@@ -175,4 +175,39 @@ var (
 	ClaudeBylineStyle = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("250")).
 				Italic(true)
+
+	// LeftPanelStyle is the outer container for the left panel.
+	// Right border only to separate it from the main chat area.
+	LeftPanelStyle = lipgloss.NewStyle().
+			Border(lipgloss.NormalBorder(), false, true, false, false).
+			BorderForeground(lipgloss.Color("237")).
+			PaddingLeft(1)
+
+	// LeftPanelHeaderStyle styles section headers within the left panel.
+	LeftPanelHeaderStyle = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(lipgloss.Color("51"))
+
+	// LeftPanelDividerStyle styles the thin divider between left panel panes.
+	LeftPanelDividerStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("237"))
+
+	// WorkEffortSelectedStyle styles the currently selected work effort.
+	WorkEffortSelectedStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("51")).
+				Bold(true)
+
+	// WorkEffortItemStyle styles unselected work effort items.
+	WorkEffortItemStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("245"))
+
+	// PlaceholderPaneStyle styles placeholder text in unimplemented panes.
+	PlaceholderPaneStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("237")).
+				Italic(true)
+
+	// TaskUpdatesPaneStyle styles the task updates section at the bottom of the right sidebar.
+	TaskUpdatesPaneStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("237")).
+				Italic(true)
 )

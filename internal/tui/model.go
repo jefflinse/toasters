@@ -22,7 +22,24 @@ const (
 	minSidebarWidth = 24
 	inputHeight     = 3
 	minWidthForBar  = 60
+
+	minLeftPanelWidth    = 22
+	minWidthForLeftPanel = 100
 )
+
+// focusedPanel identifies which panel currently holds keyboard focus.
+type focusedPanel int
+
+const (
+	focusChat        focusedPanel = iota
+	focusWorkEfforts focusedPanel = iota
+)
+
+// WorkEffort represents a unit of work being orchestrated by the tool.
+type WorkEffort struct {
+	ID   string
+	Name string
+}
 
 // SessionStats tracks session-level statistics displayed in the sidebar.
 type SessionStats struct {
@@ -70,11 +87,20 @@ type claudeMetaMsg struct {
 	Version        string
 }
 
-// sidebarWidth returns the sidebar width as 1/4 of terminal width, with a minimum.
+// leftPanelWidth returns the width of the left panel for the given terminal width.
+func leftPanelWidth(termWidth int) int {
+	w := termWidth / 6
+	if w < minLeftPanelWidth {
+		return minLeftPanelWidth
+	}
+	return w
+}
+
+// sidebarWidth returns the sidebar width using the same formula as leftPanelWidth.
 func sidebarWidth(termWidth int) int {
-	w := termWidth / 4
-	if w < minSidebarWidth {
-		w = minSidebarWidth
+	w := termWidth / 6
+	if w < minLeftPanelWidth {
+		return minLeftPanelWidth
 	}
 	return w
 }
@@ -107,6 +133,10 @@ type Model struct {
 	showCmdPopup   bool
 	filteredCmds   []SlashCommand
 	selectedCmdIdx int
+
+	workEfforts        []WorkEffort
+	selectedWorkEffort int
+	focused            focusedPanel
 }
 
 // NewModel returns an initialized root model.
@@ -143,7 +173,7 @@ func NewModel(client *llm.Client, claudeCfg config.ClaudeConfig) Model {
 	// Disable viewport key bindings so they don't capture keys from the textarea.
 	vp.KeyMap = viewport.KeyMap{}
 
-	return Model{
+	m := Model{
 		llmClient:    client,
 		claudeCfg:    claudeCfg,
 		chatViewport: vp,
@@ -153,6 +183,16 @@ func NewModel(client *llm.Client, claudeCfg config.ClaudeConfig) Model {
 			Connected: false,
 		},
 	}
+
+	m.workEfforts = []WorkEffort{
+		{ID: "we-1", Name: "Auth Refactor"},
+		{ID: "we-2", Name: "API Gateway"},
+		{ID: "we-3", Name: "DB Migration"},
+	}
+	m.selectedWorkEffort = 0
+	m.focused = focusChat
+
+	return m
 }
 
 func (m Model) Init() tea.Cmd {
@@ -196,6 +236,36 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		case "ctrl+c":
 			return m, tea.Quit
+
+		case "tab":
+			// Cycle focus between chat input and work efforts list.
+			// (Tab inside the slash command popup is handled above and returns early.)
+			if m.focused == focusChat {
+				m.focused = focusWorkEfforts
+				m.input.Blur()
+			} else {
+				m.focused = focusChat
+				return m, m.input.Focus()
+			}
+			return m, nil
+
+		case "up":
+			// Navigate work efforts when that panel is focused.
+			if m.focused == focusWorkEfforts && len(m.workEfforts) > 0 {
+				if m.selectedWorkEffort > 0 {
+					m.selectedWorkEffort--
+				}
+				return m, nil
+			}
+
+		case "down":
+			// Navigate work efforts when that panel is focused.
+			if m.focused == focusWorkEfforts && len(m.workEfforts) > 0 {
+				if m.selectedWorkEffort < len(m.workEfforts)-1 {
+					m.selectedWorkEffort++
+				}
+				return m, nil
+			}
 
 		case "esc":
 			// Cancel an in-flight stream. (Popup esc is handled above and returns early.)
@@ -415,13 +485,21 @@ func (m Model) View() tea.View {
 	}
 
 	showSidebar := m.width >= minWidthForBar
+	showLeftPanel := m.width >= minWidthForLeftPanel
 
 	sbWidth := sidebarWidth(m.width)
+	lpWidth := leftPanelWidth(m.width)
 
 	var mainWidth int
-	if showSidebar {
+	if showSidebar && showLeftPanel {
+		// Left panel right border (1) + sidebar left border (1).
+		mainWidth = m.width - sbWidth - 1 - lpWidth - 1
+	} else if showSidebar {
 		// Sidebar border takes 1 char on the left side.
 		mainWidth = m.width - sbWidth - 1
+	} else if showLeftPanel {
+		// Left panel right border (1).
+		mainWidth = m.width - lpWidth - 1
 	} else {
 		mainWidth = m.width
 	}
@@ -489,13 +567,24 @@ func (m Model) View() tea.View {
 		mainColumn = lipgloss.JoinVertical(lipgloss.Left, chatView, inputView)
 	}
 
+	// Build left panel (if visible).
+	var leftPanelView string
+	if showLeftPanel {
+		leftPanelView = m.renderLeftPanel(lpWidth, m.height)
+	}
+
 	var content string
-	if !showSidebar {
-		content = mainColumn
-	} else {
+	if showLeftPanel && showSidebar {
+		sidebar := m.renderSidebar(sbWidth)
+		content = lipgloss.JoinHorizontal(lipgloss.Top, leftPanelView, mainColumn, sidebar)
+	} else if showLeftPanel {
+		content = lipgloss.JoinHorizontal(lipgloss.Top, leftPanelView, mainColumn)
+	} else if showSidebar {
 		// Build sidebar.
 		sidebar := m.renderSidebar(sbWidth)
 		content = lipgloss.JoinHorizontal(lipgloss.Top, mainColumn, sidebar)
+	} else {
+		content = mainColumn
 	}
 
 	v := tea.NewView(content)
@@ -535,12 +624,20 @@ func (m *Model) ensureMarkdownRenderer() {
 // resizeComponents recalculates sizes for viewport and textarea after a resize.
 func (m *Model) resizeComponents() {
 	showSidebar := m.width >= minWidthForBar
+	showLeftPanel := m.width >= minWidthForLeftPanel
 
 	sbWidth := sidebarWidth(m.width)
+	lpWidth := leftPanelWidth(m.width)
 
 	var mainWidth int
-	if showSidebar {
+	if showSidebar && showLeftPanel {
+		// Left panel right border (1) + sidebar left border (1).
+		mainWidth = m.width - sbWidth - 1 - lpWidth - 1
+	} else if showSidebar {
 		mainWidth = m.width - sbWidth - 1
+	} else if showLeftPanel {
+		// Left panel right border (1).
+		mainWidth = m.width - lpWidth - 1
 	} else {
 		mainWidth = m.width
 	}
@@ -580,7 +677,26 @@ func (m *Model) updateViewportContent() {
 
 	// Show welcome message when there's no conversation yet.
 	if len(m.messages) == 0 && !m.streaming {
-		welcome := HeaderStyle.Render("Welcome to toasters!") + "\n"
+		// ASCII art: an angry toaster wielding a hammer.
+		// Each line is rendered with HeaderStyle so it picks up the accent color.
+		const toasterArt = `                    [###]
+                      |
+                      |
+         ___________  O
+        |  |||  ||| |/|
+        |           | |
+        |  {X}  {X} |/
+        |   \_v_/   |
+        |   -----   |
+        |___________|
+        |___________|
+           |     |
+          / \   / \`
+		var artLines []string
+		for _, line := range strings.Split(toasterArt, "\n") {
+			artLines = append(artLines, HeaderStyle.Render(line))
+		}
+		welcome := strings.Join(artLines, "\n") + "\n\n"
 		welcome += DimStyle.Render("Type a message and press Enter to chat.") + "\n"
 		welcome += DimStyle.Render("Connected to "+m.stats.Endpoint) + "\n\n"
 		welcome += DimStyle.Render("Esc to cancel a response · Ctrl+C to quit.")
@@ -637,14 +753,77 @@ func (m *Model) updateViewportContent() {
 	m.chatViewport.SetContent(sb.String())
 }
 
+// renderLeftPanel builds the left panel with three vertically-stacked sub-panes:
+// Work Efforts (top 40%), DAG (middle 30%), and Chat (bottom 30%).
+func (m Model) renderLeftPanel(panelWidth, panelHeight int) string {
+	contentWidth := panelWidth - LeftPanelStyle.GetHorizontalFrameSize()
+	if contentWidth < 1 {
+		contentWidth = 1
+	}
+
+	// Split panelHeight into 3 pane heights; give leftover rows to top.
+	middleH := panelHeight * 30 / 100
+	bottomH := panelHeight * 30 / 100
+	topH := panelHeight - middleH - bottomH
+
+	divider := LeftPanelDividerStyle.Render(strings.Repeat("─", contentWidth))
+
+	// --- Top pane: Work Efforts ---
+	var topLines []string
+	topLines = append(topLines, LeftPanelHeaderStyle.Render("Work Efforts"))
+	if len(m.workEfforts) == 0 {
+		topLines = append(topLines, PlaceholderPaneStyle.Render("No work efforts"))
+	} else {
+		for i, we := range m.workEfforts {
+			name := truncateStr(we.Name, contentWidth-2)
+			if i == m.selectedWorkEffort {
+				topLines = append(topLines, WorkEffortSelectedStyle.Render("> "+name))
+			} else {
+				topLines = append(topLines, WorkEffortItemStyle.Render("  "+name))
+			}
+		}
+	}
+	topPane := lipgloss.NewStyle().Height(topH).Render(
+		lipgloss.JoinVertical(lipgloss.Left, topLines...),
+	)
+
+	// --- Middle pane: DAG ---
+	middlePane := lipgloss.NewStyle().Height(middleH).Render(
+		lipgloss.JoinVertical(lipgloss.Left,
+			LeftPanelHeaderStyle.Render("DAG"),
+			PlaceholderPaneStyle.Render("No tasks"),
+		),
+	)
+
+	// --- Bottom pane: Chat ---
+	bottomPane := lipgloss.NewStyle().Height(bottomH).Render(
+		lipgloss.JoinVertical(lipgloss.Left,
+			LeftPanelHeaderStyle.Render("Chat"),
+			PlaceholderPaneStyle.Render("—"),
+		),
+	)
+
+	inner := lipgloss.JoinVertical(lipgloss.Left, topPane, divider, middlePane, divider, bottomPane)
+	return LeftPanelStyle.Width(panelWidth).Height(panelHeight).Render(inner)
+}
+
 // renderSidebar builds the right sidebar with stats.
 func (m Model) renderSidebar(sbWidth int) string {
 	contentWidth := sbWidth - SidebarStyle.GetHorizontalPadding()
 
 	var sb strings.Builder
 
-	// Connection section.
-	sb.WriteString(SidebarHeaderStyle.Render("Connection"))
+	// Operator section: header and connected status on the same line.
+	connStatus := ConnectedStyle.Render("connected")
+	if !m.stats.Connected {
+		connStatus = ErrorStyle.Render("disconnected")
+	}
+	headerText := SidebarHeaderStyle.Render("operator")
+	gap := contentWidth - lipgloss.Width(headerText) - lipgloss.Width(connStatus)
+	if gap < 1 {
+		gap = 1
+	}
+	sb.WriteString(headerText + strings.Repeat(" ", gap) + connStatus)
 	sb.WriteString("\n\n")
 
 	modelName := m.stats.ModelName
@@ -659,17 +838,6 @@ func (m Model) renderSidebar(sbWidth int) string {
 	sb.WriteString(SidebarLabelStyle.Render("Endpoint"))
 	sb.WriteString("\n")
 	sb.WriteString(SidebarValueStyle.Render(truncateStr(m.stats.Endpoint, contentWidth)))
-	sb.WriteString("\n\n")
-
-	status := "Disconnected"
-	statusStyle := ErrorStyle
-	if m.stats.Connected {
-		status = "Connected"
-		statusStyle = ConnectedStyle
-	}
-	sb.WriteString(SidebarLabelStyle.Render("Status"))
-	sb.WriteString("\n")
-	sb.WriteString(statusStyle.Render(status))
 	sb.WriteString("\n")
 
 	sb.WriteString("\n")
@@ -713,6 +881,13 @@ func (m Model) renderSidebar(sbWidth int) string {
 	}
 	sb.WriteString(sidebarRow("Last resp", lastResp))
 	sb.WriteString(sidebarRow("Avg resp", avgResp))
+
+	// Task updates section.
+	sb.WriteString("\n")
+	sb.WriteString(SidebarHeaderStyle.Render("Task Updates"))
+	sb.WriteString("\n\n")
+	sb.WriteString(TaskUpdatesPaneStyle.Render("No updates yet"))
+	sb.WriteString("\n")
 
 	return SidebarStyle.
 		Width(sbWidth).
