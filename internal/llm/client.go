@@ -7,13 +7,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 )
 
 // Message represents a single chat message.
 type Message struct {
-	Role    string `json:"role"` // "system", "user", or "assistant"
-	Content string `json:"content"`
+	Role       string     `json:"role"` // "system", "user", or "assistant"
+	Content    string     `json:"content"`
+	ToolCallID string     `json:"tool_call_id,omitempty"`
+	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
 }
 
 // StreamOptions controls streaming behavior.
@@ -27,6 +30,7 @@ type ChatRequest struct {
 	Messages      []Message      `json:"messages"`
 	Stream        bool           `json:"stream"`
 	StreamOptions *StreamOptions `json:"stream_options,omitempty"`
+	Tools         []Tool         `json:"tools,omitempty"`
 }
 
 // ChatCompletionChunk is a single SSE chunk from the streaming response.
@@ -45,9 +49,10 @@ type Choice struct {
 
 // Delta holds the incremental content for a streaming choice.
 type Delta struct {
-	Content   string `json:"content"`
-	Role      string `json:"role,omitempty"`
-	Reasoning string `json:"reasoning,omitempty"`
+	Content   string     `json:"content"`
+	Role      string     `json:"role,omitempty"`
+	Reasoning string     `json:"reasoning,omitempty"`
+	ToolCalls []ToolCall `json:"tool_calls,omitempty"`
 }
 
 // Usage holds token usage statistics.
@@ -55,6 +60,33 @@ type Usage struct {
 	PromptTokens     int `json:"prompt_tokens"`
 	CompletionTokens int `json:"completion_tokens"`
 	TotalTokens      int `json:"total_tokens"`
+}
+
+// ToolFunction describes the function a tool exposes.
+type ToolFunction struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Parameters  any    `json:"parameters"`
+}
+
+// Tool represents a tool available to the LLM.
+type Tool struct {
+	Type     string       `json:"type"` // always "function"
+	Function ToolFunction `json:"function"`
+}
+
+// ToolCallFunction holds the function name and accumulated arguments for a tool call.
+type ToolCallFunction struct {
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"`
+}
+
+// ToolCall represents a single tool call requested by the LLM.
+type ToolCall struct {
+	Index    int              `json:"index"`
+	ID       string           `json:"id"`
+	Type     string           `json:"type"`
+	Function ToolCallFunction `json:"function"`
 }
 
 // ClaudeMeta carries metadata from the claude CLI system/init event.
@@ -73,6 +105,7 @@ type StreamResponse struct {
 	Usage     *Usage      // token usage (usually only on final chunk)
 	Error     error       // non-nil if something went wrong
 	Meta      *ClaudeMeta // non-nil only for the claude CLI system/init event
+	ToolCalls []ToolCall  // non-nil when the LLM requested tool calls
 }
 
 // Client talks to an OpenAI-compatible API (e.g. LM Studio).
@@ -108,6 +141,17 @@ func (c *Client) ChatCompletionStream(ctx context.Context, messages []Message) <
 		c.streamCompletion(ctx, messages, ch)
 	}()
 
+	return ch
+}
+
+// ChatCompletionStreamWithTools is like ChatCompletionStream but sends tool definitions
+// to the LLM, enabling tool calling.
+func (c *Client) ChatCompletionStreamWithTools(ctx context.Context, messages []Message, tools []Tool) <-chan StreamResponse {
+	ch := make(chan StreamResponse, 1)
+	go func() {
+		defer close(ch)
+		c.streamCompletionWithTools(ctx, messages, tools, ch)
+	}()
 	return ch
 }
 
@@ -209,6 +253,168 @@ func (c *Client) streamCompletion(ctx context.Context, messages []Message, ch ch
 					Content: choice.Delta.Content,
 					Model:   chunk.Model,
 				}
+			}
+
+			if choice.FinishReason == "stop" {
+				sawStop = true
+				// Don't return yet — with stream_options.include_usage, the
+				// server sends a final chunk with usage data after the stop
+				// chunk. Keep reading until [DONE].
+			}
+		} else if sawStop && chunk.Usage != nil {
+			// This is the usage-only chunk that arrives after finish_reason=stop
+			// when stream_options.include_usage is true. Usage is already
+			// captured above; keep reading for [DONE].
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		ch <- StreamResponse{Error: fmt.Errorf("reading stream: %w", err)}
+		return
+	}
+
+	// Stream ended without [DONE] — treat as done.
+	ch <- StreamResponse{Done: true, Model: lastModel, Usage: lastUsage}
+}
+
+func (c *Client) streamCompletionWithTools(ctx context.Context, messages []Message, tools []Tool, ch chan<- StreamResponse) {
+	reqBody := ChatRequest{
+		Model:    c.model,
+		Messages: messages,
+		Stream:   true,
+		StreamOptions: &StreamOptions{
+			IncludeUsage: true,
+		},
+		Tools: tools,
+	}
+
+	body, err := json.Marshal(reqBody)
+	if err != nil {
+		ch <- StreamResponse{Error: fmt.Errorf("marshaling request: %w", err)}
+		return
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v1/chat/completions", bytes.NewReader(body))
+	if err != nil {
+		ch <- StreamResponse{Error: fmt.Errorf("creating request: %w", err)}
+		return
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		ch <- StreamResponse{Error: fmt.Errorf("sending request: %w", err)}
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		ch <- StreamResponse{Error: fmt.Errorf("unexpected status %d: %s", resp.StatusCode, resp.Status)}
+		return
+	}
+
+	var lastUsage *Usage
+	var lastModel string
+	sawStop := false
+	accumulated := make(map[int]*ToolCall)
+
+	scanner := bufio.NewScanner(resp.Body)
+	for scanner.Scan() {
+		// Check for context cancellation between lines.
+		if ctx.Err() != nil {
+			ch <- StreamResponse{Error: ctx.Err()}
+			return
+		}
+
+		line := scanner.Text()
+
+		// Skip blank lines (SSE event separators).
+		if line == "" {
+			continue
+		}
+
+		// We only care about data lines.
+		if !strings.HasPrefix(line, "data:") {
+			continue
+		}
+
+		// Strip the "data:" prefix. Handle both "data: " and "data:" (no space).
+		data := strings.TrimPrefix(line, "data:")
+		data = strings.TrimSpace(data)
+
+		if data == "[DONE]" {
+			ch <- StreamResponse{Done: true, Model: lastModel, Usage: lastUsage}
+			return
+		}
+
+		var chunk ChatCompletionChunk
+		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
+			ch <- StreamResponse{Error: fmt.Errorf("parsing chunk: %w", err)}
+			return
+		}
+
+		if chunk.Model != "" {
+			lastModel = chunk.Model
+		}
+		if chunk.Usage != nil {
+			lastUsage = chunk.Usage
+		}
+
+		if len(chunk.Choices) > 0 {
+			choice := chunk.Choices[0]
+
+			// Accumulate tool call deltas.
+			for _, partial := range choice.Delta.ToolCalls {
+				idx := partial.Index
+				if _, ok := accumulated[idx]; !ok {
+					accumulated[idx] = &ToolCall{
+						Index: idx,
+						ID:    partial.ID,
+						Type:  partial.Type,
+						Function: ToolCallFunction{
+							Name: partial.Function.Name,
+						},
+					}
+				}
+				entry := accumulated[idx]
+				entry.Function.Arguments += partial.Function.Arguments
+				if partial.ID != "" && entry.ID == "" {
+					entry.ID = partial.ID
+				}
+				if partial.Function.Name != "" && entry.Function.Name == "" {
+					entry.Function.Name = partial.Function.Name
+				}
+			}
+
+			if choice.Delta.Reasoning != "" {
+				ch <- StreamResponse{
+					Reasoning: choice.Delta.Reasoning,
+					Model:     chunk.Model,
+				}
+			}
+
+			if choice.Delta.Content != "" {
+				ch <- StreamResponse{
+					Content: choice.Delta.Content,
+					Model:   chunk.Model,
+				}
+			}
+
+			if choice.FinishReason == "tool_calls" {
+				// Collect accumulated tool calls sorted by index.
+				indices := make([]int, 0, len(accumulated))
+				for idx := range accumulated {
+					indices = append(indices, idx)
+				}
+				sort.Ints(indices)
+				calls := make([]ToolCall, 0, len(indices))
+				for _, idx := range indices {
+					calls = append(calls, *accumulated[idx])
+				}
+				ch <- StreamResponse{ToolCalls: calls, Done: true}
+				return
 			}
 
 			if choice.FinishReason == "stop" {

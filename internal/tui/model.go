@@ -87,6 +87,11 @@ type claudeMetaMsg struct {
 	Version        string
 }
 
+// ToolCallMsg is emitted when the LLM requests one or more tool calls.
+type ToolCallMsg struct {
+	Calls []llm.ToolCall
+}
+
 // leftPanelWidth returns the width of the left panel for the given terminal width.
 func leftPanelWidth(termWidth int) int {
 	w := termWidth / 6
@@ -410,6 +415,56 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.chatViewport.GotoBottom()
 		cmds = append(cmds, m.input.Focus())
 
+	case ToolCallMsg:
+		// The LLM wants to call tools. Execute them synchronously, inject results,
+		// then re-invoke the stream for the final answer.
+		m.streaming = false
+
+		// Append the assistant "tool call" turn to the conversation.
+		// Content is empty for tool-call-only turns; ToolCalls carries the calls.
+		assistantMsg := llm.Message{
+			Role:      "assistant",
+			Content:   "",
+			ToolCalls: msg.Calls,
+		}
+		m.messages = append(m.messages, assistantMsg)
+		m.reasoning = append(m.reasoning, "")
+		m.claudeMeta = append(m.claudeMeta, "")
+
+		// Execute each tool call and append results.
+		for _, call := range msg.Calls {
+			// Show a visual indicator in the chat.
+			indicator := fmt.Sprintf("⚙ calling `%s`…", call.Function.Name)
+			m.messages = append(m.messages, llm.Message{
+				Role:    "assistant",
+				Content: indicator,
+			})
+			m.reasoning = append(m.reasoning, "")
+			m.claudeMeta = append(m.claudeMeta, "tool-call-indicator")
+
+			result, err := llm.ExecuteTool(call)
+			if err != nil {
+				result = fmt.Sprintf("error: %s", err.Error())
+			}
+
+			m.messages = append(m.messages, llm.Message{
+				Role:       "tool",
+				ToolCallID: call.ID,
+				Content:    result,
+			})
+			// tool messages don't need entries in reasoning/claudeMeta
+			// because updateViewportContent only increments assistantIdx for "assistant" role
+		}
+
+		// Update the viewport so the user sees the tool call indicators.
+		m.updateViewportContent()
+		m.chatViewport.GotoBottom()
+
+		// Re-invoke the stream with the updated messages for the final answer.
+		msgs := make([]llm.Message, len(m.messages))
+		copy(msgs, m.messages)
+		return m, m.startStream(msgs)
+
 	case StreamErrMsg:
 		m.streaming = false
 		m.err = msg.Err
@@ -714,6 +769,12 @@ func (m *Model) updateViewportContent() {
 			block := UserMsgBlockStyle.Width(blockWidth).Render(wrapText(msg.Content, blockWidth))
 			sb.WriteString(block + "\n\n")
 		case "assistant":
+			// Tool-call indicator messages render as a dimmed line without byline/reasoning.
+			if assistantIdx < len(m.claudeMeta) && m.claudeMeta[assistantIdx] == "tool-call-indicator" {
+				sb.WriteString(DimStyle.Render(msg.Content) + "\n\n")
+				assistantIdx++
+				continue
+			}
 			// Render claude byline (if any) above the response.
 			if assistantIdx < len(m.claudeMeta) && m.claudeMeta[assistantIdx] != "" {
 				sb.WriteString(ClaudeBylineStyle.Render("⬡ "+m.claudeMeta[assistantIdx]) + "\n")
@@ -725,6 +786,13 @@ func (m *Model) updateViewportContent() {
 			}
 			sb.WriteString(m.renderMarkdown(msg.Content) + "\n\n")
 			assistantIdx++
+		case "tool":
+			// Render tool result as a dimmed block.
+			preview := msg.Content
+			if len(preview) > 300 {
+				preview = preview[:300] + "…"
+			}
+			sb.WriteString(DimStyle.Render("⚙ tool result: "+preview) + "\n\n")
 		}
 	}
 
@@ -1006,6 +1074,23 @@ func (m *Model) newSession() {
 	m.input.Focus()
 }
 
+// startStream begins a new LLM stream with the current messages and available tools.
+// It sets m.streaming = true and m.stats.ResponseStart.
+func (m *Model) startStream(msgs []llm.Message) tea.Cmd {
+	ctx, cancel := context.WithCancel(context.Background())
+	m.cancelStream = cancel
+	m.streaming = true
+	m.currentResponse = ""
+	m.currentReasoning = ""
+	m.stats.ResponseStart = time.Now()
+
+	client := m.llmClient
+	return func() tea.Msg {
+		ch := client.ChatCompletionStreamWithTools(ctx, msgs, llm.AvailableTools)
+		return streamStartedMsg{ch: ch}
+	}
+}
+
 // sendMessage takes the current input, appends it to history, and starts streaming.
 func (m *Model) sendMessage() tea.Cmd {
 	text := strings.TrimSpace(m.input.Value())
@@ -1024,10 +1109,7 @@ func (m *Model) sendMessage() tea.Cmd {
 		Content: text,
 	})
 	m.stats.MessageCount++
-	m.streaming = true
-	m.currentResponse = ""
 	m.err = nil
-	m.stats.ResponseStart = time.Now()
 
 	m.updateViewportContent()
 	m.chatViewport.GotoBottom()
@@ -1036,16 +1118,7 @@ func (m *Model) sendMessage() tea.Cmd {
 	msgs := make([]llm.Message, len(m.messages))
 	copy(msgs, m.messages)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	m.cancelStream = cancel
-
-	client := m.llmClient
-	return func() tea.Msg {
-		ch := client.ChatCompletionStream(ctx, msgs)
-		// We need to send the channel back to the model so it can keep reading.
-		// Use a special message for this.
-		return streamStartedMsg{ch: ch}
-	}
+	return m.startStream(msgs)
 }
 
 // sendClaudeMessage appends the user prompt to history and starts a subprocess
@@ -1099,6 +1172,9 @@ func waitForChunk(ch <-chan llm.StreamResponse) tea.Cmd {
 				PermissionMode: resp.Meta.PermissionMode,
 				Version:        resp.Meta.Version,
 			}
+		}
+		if len(resp.ToolCalls) > 0 {
+			return ToolCallMsg{Calls: resp.ToolCalls}
 		}
 		if resp.Done {
 			return StreamDoneMsg{Model: resp.Model, Usage: resp.Usage}
