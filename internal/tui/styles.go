@@ -4,15 +4,17 @@ import "github.com/charmbracelet/lipgloss"
 
 // Colors — dark theme palette.
 var (
-	ColorPrimary   = lipgloss.AdaptiveColor{Light: "63", Dark: "135"}
-	ColorSecondary = lipgloss.AdaptiveColor{Light: "241", Dark: "248"}
-	ColorDim       = lipgloss.AdaptiveColor{Light: "250", Dark: "241"}
-	ColorBorder    = lipgloss.AdaptiveColor{Light: "250", Dark: "237"}
-	ColorError     = lipgloss.AdaptiveColor{Light: "196", Dark: "196"}
-	ColorUser      = lipgloss.AdaptiveColor{Light: "33", Dark: "81"}
-	ColorAssistant = lipgloss.AdaptiveColor{Light: "241", Dark: "252"}
-	ColorStreaming = lipgloss.AdaptiveColor{Light: "208", Dark: "214"}
-	ColorConnected = lipgloss.AdaptiveColor{Light: "34", Dark: "76"}
+	ColorPrimary    = lipgloss.AdaptiveColor{Light: "63", Dark: "135"}
+	ColorSecondary  = lipgloss.AdaptiveColor{Light: "241", Dark: "248"}
+	ColorDim        = lipgloss.AdaptiveColor{Light: "250", Dark: "241"}
+	ColorBorder     = lipgloss.AdaptiveColor{Light: "250", Dark: "237"}
+	ColorError      = lipgloss.AdaptiveColor{Light: "196", Dark: "196"}
+	ColorUser       = lipgloss.AdaptiveColor{Light: "33", Dark: "81"}
+	ColorUserBg     = lipgloss.AdaptiveColor{Light: "254", Dark: "235"}
+	ColorUserBorder = lipgloss.AdaptiveColor{Light: "33", Dark: "81"}
+	ColorAssistant  = lipgloss.AdaptiveColor{Light: "241", Dark: "252"}
+	ColorStreaming  = lipgloss.AdaptiveColor{Light: "208", Dark: "214"}
+	ColorConnected  = lipgloss.AdaptiveColor{Light: "34", Dark: "76"}
 )
 
 // Layout styles.
@@ -25,7 +27,7 @@ var (
 
 	// ChatAreaStyle is used for the main chat message area.
 	ChatAreaStyle = lipgloss.NewStyle().
-			Padding(0, 1)
+			Padding(1, 1, 0, 1)
 
 	// InputAreaStyle is used for the message input region.
 	InputAreaStyle = lipgloss.NewStyle().
@@ -43,10 +45,18 @@ var (
 	DimStyle = lipgloss.NewStyle().
 			Foreground(ColorDim)
 
-	// UserMsgStyle styles the "you >" prefix for user messages.
-	UserMsgStyle = lipgloss.NewStyle().
-			Bold(true).
-			Foreground(ColorUser)
+	// UserMsgLabelStyle styles the "you" label above user messages.
+	UserMsgLabelStyle = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(ColorUser)
+
+	// UserMsgBlockStyle styles the user message content block.
+	UserMsgBlockStyle = lipgloss.NewStyle().
+				Background(ColorUserBg).
+				Foreground(lipgloss.AdaptiveColor{Light: "232", Dark: "252"}).
+				Border(lipgloss.ThickBorder(), false, false, false, true).
+				BorderForeground(ColorUserBorder).
+				Padding(1, 2)
 
 	// AssistantMsgStyle styles assistant message text.
 	AssistantMsgStyle = lipgloss.NewStyle().

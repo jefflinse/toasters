@@ -372,9 +372,13 @@ func (m *Model) updateViewportContent() {
 	for _, msg := range m.messages {
 		switch msg.Role {
 		case "user":
-			prefix := UserMsgStyle.Render("you > ")
-			wrapped := wrapText(msg.Content, contentWidth-6)
-			sb.WriteString(prefix + wrapped + "\n\n")
+			// Block width: viewport minus the left border + padding of the block style.
+			blockWidth := contentWidth - UserMsgBlockStyle.GetHorizontalFrameSize()
+			if blockWidth < 1 {
+				blockWidth = 1
+			}
+			block := UserMsgBlockStyle.Width(blockWidth).Render(wrapText(msg.Content, blockWidth))
+			sb.WriteString(block + "\n\n")
 		case "assistant":
 			sb.WriteString(m.renderMarkdown(msg.Content) + "\n\n")
 		}
