@@ -169,7 +169,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			case "tab", "enter":
 				if len(m.filteredCmds) > 0 {
-					m.input.SetValue(m.filteredCmds[m.selectedCmdIdx].Name)
+					m.input.SetValue(m.filteredCmds[m.selectedCmdIdx].Name + " ")
 				}
 				m.showCmdPopup = false
 				return m, nil
