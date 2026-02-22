@@ -161,6 +161,8 @@ type Model struct {
 	showKillModal   bool
 	killModalSlots  []int // actual slot indices (0-3) of running slots
 	selectedKillIdx int   // index into killModalSlots
+
+	userScrolled bool // true when user has manually scrolled up; suppresses auto-scroll
 }
 
 // NewModel returns an initialized root model.
@@ -498,7 +500,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.reasoning = append(m.reasoning, "")
 						m.claudeMeta = append(m.claudeMeta, "")
 						m.updateViewportContent()
-						m.chatViewport.GotoBottom()
+						if !m.userScrolled {
+							m.chatViewport.GotoBottom()
+						}
 					} else {
 						m.killModalSlots = running
 						m.selectedKillIdx = 0
@@ -561,7 +565,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.stats.LastResponseTime = time.Since(m.stats.ResponseStart)
 		}
 		m.updateViewportContent()
-		m.chatViewport.GotoBottom()
+		if !m.userScrolled {
+			m.chatViewport.GotoBottom()
+		}
 		if m.streamCh != nil {
 			cmds = append(cmds, waitForChunk(m.streamCh))
 		}
@@ -603,7 +609,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.streamCh = nil
 		m.cancelStream = nil
 		m.updateViewportContent()
-		m.chatViewport.GotoBottom()
+		if !m.userScrolled {
+			m.chatViewport.GotoBottom()
+		}
 		cmds = append(cmds, m.input.Focus())
 
 	case ToolCallMsg:
@@ -649,7 +657,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// Update the viewport so the user sees the tool call indicators.
 		m.updateViewportContent()
-		m.chatViewport.GotoBottom()
+		if !m.userScrolled {
+			m.chatViewport.GotoBottom()
+		}
 
 		// Re-invoke the stream with the updated messages for the final answer.
 		msgs := make([]llm.Message, len(m.messages))
@@ -733,6 +743,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.chatViewport, cmd = m.chatViewport.Update(msg)
 		cmds = append(cmds, cmd)
+		// Track whether user has scrolled away from the bottom.
+		if m.chatViewport.AtBottom() {
+			m.userScrolled = false
+		} else {
+			m.userScrolled = true
+		}
 	}
 
 	return m, tea.Batch(cmds...)
@@ -1441,7 +1457,9 @@ func (m *Model) appendHelpMessage() {
 	m.claudeMeta = append(m.claudeMeta, "")
 	m.stats.MessageCount++
 	m.updateViewportContent()
-	m.chatViewport.GotoBottom()
+	if !m.userScrolled {
+		m.chatViewport.GotoBottom()
+	}
 }
 
 // newSession resets the conversation and all session statistics.
@@ -1460,6 +1478,7 @@ func (m *Model) newSession() {
 	m.stats.TotalResponseTime = 0
 	m.stats.LastResponseTime = 0
 	m.err = nil
+	m.userScrolled = false
 	m.updateViewportContent()
 	m.chatViewport.GotoBottom()
 	m.input.Focus()
@@ -1501,6 +1520,7 @@ func (m *Model) sendMessage() tea.Cmd {
 	})
 	m.stats.MessageCount++
 	m.err = nil
+	m.userScrolled = false
 
 	m.updateViewportContent()
 	m.chatViewport.GotoBottom()
@@ -1528,6 +1548,7 @@ func (m *Model) sendClaudeMessage(prompt string) tea.Cmd {
 	m.currentResponse = ""
 	m.currentReasoning = ""
 	m.err = nil
+	m.userScrolled = false
 	m.stats.ResponseStart = time.Now()
 
 	m.updateViewportContent()
