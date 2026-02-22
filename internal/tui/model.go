@@ -16,6 +16,7 @@ import (
 
 	"github.com/jefflinse/toasters/internal/config"
 	"github.com/jefflinse/toasters/internal/llm"
+	"github.com/jefflinse/toasters/internal/workeffort"
 )
 
 const (
@@ -34,12 +35,6 @@ const (
 	focusChat        focusedPanel = iota
 	focusWorkEfforts focusedPanel = iota
 )
-
-// WorkEffort represents a unit of work being orchestrated by the tool.
-type WorkEffort struct {
-	ID   string
-	Name string
-}
 
 // SessionStats tracks session-level statistics displayed in the sidebar.
 type SessionStats struct {
@@ -139,13 +134,13 @@ type Model struct {
 	filteredCmds   []SlashCommand
 	selectedCmdIdx int
 
-	workEfforts        []WorkEffort
+	workEfforts        []workeffort.WorkEffort
 	selectedWorkEffort int
 	focused            focusedPanel
 }
 
 // NewModel returns an initialized root model.
-func NewModel(client *llm.Client, claudeCfg config.ClaudeConfig) Model {
+func NewModel(client *llm.Client, claudeCfg config.ClaudeConfig, configDir string) Model {
 	ta := textarea.New()
 	ta.Placeholder = "Type your message here..."
 	ta.Prompt = ""
@@ -189,11 +184,8 @@ func NewModel(client *llm.Client, claudeCfg config.ClaudeConfig) Model {
 		},
 	}
 
-	m.workEfforts = []WorkEffort{
-		{ID: "we-1", Name: "Auth Refactor"},
-		{ID: "we-2", Name: "API Gateway"},
-		{ID: "we-3", Name: "DB Migration"},
-	}
+	efforts, _ := workeffort.List(configDir)
+	m.workEfforts = efforts
 	m.selectedWorkEffort = 0
 	m.focused = focusChat
 

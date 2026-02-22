@@ -33,8 +33,13 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 
+	configDir, err := config.Dir()
+	if err != nil {
+		return err
+	}
+
 	client := llm.NewClient(cfg.Operator.Endpoint, cfg.Operator.Model)
-	m := tui.NewModel(client, cfg.Claude)
+	m := tui.NewModel(client, cfg.Claude, configDir)
 
 	_, err = tea.NewProgram(m).Run()
 	return err

@@ -62,6 +62,24 @@ func Load() (*Config, error) {
 	return &cfg, nil
 }
 
+// Dir returns the toasters config directory (~/.config/toasters).
+func Dir() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return home + "/.config/toasters", nil
+}
+
+// WorkEffortsDir returns the directory where work efforts are stored.
+func WorkEffortsDir() (string, error) {
+	dir, err := Dir()
+	if err != nil {
+		return "", err
+	}
+	return dir + "/work-efforts", nil
+}
+
 // BindFlags binds relevant cobra pflags to their Viper configuration keys.
 func BindFlags(cmd *cobra.Command) {
 	viper.BindPFlag("operator.endpoint", cmd.Flags().Lookup("operator-endpoint")) //nolint:errcheck
