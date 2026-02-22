@@ -24,15 +24,16 @@ const (
 
 // SessionStats tracks session-level statistics displayed in the sidebar.
 type SessionStats struct {
-	ModelName        string
-	Endpoint         string
-	Connected        bool
-	ContextLength    int // max context window in tokens (0 if unknown)
-	MessageCount     int
-	PromptTokens     int
-	CompletionTokens int
-	LastResponseTime time.Duration
-	ResponseStart    time.Time
+	ModelName            string
+	Endpoint             string
+	Connected            bool
+	ContextLength        int // max context window in tokens (0 if unknown)
+	MessageCount         int
+	PromptTokens         int
+	CompletionTokens     int
+	CompletionTokensLive int // estimated completion tokens for the in-progress response
+	LastResponseTime     time.Duration
+	ResponseStart        time.Time
 }
 
 // Message types for the Bubble Tea event loop.
@@ -165,6 +166,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case StreamChunkMsg:
 		m.currentResponse += msg.Content
+		// Update live estimates while streaming.
+		// Completion tokens: rough estimate of ~4 chars per token.
+		m.stats.CompletionTokensLive = len([]rune(m.currentResponse)) / 4
+		// Elapsed response time ticks up on every chunk.
+		if !m.stats.ResponseStart.IsZero() {
+			m.stats.LastResponseTime = time.Since(m.stats.ResponseStart)
+		}
 		m.updateViewportContent()
 		m.chatViewport.GotoBottom()
 		if m.streamCh != nil {
@@ -180,6 +188,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.stats.PromptTokens += msg.Usage.PromptTokens
 			m.stats.CompletionTokens += msg.Usage.CompletionTokens
 		}
+		m.stats.CompletionTokensLive = 0 // clear estimate; real numbers are in now
 		if !m.stats.ResponseStart.IsZero() {
 			m.stats.LastResponseTime = time.Since(m.stats.ResponseStart)
 		}
@@ -440,11 +449,14 @@ func (m Model) renderSidebar(sbWidth int) string {
 	sb.WriteString(SidebarHeaderStyle.Render("Session"))
 	sb.WriteString("\n\n")
 
+	// While streaming, blend in live estimates for the current response.
+	liveCompletionTokens := m.stats.CompletionTokens + m.stats.CompletionTokensLive
+
 	sb.WriteString(sidebarRow("Messages", fmt.Sprintf("%d", m.stats.MessageCount)))
 	sb.WriteString(sidebarRow("Tokens in", fmt.Sprintf("%d", m.stats.PromptTokens)))
-	sb.WriteString(sidebarRow("Tokens out", fmt.Sprintf("%d", m.stats.CompletionTokens)))
+	sb.WriteString(sidebarRow("Tokens out", fmt.Sprintf("%d", liveCompletionTokens)))
 
-	totalTokens := m.stats.PromptTokens + m.stats.CompletionTokens
+	totalTokens := m.stats.PromptTokens + liveCompletionTokens
 	sb.WriteString(SidebarLabelStyle.Render("Context"))
 	sb.WriteString("\n")
 	sb.WriteString(renderContextBar(totalTokens, m.stats.ContextLength, contentWidth))
