@@ -37,10 +37,20 @@ var (
 			Padding(1, 1, 0, 1)
 
 	// InputAreaStyle is used for the message input region.
+	// Thick left accent border (┃), thin top/bottom (─), no right border.
 	InputAreaStyle = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("51")).
-			Padding(0, 1)
+			Border(lipgloss.Border{
+			Top:         "─",
+			Bottom:      "─",
+			Left:        "┃",
+			Right:       "",
+			TopLeft:     "┌",
+			TopRight:    "─",
+			BottomLeft:  "└",
+			BottomRight: "─",
+		}, true, false, true, true).
+		BorderForeground(lipgloss.Color("51")).
+		Padding(0, 1)
 
 	// HeaderStyle is used for the top header / title bar.
 	HeaderStyle = lipgloss.NewStyle().
