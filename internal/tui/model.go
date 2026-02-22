@@ -1401,7 +1401,7 @@ func (m Model) renderSidebar(sbWidth int) string {
 // renderGrid renders the 2×2 agent grid screen.
 func (m Model) renderGrid() string {
 	cellW := m.width / 2
-	cellH := m.height / 2
+	cellH := (m.height - 1) / 2 // -1 to make room for the hotkey bar
 
 	var cells [4]string
 	slots := [4]gateway.SlotSnapshot{}
@@ -1537,9 +1537,12 @@ func (m Model) renderGrid() string {
 		cells[i] = cellStyle.Render(inner)
 	}
 
+	hotkeyBar := DimStyle.Render("  arrows: navigate   ·   k/ctrl+k: kill   ·   p: view prompt   ·   ctrl+g / esc: close")
+	hotkeyBar = lipgloss.NewStyle().Width(m.width).Render(hotkeyBar)
+
 	top := lipgloss.JoinHorizontal(lipgloss.Top, cells[0], cells[1])
 	bottom := lipgloss.JoinHorizontal(lipgloss.Top, cells[2], cells[3])
-	return lipgloss.JoinVertical(lipgloss.Left, top, bottom)
+	return lipgloss.JoinVertical(lipgloss.Left, hotkeyBar, top, bottom)
 }
 
 // renderContextBar renders a segmented progress bar showing context window usage.

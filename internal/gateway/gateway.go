@@ -103,6 +103,15 @@ func (g *Gateway) Spawn(agentName, workEffortID, task string) (int, error) {
 		return -1, fmt.Errorf("all slots busy")
 	}
 
+	// Check for an already-running slot with the same agent+work-effort.
+	for _, s := range g.slots {
+		if s != nil && s.status == SlotRunning &&
+			s.agentName == agentName && s.workEffortID == workEffortID {
+			g.mu.Unlock()
+			return -1, fmt.Errorf("agent %q is already running on work effort %q", agentName, workEffortID)
+		}
+	}
+
 	// Read agent file.
 	agentPath := filepath.Join(g.repoRoot, "agents", agentName+".md")
 	agentData, err := os.ReadFile(agentPath)
@@ -166,6 +175,7 @@ func (g *Gateway) Spawn(agentName, workEffortID, task string) (int, error) {
 				g.mu.Lock()
 				s.model = resp.Meta.Model
 				g.mu.Unlock()
+				g.notify()
 			case resp.Content != "":
 				g.mu.Lock()
 				s.output.WriteString(resp.Content)
