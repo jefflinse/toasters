@@ -1,0 +1,578 @@
+package tui
+
+import (
+	"context"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/charmbracelet/bubbles/key"
+	"github.com/charmbracelet/bubbles/textarea"
+	"github.com/charmbracelet/bubbles/viewport"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+
+	"github.com/jefflinse/toasters/internal/llm"
+)
+
+const (
+	sidebarWidth   = 28
+	inputHeight    = 3
+	minWidthForBar = 60
+)
+
+// SessionStats tracks session-level statistics displayed in the sidebar.
+type SessionStats struct {
+	ModelName        string
+	Endpoint         string
+	Connected        bool
+	MessageCount     int
+	PromptTokens     int
+	CompletionTokens int
+	LastResponseTime time.Duration
+	ResponseStart    time.Time
+}
+
+// Message types for the Bubble Tea event loop.
+
+type StreamChunkMsg struct {
+	Content string
+}
+
+type StreamDoneMsg struct {
+	Model string
+	Usage *llm.Usage
+}
+
+type StreamErrMsg struct {
+	Err error
+}
+
+type ModelsMsg struct {
+	Models []string
+	Err    error
+}
+
+type TickMsg time.Time
+
+// Model is the root Bubble Tea model for the toasters TUI.
+type Model struct {
+	width  int
+	height int
+
+	llmClient       *llm.Client
+	messages        []llm.Message
+	chatViewport    viewport.Model
+	input           textarea.Model
+	streaming       bool
+	currentResponse string
+	streamCh        <-chan llm.StreamResponse
+	cancelStream    context.CancelFunc
+	stats           SessionStats
+	startTime       time.Time
+	err             error
+}
+
+// NewModel returns an initialized root model.
+func NewModel(client *llm.Client) Model {
+	ta := textarea.New()
+	ta.Placeholder = "Type your message here..."
+	ta.Prompt = "> "
+	ta.ShowLineNumbers = false
+	ta.SetHeight(inputHeight)
+	ta.CharLimit = 0 // no limit
+	ta.FocusedStyle.CursorLine = lipgloss.NewStyle()
+	// Rebind InsertNewline to shift+enter so plain Enter can send messages.
+	ta.KeyMap.InsertNewline = key.NewBinding(key.WithKeys("shift+enter"))
+	ta.Focus()
+
+	vp := viewport.New(0, 0)
+	vp.MouseWheelEnabled = true
+	// Disable viewport key bindings so they don't capture keys from the textarea.
+	vp.KeyMap = viewport.KeyMap{}
+
+	return Model{
+		llmClient:    client,
+		chatViewport: vp,
+		input:        ta,
+		startTime:    time.Now(),
+		stats: SessionStats{
+			Endpoint:  client.BaseURL(),
+			Connected: false,
+		},
+	}
+}
+
+func (m Model) Init() tea.Cmd {
+	return tea.Batch(
+		tea.WindowSize(),
+		m.fetchModels(),
+		m.tickCmd(),
+		textarea.Blink,
+	)
+}
+
+func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var cmds []tea.Cmd
+
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "ctrl+c":
+			if m.streaming && m.cancelStream != nil {
+				m.cancelStream()
+				m.streaming = false
+				m.cancelStream = nil
+				m.streamCh = nil
+				if m.currentResponse != "" {
+					m.messages = append(m.messages, llm.Message{
+						Role:    "assistant",
+						Content: m.currentResponse,
+					})
+					m.currentResponse = ""
+				}
+				m.updateViewportContent()
+				return m, m.input.Focus()
+			}
+			return m, tea.Quit
+
+		case "enter":
+			// Send message on Enter when not streaming and input has content.
+			// Shift+enter inserts a newline (handled by textarea).
+			if !m.streaming && strings.TrimSpace(m.input.Value()) != "" {
+				return m, m.sendMessage()
+			}
+		}
+
+		// Delegate to textarea when not a special key we handle.
+		if !m.streaming {
+			var cmd tea.Cmd
+			m.input, cmd = m.input.Update(msg)
+			cmds = append(cmds, cmd)
+		}
+
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		m.height = msg.Height
+		m.resizeComponents()
+
+	case StreamChunkMsg:
+		m.currentResponse += msg.Content
+		m.updateViewportContent()
+		m.chatViewport.GotoBottom()
+		if m.streamCh != nil {
+			cmds = append(cmds, waitForChunk(m.streamCh))
+		}
+
+	case StreamDoneMsg:
+		m.streaming = false
+		if msg.Model != "" {
+			m.stats.ModelName = msg.Model
+		}
+		if msg.Usage != nil {
+			m.stats.PromptTokens += msg.Usage.PromptTokens
+			m.stats.CompletionTokens += msg.Usage.CompletionTokens
+		}
+		if !m.stats.ResponseStart.IsZero() {
+			m.stats.LastResponseTime = time.Since(m.stats.ResponseStart)
+		}
+		if m.currentResponse != "" {
+			m.messages = append(m.messages, llm.Message{
+				Role:    "assistant",
+				Content: m.currentResponse,
+			})
+			m.currentResponse = ""
+		}
+		m.streamCh = nil
+		m.cancelStream = nil
+		m.updateViewportContent()
+		m.chatViewport.GotoBottom()
+		cmds = append(cmds, m.input.Focus())
+
+	case StreamErrMsg:
+		m.streaming = false
+		m.err = msg.Err
+		m.stats.Connected = false
+		m.streamCh = nil
+		m.cancelStream = nil
+		if m.currentResponse != "" {
+			m.messages = append(m.messages, llm.Message{
+				Role:    "assistant",
+				Content: m.currentResponse,
+			})
+			m.currentResponse = ""
+		}
+		m.updateViewportContent()
+		cmds = append(cmds, m.input.Focus())
+
+	case ModelsMsg:
+		if msg.Err != nil {
+			m.stats.Connected = false
+			m.err = fmt.Errorf("fetching models: %w", msg.Err)
+		} else {
+			m.stats.Connected = true
+			m.err = nil
+			if len(msg.Models) > 0 {
+				m.stats.ModelName = msg.Models[0]
+			}
+		}
+		m.updateViewportContent()
+
+	case streamStartedMsg:
+		m.streamCh = msg.ch
+		cmds = append(cmds, waitForChunk(m.streamCh))
+
+	case TickMsg:
+		cmds = append(cmds, m.tickCmd())
+
+	case tea.MouseMsg:
+		// Forward mouse events to viewport for scroll support.
+		var cmd tea.Cmd
+		m.chatViewport, cmd = m.chatViewport.Update(msg)
+		cmds = append(cmds, cmd)
+	}
+
+	return m, tea.Batch(cmds...)
+}
+
+func (m Model) View() string {
+	if m.width == 0 || m.height == 0 {
+		return ""
+	}
+
+	showSidebar := m.width >= minWidthForBar
+
+	var mainWidth int
+	if showSidebar {
+		// Sidebar border takes 1 char on the left side.
+		mainWidth = m.width - sidebarWidth - 1
+	} else {
+		mainWidth = m.width
+	}
+
+	// Build chat content area.
+	// Width includes padding, so use mainWidth directly.
+	chatView := ChatAreaStyle.Width(mainWidth).
+		Render(m.chatViewport.View())
+
+	// Build input area.
+	inputView := InputAreaStyle.Width(mainWidth).Render(m.input.View())
+
+	// Join chat + input vertically.
+	mainColumn := lipgloss.JoinVertical(lipgloss.Left, chatView, inputView)
+
+	if !showSidebar {
+		return mainColumn
+	}
+
+	// Build sidebar.
+	sidebar := m.renderSidebar()
+
+	return lipgloss.JoinHorizontal(lipgloss.Top, mainColumn, sidebar)
+}
+
+// resizeComponents recalculates sizes for viewport and textarea after a resize.
+func (m *Model) resizeComponents() {
+	showSidebar := m.width >= minWidthForBar
+
+	var mainWidth int
+	if showSidebar {
+		mainWidth = m.width - sidebarWidth - 1
+	} else {
+		mainWidth = m.width
+	}
+
+	// Input takes a fixed height plus its border.
+	inputFrameHeight := inputHeight + InputAreaStyle.GetVerticalFrameSize()
+
+	// Chat viewport gets remaining height.
+	chatPadding := ChatAreaStyle.GetVerticalPadding()
+	vpHeight := m.height - inputFrameHeight - chatPadding
+	if vpHeight < 1 {
+		vpHeight = 1
+	}
+
+	vpWidth := mainWidth - ChatAreaStyle.GetHorizontalPadding()
+	if vpWidth < 1 {
+		vpWidth = 1
+	}
+
+	m.chatViewport.Width = vpWidth
+	m.chatViewport.Height = vpHeight
+
+	m.input.SetWidth(mainWidth - InputAreaStyle.GetHorizontalFrameSize())
+	m.input.SetHeight(inputHeight)
+
+	m.updateViewportContent()
+}
+
+// updateViewportContent rebuilds the chat history string and sets it on the viewport.
+func (m *Model) updateViewportContent() {
+	var sb strings.Builder
+	contentWidth := m.chatViewport.Width
+	if contentWidth < 1 {
+		contentWidth = 40
+	}
+
+	// Show welcome message when there's no conversation yet.
+	if len(m.messages) == 0 && !m.streaming {
+		welcome := HeaderStyle.Render("Welcome to toasters!") + "\n"
+		welcome += DimStyle.Render("Type a message and press Enter to chat.") + "\n"
+		welcome += DimStyle.Render("Connected to "+m.stats.Endpoint) + "\n\n"
+		welcome += DimStyle.Render("Ctrl+C to cancel a response or quit.")
+		sb.WriteString(welcome + "\n\n")
+	}
+
+	for _, msg := range m.messages {
+		switch msg.Role {
+		case "user":
+			prefix := UserMsgStyle.Render("you > ")
+			// Wrap message text to fit viewport.
+			wrapped := wrapText(msg.Content, contentWidth-6)
+			sb.WriteString(prefix + wrapped + "\n\n")
+		case "assistant":
+			wrapped := wrapText(msg.Content, contentWidth)
+			sb.WriteString(AssistantMsgStyle.Render(wrapped) + "\n\n")
+		}
+	}
+
+	// Show streaming response in progress.
+	if m.streaming && m.currentResponse != "" {
+		wrapped := wrapText(m.currentResponse, contentWidth)
+		sb.WriteString(AssistantMsgStyle.Render(wrapped))
+		sb.WriteString(StreamingStyle.Render(" ..."))
+		sb.WriteString("\n\n")
+	} else if m.streaming {
+		sb.WriteString(StreamingStyle.Render("Thinking...") + "\n\n")
+	}
+
+	// Show error if present.
+	if m.err != nil {
+		sb.WriteString(ErrorStyle.Render("Error: "+m.err.Error()) + "\n\n")
+	}
+
+	m.chatViewport.SetContent(sb.String())
+}
+
+// renderSidebar builds the right sidebar with stats.
+func (m Model) renderSidebar() string {
+	w := sidebarWidth - SidebarStyle.GetHorizontalPadding()
+
+	var sb strings.Builder
+
+	// Connection section.
+	sb.WriteString(SidebarHeaderStyle.Render("Connection"))
+	sb.WriteString("\n\n")
+
+	modelName := m.stats.ModelName
+	if modelName == "" {
+		modelName = "Loading..."
+	}
+	sb.WriteString(sidebarRow("Model", truncateStr(modelName, w-8), w))
+	sb.WriteString(sidebarRow("Endpoint", m.stats.Endpoint, w))
+
+	status := "Disconnected"
+	statusStyle := ErrorStyle
+	if m.stats.Connected {
+		status = "Connected"
+		statusStyle = ConnectedStyle
+	}
+	sb.WriteString(SidebarLabelStyle.Render("Status   "))
+	sb.WriteString(statusStyle.Render(status))
+	sb.WriteString("\n")
+
+	sb.WriteString("\n")
+	sb.WriteString(SidebarHeaderStyle.Render("Session"))
+	sb.WriteString("\n\n")
+
+	sb.WriteString(sidebarRow("Messages", fmt.Sprintf("%d", m.stats.MessageCount), w))
+	sb.WriteString(sidebarRow("Tokens in", fmt.Sprintf("%d", m.stats.PromptTokens), w))
+	sb.WriteString(sidebarRow("Tokens out", fmt.Sprintf("%d", m.stats.CompletionTokens), w))
+
+	elapsed := time.Since(m.startTime).Truncate(time.Second)
+	sb.WriteString(sidebarRow("Duration", formatDuration(elapsed), w))
+
+	lastResp := "-"
+	if m.stats.LastResponseTime > 0 {
+		lastResp = fmt.Sprintf("%.1fs", m.stats.LastResponseTime.Seconds())
+	}
+	sb.WriteString(sidebarRow("Last resp", lastResp, w))
+
+	return SidebarStyle.
+		Width(sidebarWidth).
+		Height(m.height).
+		Render(sb.String())
+}
+
+func sidebarRow(label, value string, _ int) string {
+	return SidebarLabelStyle.Render(fmt.Sprintf("%-10s", label)) +
+		SidebarValueStyle.Render(value) + "\n"
+}
+
+// sendMessage takes the current input, appends it to history, and starts streaming.
+func (m *Model) sendMessage() tea.Cmd {
+	text := strings.TrimSpace(m.input.Value())
+	if text == "" {
+		return nil
+	}
+
+	m.input.Reset()
+	m.input.Blur()
+
+	m.messages = append(m.messages, llm.Message{
+		Role:    "user",
+		Content: text,
+	})
+	m.stats.MessageCount++
+	m.streaming = true
+	m.currentResponse = ""
+	m.err = nil
+	m.stats.ResponseStart = time.Now()
+
+	m.updateViewportContent()
+	m.chatViewport.GotoBottom()
+
+	// Copy messages for the goroutine.
+	msgs := make([]llm.Message, len(m.messages))
+	copy(msgs, m.messages)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	m.cancelStream = cancel
+
+	client := m.llmClient
+	return func() tea.Msg {
+		ch := client.ChatCompletionStream(ctx, msgs)
+		// We need to send the channel back to the model so it can keep reading.
+		// Use a special message for this.
+		return streamStartedMsg{ch: ch}
+	}
+}
+
+// streamStartedMsg carries the channel back to the model after the stream begins.
+type streamStartedMsg struct {
+	ch <-chan llm.StreamResponse
+}
+
+// waitForChunk reads one item from the stream channel and returns the appropriate Msg.
+func waitForChunk(ch <-chan llm.StreamResponse) tea.Cmd {
+	return func() tea.Msg {
+		resp, ok := <-ch
+		if !ok {
+			return StreamDoneMsg{}
+		}
+		if resp.Error != nil {
+			return StreamErrMsg{Err: resp.Error}
+		}
+		if resp.Done {
+			return StreamDoneMsg{Model: resp.Model, Usage: resp.Usage}
+		}
+		return StreamChunkMsg{Content: resp.Content}
+	}
+}
+
+// fetchModels returns a command that fetches available models from the LLM server.
+func (m Model) fetchModels() tea.Cmd {
+	client := m.llmClient
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		models, err := client.FetchModels(ctx)
+		return ModelsMsg{Models: models, Err: err}
+	}
+}
+
+// tickCmd returns a command that sends a TickMsg after one second.
+func (m Model) tickCmd() tea.Cmd {
+	return tea.Tick(time.Second, func(t time.Time) tea.Msg {
+		return TickMsg(t)
+	})
+}
+
+// wrapText wraps s to fit within maxWidth columns.
+func wrapText(s string, maxWidth int) string {
+	if maxWidth <= 0 {
+		maxWidth = 40
+	}
+
+	var result strings.Builder
+	for _, line := range strings.Split(s, "\n") {
+		if lipgloss.Width(line) <= maxWidth {
+			if result.Len() > 0 {
+				result.WriteString("\n")
+			}
+			result.WriteString(line)
+			continue
+		}
+
+		// Word-wrap long lines.
+		words := strings.Fields(line)
+		var currentLine strings.Builder
+		for _, word := range words {
+			wordW := lipgloss.Width(word)
+			currentW := lipgloss.Width(currentLine.String())
+
+			if currentW == 0 {
+				// Break very long words.
+				for wordW > maxWidth {
+					if result.Len() > 0 || currentLine.Len() > 0 {
+						result.WriteString("\n")
+					}
+					// Take as many runes as fit.
+					runes := []rune(word)
+					cut := maxWidth
+					if cut > len(runes) {
+						cut = len(runes)
+					}
+					result.WriteString(string(runes[:cut]))
+					word = string(runes[cut:])
+					wordW = lipgloss.Width(word)
+				}
+				currentLine.WriteString(word)
+			} else if currentW+1+wordW <= maxWidth {
+				currentLine.WriteString(" ")
+				currentLine.WriteString(word)
+			} else {
+				if result.Len() > 0 {
+					result.WriteString("\n")
+				}
+				result.WriteString(currentLine.String())
+				currentLine.Reset()
+				currentLine.WriteString(word)
+			}
+		}
+		if currentLine.Len() > 0 {
+			if result.Len() > 0 {
+				result.WriteString("\n")
+			}
+			result.WriteString(currentLine.String())
+		}
+	}
+
+	return result.String()
+}
+
+// truncateStr truncates s to maxLen, adding "..." if truncated.
+func truncateStr(s string, maxLen int) string {
+	if maxLen <= 3 {
+		maxLen = 3
+	}
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen-3] + "..."
+}
+
+// formatDuration formats a duration as "Xm Ys" or "Xh Ym".
+func formatDuration(d time.Duration) string {
+	if d < time.Minute {
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	}
+	if d < time.Hour {
+		m := int(d.Minutes())
+		s := int(d.Seconds()) % 60
+		return fmt.Sprintf("%dm %ds", m, s)
+	}
+	h := int(d.Hours())
+	m := int(d.Minutes()) % 60
+	return fmt.Sprintf("%dh %dm", h, m)
+}
