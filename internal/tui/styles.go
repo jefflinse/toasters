@@ -34,7 +34,7 @@ var (
 
 	// InputAreaStyle is used for the message input region.
 	InputAreaStyle = lipgloss.NewStyle().
-			Border(lipgloss.ThickBorder()).
+			Border(lipgloss.RoundedBorder()).
 			BorderForeground(lipgloss.Color("51")).
 			Padding(0, 1)
 
