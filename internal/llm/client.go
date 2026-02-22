@@ -45,8 +45,9 @@ type Choice struct {
 
 // Delta holds the incremental content for a streaming choice.
 type Delta struct {
-	Content string `json:"content"`
-	Role    string `json:"role,omitempty"`
+	Content   string `json:"content"`
+	Role      string `json:"role,omitempty"`
+	Reasoning string `json:"reasoning,omitempty"`
 }
 
 // Usage holds token usage statistics.
@@ -58,11 +59,12 @@ type Usage struct {
 
 // StreamResponse carries a single update from the streaming API.
 type StreamResponse struct {
-	Content string // text chunk (may be empty for final message)
-	Done    bool   // true when stream is complete
-	Model   string // model name from response
-	Usage   *Usage // token usage (usually only on final chunk)
-	Error   error  // non-nil if something went wrong
+	Content   string // text chunk (may be empty for final message)
+	Reasoning string // reasoning/thinking chunk (chain-of-thought, if supported)
+	Done      bool   // true when stream is complete
+	Model     string // model name from response
+	Usage     *Usage // token usage (usually only on final chunk)
+	Error     error  // non-nil if something went wrong
 }
 
 // Client talks to an OpenAI-compatible API (e.g. LM Studio).
@@ -186,6 +188,13 @@ func (c *Client) streamCompletion(ctx context.Context, messages []Message, ch ch
 
 		if len(chunk.Choices) > 0 {
 			choice := chunk.Choices[0]
+
+			if choice.Delta.Reasoning != "" {
+				ch <- StreamResponse{
+					Reasoning: choice.Delta.Reasoning,
+					Model:     chunk.Model,
+				}
+			}
 
 			if choice.Delta.Content != "" {
 				ch <- StreamResponse{

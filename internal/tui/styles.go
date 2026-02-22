@@ -4,17 +4,20 @@ import "github.com/charmbracelet/lipgloss"
 
 // Colors — dark theme palette.
 var (
-	ColorPrimary    = lipgloss.AdaptiveColor{Light: "63", Dark: "135"}
-	ColorSecondary  = lipgloss.AdaptiveColor{Light: "241", Dark: "248"}
-	ColorDim        = lipgloss.AdaptiveColor{Light: "250", Dark: "241"}
-	ColorBorder     = lipgloss.AdaptiveColor{Light: "250", Dark: "237"}
-	ColorError      = lipgloss.AdaptiveColor{Light: "196", Dark: "196"}
-	ColorUser       = lipgloss.AdaptiveColor{Light: "33", Dark: "81"}
-	ColorUserBg     = lipgloss.AdaptiveColor{Light: "254", Dark: "235"}
-	ColorUserBorder = lipgloss.AdaptiveColor{Light: "33", Dark: "81"}
-	ColorAssistant  = lipgloss.AdaptiveColor{Light: "241", Dark: "252"}
-	ColorStreaming  = lipgloss.AdaptiveColor{Light: "208", Dark: "214"}
-	ColorConnected  = lipgloss.AdaptiveColor{Light: "34", Dark: "76"}
+	ColorPrimary         = lipgloss.AdaptiveColor{Light: "63", Dark: "135"}
+	ColorSecondary       = lipgloss.AdaptiveColor{Light: "241", Dark: "248"}
+	ColorDim             = lipgloss.AdaptiveColor{Light: "250", Dark: "241"}
+	ColorBorder          = lipgloss.AdaptiveColor{Light: "250", Dark: "237"}
+	ColorError           = lipgloss.AdaptiveColor{Light: "196", Dark: "196"}
+	ColorUser            = lipgloss.AdaptiveColor{Light: "33", Dark: "81"}
+	ColorUserBg          = lipgloss.AdaptiveColor{Light: "254", Dark: "235"}
+	ColorUserBorder      = lipgloss.AdaptiveColor{Light: "33", Dark: "81"}
+	ColorAssistant       = lipgloss.AdaptiveColor{Light: "241", Dark: "252"}
+	ColorStreaming       = lipgloss.AdaptiveColor{Light: "208", Dark: "214"}
+	ColorConnected       = lipgloss.AdaptiveColor{Light: "34", Dark: "76"}
+	ColorReasoning       = lipgloss.AdaptiveColor{Light: "240", Dark: "243"}
+	ColorReasoningBorder = lipgloss.AdaptiveColor{Light: "245", Dark: "238"}
+	ColorReasoningBg     = lipgloss.AdaptiveColor{Light: "253", Dark: "233"}
 )
 
 // Layout styles.
@@ -66,6 +69,25 @@ var (
 	StreamingStyle = lipgloss.NewStyle().
 			Foreground(ColorStreaming).
 			Italic(true)
+
+	// ReasoningStyle styles the "Thinking..." label.
+	ReasoningStyle = lipgloss.NewStyle().
+			Foreground(ColorReasoning).
+			Italic(true)
+
+	// ReasoningHeaderStyle styles the "thinking" label inside the reasoning block.
+	ReasoningHeaderStyle = lipgloss.NewStyle().
+				Foreground(ColorReasoning).
+				Italic(true).
+				Bold(false)
+
+	// ReasoningBlockStyle styles the reasoning trace block.
+	ReasoningBlockStyle = lipgloss.NewStyle().
+				Foreground(ColorReasoning).
+				Background(ColorReasoningBg).
+				Border(lipgloss.NormalBorder(), false, false, false, true).
+				BorderForeground(ColorReasoningBorder).
+				Padding(0, 1)
 
 	// ErrorStyle styles error messages.
 	ErrorStyle = lipgloss.NewStyle().

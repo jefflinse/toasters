@@ -31,15 +31,20 @@ type SessionStats struct {
 	MessageCount         int
 	PromptTokens         int
 	CompletionTokens     int
+	ReasoningTokens      int // accumulated reasoning tokens across all turns
 	CompletionTokensLive int // estimated completion tokens for the in-progress response
+	ReasoningTokensLive  int // estimated reasoning tokens for the in-progress response
 	LastResponseTime     time.Duration
 	ResponseStart        time.Time
+	TotalResponses       int           // number of completed responses (for avg calc)
+	TotalResponseTime    time.Duration // sum of all response times (for avg calc)
 }
 
 // Message types for the Bubble Tea event loop.
 
 type StreamChunkMsg struct {
-	Content string
+	Content   string
+	Reasoning string
 }
 
 type StreamDoneMsg struct {
@@ -70,17 +75,19 @@ type Model struct {
 	width  int
 	height int
 
-	llmClient       *llm.Client
-	messages        []llm.Message
-	chatViewport    viewport.Model
-	input           textarea.Model
-	streaming       bool
-	currentResponse string
-	streamCh        <-chan llm.StreamResponse
-	cancelStream    context.CancelFunc
-	stats           SessionStats
-	err             error
-	mdRender        *glamour.TermRenderer
+	llmClient        *llm.Client
+	messages         []llm.Message
+	reasoning        []string // reasoning[i] is the thinking trace for messages[i] (assistant turns only)
+	chatViewport     viewport.Model
+	input            textarea.Model
+	streaming        bool
+	currentResponse  string
+	currentReasoning string
+	streamCh         <-chan llm.StreamResponse
+	cancelStream     context.CancelFunc
+	stats            SessionStats
+	err              error
+	mdRender         *glamour.TermRenderer
 }
 
 // NewModel returns an initialized root model.
@@ -137,8 +144,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						Role:    "assistant",
 						Content: m.currentResponse,
 					})
+					m.reasoning = append(m.reasoning, m.currentReasoning)
 					m.currentResponse = ""
+					m.currentReasoning = ""
 				}
+				m.stats.CompletionTokensLive = 0
+				m.stats.ReasoningTokensLive = 0
 				m.updateViewportContent()
 				return m, m.input.Focus()
 			}
@@ -166,9 +177,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case StreamChunkMsg:
 		m.currentResponse += msg.Content
-		// Update live estimates while streaming.
-		// Completion tokens: rough estimate of ~4 chars per token.
+		m.currentReasoning += msg.Reasoning
+		// Live token estimates (~4 chars/token).
 		m.stats.CompletionTokensLive = len([]rune(m.currentResponse)) / 4
+		m.stats.ReasoningTokensLive = len([]rune(m.currentReasoning)) / 4
 		// Elapsed response time ticks up on every chunk.
 		if !m.stats.ResponseStart.IsZero() {
 			m.stats.LastResponseTime = time.Since(m.stats.ResponseStart)
@@ -188,17 +200,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.stats.PromptTokens += msg.Usage.PromptTokens
 			m.stats.CompletionTokens += msg.Usage.CompletionTokens
 		}
-		m.stats.CompletionTokensLive = 0 // clear estimate; real numbers are in now
+		// Accumulate reasoning tokens from live estimate (server doesn't report them separately).
+		m.stats.ReasoningTokens += m.stats.ReasoningTokensLive
+		m.stats.CompletionTokensLive = 0
+		m.stats.ReasoningTokensLive = 0
 		if !m.stats.ResponseStart.IsZero() {
 			m.stats.LastResponseTime = time.Since(m.stats.ResponseStart)
+			m.stats.TotalResponseTime += m.stats.LastResponseTime
+			m.stats.TotalResponses++
 		}
 		if m.currentResponse != "" {
 			m.messages = append(m.messages, llm.Message{
 				Role:    "assistant",
 				Content: m.currentResponse,
 			})
-			m.currentResponse = ""
+			m.reasoning = append(m.reasoning, m.currentReasoning)
 		}
+		m.currentResponse = ""
+		m.currentReasoning = ""
 		m.streamCh = nil
 		m.cancelStream = nil
 		m.updateViewportContent()
@@ -216,8 +235,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				Role:    "assistant",
 				Content: m.currentResponse,
 			})
+			m.reasoning = append(m.reasoning, m.currentReasoning)
 			m.currentResponse = ""
+			m.currentReasoning = ""
 		}
+		m.stats.CompletionTokensLive = 0
+		m.stats.ReasoningTokensLive = 0
 		m.updateViewportContent()
 		cmds = append(cmds, m.input.Focus())
 
@@ -378,10 +401,10 @@ func (m *Model) updateViewportContent() {
 		sb.WriteString(welcome + "\n\n")
 	}
 
+	assistantIdx := 0
 	for _, msg := range m.messages {
 		switch msg.Role {
 		case "user":
-			// Block width: viewport minus the left border + padding of the block style.
 			blockWidth := contentWidth - UserMsgBlockStyle.GetHorizontalFrameSize()
 			if blockWidth < 1 {
 				blockWidth = 1
@@ -389,17 +412,31 @@ func (m *Model) updateViewportContent() {
 			block := UserMsgBlockStyle.Width(blockWidth).Render(wrapText(msg.Content, blockWidth))
 			sb.WriteString(block + "\n\n")
 		case "assistant":
+			// Render reasoning trace (if any) above the response.
+			if assistantIdx < len(m.reasoning) && m.reasoning[assistantIdx] != "" {
+				sb.WriteString(renderReasoningBlock(m.reasoning[assistantIdx], contentWidth))
+				sb.WriteString("\n")
+			}
 			sb.WriteString(m.renderMarkdown(msg.Content) + "\n\n")
+			assistantIdx++
 		}
 	}
 
 	// Show streaming response in progress — re-render markdown incrementally.
-	if m.streaming && m.currentResponse != "" {
-		sb.WriteString(m.renderMarkdown(m.currentResponse))
-		sb.WriteString(StreamingStyle.Render(" ▍"))
-		sb.WriteString("\n\n")
-	} else if m.streaming {
-		sb.WriteString(StreamingStyle.Render("Thinking...") + "\n\n")
+	if m.streaming {
+		// Live reasoning trace while thinking.
+		if m.currentReasoning != "" {
+			sb.WriteString(renderReasoningBlock(m.currentReasoning, contentWidth))
+			sb.WriteString("\n")
+		} else {
+			sb.WriteString(ReasoningStyle.Render("Thinking...") + "\n\n")
+		}
+		// Live response content.
+		if m.currentResponse != "" {
+			sb.WriteString(m.renderMarkdown(m.currentResponse))
+			sb.WriteString(StreamingStyle.Render(" ▍"))
+			sb.WriteString("\n\n")
+		}
 	}
 
 	// Show error if present.
@@ -451,12 +488,25 @@ func (m Model) renderSidebar(sbWidth int) string {
 
 	// While streaming, blend in live estimates for the current response.
 	liveCompletionTokens := m.stats.CompletionTokens + m.stats.CompletionTokensLive
+	liveReasoningTokens := m.stats.ReasoningTokens + m.stats.ReasoningTokensLive
 
 	sb.WriteString(sidebarRow("Messages", fmt.Sprintf("%d", m.stats.MessageCount)))
 	sb.WriteString(sidebarRow("Tokens in", fmt.Sprintf("%d", m.stats.PromptTokens)))
 	sb.WriteString(sidebarRow("Tokens out", fmt.Sprintf("%d", liveCompletionTokens)))
+	sb.WriteString(sidebarRow("Reasoning", fmt.Sprintf("%d", liveReasoningTokens)))
 
-	totalTokens := m.stats.PromptTokens + liveCompletionTokens
+	// Tokens/sec: completion tokens over total response time.
+	tokPerSec := "-"
+	if m.stats.TotalResponses > 0 && m.stats.TotalResponseTime > 0 {
+		tps := float64(m.stats.CompletionTokens) / m.stats.TotalResponseTime.Seconds()
+		tokPerSec = fmt.Sprintf("%.1f t/s", tps)
+	} else if m.streaming && m.stats.LastResponseTime > 0 && m.stats.CompletionTokensLive > 0 {
+		tps := float64(m.stats.CompletionTokensLive) / m.stats.LastResponseTime.Seconds()
+		tokPerSec = fmt.Sprintf("%.1f t/s", tps)
+	}
+	sb.WriteString(sidebarRow("Speed", tokPerSec))
+
+	totalTokens := m.stats.PromptTokens + liveCompletionTokens + liveReasoningTokens
 	sb.WriteString(SidebarLabelStyle.Render("Context"))
 	sb.WriteString("\n")
 	sb.WriteString(renderContextBar(totalTokens, m.stats.ContextLength, contentWidth))
@@ -466,7 +516,13 @@ func (m Model) renderSidebar(sbWidth int) string {
 	if m.stats.LastResponseTime > 0 {
 		lastResp = fmt.Sprintf("%.1fs", m.stats.LastResponseTime.Seconds())
 	}
+	avgResp := "-"
+	if m.stats.TotalResponses > 0 {
+		avg := m.stats.TotalResponseTime / time.Duration(m.stats.TotalResponses)
+		avgResp = fmt.Sprintf("%.1fs", avg.Seconds())
+	}
 	sb.WriteString(sidebarRow("Last resp", lastResp))
+	sb.WriteString(sidebarRow("Avg resp", avgResp))
 
 	return SidebarStyle.
 		Width(sbWidth).
@@ -518,6 +574,18 @@ func renderContextBar(used, total, width int) string {
 	summaryStr := DimStyle.Render(summary)
 
 	return bar + "\n" + summaryStr
+}
+
+// renderReasoningBlock renders a chain-of-thought reasoning trace as a dimmed,
+// left-bordered block with a "thinking" header.
+func renderReasoningBlock(reasoning string, contentWidth int) string {
+	blockWidth := contentWidth - ReasoningBlockStyle.GetHorizontalFrameSize()
+	if blockWidth < 1 {
+		blockWidth = 1
+	}
+	header := ReasoningHeaderStyle.Render("⟳ thinking")
+	body := ReasoningBlockStyle.Width(blockWidth).Render(wrapText(reasoning, blockWidth))
+	return header + "\n" + body
 }
 
 func sidebarRow(label, value string) string {
@@ -582,7 +650,7 @@ func waitForChunk(ch <-chan llm.StreamResponse) tea.Cmd {
 		if resp.Done {
 			return StreamDoneMsg{Model: resp.Model, Usage: resp.Usage}
 		}
-		return StreamChunkMsg{Content: resp.Content}
+		return StreamChunkMsg{Content: resp.Content, Reasoning: resp.Reasoning}
 	}
 }
 
