@@ -243,11 +243,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.focused == focusChat {
 				m.focused = focusWorkEfforts
 				m.input.Blur()
+				return m, nil
 			} else {
 				m.focused = focusChat
 				return m, m.input.Focus()
 			}
-			return m, nil
 
 		case "up":
 			// Navigate work efforts when that panel is focused.
@@ -775,11 +775,11 @@ func (m Model) renderLeftPanel(panelWidth, panelHeight int) string {
 		topLines = append(topLines, PlaceholderPaneStyle.Render("No work efforts"))
 	} else {
 		for i, we := range m.workEfforts {
-			name := truncateStr(we.Name, contentWidth-2)
+			name := truncateStr(we.Name, contentWidth-3)
 			if i == m.selectedWorkEffort {
-				topLines = append(topLines, WorkEffortSelectedStyle.Render("> "+name))
+				topLines = append(topLines, WorkEffortSelectedStyle.Render("🍞 "+name))
 			} else {
-				topLines = append(topLines, WorkEffortItemStyle.Render("  "+name))
+				topLines = append(topLines, WorkEffortItemStyle.Render("   "+name))
 			}
 		}
 	}
@@ -788,10 +788,14 @@ func (m Model) renderLeftPanel(panelWidth, panelHeight int) string {
 	)
 
 	// --- Middle pane: DAG ---
+	selectedName := ""
+	if len(m.workEfforts) > 0 && m.selectedWorkEffort < len(m.workEfforts) {
+		selectedName = m.workEfforts[m.selectedWorkEffort].Name
+	}
 	middlePane := lipgloss.NewStyle().Height(middleH).Render(
 		lipgloss.JoinVertical(lipgloss.Left,
-			LeftPanelHeaderStyle.Render("DAG"),
-			PlaceholderPaneStyle.Render("No tasks"),
+			LeftPanelHeaderStyle.Render(truncateStr(selectedName, contentWidth)),
+			PlaceholderPaneStyle.Render("—"),
 		),
 	)
 
