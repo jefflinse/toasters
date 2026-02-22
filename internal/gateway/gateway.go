@@ -53,19 +53,21 @@ type slot struct {
 
 // Gateway manages up to MaxSlots concurrent Claude subprocess slots.
 type Gateway struct {
-	mu        sync.Mutex
-	slots     [MaxSlots]*slot
-	claudeCfg config.ClaudeConfig
-	repoRoot  string // path to repo root (agents/ dir is repoRoot/agents/)
-	notify    func() // called on every output update; wired to TUI re-render
+	mu             sync.Mutex
+	slots          [MaxSlots]*slot
+	claudeCfg      config.ClaudeConfig
+	repoRoot       string        // path to repo root (agents/ dir is repoRoot/agents/)
+	notify         func()        // called on every output update; wired to TUI re-render
+	defaultTimeout time.Duration // per-slot subprocess timeout
 }
 
 // New returns an initialized Gateway with all slots nil.
 func New(claudeCfg config.ClaudeConfig, repoRoot string, notify func()) *Gateway {
 	return &Gateway{
-		claudeCfg: claudeCfg,
-		repoRoot:  repoRoot,
-		notify:    notify,
+		claudeCfg:      claudeCfg,
+		repoRoot:       repoRoot,
+		notify:         notify,
+		defaultTimeout: 5 * time.Minute,
 	}
 }
 
@@ -125,7 +127,7 @@ func (g *Gateway) Spawn(agentName, workEffortID, task string) (int, error) {
 	prompt := sb.String()
 
 	// Create the slot and assign it.
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), g.defaultTimeout)
 	s := &slot{
 		agentName:    agentName,
 		workEffortID: workEffortID,
@@ -211,6 +213,29 @@ func (g *Gateway) Dismiss(slotID int) error {
 	return nil
 }
 
+// Kill cancels a running slot's subprocess and marks it done.
+// Returns an error if the slot is out of range or not running.
+func (g *Gateway) Kill(slotID int) error {
+	if slotID < 0 || slotID >= MaxSlots {
+		return fmt.Errorf("slot ID %d out of range (0-%d)", slotID, MaxSlots-1)
+	}
+
+	g.mu.Lock()
+	s := g.slots[slotID]
+	if s == nil || s.status != SlotRunning {
+		g.mu.Unlock()
+		return fmt.Errorf("slot %d is not running", slotID)
+	}
+	s.cancel()
+	s.status = SlotDone
+	s.endTime = time.Now()
+	s.output.WriteString("\n[killed]")
+	g.mu.Unlock() // unlock BEFORE calling notify to avoid deadlock
+
+	g.notify()
+	return nil
+}
+
 // --- Claude subprocess streaming (inlined from internal/tui/claude.go) ---
 
 // claudeInitEvent is the first line emitted by `claude --output-format stream-json`.
@@ -263,7 +288,12 @@ func spawnClaudeStream(ctx context.Context, prompt string, claudeCfg config.Clau
 		args = append(args, prompt)
 
 		cmd := exec.CommandContext(ctx, claudeCfg.Path, args...)
-		cmd.Stderr = io.Discard
+
+		stderrPipe, err := cmd.StderrPipe()
+		if err != nil {
+			ch <- llm.StreamResponse{Error: fmt.Errorf("opening claude stderr pipe: %w", err)}
+			return
+		}
 
 		stdout, err := cmd.StdoutPipe()
 		if err != nil {
@@ -275,6 +305,14 @@ func spawnClaudeStream(ctx context.Context, prompt string, claudeCfg config.Clau
 			ch <- llm.StreamResponse{Error: fmt.Errorf("starting claude: %w", err)}
 			return
 		}
+
+		var stderrBuf strings.Builder
+		var stderrWg sync.WaitGroup
+		stderrWg.Add(1)
+		go func() {
+			defer stderrWg.Done()
+			io.Copy(&stderrBuf, stderrPipe)
+		}()
 
 		done := false
 		firstLine := true
@@ -324,8 +362,12 @@ func spawnClaudeStream(ctx context.Context, prompt string, claudeCfg config.Clau
 			}
 		}
 
-		// Wait for the process to exit so we don't leave zombies.
+		stderrWg.Wait() // ensure stderr is fully read before Wait
 		_ = cmd.Wait()
+
+		if stderrStr := strings.TrimSpace(stderrBuf.String()); stderrStr != "" {
+			ch <- llm.StreamResponse{Content: "\n[stderr]: " + stderrStr}
+		}
 
 		if !done {
 			ch <- llm.StreamResponse{Done: true}

@@ -156,6 +156,11 @@ type Model struct {
 	// Grid screen state.
 	showGrid      bool
 	gridFocusCell int // 0-3
+
+	// Kill modal state.
+	showKillModal   bool
+	killModalSlots  []int // actual slot indices (0-3) of running slots
+	selectedKillIdx int   // index into killModalSlots
 }
 
 // NewModel returns an initialized root model.
@@ -262,6 +267,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "ctrl+g", "esc":
 				m.showGrid = false
 				return m, nil
+			case "k", "ctrl+k":
+				if m.gateway != nil {
+					_ = m.gateway.Kill(m.gridFocusCell)
+				}
+				return m, nil
 			case "left":
 				if m.gridFocusCell%2 == 1 {
 					m.gridFocusCell--
@@ -281,6 +291,32 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.gridFocusCell < 2 {
 					m.gridFocusCell += 2
 				}
+				return m, nil
+			}
+			return m, nil
+		}
+
+		// When the kill modal is visible, intercept all keys before any other handling.
+		if m.showKillModal {
+			switch msg.String() {
+			case "up":
+				if len(m.killModalSlots) > 0 {
+					m.selectedKillIdx = (m.selectedKillIdx - 1 + len(m.killModalSlots)) % len(m.killModalSlots)
+				}
+				return m, nil
+			case "down":
+				if len(m.killModalSlots) > 0 {
+					m.selectedKillIdx = (m.selectedKillIdx + 1) % len(m.killModalSlots)
+				}
+				return m, nil
+			case "enter":
+				if m.gateway != nil && len(m.killModalSlots) > 0 {
+					_ = m.gateway.Kill(m.killModalSlots[m.selectedKillIdx])
+				}
+				m.showKillModal = false
+				return m, nil
+			case "esc":
+				m.showKillModal = false
 				return m, nil
 			}
 			return m, nil
@@ -443,6 +479,31 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.input.Reset()
 					m.showCmdPopup = false
 					m.newSession()
+					return m, nil
+				case "/kill":
+					m.input.Reset()
+					m.showCmdPopup = false
+					if m.gateway == nil {
+						return m, nil
+					}
+					slots := m.gateway.Slots()
+					var running []int
+					for i, s := range slots {
+						if s.Active && s.Status == gateway.SlotRunning {
+							running = append(running, i)
+						}
+					}
+					if len(running) == 0 {
+						m.messages = append(m.messages, llm.Message{Role: "assistant", Content: "No running agents."})
+						m.reasoning = append(m.reasoning, "")
+						m.claudeMeta = append(m.claudeMeta, "")
+						m.updateViewportContent()
+						m.chatViewport.GotoBottom()
+					} else {
+						m.killModalSlots = running
+						m.selectedKillIdx = 0
+						m.showKillModal = true
+					}
 					return m, nil
 				}
 				// /claude <prompt> — stream via the claude CLI subprocess.
@@ -770,6 +831,43 @@ func (m Model) View() tea.View {
 		chatContent = strings.Join(lines[:trimTo], "\n")
 	}
 
+	// Build kill modal popup (if active) — mutually exclusive with cmd popup.
+	var killPopupView string
+	if m.showKillModal && m.gateway != nil {
+		slots := m.gateway.Slots()
+		var rows []string
+		for i, slotIdx := range m.killModalSlots {
+			snap := slots[slotIdx]
+			label := fmt.Sprintf("[%d] %s · %s", slotIdx, snap.AgentName, snap.WorkEffortID)
+			if i == m.selectedKillIdx {
+				row := CmdPopupSelectedStyle.Width(mainWidth).Render(
+					CmdPopupNameSelectedStyle.Render(label),
+				)
+				rows = append(rows, row)
+			} else {
+				row := CmdPopupRowStyle.Width(mainWidth).Render(
+					CmdPopupNameStyle.Render(label),
+				)
+				rows = append(rows, row)
+			}
+		}
+		footer := CmdPopupRowStyle.Width(mainWidth).Render(
+			DimStyle.Render("Enter to kill · Esc to cancel"),
+		)
+		rows = append(rows, footer)
+		killPopupView = CmdPopupContainerStyle.Width(mainWidth).Render(
+			lipgloss.JoinVertical(lipgloss.Left, rows...),
+		)
+		// Trim chatContent to make room for the modal.
+		killPopupHeight := len(m.killModalSlots) + 1 // +1 for footer
+		lines := strings.Split(chatContent, "\n")
+		trimTo := len(lines) - killPopupHeight
+		if trimTo < 0 {
+			trimTo = 0
+		}
+		chatContent = strings.Join(lines[:trimTo], "\n")
+	}
+
 	chatView := ChatAreaStyle.Width(mainWidth).Render(chatContent)
 
 	// Build claude meta strip (shown while a claude stream is active).
@@ -778,12 +876,18 @@ func (m Model) View() tea.View {
 		metaStrip = ClaudeMetaStyle.Width(mainWidth).Render("⬡ " + m.claudeActiveMeta)
 	}
 
-	// Join chat + popup (if any) + meta strip (if any) + input/status vertically.
+	// overlayView is whichever popup is active (cmd popup or kill modal), if any.
+	overlayView := popupView
+	if killPopupView != "" {
+		overlayView = killPopupView
+	}
+
+	// Join chat + overlay (if any) + meta strip (if any) + input/status vertically.
 	var mainColumn string
-	if popupView != "" && metaStrip != "" {
-		mainColumn = lipgloss.JoinVertical(lipgloss.Left, chatView, popupView, metaStrip, inputOrStatus)
-	} else if popupView != "" {
-		mainColumn = lipgloss.JoinVertical(lipgloss.Left, chatView, popupView, inputOrStatus)
+	if overlayView != "" && metaStrip != "" {
+		mainColumn = lipgloss.JoinVertical(lipgloss.Left, chatView, overlayView, metaStrip, inputOrStatus)
+	} else if overlayView != "" {
+		mainColumn = lipgloss.JoinVertical(lipgloss.Left, chatView, overlayView, inputOrStatus)
 	} else if metaStrip != "" {
 		mainColumn = lipgloss.JoinVertical(lipgloss.Left, chatView, metaStrip, inputOrStatus)
 	} else {
