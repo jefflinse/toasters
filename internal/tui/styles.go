@@ -110,4 +110,42 @@ var (
 	// ConnectedStyle styles the "Connected" status.
 	ConnectedStyle = lipgloss.NewStyle().
 			Foreground(ColorConnected)
+
+	// CmdPopupContainerStyle wraps the entire slash command popup.
+	CmdPopupContainerStyle = lipgloss.NewStyle().
+				Background(lipgloss.Color("235"))
+
+	// CmdPopupRowStyle styles an unselected row in the command popup.
+	CmdPopupRowStyle = lipgloss.NewStyle().
+				Padding(0, 1).
+				Background(lipgloss.Color("235"))
+
+	// CmdPopupSelectedStyle styles the currently selected row in the command popup.
+	CmdPopupSelectedStyle = lipgloss.NewStyle().
+				Padding(0, 1).
+				Background(lipgloss.Color("238")).
+				Bold(true)
+
+	// CmdPopupNameStyle styles the command name in an unselected row.
+	CmdPopupNameStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("51")).
+				Width(12).
+				Background(lipgloss.Color("235"))
+
+	// CmdPopupNameSelectedStyle styles the command name in the selected row.
+	CmdPopupNameSelectedStyle = lipgloss.NewStyle().
+					Foreground(lipgloss.Color("51")).
+					Width(12).
+					Background(lipgloss.Color("238")).
+					Bold(true)
+
+	// CmdPopupDescStyle styles the description in an unselected row.
+	CmdPopupDescStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("245")).
+				Background(lipgloss.Color("235"))
+
+	// CmdPopupDescSelectedStyle styles the description in the selected row.
+	CmdPopupDescSelectedStyle = lipgloss.NewStyle().
+					Foreground(lipgloss.Color("252")).
+					Background(lipgloss.Color("238"))
 )

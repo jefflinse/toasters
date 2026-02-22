@@ -88,6 +88,11 @@ type Model struct {
 	stats            SessionStats
 	err              error
 	mdRender         *glamour.TermRenderer
+
+	// Slash command autocomplete popup state.
+	showCmdPopup   bool
+	filteredCmds   []SlashCommand
+	selectedCmdIdx int
 }
 
 // NewModel returns an initialized root model.
@@ -145,6 +150,32 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		// When the slash command popup is visible, intercept navigation keys
+		// before any other handling so they don't fall through to the textarea.
+		if m.showCmdPopup {
+			switch msg.String() {
+			case "up":
+				if len(m.filteredCmds) > 0 {
+					m.selectedCmdIdx = (m.selectedCmdIdx - 1 + len(m.filteredCmds)) % len(m.filteredCmds)
+				}
+				return m, nil
+			case "down":
+				if len(m.filteredCmds) > 0 {
+					m.selectedCmdIdx = (m.selectedCmdIdx + 1) % len(m.filteredCmds)
+				}
+				return m, nil
+			case "tab", "enter":
+				if len(m.filteredCmds) > 0 {
+					m.input.SetValue(m.filteredCmds[m.selectedCmdIdx].Name)
+				}
+				m.showCmdPopup = false
+				return m, nil
+			case "esc":
+				m.showCmdPopup = false
+				return m, nil
+			}
+		}
+
 		switch msg.String() {
 		case "ctrl+c":
 			if m.streaming && m.cancelStream != nil {
@@ -172,6 +203,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Send message on Enter when not streaming and input has content.
 			// Shift+enter inserts a newline (handled by textarea).
 			if !m.streaming && strings.TrimSpace(m.input.Value()) != "" {
+				text := strings.TrimSpace(m.input.Value())
+				switch text {
+				case "/exit", "/quit":
+					return m, tea.Quit
+				case "/help":
+					m.input.Reset()
+					m.showCmdPopup = false
+					m.appendHelpMessage()
+					return m, nil
+				case "/new":
+					m.input.Reset()
+					m.showCmdPopup = false
+					m.newSession()
+					return m, nil
+				}
+				// Not a recognized slash command — send to LLM.
+				m.showCmdPopup = false
 				return m, m.sendMessage()
 			}
 		}
@@ -181,6 +229,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			var cmd tea.Cmd
 			m.input, cmd = m.input.Update(msg)
 			cmds = append(cmds, cmd)
+
+			// Update slash command popup state based on current input value.
+			inputVal := m.input.Value()
+			if strings.HasPrefix(inputVal, "/") {
+				m.filteredCmds = filterCommands(inputVal)
+				m.showCmdPopup = len(m.filteredCmds) > 0
+				if m.showCmdPopup && m.selectedCmdIdx >= len(m.filteredCmds) {
+					m.selectedCmdIdx = 0
+				}
+			} else {
+				m.showCmdPopup = false
+				m.filteredCmds = nil
+				m.selectedCmdIdx = 0
+			}
 		}
 
 	case tea.WindowSizeMsg:
@@ -312,14 +374,56 @@ func (m Model) View() string {
 
 	// Build chat content area.
 	// Width includes padding, so use mainWidth directly.
-	chatView := ChatAreaStyle.Width(mainWidth).
-		Render(m.chatViewport.View())
+	chatContent := m.chatViewport.View()
+
+	// Build slash command popup (if active).
+	var popupView string
+	if m.showCmdPopup && len(m.filteredCmds) > 0 {
+		var rows []string
+		for i, cmd := range m.filteredCmds {
+			if i == m.selectedCmdIdx {
+				nameStr := CmdPopupNameSelectedStyle.Render(cmd.Name)
+				descStr := CmdPopupDescSelectedStyle.Render(cmd.Description)
+				row := CmdPopupSelectedStyle.Width(mainWidth).Render(
+					lipgloss.JoinHorizontal(lipgloss.Left, nameStr, descStr),
+				)
+				rows = append(rows, row)
+			} else {
+				nameStr := CmdPopupNameStyle.Render(cmd.Name)
+				descStr := CmdPopupDescStyle.Render(cmd.Description)
+				row := CmdPopupRowStyle.Width(mainWidth).Render(
+					lipgloss.JoinHorizontal(lipgloss.Left, nameStr, descStr),
+				)
+				rows = append(rows, row)
+			}
+		}
+		popupView = CmdPopupContainerStyle.Width(mainWidth).Render(
+			lipgloss.JoinVertical(lipgloss.Left, rows...),
+		)
+
+		// Trim the chat content to make room for the popup so the layout
+		// doesn't overflow the terminal height.
+		popupHeight := len(m.filteredCmds)
+		lines := strings.Split(chatContent, "\n")
+		trimTo := len(lines) - popupHeight
+		if trimTo < 0 {
+			trimTo = 0
+		}
+		chatContent = strings.Join(lines[:trimTo], "\n")
+	}
+
+	chatView := ChatAreaStyle.Width(mainWidth).Render(chatContent)
 
 	// Build input area.
 	inputView := InputAreaStyle.Width(mainWidth).Render(m.input.View())
 
-	// Join chat + input vertically.
-	mainColumn := lipgloss.JoinVertical(lipgloss.Left, chatView, inputView)
+	// Join chat + popup (if any) + input vertically.
+	var mainColumn string
+	if popupView != "" {
+		mainColumn = lipgloss.JoinVertical(lipgloss.Left, chatView, popupView, inputView)
+	} else {
+		mainColumn = lipgloss.JoinVertical(lipgloss.Left, chatView, inputView)
+	}
 
 	if !showSidebar {
 		return mainColumn
@@ -606,6 +710,47 @@ func sidebarRow(label, value string) string {
 		SidebarValueStyle.Render(value) + "\n"
 }
 
+// appendHelpMessage adds a help message to the chat as an assistant turn.
+func (m *Model) appendHelpMessage() {
+	helpText := "**Toasters — Help**\n\n" +
+		"**Slash Commands**\n" +
+		"- `/help` — Show this help message\n" +
+		"- `/new` — Start a new session (clears chat history)\n" +
+		"- `/exit`, `/quit` — Exit the application\n\n" +
+		"**Keyboard Shortcuts**\n" +
+		"- `Enter` — Send message\n" +
+		"- `Shift+Enter` — New line in message\n" +
+		"- `Ctrl+C` (during stream) — Cancel current response\n" +
+		"- `Ctrl+C` (idle) — Quit\n\n" +
+		"**Slash Command Autocomplete**\n" +
+		"Type `/` to open the command picker. Use ↑↓ to navigate, Tab or Enter to select, Esc to dismiss."
+
+	m.messages = append(m.messages, llm.Message{Role: "assistant", Content: helpText})
+	m.reasoning = append(m.reasoning, "")
+	m.stats.MessageCount++
+	m.updateViewportContent()
+	m.chatViewport.GotoBottom()
+}
+
+// newSession resets the conversation and all session statistics.
+func (m *Model) newSession() {
+	m.messages = nil
+	m.reasoning = nil
+	m.currentResponse = ""
+	m.currentReasoning = ""
+	m.stats.MessageCount = 0
+	m.stats.PromptTokens = 0
+	m.stats.CompletionTokens = 0
+	m.stats.ReasoningTokens = 0
+	m.stats.TotalResponses = 0
+	m.stats.TotalResponseTime = 0
+	m.stats.LastResponseTime = 0
+	m.err = nil
+	m.updateViewportContent()
+	m.chatViewport.GotoBottom()
+	m.input.Focus()
+}
+
 // sendMessage takes the current input, appends it to history, and starts streaming.
 func (m *Model) sendMessage() tea.Cmd {
 	text := strings.TrimSpace(m.input.Value())
@@ -615,6 +760,9 @@ func (m *Model) sendMessage() tea.Cmd {
 
 	m.input.Reset()
 	m.input.Blur()
+	m.showCmdPopup = false
+	m.filteredCmds = nil
+	m.selectedCmdIdx = 0
 
 	m.messages = append(m.messages, llm.Message{
 		Role:    "user",
