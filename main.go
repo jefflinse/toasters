@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/jefflinse/toasters/internal/llm"
 	"github.com/jefflinse/toasters/internal/tui"
@@ -13,11 +13,7 @@ import (
 func main() {
 	client := llm.NewClient("http://localhost:1234", "")
 
-	p := tea.NewProgram(
-		tui.NewModel(client),
-		tea.WithAltScreen(),
-		tea.WithMouseCellMotion(),
-	)
+	p := tea.NewProgram(tui.NewModel(client))
 
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)

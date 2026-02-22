@@ -1,23 +1,27 @@
 package tui
 
-import "github.com/charmbracelet/lipgloss"
+import (
+	"charm.land/lipgloss/v2"
+	"charm.land/lipgloss/v2/compat"
+)
 
 // Colors — dark theme palette.
+// compat.AdaptiveColor selects light/dark at runtime based on terminal background.
 var (
-	ColorPrimary         = lipgloss.AdaptiveColor{Light: "63", Dark: "135"}
-	ColorSecondary       = lipgloss.AdaptiveColor{Light: "241", Dark: "248"}
-	ColorDim             = lipgloss.AdaptiveColor{Light: "250", Dark: "241"}
-	ColorBorder          = lipgloss.AdaptiveColor{Light: "250", Dark: "237"}
-	ColorError           = lipgloss.AdaptiveColor{Light: "196", Dark: "196"}
-	ColorUser            = lipgloss.AdaptiveColor{Light: "33", Dark: "81"}
-	ColorUserBg          = lipgloss.AdaptiveColor{Light: "254", Dark: "235"}
-	ColorUserBorder      = lipgloss.AdaptiveColor{Light: "33", Dark: "81"}
-	ColorAssistant       = lipgloss.AdaptiveColor{Light: "241", Dark: "252"}
-	ColorStreaming       = lipgloss.AdaptiveColor{Light: "208", Dark: "214"}
-	ColorConnected       = lipgloss.AdaptiveColor{Light: "34", Dark: "76"}
-	ColorReasoning       = lipgloss.AdaptiveColor{Light: "240", Dark: "243"}
-	ColorReasoningBorder = lipgloss.AdaptiveColor{Light: "245", Dark: "238"}
-	ColorReasoningBg     = lipgloss.AdaptiveColor{Light: "253", Dark: "233"}
+	ColorPrimary         = compat.AdaptiveColor{Light: lipgloss.Color("63"), Dark: lipgloss.Color("135")}
+	ColorSecondary       = compat.AdaptiveColor{Light: lipgloss.Color("241"), Dark: lipgloss.Color("248")}
+	ColorDim             = compat.AdaptiveColor{Light: lipgloss.Color("250"), Dark: lipgloss.Color("241")}
+	ColorBorder          = compat.AdaptiveColor{Light: lipgloss.Color("250"), Dark: lipgloss.Color("237")}
+	ColorError           = compat.AdaptiveColor{Light: lipgloss.Color("196"), Dark: lipgloss.Color("196")}
+	ColorUser            = compat.AdaptiveColor{Light: lipgloss.Color("33"), Dark: lipgloss.Color("81")}
+	ColorUserBg          = compat.AdaptiveColor{Light: lipgloss.Color("254"), Dark: lipgloss.Color("235")}
+	ColorUserBorder      = compat.AdaptiveColor{Light: lipgloss.Color("33"), Dark: lipgloss.Color("81")}
+	ColorAssistant       = compat.AdaptiveColor{Light: lipgloss.Color("241"), Dark: lipgloss.Color("252")}
+	ColorStreaming       = compat.AdaptiveColor{Light: lipgloss.Color("208"), Dark: lipgloss.Color("214")}
+	ColorConnected       = compat.AdaptiveColor{Light: lipgloss.Color("34"), Dark: lipgloss.Color("76")}
+	ColorReasoning       = compat.AdaptiveColor{Light: lipgloss.Color("240"), Dark: lipgloss.Color("243")}
+	ColorReasoningBorder = compat.AdaptiveColor{Light: lipgloss.Color("245"), Dark: lipgloss.Color("238")}
+	ColorReasoningBg     = compat.AdaptiveColor{Light: lipgloss.Color("253"), Dark: lipgloss.Color("233")}
 )
 
 // Layout styles.
@@ -56,7 +60,7 @@ var (
 	// UserMsgBlockStyle styles the user message content block.
 	UserMsgBlockStyle = lipgloss.NewStyle().
 				Background(ColorUserBg).
-				Foreground(lipgloss.AdaptiveColor{Light: "232", Dark: "252"}).
+				Foreground(compat.AdaptiveColor{Light: lipgloss.Color("232"), Dark: lipgloss.Color("252")}).
 				Border(lipgloss.ThickBorder(), false, false, false, true).
 				BorderForeground(ColorUserBorder).
 				Padding(1, 2)

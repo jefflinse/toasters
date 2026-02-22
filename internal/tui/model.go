@@ -3,15 +3,16 @@ package tui
 import (
 	"context"
 	"fmt"
+	"image/color"
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/bubbles/textarea"
-	"github.com/charmbracelet/bubbles/viewport"
-	tea "github.com/charmbracelet/bubbletea"
+	"charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/textarea"
+	"charm.land/bubbles/v2/viewport"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/glamour"
-	"github.com/charmbracelet/lipgloss"
 
 	"github.com/jefflinse/toasters/internal/llm"
 )
@@ -105,24 +106,26 @@ func NewModel(client *llm.Client) Model {
 	ta.CharLimit = 0 // no limit
 
 	// Clear all internal textarea styling — the border on InputAreaStyle provides the visual chrome.
+	// In bubbles v2, styles are accessed via Styles()/SetStyles().
 	noStyle := lipgloss.NewStyle()
-	ta.FocusedStyle.Base = noStyle
-	ta.FocusedStyle.CursorLine = noStyle
-	ta.FocusedStyle.Text = noStyle
-	ta.FocusedStyle.Placeholder = noStyle.Foreground(ColorDim)
-	ta.FocusedStyle.EndOfBuffer = noStyle
-	ta.BlurredStyle.Base = noStyle
-	ta.BlurredStyle.CursorLine = noStyle
-	ta.BlurredStyle.Text = noStyle
-	ta.BlurredStyle.Placeholder = noStyle.Foreground(ColorDim)
-	ta.BlurredStyle.EndOfBuffer = noStyle
+	s := ta.Styles()
+	s.Focused.Base = noStyle
+	s.Focused.CursorLine = noStyle
+	s.Focused.Text = noStyle
+	s.Focused.Placeholder = noStyle.Foreground(ColorDim)
+	s.Focused.EndOfBuffer = noStyle
+	s.Blurred.Base = noStyle
+	s.Blurred.CursorLine = noStyle
+	s.Blurred.Text = noStyle
+	s.Blurred.Placeholder = noStyle.Foreground(ColorDim)
+	s.Blurred.EndOfBuffer = noStyle
+	ta.SetStyles(s)
 
-	// Rebind InsertNewline to alt+enter so plain Enter can send messages.
-	// Note: terminals cannot distinguish shift+enter from plain enter; alt+enter is reliable.
-	ta.KeyMap.InsertNewline = key.NewBinding(key.WithKeys("alt+enter"))
+	// Rebind InsertNewline to shift+enter so plain Enter can send messages.
+	ta.KeyMap.InsertNewline = key.NewBinding(key.WithKeys("shift+enter"))
 	ta.Focus()
 
-	vp := viewport.New(0, 0)
+	vp := viewport.New()
 	vp.MouseWheelEnabled = true
 	// Disable viewport key bindings so they don't capture keys from the textarea.
 	vp.KeyMap = viewport.KeyMap{}
@@ -140,9 +143,8 @@ func NewModel(client *llm.Client) Model {
 
 func (m Model) Init() tea.Cmd {
 	return tea.Batch(
-		tea.WindowSize(),
+		tea.RequestWindowSize,
 		m.fetchModels(),
-		textarea.Blink,
 	)
 }
 
@@ -150,7 +152,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 
 	switch msg := msg.(type) {
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		// When the slash command popup is visible, intercept navigation keys
 		// before any other handling so they don't fall through to the textarea.
 		if m.showCmdPopup {
@@ -349,8 +351,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.streamCh = msg.ch
 		cmds = append(cmds, waitForChunk(m.streamCh))
 
-	case tea.MouseMsg:
-		// Forward mouse events to viewport for scroll support.
+	case tea.MouseWheelMsg:
+		// Forward mouse wheel events to viewport for scroll support.
 		var cmd tea.Cmd
 		m.chatViewport, cmd = m.chatViewport.Update(msg)
 		cmds = append(cmds, cmd)
@@ -359,9 +361,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
-func (m Model) View() string {
+func (m Model) View() tea.View {
 	if m.width == 0 || m.height == 0 {
-		return ""
+		v := tea.NewView("")
+		v.AltScreen = true
+		v.MouseMode = tea.MouseModeCellMotion
+		return v
 	}
 
 	showSidebar := m.width >= minWidthForBar
@@ -429,14 +434,19 @@ func (m Model) View() string {
 		mainColumn = lipgloss.JoinVertical(lipgloss.Left, chatView, inputView)
 	}
 
+	var content string
 	if !showSidebar {
-		return mainColumn
+		content = mainColumn
+	} else {
+		// Build sidebar.
+		sidebar := m.renderSidebar(sbWidth)
+		content = lipgloss.JoinHorizontal(lipgloss.Top, mainColumn, sidebar)
 	}
 
-	// Build sidebar.
-	sidebar := m.renderSidebar(sbWidth)
-
-	return lipgloss.JoinHorizontal(lipgloss.Top, mainColumn, sidebar)
+	v := tea.NewView(content)
+	v.AltScreen = true
+	v.MouseMode = tea.MouseModeCellMotion
+	return v
 }
 
 // renderMarkdown renders markdown content to styled terminal output.
@@ -454,7 +464,7 @@ func (m *Model) renderMarkdown(content string) string {
 
 // ensureMarkdownRenderer creates or recreates the glamour renderer for the current width.
 func (m *Model) ensureMarkdownRenderer() {
-	w := m.chatViewport.Width
+	w := m.chatViewport.Width()
 	if w < 1 {
 		w = 80
 	}
@@ -495,8 +505,8 @@ func (m *Model) resizeComponents() {
 		vpWidth = 1
 	}
 
-	m.chatViewport.Width = vpWidth
-	m.chatViewport.Height = vpHeight
+	m.chatViewport.SetWidth(vpWidth)
+	m.chatViewport.SetHeight(vpHeight)
 
 	m.input.SetWidth(mainWidth - InputAreaStyle.GetHorizontalFrameSize())
 	m.input.SetHeight(inputHeight)
@@ -508,7 +518,7 @@ func (m *Model) resizeComponents() {
 // updateViewportContent rebuilds the chat history string and sets it on the viewport.
 func (m *Model) updateViewportContent() {
 	var sb strings.Builder
-	contentWidth := m.chatViewport.Width
+	contentWidth := m.chatViewport.Width()
 	if contentWidth < 1 {
 		contentWidth = 40
 	}
@@ -676,7 +686,7 @@ func renderContextBar(used, total, width int) string {
 	empty := width - filled
 
 	// Color: green (82) → yellow (226) → red (196) based on usage.
-	var barColor lipgloss.Color
+	var barColor color.Color
 	switch {
 	case pct < 0.6:
 		barColor = lipgloss.Color("82") // green
@@ -723,7 +733,7 @@ func (m *Model) appendHelpMessage() {
 		"- `/exit`, `/quit` — Exit the application\n\n" +
 		"**Keyboard Shortcuts**\n" +
 		"- `Enter` — Send message\n" +
-		"- `Alt+Enter` — New line in message\n" +
+		"- `Shift+Enter` — New line in message\n" +
 		"- `Esc` — Cancel current response\n" +
 		"- `Ctrl+C` — Quit\n\n" +
 		"**Slash Command Autocomplete**\n" +
