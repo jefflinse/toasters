@@ -99,17 +99,22 @@ func NewModel(client *llm.Client) Model {
 	ta.SetHeight(inputHeight)
 	ta.CharLimit = 0 // no limit
 
-	// Strip all internal textarea chrome so InputAreaStyle controls the look.
+	// Apply a consistent background across every textarea style field so the
+	// box looks filled even on empty lines and before any text is typed.
 	inputBg := lipgloss.AdaptiveColor{Light: "254", Dark: "236"}
-	noStyle := lipgloss.NewStyle()
-	ta.FocusedStyle.Base = lipgloss.NewStyle().Background(inputBg)
-	ta.FocusedStyle.CursorLine = lipgloss.NewStyle().Background(inputBg)
-	ta.FocusedStyle.Placeholder = lipgloss.NewStyle().Background(inputBg).Foreground(ColorDim)
-	ta.FocusedStyle.Text = lipgloss.NewStyle().Background(inputBg)
-	ta.BlurredStyle.Base = noStyle
-	ta.BlurredStyle.CursorLine = noStyle
-	ta.BlurredStyle.Placeholder = noStyle
-	ta.BlurredStyle.Text = noStyle
+	bg := lipgloss.NewStyle().Background(inputBg)
+	ta.FocusedStyle.Base = bg
+	ta.FocusedStyle.CursorLine = bg
+	ta.FocusedStyle.Text = bg
+	ta.FocusedStyle.Placeholder = bg.Foreground(ColorDim)
+	ta.FocusedStyle.EndOfBuffer = bg
+	ta.BlurredStyle.Base = bg
+	ta.BlurredStyle.CursorLine = bg
+	ta.BlurredStyle.Text = bg
+	ta.BlurredStyle.Placeholder = bg.Foreground(ColorDim)
+	ta.BlurredStyle.EndOfBuffer = bg
+	// Use a space as the end-of-buffer character so empty lines render with the background.
+	ta.EndOfBufferCharacter = ' '
 
 	// Rebind InsertNewline to shift+enter so plain Enter can send messages.
 	ta.KeyMap.InsertNewline = key.NewBinding(key.WithKeys("shift+enter"))
