@@ -94,11 +94,23 @@ type Model struct {
 func NewModel(client *llm.Client) Model {
 	ta := textarea.New()
 	ta.Placeholder = "Type your message here..."
-	ta.Prompt = "> "
+	ta.Prompt = ""
 	ta.ShowLineNumbers = false
 	ta.SetHeight(inputHeight)
 	ta.CharLimit = 0 // no limit
-	ta.FocusedStyle.CursorLine = lipgloss.NewStyle()
+
+	// Strip all internal textarea chrome so InputAreaStyle controls the look.
+	inputBg := lipgloss.AdaptiveColor{Light: "254", Dark: "236"}
+	noStyle := lipgloss.NewStyle()
+	ta.FocusedStyle.Base = lipgloss.NewStyle().Background(inputBg)
+	ta.FocusedStyle.CursorLine = lipgloss.NewStyle().Background(inputBg)
+	ta.FocusedStyle.Placeholder = lipgloss.NewStyle().Background(inputBg).Foreground(ColorDim)
+	ta.FocusedStyle.Text = lipgloss.NewStyle().Background(inputBg)
+	ta.BlurredStyle.Base = noStyle
+	ta.BlurredStyle.CursorLine = noStyle
+	ta.BlurredStyle.Placeholder = noStyle
+	ta.BlurredStyle.Text = noStyle
+
 	// Rebind InsertNewline to shift+enter so plain Enter can send messages.
 	ta.KeyMap.InsertNewline = key.NewBinding(key.WithKeys("shift+enter"))
 	ta.Focus()
@@ -377,7 +389,7 @@ func (m *Model) resizeComponents() {
 	m.chatViewport.Width = vpWidth
 	m.chatViewport.Height = vpHeight
 
-	m.input.SetWidth(mainWidth - InputAreaStyle.GetHorizontalFrameSize())
+	m.input.SetWidth(mainWidth - InputAreaStyle.GetHorizontalFrameSize() - InputAreaStyle.GetHorizontalPadding())
 	m.input.SetHeight(inputHeight)
 
 	m.ensureMarkdownRenderer()

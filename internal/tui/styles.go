@@ -36,7 +36,8 @@ var (
 	InputAreaStyle = lipgloss.NewStyle().
 			Border(lipgloss.NormalBorder(), true, false, false, false).
 			BorderForeground(ColorBorder).
-			Padding(0, 0)
+			Background(lipgloss.AdaptiveColor{Light: "254", Dark: "236"}).
+			Padding(1, 1)
 
 	// HeaderStyle is used for the top header / title bar.
 	HeaderStyle = lipgloss.NewStyle().
