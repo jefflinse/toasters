@@ -15,6 +15,7 @@ import (
 	"github.com/charmbracelet/glamour"
 
 	"github.com/jefflinse/toasters/internal/config"
+	"github.com/jefflinse/toasters/internal/gateway"
 	"github.com/jefflinse/toasters/internal/llm"
 	"github.com/jefflinse/toasters/internal/workeffort"
 )
@@ -34,6 +35,7 @@ type focusedPanel int
 const (
 	focusChat        focusedPanel = iota
 	focusWorkEfforts focusedPanel = iota
+	focusAgents      focusedPanel = iota
 )
 
 // SessionStats tracks session-level statistics displayed in the sidebar.
@@ -74,6 +76,9 @@ type ModelsMsg struct {
 	Models []llm.ModelInfo
 	Err    error
 }
+
+// AgentOutputMsg is sent by the gateway notify callback when any slot output changes.
+type AgentOutputMsg struct{}
 
 // claudeMetaMsg carries model/mode info parsed from the claude CLI system/init event.
 type claudeMetaMsg struct {
@@ -137,10 +142,24 @@ type Model struct {
 	workEfforts        []workeffort.WorkEffort
 	selectedWorkEffort int
 	focused            focusedPanel
+
+	gateway *gateway.Gateway
+
+	// Gateway notify channel — gateway writes to this; TUI polls it.
+	agentNotifyCh chan struct{}
+
+	// Agent pane state.
+	selectedAgentSlot int            // which slot is highlighted in the agents pane (0-3)
+	attachedSlot      int            // -1 = not attached; 0-3 = viewing this slot's output
+	agentViewport     viewport.Model // viewport for attached slot output
+
+	// Grid screen state.
+	showGrid      bool
+	gridFocusCell int // 0-3
 }
 
 // NewModel returns an initialized root model.
-func NewModel(client *llm.Client, claudeCfg config.ClaudeConfig, configDir string) Model {
+func NewModel(client *llm.Client, claudeCfg config.ClaudeConfig, configDir string, gw *gateway.Gateway) Model {
 	ta := textarea.New()
 	ta.Placeholder = "Type your message here..."
 	ta.Prompt = ""
@@ -188,15 +207,48 @@ func NewModel(client *llm.Client, claudeCfg config.ClaudeConfig, configDir strin
 	m.workEfforts = efforts
 	m.selectedWorkEffort = 0
 	m.focused = focusChat
+	m.gateway = gw
+
+	m.agentNotifyCh = make(chan struct{}, 8) // buffered to avoid blocking gateway goroutines
+	m.attachedSlot = -1
+	m.selectedAgentSlot = 0
+	m.gridFocusCell = 0
+
+	agentVP := viewport.New()
+	agentVP.MouseWheelEnabled = true
+	agentVP.KeyMap = viewport.KeyMap{}
+	m.agentViewport = agentVP
+
+	if gw != nil {
+		notifyCh := m.agentNotifyCh
+		gw.SetNotify(func() {
+			select {
+			case notifyCh <- struct{}{}:
+			default: // drop if full — next render will catch up
+			}
+		})
+	}
 
 	return m
 }
 
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(
+	cmds := []tea.Cmd{
 		tea.RequestWindowSize,
 		m.fetchModels(),
-	)
+	}
+	if m.agentNotifyCh != nil {
+		cmds = append(cmds, waitForAgentUpdate(m.agentNotifyCh))
+	}
+	return tea.Batch(cmds...)
+}
+
+// waitForAgentUpdate blocks until the gateway signals an output update.
+func waitForAgentUpdate(ch <-chan struct{}) tea.Cmd {
+	return func() tea.Msg {
+		<-ch
+		return AgentOutputMsg{}
+	}
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -204,6 +256,36 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case tea.KeyPressMsg:
+		// When the grid screen is visible, handle navigation and dismiss it.
+		if m.showGrid {
+			switch msg.String() {
+			case "ctrl+g", "esc":
+				m.showGrid = false
+				return m, nil
+			case "left":
+				if m.gridFocusCell%2 == 1 {
+					m.gridFocusCell--
+				}
+				return m, nil
+			case "right":
+				if m.gridFocusCell%2 == 0 {
+					m.gridFocusCell++
+				}
+				return m, nil
+			case "up":
+				if m.gridFocusCell >= 2 {
+					m.gridFocusCell -= 2
+				}
+				return m, nil
+			case "down":
+				if m.gridFocusCell < 2 {
+					m.gridFocusCell += 2
+				}
+				return m, nil
+			}
+			return m, nil
+		}
+
 		// When the slash command popup is visible, intercept navigation keys
 		// before any other handling so they don't fall through to the textarea.
 		if m.showCmdPopup {
@@ -235,13 +317,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 
 		case "tab":
-			// Cycle focus between chat input and work efforts list.
+			// Cycle focus: chat → work efforts → agents → chat.
 			// (Tab inside the slash command popup is handled above and returns early.)
-			if m.focused == focusChat {
+			switch m.focused {
+			case focusChat:
 				m.focused = focusWorkEfforts
 				m.input.Blur()
 				return m, nil
-			} else {
+			case focusWorkEfforts:
+				m.focused = focusAgents
+				return m, nil
+			case focusAgents:
 				m.focused = focusChat
 				return m, m.input.Focus()
 			}
@@ -254,6 +340,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, nil
 			}
+			// Navigate agent slots when agents pane is focused.
+			if m.focused == focusAgents {
+				if m.selectedAgentSlot > 0 {
+					m.selectedAgentSlot--
+				}
+				return m, nil
+			}
 
 		case "down":
 			// Navigate work efforts when that panel is focused.
@@ -263,8 +356,29 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, nil
 			}
+			// Navigate agent slots when agents pane is focused.
+			if m.focused == focusAgents {
+				if m.selectedAgentSlot < gateway.MaxSlots-1 {
+					m.selectedAgentSlot++
+				}
+				return m, nil
+			}
+
+		case "ctrl+g":
+			m.showGrid = !m.showGrid
+			return m, nil
 
 		case "esc":
+			// Detach from agent slot first.
+			if m.attachedSlot >= 0 {
+				m.attachedSlot = -1
+				return m, nil
+			}
+			// Exit grid screen.
+			if m.showGrid {
+				m.showGrid = false
+				return m, nil
+			}
 			// Cancel an in-flight stream. (Popup esc is handled above and returns early.)
 			if m.streaming && m.cancelStream != nil {
 				m.cancelStream()
@@ -288,7 +402,31 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, m.input.Focus()
 			}
 
+		case "d":
+			// Dismiss a completed agent slot when the agents pane is focused.
+			if m.focused == focusAgents && m.gateway != nil {
+				_ = m.gateway.Dismiss(m.selectedAgentSlot)
+				if m.attachedSlot == m.selectedAgentSlot {
+					m.attachedSlot = -1
+				}
+				return m, nil
+			}
+
 		case "enter":
+			// Attach to an agent slot when the agents pane is focused.
+			if m.focused == focusAgents && m.gateway != nil {
+				slots := m.gateway.Slots()
+				snap := slots[m.selectedAgentSlot]
+				if snap.Active {
+					m.attachedSlot = m.selectedAgentSlot
+					m.agentViewport.SetContent(snap.Output)
+					m.agentViewport.GotoBottom()
+					// Resize agent viewport to match chat viewport dimensions.
+					m.agentViewport.SetWidth(m.chatViewport.Width())
+					m.agentViewport.SetHeight(m.chatViewport.Height())
+				}
+				return m, nil
+			}
 			// Send message on Enter when not streaming and input has content.
 			// Shift+enter inserts a newline (handled by textarea).
 			if !m.streaming && strings.TrimSpace(m.input.Value()) != "" {
@@ -513,6 +651,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.claudeActiveMeta = formatClaudeMeta(msg)
 		return m, waitForChunk(m.streamCh)
 
+	case AgentOutputMsg:
+		// Re-arm the poller.
+		if m.agentNotifyCh != nil {
+			cmds = append(cmds, waitForAgentUpdate(m.agentNotifyCh))
+		}
+		// If attached to a slot, update the agent viewport.
+		if m.attachedSlot >= 0 && m.gateway != nil {
+			slots := m.gateway.Slots()
+			snap := slots[m.attachedSlot]
+			if snap.Active {
+				m.agentViewport.SetContent(snap.Output)
+				m.agentViewport.GotoBottom()
+			}
+		}
+		return m, tea.Batch(cmds...)
+
 	case tea.MouseWheelMsg:
 		// Forward mouse wheel events to viewport for scroll support.
 		var cmd tea.Cmd
@@ -526,6 +680,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m Model) View() tea.View {
 	if m.width == 0 || m.height == 0 {
 		v := tea.NewView("")
+		v.AltScreen = true
+		v.MouseMode = tea.MouseModeCellMotion
+		return v
+	}
+
+	// Grid screen takes over the full terminal.
+	if m.showGrid {
+		v := tea.NewView(m.renderGrid())
 		v.AltScreen = true
 		v.MouseMode = tea.MouseModeCellMotion
 		return v
@@ -551,9 +713,26 @@ func (m Model) View() tea.View {
 		mainWidth = m.width
 	}
 
-	// Build chat content area.
-	// Width includes padding, so use mainWidth directly.
-	chatContent := m.chatViewport.View()
+	// Determine chat content and input area — swapped when attached to an agent slot.
+	var chatContent string
+	var inputOrStatus string
+	if m.attachedSlot >= 0 && m.gateway != nil {
+		slots := m.gateway.Slots()
+		snap := slots[m.attachedSlot]
+		header := fmt.Sprintf("⬡ %s · %s", snap.AgentName, snap.WorkEffortID)
+		if snap.Status == gateway.SlotDone {
+			header += " [done]"
+		} else {
+			header += " [running]"
+		}
+		chatContent = m.agentViewport.View()
+		inputOrStatus = InputAreaStyle.Width(mainWidth).Render(
+			DimStyle.Render(header + "  ·  Esc to detach · d to dismiss"),
+		)
+	} else {
+		chatContent = m.chatViewport.View()
+		inputOrStatus = InputAreaStyle.Width(mainWidth).Render(m.input.View())
+	}
 
 	// Build slash command popup (if active).
 	var popupView string
@@ -593,25 +772,22 @@ func (m Model) View() tea.View {
 
 	chatView := ChatAreaStyle.Width(mainWidth).Render(chatContent)
 
-	// Build input area.
-	inputView := InputAreaStyle.Width(mainWidth).Render(m.input.View())
-
 	// Build claude meta strip (shown while a claude stream is active).
 	var metaStrip string
 	if m.claudeActiveMeta != "" {
 		metaStrip = ClaudeMetaStyle.Width(mainWidth).Render("⬡ " + m.claudeActiveMeta)
 	}
 
-	// Join chat + popup (if any) + meta strip (if any) + input vertically.
+	// Join chat + popup (if any) + meta strip (if any) + input/status vertically.
 	var mainColumn string
 	if popupView != "" && metaStrip != "" {
-		mainColumn = lipgloss.JoinVertical(lipgloss.Left, chatView, popupView, metaStrip, inputView)
+		mainColumn = lipgloss.JoinVertical(lipgloss.Left, chatView, popupView, metaStrip, inputOrStatus)
 	} else if popupView != "" {
-		mainColumn = lipgloss.JoinVertical(lipgloss.Left, chatView, popupView, inputView)
+		mainColumn = lipgloss.JoinVertical(lipgloss.Left, chatView, popupView, inputOrStatus)
 	} else if metaStrip != "" {
-		mainColumn = lipgloss.JoinVertical(lipgloss.Left, chatView, metaStrip, inputView)
+		mainColumn = lipgloss.JoinVertical(lipgloss.Left, chatView, metaStrip, inputOrStatus)
 	} else {
-		mainColumn = lipgloss.JoinVertical(lipgloss.Left, chatView, inputView)
+		mainColumn = lipgloss.JoinVertical(lipgloss.Left, chatView, inputOrStatus)
 	}
 
 	// Build left panel (if visible).
@@ -706,6 +882,10 @@ func (m *Model) resizeComponents() {
 
 	m.chatViewport.SetWidth(vpWidth)
 	m.chatViewport.SetHeight(vpHeight)
+
+	// Agent viewport mirrors chat viewport dimensions.
+	m.agentViewport.SetWidth(vpWidth)
+	m.agentViewport.SetHeight(vpHeight)
 
 	m.input.SetWidth(mainWidth - InputAreaStyle.GetHorizontalFrameSize())
 	m.input.SetHeight(inputHeight)
@@ -946,17 +1126,132 @@ func (m Model) renderSidebar(sbWidth int) string {
 	sb.WriteString(sidebarRow("Last resp", lastResp))
 	sb.WriteString(sidebarRow("Avg resp", avgResp))
 
-	// Task updates section.
+	// Agents section.
 	sb.WriteString("\n")
-	sb.WriteString(SidebarHeaderStyle.Render("Task Updates"))
+	sb.WriteString(SidebarHeaderStyle.Render("Agents"))
 	sb.WriteString("\n\n")
-	sb.WriteString(TaskUpdatesPaneStyle.Render("No updates yet"))
+
+	if m.gateway != nil {
+		slots := m.gateway.Slots()
+		hasAny := false
+		for i, snap := range slots {
+			if !snap.Active {
+				continue
+			}
+			hasAny = true
+			label := snap.AgentName + " · " + snap.WorkEffortID
+			var statusIcon string
+			if snap.Status == gateway.SlotRunning {
+				statusIcon = "▶ "
+			} else {
+				statusIcon = "✓ "
+			}
+			line := statusIcon + truncateStr(label, contentWidth-2)
+			if m.focused == focusAgents && i == m.selectedAgentSlot {
+				sb.WriteString(WorkEffortSelectedStyle.Render("🍞 " + truncateStr(label, contentWidth-3)))
+			} else if snap.Status == gateway.SlotDone {
+				sb.WriteString(DimStyle.Render(statusIcon + truncateStr(label, contentWidth-2)))
+			} else {
+				sb.WriteString(SidebarValueStyle.Render(line))
+			}
+			sb.WriteString("\n")
+		}
+		if !hasAny {
+			sb.WriteString(TaskUpdatesPaneStyle.Render("No agents running"))
+		}
+	} else {
+		sb.WriteString(TaskUpdatesPaneStyle.Render("No agents running"))
+	}
 	sb.WriteString("\n")
 
 	return SidebarStyle.
 		Width(sbWidth).
 		Height(m.height).
 		Render(sb.String())
+}
+
+// renderGrid renders the 2×2 agent grid screen.
+func (m Model) renderGrid() string {
+	cellW := m.width / 2
+	cellH := m.height / 2
+
+	var cells [4]string
+	slots := [4]gateway.SlotSnapshot{}
+	if m.gateway != nil {
+		slots = m.gateway.Slots()
+	}
+
+	for i := 0; i < 4; i++ {
+		snap := slots[i]
+		focused := i == m.gridFocusCell
+
+		// Build header line.
+		var header string
+		if snap.Active {
+			elapsed := time.Since(snap.StartTime).Round(time.Second)
+			if snap.Status == gateway.SlotDone && !snap.EndTime.IsZero() {
+				elapsed = snap.EndTime.Sub(snap.StartTime).Round(time.Second)
+			}
+			header = fmt.Sprintf("⬡ %s · %s · %s", snap.AgentName, snap.WorkEffortID, elapsed)
+		} else {
+			header = fmt.Sprintf("slot %d — empty", i)
+		}
+
+		// Inner dimensions (minus border + padding).
+		innerH := cellH - 3 // header + borders
+		innerW := cellW - 4 // borders + padding
+		if innerH < 1 {
+			innerH = 1
+		}
+		if innerW < 1 {
+			innerW = 1
+		}
+
+		var body string
+		if snap.Active && snap.Output != "" {
+			lines := strings.Split(snap.Output, "\n")
+			if len(lines) > innerH {
+				lines = lines[len(lines)-innerH:]
+			}
+			for j, l := range lines {
+				if len(l) > innerW {
+					lines[j] = l[:innerW]
+				}
+			}
+			body = strings.Join(lines, "\n")
+		} else if !snap.Active {
+			body = DimStyle.Render("— empty —")
+		}
+
+		// Choose border color based on focus.
+		var borderColor color.Color
+		if focused {
+			borderColor = ColorPrimary
+		} else {
+			borderColor = ColorBorder
+		}
+
+		cellStyle := lipgloss.NewStyle().
+			Width(cellW).
+			Height(cellH).
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(borderColor).
+			Padding(0, 1)
+
+		var headerStyle lipgloss.Style
+		if focused {
+			headerStyle = HeaderStyle
+		} else {
+			headerStyle = SidebarHeaderStyle
+		}
+
+		inner := headerStyle.Render(truncateStr(header, innerW)) + "\n" + body
+		cells[i] = cellStyle.Render(inner)
+	}
+
+	top := lipgloss.JoinHorizontal(lipgloss.Top, cells[0], cells[1])
+	bottom := lipgloss.JoinHorizontal(lipgloss.Top, cells[2], cells[3])
+	return lipgloss.JoinVertical(lipgloss.Left, top, bottom)
 }
 
 // renderContextBar renders a segmented progress bar showing context window usage.

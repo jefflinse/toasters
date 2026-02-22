@@ -17,6 +17,21 @@ import (
 	"github.com/jefflinse/toasters/internal/workeffort"
 )
 
+// AgentSpawner is the interface satisfied by *gateway.Gateway.
+// Using an interface here avoids an import cycle (gateway imports llm).
+type AgentSpawner interface {
+	Spawn(agentName, workEffortID, task string) (int, error)
+}
+
+// activeGateway is the gateway instance used by the run_agent tool.
+// Set via SetGateway before the TUI starts.
+var activeGateway AgentSpawner
+
+// SetGateway wires the gateway instance into the tool executor.
+func SetGateway(g AgentSpawner) {
+	activeGateway = g
+}
+
 // AvailableTools is the set of tools exposed to the LLM.
 var AvailableTools = []Tool{
 	{
@@ -151,6 +166,31 @@ var AvailableTools = []Tool{
 					"index_or_text": map[string]any{"type": "string", "description": "1-based index of the TODO item, or a substring of the task text to match."},
 				},
 				"required": []string{"id", "index_or_text"},
+			},
+		},
+	},
+	{
+		Type: "function",
+		Function: ToolFunction{
+			Name:        "run_agent",
+			Description: "Spawn a named background Claude agent to work on a work effort. Available agents: investigator, planner, executor, summarizer.",
+			Parameters: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"agent_name": map[string]any{
+						"type":        "string",
+						"description": "The agent to run. One of: investigator, planner, executor, summarizer.",
+					},
+					"work_effort_id": map[string]any{
+						"type":        "string",
+						"description": "The ID of the work effort to operate on.",
+					},
+					"task": map[string]any{
+						"type":        "string",
+						"description": "Optional extra instruction appended to the agent prompt.",
+					},
+				},
+				"required": []string{"agent_name", "work_effort_id"},
 			},
 		},
 	},
@@ -307,6 +347,24 @@ func ExecuteTool(call ToolCall) (string, error) {
 			return "", err
 		}
 		return "ok", nil
+
+	case "run_agent":
+		if activeGateway == nil {
+			return "", fmt.Errorf("gateway not initialized")
+		}
+		var args struct {
+			AgentName    string `json:"agent_name"`
+			WorkEffortID string `json:"work_effort_id"`
+			Task         string `json:"task"`
+		}
+		if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
+			return "", fmt.Errorf("parsing run_agent args: %w", err)
+		}
+		slotID, err := activeGateway.Spawn(args.AgentName, args.WorkEffortID, args.Task)
+		if err != nil {
+			return "", fmt.Errorf("spawning agent: %w", err)
+		}
+		return fmt.Sprintf("started: slot %d", slotID), nil
 
 	default:
 		return "", fmt.Errorf("unknown tool: %s", call.Function.Name)
