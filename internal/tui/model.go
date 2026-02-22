@@ -14,6 +14,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/glamour"
 
+	"github.com/jefflinse/toasters/internal/config"
 	"github.com/jefflinse/toasters/internal/llm"
 )
 
@@ -62,6 +63,13 @@ type ModelsMsg struct {
 	Err    error
 }
 
+// claudeMetaMsg carries model/mode info parsed from the claude CLI system/init event.
+type claudeMetaMsg struct {
+	Model          string
+	PermissionMode string
+	Version        string
+}
+
 // sidebarWidth returns the sidebar width as 1/4 of terminal width, with a minimum.
 func sidebarWidth(termWidth int) int {
 	w := termWidth / 4
@@ -77,6 +85,7 @@ type Model struct {
 	height int
 
 	llmClient        *llm.Client
+	claudeCfg        config.ClaudeConfig
 	messages         []llm.Message
 	reasoning        []string // reasoning[i] is the thinking trace for messages[i] (assistant turns only)
 	chatViewport     viewport.Model
@@ -90,6 +99,10 @@ type Model struct {
 	err              error
 	mdRender         *glamour.TermRenderer
 
+	// Claude CLI metadata.
+	claudeActiveMeta string   // formatted byline for the in-progress claude stream; cleared when done
+	claudeMeta       []string // parallel to messages; byline per message (empty for non-claude turns)
+
 	// Slash command autocomplete popup state.
 	showCmdPopup   bool
 	filteredCmds   []SlashCommand
@@ -97,7 +110,7 @@ type Model struct {
 }
 
 // NewModel returns an initialized root model.
-func NewModel(client *llm.Client) Model {
+func NewModel(client *llm.Client, claudeCfg config.ClaudeConfig) Model {
 	ta := textarea.New()
 	ta.Placeholder = "Type your message here..."
 	ta.Prompt = ""
@@ -132,6 +145,7 @@ func NewModel(client *llm.Client) Model {
 
 	return Model{
 		llmClient:    client,
+		claudeCfg:    claudeCfg,
 		chatViewport: vp,
 		input:        ta,
 		stats: SessionStats{
@@ -196,6 +210,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						Content: m.currentResponse,
 					})
 					m.reasoning = append(m.reasoning, m.currentReasoning)
+					m.claudeMeta = append(m.claudeMeta, m.claudeActiveMeta)
+					m.claudeActiveMeta = ""
 					m.currentResponse = ""
 					m.currentReasoning = ""
 				}
@@ -308,6 +324,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				Content: m.currentResponse,
 			})
 			m.reasoning = append(m.reasoning, m.currentReasoning)
+			// For LM Studio (operator) turns, claudeActiveMeta is empty — fill in the operator byline.
+			byline := m.claudeActiveMeta
+			if byline == "" && m.stats.ModelName != "" {
+				byline = "operator · " + m.stats.ModelName
+			}
+			m.claudeMeta = append(m.claudeMeta, byline)
+			m.claudeActiveMeta = ""
 		}
 		m.currentResponse = ""
 		m.currentReasoning = ""
@@ -329,6 +352,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				Content: m.currentResponse,
 			})
 			m.reasoning = append(m.reasoning, m.currentReasoning)
+			byline := m.claudeActiveMeta
+			if byline == "" && m.stats.ModelName != "" {
+				byline = "operator · " + m.stats.ModelName
+			}
+			m.claudeMeta = append(m.claudeMeta, byline)
+			m.claudeActiveMeta = ""
 			m.currentResponse = ""
 			m.currentReasoning = ""
 		}
@@ -362,6 +391,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case streamStartedMsg:
 		m.streamCh = msg.ch
 		cmds = append(cmds, waitForChunk(m.streamCh))
+
+	case claudeMetaMsg:
+		m.claudeActiveMeta = formatClaudeMeta(msg)
+		return m, waitForChunk(m.streamCh)
 
 	case tea.MouseWheelMsg:
 		// Forward mouse wheel events to viewport for scroll support.
@@ -438,10 +471,20 @@ func (m Model) View() tea.View {
 	// Build input area.
 	inputView := InputAreaStyle.Width(mainWidth).Render(m.input.View())
 
-	// Join chat + popup (if any) + input vertically.
+	// Build claude meta strip (shown while a claude stream is active).
+	var metaStrip string
+	if m.claudeActiveMeta != "" {
+		metaStrip = ClaudeMetaStyle.Width(mainWidth).Render("⬡ " + m.claudeActiveMeta)
+	}
+
+	// Join chat + popup (if any) + meta strip (if any) + input vertically.
 	var mainColumn string
-	if popupView != "" {
+	if popupView != "" && metaStrip != "" {
+		mainColumn = lipgloss.JoinVertical(lipgloss.Left, chatView, popupView, metaStrip, inputView)
+	} else if popupView != "" {
 		mainColumn = lipgloss.JoinVertical(lipgloss.Left, chatView, popupView, inputView)
+	} else if metaStrip != "" {
+		mainColumn = lipgloss.JoinVertical(lipgloss.Left, chatView, metaStrip, inputView)
 	} else {
 		mainColumn = lipgloss.JoinVertical(lipgloss.Left, chatView, inputView)
 	}
@@ -555,6 +598,10 @@ func (m *Model) updateViewportContent() {
 			block := UserMsgBlockStyle.Width(blockWidth).Render(wrapText(msg.Content, blockWidth))
 			sb.WriteString(block + "\n\n")
 		case "assistant":
+			// Render claude byline (if any) above the response.
+			if assistantIdx < len(m.claudeMeta) && m.claudeMeta[assistantIdx] != "" {
+				sb.WriteString(ClaudeBylineStyle.Render("⬡ "+m.claudeMeta[assistantIdx]) + "\n")
+			}
 			// Render reasoning trace (if any) above the response.
 			if assistantIdx < len(m.reasoning) && m.reasoning[assistantIdx] != "" {
 				sb.WriteString(renderReasoningBlock(m.reasoning[assistantIdx], contentWidth))
@@ -753,6 +800,7 @@ func (m *Model) appendHelpMessage() {
 
 	m.messages = append(m.messages, llm.Message{Role: "assistant", Content: helpText})
 	m.reasoning = append(m.reasoning, "")
+	m.claudeMeta = append(m.claudeMeta, "")
 	m.stats.MessageCount++
 	m.updateViewportContent()
 	m.chatViewport.GotoBottom()
@@ -762,6 +810,8 @@ func (m *Model) appendHelpMessage() {
 func (m *Model) newSession() {
 	m.messages = nil
 	m.reasoning = nil
+	m.claudeMeta = nil
+	m.claudeActiveMeta = ""
 	m.currentResponse = ""
 	m.currentReasoning = ""
 	m.stats.MessageCount = 0
@@ -843,7 +893,7 @@ func (m *Model) sendClaudeMessage(prompt string) tea.Cmd {
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancelStream = cancel
 
-	ch := streamClaudeResponse(ctx, prompt)
+	ch := streamClaudeResponse(ctx, prompt, m.claudeCfg)
 	return func() tea.Msg {
 		return streamStartedMsg{ch: ch}
 	}
@@ -863,6 +913,13 @@ func waitForChunk(ch <-chan llm.StreamResponse) tea.Cmd {
 		}
 		if resp.Error != nil {
 			return StreamErrMsg{Err: resp.Error}
+		}
+		if resp.Meta != nil {
+			return claudeMetaMsg{
+				Model:          resp.Meta.Model,
+				PermissionMode: resp.Meta.PermissionMode,
+				Version:        resp.Meta.Version,
+			}
 		}
 		if resp.Done {
 			return StreamDoneMsg{Model: resp.Model, Usage: resp.Usage}
@@ -943,6 +1000,11 @@ func wrapText(s string, maxWidth int) string {
 	}
 
 	return result.String()
+}
+
+// formatClaudeMeta returns a short byline string for a claudeMetaMsg.
+func formatClaudeMeta(msg claudeMetaMsg) string {
+	return msg.Model + " · " + msg.PermissionMode + " mode"
 }
 
 // truncateStr truncates s to maxLen, adding "..." if truncated.

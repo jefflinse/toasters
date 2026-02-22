@@ -57,14 +57,22 @@ type Usage struct {
 	TotalTokens      int `json:"total_tokens"`
 }
 
+// ClaudeMeta carries metadata from the claude CLI system/init event.
+type ClaudeMeta struct {
+	Model          string
+	PermissionMode string
+	Version        string
+}
+
 // StreamResponse carries a single update from the streaming API.
 type StreamResponse struct {
-	Content   string // text chunk (may be empty for final message)
-	Reasoning string // reasoning/thinking chunk (chain-of-thought, if supported)
-	Done      bool   // true when stream is complete
-	Model     string // model name from response
-	Usage     *Usage // token usage (usually only on final chunk)
-	Error     error  // non-nil if something went wrong
+	Content   string      // text chunk (may be empty for final message)
+	Reasoning string      // reasoning/thinking chunk (chain-of-thought, if supported)
+	Done      bool        // true when stream is complete
+	Model     string      // model name from response
+	Usage     *Usage      // token usage (usually only on final chunk)
+	Error     error       // non-nil if something went wrong
+	Meta      *ClaudeMeta // non-nil only for the claude CLI system/init event
 }
 
 // Client talks to an OpenAI-compatible API (e.g. LM Studio).

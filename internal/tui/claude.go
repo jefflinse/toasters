@@ -8,8 +8,19 @@ import (
 	"io"
 	"os/exec"
 
+	"github.com/jefflinse/toasters/internal/config"
 	"github.com/jefflinse/toasters/internal/llm"
 )
+
+// claudeInitEvent is the first line emitted by `claude --output-format stream-json`.
+// It carries model and permission metadata for the session.
+type claudeInitEvent struct {
+	Type              string `json:"type"`
+	Subtype           string `json:"subtype"`
+	Model             string `json:"model"`
+	PermissionMode    string `json:"permissionMode"`
+	ClaudeCodeVersion string `json:"claude_code_version"`
+}
 
 // claudeInnerEvent is the inner event shape nested inside stream_event wrappers.
 type claudeInnerEvent struct {
@@ -34,19 +45,26 @@ type claudeOuterEvent struct {
 // channel that delivers streamed response chunks. The subprocess is started
 // with exec.CommandContext so context cancellation kills it automatically.
 // The channel is closed when the stream ends, either normally or due to an error.
-func streamClaudeResponse(ctx context.Context, prompt string) <-chan llm.StreamResponse {
+func streamClaudeResponse(ctx context.Context, prompt string, claudeCfg config.ClaudeConfig) <-chan llm.StreamResponse {
 	ch := make(chan llm.StreamResponse, 64)
 
 	go func() {
 		defer close(ch)
 
-		cmd := exec.CommandContext(ctx,
-			"claude",
+		args := []string{
 			"--print",
 			"--output-format", "stream-json",
 			"--include-partial-messages",
-			prompt,
-		)
+		}
+		if claudeCfg.DefaultModel != "" {
+			args = append(args, "--model", claudeCfg.DefaultModel)
+		}
+		if claudeCfg.PermissionMode != "" {
+			args = append(args, "--permission-mode", claudeCfg.PermissionMode)
+		}
+		args = append(args, prompt)
+
+		cmd := exec.CommandContext(ctx, claudeCfg.Path, args...)
 		cmd.Stderr = io.Discard
 
 		stdout, err := cmd.StdoutPipe()
@@ -61,11 +79,29 @@ func streamClaudeResponse(ctx context.Context, prompt string) <-chan llm.StreamR
 		}
 
 		done := false
+		firstLine := true
 		scanner := bufio.NewScanner(stdout)
 		for scanner.Scan() {
 			line := scanner.Text()
 			if line == "" {
 				continue
+			}
+
+			// The very first non-empty line is always the system/init event.
+			// Parse it separately and emit a Meta response, then move on.
+			if firstLine {
+				firstLine = false
+				var init claudeInitEvent
+				if err := json.Unmarshal([]byte(line), &init); err == nil &&
+					init.Type == "system" && init.Subtype == "init" {
+					ch <- llm.StreamResponse{Meta: &llm.ClaudeMeta{
+						Model:          init.Model,
+						PermissionMode: init.PermissionMode,
+						Version:        init.ClaudeCodeVersion,
+					}}
+					continue
+				}
+				// Not a system/init line — fall through to normal parsing below.
 			}
 
 			var event claudeOuterEvent
