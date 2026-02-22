@@ -44,9 +44,9 @@ var (
 			Bottom:      "─",
 			Left:        "┃",
 			Right:       "│",
-			TopLeft:     "┍",
+			TopLeft:     "┎",
 			TopRight:    "┐",
-			BottomLeft:  "┕",
+			BottomLeft:  "┖",
 			BottomRight: "┘",
 		}).
 		BorderForeground(lipgloss.Color("51")).
