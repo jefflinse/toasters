@@ -734,26 +734,26 @@ func (m *Model) updateViewportContent() {
 	if len(m.messages) == 0 && !m.streaming {
 		// ASCII art: an angry toaster wielding a hammer.
 		// Each line is rendered with HeaderStyle so it picks up the accent color.
-		const toasterArt = `                    [###]
-                      |
-                      |
-         ___________  O
-        |  |||  ||| |/|
-        |           | |
-        |  {X}  {X} |/
-        |   \_v_/   |
-        |   -----   |
-        |___________|
+		const toasterArt = `                     [###]
+                       |
+                       |
+         ___________   |            xxx  
+        |  |||  ||| |  O     ______  |
+        |           | /|    | w  w | |
+        |  {O}  {o} |/ |    | .  . |/|
+        |   \_v_/   |  |    |  --- |
+        |   -----   |       |______|
+        |___________|         |  |
         |___________|
            |     |
-          / \   / \`
+           |     |`
 		var artLines []string
 		for _, line := range strings.Split(toasterArt, "\n") {
 			artLines = append(artLines, HeaderStyle.Render(line))
 		}
 		welcome := strings.Join(artLines, "\n") + "\n\n"
-		welcome += DimStyle.Render("Type a message and press Enter to chat.") + "\n"
-		welcome += DimStyle.Render("Connected to "+m.stats.Endpoint) + "\n\n"
+		welcome += DimStyle.Render("Your personal army of toasters to") + HeaderStyle.Render("get shit done.") + "\n\n"
+		welcome += DimStyle.Render("Operator connected to "+m.stats.Endpoint) + "\n\n"
 		welcome += DimStyle.Render("Esc to cancel a response · Ctrl+C to quit.")
 		sb.WriteString(welcome + "\n\n")
 	}
