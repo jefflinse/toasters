@@ -49,7 +49,10 @@ var (
 			BottomLeft:  "┖",
 			BottomRight: "┘",
 		}).
-		BorderForeground(lipgloss.Color("51")).
+		BorderLeftForeground(lipgloss.Color("51")).
+		BorderTopForeground(lipgloss.Color("237")).
+		BorderRightForeground(lipgloss.Color("237")).
+		BorderBottomForeground(lipgloss.Color("237")).
 		Padding(0, 1)
 
 	// HeaderStyle is used for the top header / title bar.
