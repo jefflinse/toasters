@@ -117,8 +117,9 @@ func NewModel(client *llm.Client) Model {
 	ta.BlurredStyle.Placeholder = noStyle.Foreground(ColorDim)
 	ta.BlurredStyle.EndOfBuffer = noStyle
 
-	// Rebind InsertNewline to shift+enter so plain Enter can send messages.
-	ta.KeyMap.InsertNewline = key.NewBinding(key.WithKeys("shift+enter"))
+	// Rebind InsertNewline to alt+enter so plain Enter can send messages.
+	// Note: terminals cannot distinguish shift+enter from plain enter; alt+enter is reliable.
+	ta.KeyMap.InsertNewline = key.NewBinding(key.WithKeys("alt+enter"))
 	ta.Focus()
 
 	vp := viewport.New(0, 0)
@@ -178,6 +179,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		switch msg.String() {
 		case "ctrl+c":
+			return m, tea.Quit
+
+		case "esc":
+			// Cancel an in-flight stream. (Popup esc is handled above and returns early.)
 			if m.streaming && m.cancelStream != nil {
 				m.cancelStream()
 				m.streaming = false
@@ -197,7 +202,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.updateViewportContent()
 				return m, m.input.Focus()
 			}
-			return m, tea.Quit
 
 		case "enter":
 			// Send message on Enter when not streaming and input has content.
@@ -514,7 +518,7 @@ func (m *Model) updateViewportContent() {
 		welcome := HeaderStyle.Render("Welcome to toasters!") + "\n"
 		welcome += DimStyle.Render("Type a message and press Enter to chat.") + "\n"
 		welcome += DimStyle.Render("Connected to "+m.stats.Endpoint) + "\n\n"
-		welcome += DimStyle.Render("Ctrl+C to cancel a response or quit.")
+		welcome += DimStyle.Render("Esc to cancel a response · Ctrl+C to quit.")
 		sb.WriteString(welcome + "\n\n")
 	}
 
@@ -719,9 +723,9 @@ func (m *Model) appendHelpMessage() {
 		"- `/exit`, `/quit` — Exit the application\n\n" +
 		"**Keyboard Shortcuts**\n" +
 		"- `Enter` — Send message\n" +
-		"- `Shift+Enter` — New line in message\n" +
-		"- `Ctrl+C` (during stream) — Cancel current response\n" +
-		"- `Ctrl+C` (idle) — Quit\n\n" +
+		"- `Alt+Enter` — New line in message\n" +
+		"- `Esc` — Cancel current response\n" +
+		"- `Ctrl+C` — Quit\n\n" +
 		"**Slash Command Autocomplete**\n" +
 		"Type `/` to open the command picker. Use ↑↓ to navigate, Tab or Enter to select, Esc to dismiss."
 
