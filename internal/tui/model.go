@@ -319,8 +319,12 @@ func (m Model) View() string {
 	chatView := ChatAreaStyle.Width(mainWidth).
 		Render(m.chatViewport.View())
 
-	// Build input area.
-	inputView := InputAreaStyle.Width(mainWidth).Render(m.input.View())
+	// Build input area. Pad each textarea line to full inner width so the
+	// background fills every line, not just lines with content.
+	inputBg := lipgloss.AdaptiveColor{Light: "254", Dark: "236"}
+	innerWidth := mainWidth - InputAreaStyle.GetHorizontalFrameSize() - InputAreaStyle.GetHorizontalPadding()
+	inputContent := padLinesToWidth(m.input.View(), innerWidth, inputBg)
+	inputView := InputAreaStyle.Width(mainWidth).Render(inputContent)
 
 	// Join chat + input vertically.
 	mainColumn := lipgloss.JoinVertical(lipgloss.Left, chatView, inputView)
@@ -591,6 +595,24 @@ func renderContextBar(used, total, width int) string {
 	summaryStr := DimStyle.Render(summary)
 
 	return bar + "\n" + summaryStr
+}
+
+// padLinesToWidth pads every line in s to exactly width cells using the given
+// background color, so the background fills the full line regardless of content.
+func padLinesToWidth(s string, width int, bg lipgloss.TerminalColor) string {
+	if width <= 0 {
+		return s
+	}
+	lineStyle := lipgloss.NewStyle().Background(bg)
+	lines := strings.Split(s, "\n")
+	for i, line := range lines {
+		w := lipgloss.Width(line)
+		if w < width {
+			line += strings.Repeat(" ", width-w)
+		}
+		lines[i] = lineStyle.Render(line)
+	}
+	return strings.Join(lines, "\n")
 }
 
 // renderReasoningBlock renders a chain-of-thought reasoning trace as a dimmed,
