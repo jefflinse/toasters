@@ -37,18 +37,18 @@ var (
 			Padding(1, 1, 0, 1)
 
 	// InputAreaStyle is used for the message input region.
-	// Thick left accent border (┃), thin top/bottom (─), no right border.
+	// Thick left accent border (┃), thin top/bottom/right (─/│), proper corners.
 	InputAreaStyle = lipgloss.NewStyle().
 			Border(lipgloss.Border{
 			Top:         "─",
 			Bottom:      "─",
 			Left:        "┃",
-			Right:       "",
+			Right:       "│",
 			TopLeft:     "┌",
-			TopRight:    "─",
+			TopRight:    "┐",
 			BottomLeft:  "└",
-			BottomRight: "─",
-		}, true, false, true, true).
+			BottomRight: "┘",
+		}).
 		BorderForeground(lipgloss.Color("51")).
 		Padding(0, 1)
 
