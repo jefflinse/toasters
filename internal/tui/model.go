@@ -445,12 +445,10 @@ func (m Model) renderSidebar(sbWidth int) string {
 	sb.WriteString(sidebarRow("Tokens out", fmt.Sprintf("%d", m.stats.CompletionTokens)))
 
 	totalTokens := m.stats.PromptTokens + m.stats.CompletionTokens
-	if m.stats.ContextLength > 0 {
-		pct := float64(totalTokens) / float64(m.stats.ContextLength) * 100
-		sb.WriteString(sidebarRow("Context", fmt.Sprintf("%d / %d (%.0f%%)", totalTokens, m.stats.ContextLength, pct)))
-	} else {
-		sb.WriteString(sidebarRow("Context", fmt.Sprintf("%d / ?", totalTokens)))
-	}
+	sb.WriteString(SidebarLabelStyle.Render("Context"))
+	sb.WriteString("\n")
+	sb.WriteString(renderContextBar(totalTokens, m.stats.ContextLength, contentWidth))
+	sb.WriteString("\n")
 
 	lastResp := "-"
 	if m.stats.LastResponseTime > 0 {
@@ -462,6 +460,52 @@ func (m Model) renderSidebar(sbWidth int) string {
 		Width(sbWidth).
 		Height(m.height).
 		Render(sb.String())
+}
+
+// renderContextBar renders a segmented progress bar showing context window usage.
+// It color-shifts green → yellow → red as usage increases, and prints a
+// summary line beneath it.
+func renderContextBar(used, total, width int) string {
+	if width < 4 {
+		width = 4
+	}
+
+	var pct float64
+	var summary string
+	if total > 0 {
+		pct = float64(used) / float64(total)
+		if pct > 1 {
+			pct = 1
+		}
+		summary = fmt.Sprintf("%d / %d (%.0f%%)", used, total, pct*100)
+	} else {
+		summary = fmt.Sprintf("%d / ?", used)
+	}
+
+	// Build the bar.
+	filled := int(pct * float64(width))
+	empty := width - filled
+
+	// Color: green (82) → yellow (226) → red (196) based on usage.
+	var barColor lipgloss.Color
+	switch {
+	case pct < 0.6:
+		barColor = lipgloss.Color("82") // green
+	case pct < 0.8:
+		barColor = lipgloss.Color("226") // yellow
+	default:
+		barColor = lipgloss.Color("196") // red
+	}
+
+	filledStyle := lipgloss.NewStyle().Foreground(barColor)
+	emptyStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("237"))
+
+	bar := filledStyle.Render(strings.Repeat("█", filled)) +
+		emptyStyle.Render(strings.Repeat("░", empty))
+
+	summaryStr := DimStyle.Render(summary)
+
+	return bar + "\n" + summaryStr
 }
 
 func sidebarRow(label, value string) string {
