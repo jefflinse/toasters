@@ -38,6 +38,9 @@ type SlotSnapshot struct {
 	StartTime    time.Time
 	EndTime      time.Time // zero if still running
 	Output       string    // accumulated text output
+	Summary      string
+	Model        string
+	Prompt       string
 }
 
 // slot is the internal mutable state (mutex-protected via Gateway).
@@ -49,6 +52,9 @@ type slot struct {
 	endTime      time.Time
 	output       strings.Builder
 	cancel       context.CancelFunc
+	summary      string // one-sentence description of what the agent was asked to do
+	model        string // model name from the system/init event
+	prompt       string // the full assembled prompt passed to claude
 }
 
 // Gateway manages up to MaxSlots concurrent Claude subprocess slots.
@@ -126,6 +132,15 @@ func (g *Gateway) Spawn(agentName, workEffortID, task string) (int, error) {
 	}
 	prompt := sb.String()
 
+	// Build summary: "agentName on workEffortID" optionally with ": task", max 80 chars.
+	summary := agentName + " on " + workEffortID
+	if task != "" {
+		summary += ": " + task
+	}
+	if len(summary) > 80 {
+		summary = summary[:80]
+	}
+
 	// Create the slot and assign it.
 	ctx, cancel := context.WithTimeout(context.Background(), g.defaultTimeout)
 	s := &slot{
@@ -134,6 +149,8 @@ func (g *Gateway) Spawn(agentName, workEffortID, task string) (int, error) {
 		status:       SlotRunning,
 		startTime:    time.Now(),
 		cancel:       cancel,
+		summary:      summary,
+		prompt:       prompt,
 	}
 
 	g.mu.Lock()
@@ -145,6 +162,10 @@ func (g *Gateway) Spawn(agentName, workEffortID, task string) (int, error) {
 		ch := spawnClaudeStream(ctx, prompt, g.claudeCfg)
 		for resp := range ch {
 			switch {
+			case resp.Meta != nil:
+				g.mu.Lock()
+				s.model = resp.Meta.Model
+				g.mu.Unlock()
 			case resp.Content != "":
 				g.mu.Lock()
 				s.output.WriteString(resp.Content)
@@ -189,6 +210,9 @@ func (g *Gateway) Slots() [MaxSlots]SlotSnapshot {
 			StartTime:    s.startTime,
 			EndTime:      s.endTime,
 			Output:       s.output.String(),
+			Summary:      s.summary,
+			Model:        s.model,
+			Prompt:       s.prompt,
 		}
 	}
 	return snapshots

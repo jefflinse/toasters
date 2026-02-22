@@ -162,6 +162,11 @@ type Model struct {
 	killModalSlots  []int // actual slot indices (0-3) of running slots
 	selectedKillIdx int   // index into killModalSlots
 
+	// Prompt modal state.
+	showPromptModal    bool
+	promptModalContent string // the full prompt text being displayed
+	promptModalScroll  int    // scroll offset in lines
+
 	userScrolled bool // true when user has manually scrolled up; suppresses auto-scroll
 }
 
@@ -263,6 +268,33 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case tea.KeyPressMsg:
+		// When the prompt modal is visible, intercept all keys before any other handling.
+		if m.showPromptModal {
+			switch msg.String() {
+			case "esc", "p", "q":
+				m.showPromptModal = false
+				return m, nil
+			case "up", "k":
+				if m.promptModalScroll > 0 {
+					m.promptModalScroll--
+				}
+				return m, nil
+			case "down", "j":
+				m.promptModalScroll++
+				return m, nil
+			case "ctrl+u":
+				m.promptModalScroll -= 10
+				if m.promptModalScroll < 0 {
+					m.promptModalScroll = 0
+				}
+				return m, nil
+			case "ctrl+d":
+				m.promptModalScroll += 10
+				return m, nil
+			}
+			return m, nil
+		}
+
 		// When the grid screen is visible, handle navigation and dismiss it.
 		if m.showGrid {
 			switch msg.String() {
@@ -272,6 +304,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "k", "ctrl+k":
 				if m.gateway != nil {
 					_ = m.gateway.Kill(m.gridFocusCell)
+				}
+				return m, nil
+			case "p":
+				if m.gateway != nil {
+					slots := m.gateway.Slots()
+					snap := slots[m.gridFocusCell]
+					if snap.Active && snap.Prompt != "" {
+						m.showPromptModal = true
+						m.promptModalContent = snap.Prompt
+						m.promptModalScroll = 0
+					}
 				}
 				return m, nil
 			case "left":
@@ -764,7 +807,72 @@ func (m Model) View() tea.View {
 
 	// Grid screen takes over the full terminal.
 	if m.showGrid {
-		v := tea.NewView(m.renderGrid())
+		gridView := m.renderGrid()
+		if m.showPromptModal {
+			// Render prompt modal as a centered overlay.
+			modalW := m.width * 3 / 4
+			modalH := m.height * 3 / 4
+			if modalW < 40 {
+				modalW = 40
+			}
+			if modalH < 10 {
+				modalH = 10
+			}
+
+			// Slice the prompt into lines, apply scroll offset.
+			allLines := strings.Split(m.promptModalContent, "\n")
+			maxScroll := len(allLines) - modalH + 4
+			if maxScroll < 0 {
+				maxScroll = 0
+			}
+			if m.promptModalScroll > maxScroll {
+				m.promptModalScroll = maxScroll
+			}
+
+			start := m.promptModalScroll
+			end := start + modalH - 4 // -4 for title + footer + borders
+			if end > len(allLines) {
+				end = len(allLines)
+			}
+			visibleLines := allLines[start:end]
+
+			// Truncate each line to modal inner width.
+			innerW := modalW - 4
+			truncated := make([]string, len(visibleLines))
+			for i, l := range visibleLines {
+				if len(l) > innerW {
+					truncated[i] = l[:innerW]
+				} else {
+					truncated[i] = l
+				}
+			}
+
+			body := strings.Join(truncated, "\n")
+			scrollInfo := fmt.Sprintf("line %d/%d", m.promptModalScroll+1, len(allLines))
+			footer := DimStyle.Render("↑↓ scroll · Esc to close · " + scrollInfo)
+
+			modalContent := HeaderStyle.Render("Prompt") + "\n\n" + body + "\n\n" + footer
+
+			modalStyle := lipgloss.NewStyle().
+				Width(modalW).
+				Height(modalH).
+				Border(lipgloss.RoundedBorder()).
+				BorderForeground(ColorPrimary).
+				Padding(0, 2)
+
+			modal := modalStyle.Render(modalContent)
+
+			// Place modal centered over the grid using lipgloss.Place.
+			// WithWhitespaceStyle sets the background of the surrounding area.
+			overlaid := lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, modal,
+				lipgloss.WithWhitespaceStyle(lipgloss.NewStyle().Background(lipgloss.Color("235"))))
+
+			v := tea.NewView(overlaid)
+			v.AltScreen = true
+			v.MouseMode = tea.MouseModeCellMotion
+			return v
+		}
+		v := tea.NewView(gridView)
 		v.AltScreen = true
 		v.MouseMode = tea.MouseModeCellMotion
 		return v
@@ -1305,21 +1413,8 @@ func (m Model) renderGrid() string {
 		snap := slots[i]
 		focused := i == m.gridFocusCell
 
-		// Build header line.
-		var header string
-		if snap.Active {
-			elapsed := time.Since(snap.StartTime).Round(time.Second)
-			if snap.Status == gateway.SlotDone && !snap.EndTime.IsZero() {
-				elapsed = snap.EndTime.Sub(snap.StartTime).Round(time.Second)
-			}
-			header = fmt.Sprintf("⬡ %s · %s · %s", snap.AgentName, snap.WorkEffortID, elapsed)
-		} else {
-			header = fmt.Sprintf("slot %d — empty", i)
-		}
-
-		// Inner dimensions (minus border + padding).
-		innerH := cellH - 3 // header + borders
-		innerW := cellW - 4 // borders + padding
+		innerH := cellH - 2 // top + bottom border
+		innerW := cellW - 4 // left + right border + padding
 		if innerH < 1 {
 			innerH = 1
 		}
@@ -1327,28 +1422,17 @@ func (m Model) renderGrid() string {
 			innerW = 1
 		}
 
-		var body string
-		if snap.Active && snap.Output != "" {
-			lines := strings.Split(snap.Output, "\n")
-			if len(lines) > innerH {
-				lines = lines[len(lines)-innerH:]
-			}
-			for j, l := range lines {
-				if len(l) > innerW {
-					lines[j] = l[:innerW]
-				}
-			}
-			body = strings.Join(lines, "\n")
-		} else if !snap.Active {
-			body = DimStyle.Render("— empty —")
-		}
-
-		// Choose border color based on focus.
 		var borderColor color.Color
 		if focused {
 			borderColor = ColorPrimary
 		} else {
 			borderColor = ColorBorder
+		}
+		var headerStyle lipgloss.Style
+		if focused {
+			headerStyle = HeaderStyle
+		} else {
+			headerStyle = SidebarHeaderStyle
 		}
 
 		cellStyle := lipgloss.NewStyle().
@@ -1358,14 +1442,98 @@ func (m Model) renderGrid() string {
 			BorderForeground(borderColor).
 			Padding(0, 1)
 
-		var headerStyle lipgloss.Style
-		if focused {
-			headerStyle = HeaderStyle
-		} else {
-			headerStyle = SidebarHeaderStyle
+		if !snap.Active {
+			empty := DimStyle.Render(fmt.Sprintf("slot %d — empty", i))
+			cells[i] = cellStyle.Render(empty)
+			continue
 		}
 
-		inner := headerStyle.Render(truncateStr(header, innerW)) + "\n" + body
+		// 1. Header: statusMark · agent · work-effort · elapsed
+		elapsed := time.Since(snap.StartTime).Round(time.Second)
+		if snap.Status == gateway.SlotDone && !snap.EndTime.IsZero() {
+			elapsed = snap.EndTime.Sub(snap.StartTime).Round(time.Second)
+		}
+		statusMark := "▶"
+		if snap.Status == gateway.SlotDone {
+			statusMark = "✓"
+		}
+		header := fmt.Sprintf("%s %s · %s · %s", statusMark, snap.AgentName, snap.WorkEffortID, elapsed)
+		headerLine := headerStyle.Render(truncateStr(header, innerW))
+
+		// 2. Summary
+		summary := snap.Summary
+		if summary == "" {
+			summary = snap.AgentName + " on " + snap.WorkEffortID
+		}
+		summaryLine := truncateStr(summary, innerW)
+
+		// 3. Model line
+		modelStr := snap.Model
+		if modelStr == "" {
+			modelStr = "model: unknown"
+		}
+		modelLine := DimStyle.Render(truncateStr(modelStr, innerW))
+
+		// 4. Prompt preview: first 3 non-empty lines of the prompt
+		var promptLines []string
+		for _, l := range strings.Split(snap.Prompt, "\n") {
+			l = strings.TrimSpace(l)
+			if l != "" {
+				promptLines = append(promptLines, l)
+			}
+			if len(promptLines) == 3 {
+				break
+			}
+		}
+		var promptPreview string
+		if len(promptLines) > 0 {
+			truncatedLines := make([]string, len(promptLines))
+			for j, l := range promptLines {
+				truncatedLines[j] = truncateStr(l, innerW)
+			}
+			promptPreview = DimStyle.Render(strings.Join(truncatedLines, "\n"))
+		}
+		// Hint for focused cell
+		if focused {
+			promptPreview += "\n" + DimStyle.Render(truncateStr("p: view full prompt", innerW))
+		}
+
+		// 5. Separator
+		separator := DimStyle.Render(strings.Repeat("─", innerW))
+
+		// 6. Output: tail of snap.Output to fill remaining height.
+		// Budget: 1 header + 1 summary + 1 model + 3 prompt + 1 p-hint(focused) + 1 separator = 8 (focused) or 7 (unfocused)
+		metaLines := 7
+		if focused {
+			metaLines = 8
+		}
+		outputH := innerH - metaLines
+		if outputH < 1 {
+			outputH = 1
+		}
+		var outputBody string
+		if snap.Output != "" {
+			outLines := strings.Split(snap.Output, "\n")
+			if len(outLines) > outputH {
+				outLines = outLines[len(outLines)-outputH:]
+			}
+			for j, l := range outLines {
+				if len(l) > innerW {
+					outLines[j] = l[:innerW]
+				}
+			}
+			outputBody = strings.Join(outLines, "\n")
+		}
+
+		inner := strings.Join([]string{
+			headerLine,
+			summaryLine,
+			modelLine,
+			promptPreview,
+			separator,
+			outputBody,
+		}, "\n")
+
 		cells[i] = cellStyle.Render(inner)
 	}
 
