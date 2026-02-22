@@ -224,6 +224,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.newSession()
 					return m, nil
 				}
+				// /claude <prompt> — stream via the claude CLI subprocess.
+				if strings.HasPrefix(text, "/claude ") {
+					prompt := strings.TrimSpace(strings.TrimPrefix(text, "/claude "))
+					if prompt == "" {
+						m.input.Reset()
+						m.showCmdPopup = false
+						return m, nil
+					}
+					m.showCmdPopup = false
+					m.input.Reset()
+					return m, m.sendClaudeMessage(prompt)
+				}
 				// Not a recognized slash command — send to LLM.
 				m.showCmdPopup = false
 				return m, m.sendMessage()
@@ -803,6 +815,36 @@ func (m *Model) sendMessage() tea.Cmd {
 		ch := client.ChatCompletionStream(ctx, msgs)
 		// We need to send the channel back to the model so it can keep reading.
 		// Use a special message for this.
+		return streamStartedMsg{ch: ch}
+	}
+}
+
+// sendClaudeMessage appends the user prompt to history and starts a subprocess
+// stream via the claude CLI, reusing the same streaming pipeline as sendMessage.
+func (m *Model) sendClaudeMessage(prompt string) tea.Cmd {
+	m.input.Blur()
+	m.filteredCmds = nil
+	m.selectedCmdIdx = 0
+
+	m.messages = append(m.messages, llm.Message{
+		Role:    "user",
+		Content: "/claude " + prompt,
+	})
+	m.stats.MessageCount++
+	m.streaming = true
+	m.currentResponse = ""
+	m.currentReasoning = ""
+	m.err = nil
+	m.stats.ResponseStart = time.Now()
+
+	m.updateViewportContent()
+	m.chatViewport.GotoBottom()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	m.cancelStream = cancel
+
+	ch := streamClaudeResponse(ctx, prompt)
+	return func() tea.Msg {
 		return streamStartedMsg{ch: ch}
 	}
 }

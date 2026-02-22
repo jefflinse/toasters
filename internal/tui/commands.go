@@ -13,6 +13,7 @@ var allCommands = []SlashCommand{
 	{Name: "/exit", Description: "Exit the application"},
 	{Name: "/quit", Description: "Exit the application"},
 	{Name: "/help", Description: "Show help information"},
+	{Name: "/claude", Description: "Ask Claude (via claude CLI)"},
 	{Name: "/new", Description: "Start a new session"},
 }
 
