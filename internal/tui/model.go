@@ -10,15 +10,16 @@ import (
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/jefflinse/toasters/internal/llm"
 )
 
 const (
-	sidebarWidth   = 28
-	inputHeight    = 3
-	minWidthForBar = 60
+	minSidebarWidth = 24
+	inputHeight     = 3
+	minWidthForBar  = 60
 )
 
 // SessionStats tracks session-level statistics displayed in the sidebar.
@@ -26,6 +27,7 @@ type SessionStats struct {
 	ModelName        string
 	Endpoint         string
 	Connected        bool
+	ContextLength    int // max context window in tokens (0 if unknown)
 	MessageCount     int
 	PromptTokens     int
 	CompletionTokens int
@@ -49,11 +51,18 @@ type StreamErrMsg struct {
 }
 
 type ModelsMsg struct {
-	Models []string
+	Models []llm.ModelInfo
 	Err    error
 }
 
-type TickMsg time.Time
+// sidebarWidth returns the sidebar width as 1/4 of terminal width, with a minimum.
+func sidebarWidth(termWidth int) int {
+	w := termWidth / 4
+	if w < minSidebarWidth {
+		w = minSidebarWidth
+	}
+	return w
+}
 
 // Model is the root Bubble Tea model for the toasters TUI.
 type Model struct {
@@ -69,8 +78,8 @@ type Model struct {
 	streamCh        <-chan llm.StreamResponse
 	cancelStream    context.CancelFunc
 	stats           SessionStats
-	startTime       time.Time
 	err             error
+	mdRender        *glamour.TermRenderer
 }
 
 // NewModel returns an initialized root model.
@@ -95,7 +104,6 @@ func NewModel(client *llm.Client) Model {
 		llmClient:    client,
 		chatViewport: vp,
 		input:        ta,
-		startTime:    time.Now(),
 		stats: SessionStats{
 			Endpoint:  client.BaseURL(),
 			Connected: false,
@@ -107,7 +115,6 @@ func (m Model) Init() tea.Cmd {
 	return tea.Batch(
 		tea.WindowSize(),
 		m.fetchModels(),
-		m.tickCmd(),
 		textarea.Blink,
 	)
 }
@@ -212,8 +219,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.stats.Connected = true
 			m.err = nil
+			// Prefer the loaded model; fall back to first in list.
 			if len(msg.Models) > 0 {
-				m.stats.ModelName = msg.Models[0]
+				picked := msg.Models[0]
+				for _, mi := range msg.Models {
+					if mi.State == "loaded" {
+						picked = mi
+						break
+					}
+				}
+				m.stats.ModelName = picked.ID
+				m.stats.ContextLength = picked.ContextLength()
 			}
 		}
 		m.updateViewportContent()
@@ -221,9 +237,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case streamStartedMsg:
 		m.streamCh = msg.ch
 		cmds = append(cmds, waitForChunk(m.streamCh))
-
-	case TickMsg:
-		cmds = append(cmds, m.tickCmd())
 
 	case tea.MouseMsg:
 		// Forward mouse events to viewport for scroll support.
@@ -242,10 +255,12 @@ func (m Model) View() string {
 
 	showSidebar := m.width >= minWidthForBar
 
+	sbWidth := sidebarWidth(m.width)
+
 	var mainWidth int
 	if showSidebar {
 		// Sidebar border takes 1 char on the left side.
-		mainWidth = m.width - sidebarWidth - 1
+		mainWidth = m.width - sbWidth - 1
 	} else {
 		mainWidth = m.width
 	}
@@ -266,18 +281,48 @@ func (m Model) View() string {
 	}
 
 	// Build sidebar.
-	sidebar := m.renderSidebar()
+	sidebar := m.renderSidebar(sbWidth)
 
 	return lipgloss.JoinHorizontal(lipgloss.Top, mainColumn, sidebar)
+}
+
+// renderMarkdown renders markdown content to styled terminal output.
+func (m *Model) renderMarkdown(content string) string {
+	if m.mdRender == nil {
+		return content
+	}
+	rendered, err := m.mdRender.Render(content)
+	if err != nil {
+		return content
+	}
+	// glamour adds trailing newlines; trim them so we control spacing.
+	return strings.TrimRight(rendered, "\n")
+}
+
+// ensureMarkdownRenderer creates or recreates the glamour renderer for the current width.
+func (m *Model) ensureMarkdownRenderer() {
+	w := m.chatViewport.Width
+	if w < 1 {
+		w = 80
+	}
+	r, err := glamour.NewTermRenderer(
+		glamour.WithStylePath("dark"),
+		glamour.WithWordWrap(w),
+	)
+	if err == nil {
+		m.mdRender = r
+	}
 }
 
 // resizeComponents recalculates sizes for viewport and textarea after a resize.
 func (m *Model) resizeComponents() {
 	showSidebar := m.width >= minWidthForBar
 
+	sbWidth := sidebarWidth(m.width)
+
 	var mainWidth int
 	if showSidebar {
-		mainWidth = m.width - sidebarWidth - 1
+		mainWidth = m.width - sbWidth - 1
 	} else {
 		mainWidth = m.width
 	}
@@ -303,6 +348,7 @@ func (m *Model) resizeComponents() {
 	m.input.SetWidth(mainWidth - InputAreaStyle.GetHorizontalFrameSize())
 	m.input.SetHeight(inputHeight)
 
+	m.ensureMarkdownRenderer()
 	m.updateViewportContent()
 }
 
@@ -327,20 +373,17 @@ func (m *Model) updateViewportContent() {
 		switch msg.Role {
 		case "user":
 			prefix := UserMsgStyle.Render("you > ")
-			// Wrap message text to fit viewport.
 			wrapped := wrapText(msg.Content, contentWidth-6)
 			sb.WriteString(prefix + wrapped + "\n\n")
 		case "assistant":
-			wrapped := wrapText(msg.Content, contentWidth)
-			sb.WriteString(AssistantMsgStyle.Render(wrapped) + "\n\n")
+			sb.WriteString(m.renderMarkdown(msg.Content) + "\n\n")
 		}
 	}
 
-	// Show streaming response in progress.
+	// Show streaming response in progress — re-render markdown incrementally.
 	if m.streaming && m.currentResponse != "" {
-		wrapped := wrapText(m.currentResponse, contentWidth)
-		sb.WriteString(AssistantMsgStyle.Render(wrapped))
-		sb.WriteString(StreamingStyle.Render(" ..."))
+		sb.WriteString(m.renderMarkdown(m.currentResponse))
+		sb.WriteString(StreamingStyle.Render(" ▍"))
 		sb.WriteString("\n\n")
 	} else if m.streaming {
 		sb.WriteString(StreamingStyle.Render("Thinking...") + "\n\n")
@@ -355,8 +398,8 @@ func (m *Model) updateViewportContent() {
 }
 
 // renderSidebar builds the right sidebar with stats.
-func (m Model) renderSidebar() string {
-	w := sidebarWidth - SidebarStyle.GetHorizontalPadding()
+func (m Model) renderSidebar(sbWidth int) string {
+	contentWidth := sbWidth - SidebarStyle.GetHorizontalPadding()
 
 	var sb strings.Builder
 
@@ -368,8 +411,15 @@ func (m Model) renderSidebar() string {
 	if modelName == "" {
 		modelName = "Loading..."
 	}
-	sb.WriteString(sidebarRow("Model", truncateStr(modelName, w-8), w))
-	sb.WriteString(sidebarRow("Endpoint", m.stats.Endpoint, w))
+	sb.WriteString(SidebarLabelStyle.Render("Model"))
+	sb.WriteString("\n")
+	sb.WriteString(SidebarValueStyle.Render(truncateStr(modelName, contentWidth)))
+	sb.WriteString("\n\n")
+
+	sb.WriteString(SidebarLabelStyle.Render("Endpoint"))
+	sb.WriteString("\n")
+	sb.WriteString(SidebarValueStyle.Render(truncateStr(m.stats.Endpoint, contentWidth)))
+	sb.WriteString("\n\n")
 
 	status := "Disconnected"
 	statusStyle := ErrorStyle
@@ -377,7 +427,8 @@ func (m Model) renderSidebar() string {
 		status = "Connected"
 		statusStyle = ConnectedStyle
 	}
-	sb.WriteString(SidebarLabelStyle.Render("Status   "))
+	sb.WriteString(SidebarLabelStyle.Render("Status"))
+	sb.WriteString("\n")
 	sb.WriteString(statusStyle.Render(status))
 	sb.WriteString("\n")
 
@@ -385,27 +436,32 @@ func (m Model) renderSidebar() string {
 	sb.WriteString(SidebarHeaderStyle.Render("Session"))
 	sb.WriteString("\n\n")
 
-	sb.WriteString(sidebarRow("Messages", fmt.Sprintf("%d", m.stats.MessageCount), w))
-	sb.WriteString(sidebarRow("Tokens in", fmt.Sprintf("%d", m.stats.PromptTokens), w))
-	sb.WriteString(sidebarRow("Tokens out", fmt.Sprintf("%d", m.stats.CompletionTokens), w))
+	sb.WriteString(sidebarRow("Messages", fmt.Sprintf("%d", m.stats.MessageCount)))
+	sb.WriteString(sidebarRow("Tokens in", fmt.Sprintf("%d", m.stats.PromptTokens)))
+	sb.WriteString(sidebarRow("Tokens out", fmt.Sprintf("%d", m.stats.CompletionTokens)))
 
-	elapsed := time.Since(m.startTime).Truncate(time.Second)
-	sb.WriteString(sidebarRow("Duration", formatDuration(elapsed), w))
+	totalTokens := m.stats.PromptTokens + m.stats.CompletionTokens
+	if m.stats.ContextLength > 0 {
+		pct := float64(totalTokens) / float64(m.stats.ContextLength) * 100
+		sb.WriteString(sidebarRow("Context", fmt.Sprintf("%d / %d (%.0f%%)", totalTokens, m.stats.ContextLength, pct)))
+	} else {
+		sb.WriteString(sidebarRow("Context", fmt.Sprintf("%d / ?", totalTokens)))
+	}
 
 	lastResp := "-"
 	if m.stats.LastResponseTime > 0 {
 		lastResp = fmt.Sprintf("%.1fs", m.stats.LastResponseTime.Seconds())
 	}
-	sb.WriteString(sidebarRow("Last resp", lastResp, w))
+	sb.WriteString(sidebarRow("Last resp", lastResp))
 
 	return SidebarStyle.
-		Width(sidebarWidth).
+		Width(sbWidth).
 		Height(m.height).
 		Render(sb.String())
 }
 
-func sidebarRow(label, value string, _ int) string {
-	return SidebarLabelStyle.Render(fmt.Sprintf("%-10s", label)) +
+func sidebarRow(label, value string) string {
+	return SidebarLabelStyle.Render(fmt.Sprintf("%-12s", label)) +
 		SidebarValueStyle.Render(value) + "\n"
 }
 
@@ -481,13 +537,6 @@ func (m Model) fetchModels() tea.Cmd {
 	}
 }
 
-// tickCmd returns a command that sends a TickMsg after one second.
-func (m Model) tickCmd() tea.Cmd {
-	return tea.Tick(time.Second, func(t time.Time) tea.Msg {
-		return TickMsg(t)
-	})
-}
-
 // wrapText wraps s to fit within maxWidth columns.
 func wrapText(s string, maxWidth int) string {
 	if maxWidth <= 0 {
@@ -560,19 +609,4 @@ func truncateStr(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen-3] + "..."
-}
-
-// formatDuration formats a duration as "Xm Ys" or "Xh Ym".
-func formatDuration(d time.Duration) string {
-	if d < time.Minute {
-		return fmt.Sprintf("%ds", int(d.Seconds()))
-	}
-	if d < time.Hour {
-		m := int(d.Minutes())
-		s := int(d.Seconds()) % 60
-		return fmt.Sprintf("%dm %ds", m, s)
-	}
-	h := int(d.Hours())
-	m := int(d.Minutes()) % 60
-	return fmt.Sprintf("%dh %dm", h, m)
 }

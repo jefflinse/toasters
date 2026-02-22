@@ -16,11 +16,17 @@ type Message struct {
 	Content string `json:"content"`
 }
 
+// StreamOptions controls streaming behavior.
+type StreamOptions struct {
+	IncludeUsage bool `json:"include_usage"`
+}
+
 // ChatRequest is the request body for /v1/chat/completions.
 type ChatRequest struct {
-	Model    string    `json:"model"`
-	Messages []Message `json:"messages"`
-	Stream   bool      `json:"stream"`
+	Model         string         `json:"model"`
+	Messages      []Message      `json:"messages"`
+	Stream        bool           `json:"stream"`
+	StreamOptions *StreamOptions `json:"stream_options,omitempty"`
 }
 
 // ChatCompletionChunk is a single SSE chunk from the streaming response.
@@ -100,6 +106,9 @@ func (c *Client) streamCompletion(ctx context.Context, messages []Message, ch ch
 		Model:    c.model,
 		Messages: messages,
 		Stream:   true,
+		StreamOptions: &StreamOptions{
+			IncludeUsage: true,
+		},
 	}
 
 	body, err := json.Marshal(reqBody)
@@ -131,6 +140,7 @@ func (c *Client) streamCompletion(ctx context.Context, messages []Message, ch ch
 
 	var lastUsage *Usage
 	var lastModel string
+	sawStop := false
 
 	scanner := bufio.NewScanner(resp.Body)
 	for scanner.Scan() {
@@ -185,9 +195,15 @@ func (c *Client) streamCompletion(ctx context.Context, messages []Message, ch ch
 			}
 
 			if choice.FinishReason == "stop" {
-				ch <- StreamResponse{Done: true, Model: lastModel, Usage: lastUsage}
-				return
+				sawStop = true
+				// Don't return yet — with stream_options.include_usage, the
+				// server sends a final chunk with usage data after the stop
+				// chunk. Keep reading until [DONE].
 			}
+		} else if sawStop && chunk.Usage != nil {
+			// This is the usage-only chunk that arrives after finish_reason=stop
+			// when stream_options.include_usage is true. Usage is already
+			// captured above; keep reading for [DONE].
 		}
 	}
 
@@ -196,19 +212,91 @@ func (c *Client) streamCompletion(ctx context.Context, messages []Message, ch ch
 		return
 	}
 
-	// Stream ended without [DONE] or finish_reason — treat as done.
+	// Stream ended without [DONE] — treat as done.
 	ch <- StreamResponse{Done: true, Model: lastModel, Usage: lastUsage}
 }
 
-// modelsResponse is the response from /v1/models.
-type modelsResponse struct {
+// ModelInfo holds metadata about an available model.
+type ModelInfo struct {
+	ID                  string
+	State               string // "loaded", "not-loaded", etc.
+	MaxContextLength    int    // max context window the model supports (0 if unknown)
+	LoadedContextLength int    // actual context length configured for the loaded model (0 if unknown or not loaded)
+}
+
+// ContextLength returns the effective context length — loaded if available, otherwise max.
+func (m ModelInfo) ContextLength() int {
+	if m.LoadedContextLength > 0 {
+		return m.LoadedContextLength
+	}
+	return m.MaxContextLength
+}
+
+// lmStudioModelsResponse is the response from LM Studio's /api/v0/models.
+type lmStudioModelsResponse struct {
+	Data []struct {
+		ID                  string `json:"id"`
+		State               string `json:"state"`
+		MaxContextLength    int    `json:"max_context_length,omitempty"`
+		LoadedContextLength int    `json:"loaded_context_length,omitempty"`
+	} `json:"data"`
+}
+
+// openAIModelsResponse is the response from the standard /v1/models.
+type openAIModelsResponse struct {
 	Data []struct {
 		ID string `json:"id"`
 	} `json:"data"`
 }
 
-// FetchModels returns the list of model IDs available on the server.
-func (c *Client) FetchModels(ctx context.Context) ([]string, error) {
+// FetchModels returns metadata about available models on the server.
+// Tries the LM Studio-specific endpoint first for richer metadata, then
+// falls back to the standard OpenAI endpoint.
+func (c *Client) FetchModels(ctx context.Context) ([]ModelInfo, error) {
+	models, err := c.fetchLMStudioModels(ctx)
+	if err == nil {
+		return models, nil
+	}
+
+	// Fall back to standard OpenAI endpoint.
+	return c.fetchOpenAIModels(ctx)
+}
+
+func (c *Client) fetchLMStudioModels(ctx context.Context) ([]ModelInfo, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/api/v0/models", nil)
+	if err != nil {
+		return nil, fmt.Errorf("creating request: %w", err)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("fetching models: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("unexpected status %d: %s", resp.StatusCode, resp.Status)
+	}
+
+	var result lmStudioModelsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("decoding models response: %w", err)
+	}
+
+	models := make([]ModelInfo, 0, len(result.Data))
+	for _, m := range result.Data {
+		models = append(models, ModelInfo{
+			ID:                  m.ID,
+			State:               m.State,
+			MaxContextLength:    m.MaxContextLength,
+			LoadedContextLength: m.LoadedContextLength,
+		})
+	}
+
+	return models, nil
+}
+
+func (c *Client) fetchOpenAIModels(ctx context.Context) ([]ModelInfo, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/v1/models", nil)
 	if err != nil {
 		return nil, fmt.Errorf("creating request: %w", err)
@@ -224,14 +312,14 @@ func (c *Client) FetchModels(ctx context.Context) ([]string, error) {
 		return nil, fmt.Errorf("unexpected status %d: %s", resp.StatusCode, resp.Status)
 	}
 
-	var result modelsResponse
+	var result openAIModelsResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, fmt.Errorf("decoding models response: %w", err)
 	}
 
-	models := make([]string, len(result.Data))
+	models := make([]ModelInfo, len(result.Data))
 	for i, m := range result.Data {
-		models[i] = m.ID
+		models[i] = ModelInfo{ID: m.ID}
 	}
 
 	return models, nil
