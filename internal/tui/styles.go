@@ -34,10 +34,9 @@ var (
 
 	// InputAreaStyle is used for the message input region.
 	InputAreaStyle = lipgloss.NewStyle().
-			Border(lipgloss.NormalBorder(), true, false, false, false).
-			BorderForeground(ColorBorder).
-			Background(lipgloss.AdaptiveColor{Light: "254", Dark: "236"}).
-			Padding(1, 1)
+			Border(lipgloss.ThickBorder()).
+			BorderForeground(lipgloss.Color("51")).
+			Padding(0, 1)
 
 	// HeaderStyle is used for the top header / title bar.
 	HeaderStyle = lipgloss.NewStyle().

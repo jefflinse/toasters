@@ -99,22 +99,18 @@ func NewModel(client *llm.Client) Model {
 	ta.SetHeight(inputHeight)
 	ta.CharLimit = 0 // no limit
 
-	// Apply a consistent background across every textarea style field so the
-	// box looks filled even on empty lines and before any text is typed.
-	inputBg := lipgloss.AdaptiveColor{Light: "254", Dark: "236"}
-	bg := lipgloss.NewStyle().Background(inputBg)
-	ta.FocusedStyle.Base = bg
-	ta.FocusedStyle.CursorLine = bg
-	ta.FocusedStyle.Text = bg
-	ta.FocusedStyle.Placeholder = bg.Foreground(ColorDim)
-	ta.FocusedStyle.EndOfBuffer = bg
-	ta.BlurredStyle.Base = bg
-	ta.BlurredStyle.CursorLine = bg
-	ta.BlurredStyle.Text = bg
-	ta.BlurredStyle.Placeholder = bg.Foreground(ColorDim)
-	ta.BlurredStyle.EndOfBuffer = bg
-	// Use a space as the end-of-buffer character so empty lines render with the background.
-	ta.EndOfBufferCharacter = ' '
+	// Clear all internal textarea styling — the border on InputAreaStyle provides the visual chrome.
+	noStyle := lipgloss.NewStyle()
+	ta.FocusedStyle.Base = noStyle
+	ta.FocusedStyle.CursorLine = noStyle
+	ta.FocusedStyle.Text = noStyle
+	ta.FocusedStyle.Placeholder = noStyle.Foreground(ColorDim)
+	ta.FocusedStyle.EndOfBuffer = noStyle
+	ta.BlurredStyle.Base = noStyle
+	ta.BlurredStyle.CursorLine = noStyle
+	ta.BlurredStyle.Text = noStyle
+	ta.BlurredStyle.Placeholder = noStyle.Foreground(ColorDim)
+	ta.BlurredStyle.EndOfBuffer = noStyle
 
 	// Rebind InsertNewline to shift+enter so plain Enter can send messages.
 	ta.KeyMap.InsertNewline = key.NewBinding(key.WithKeys("shift+enter"))
@@ -319,12 +315,8 @@ func (m Model) View() string {
 	chatView := ChatAreaStyle.Width(mainWidth).
 		Render(m.chatViewport.View())
 
-	// Build input area. Pad each textarea line to full inner width so the
-	// background fills every line, not just lines with content.
-	inputBg := lipgloss.AdaptiveColor{Light: "254", Dark: "236"}
-	innerWidth := mainWidth - InputAreaStyle.GetHorizontalFrameSize() - InputAreaStyle.GetHorizontalPadding()
-	inputContent := padLinesToWidth(m.input.View(), innerWidth, inputBg)
-	inputView := InputAreaStyle.Width(mainWidth).Render(inputContent)
+	// Build input area.
+	inputView := InputAreaStyle.Width(mainWidth).Render(m.input.View())
 
 	// Join chat + input vertically.
 	mainColumn := lipgloss.JoinVertical(lipgloss.Left, chatView, inputView)
@@ -398,7 +390,7 @@ func (m *Model) resizeComponents() {
 	m.chatViewport.Width = vpWidth
 	m.chatViewport.Height = vpHeight
 
-	m.input.SetWidth(mainWidth - InputAreaStyle.GetHorizontalFrameSize() - InputAreaStyle.GetHorizontalPadding())
+	m.input.SetWidth(mainWidth - InputAreaStyle.GetHorizontalFrameSize())
 	m.input.SetHeight(inputHeight)
 
 	m.ensureMarkdownRenderer()
@@ -595,24 +587,6 @@ func renderContextBar(used, total, width int) string {
 	summaryStr := DimStyle.Render(summary)
 
 	return bar + "\n" + summaryStr
-}
-
-// padLinesToWidth pads every line in s to exactly width cells using the given
-// background color, so the background fills the full line regardless of content.
-func padLinesToWidth(s string, width int, bg lipgloss.TerminalColor) string {
-	if width <= 0 {
-		return s
-	}
-	lineStyle := lipgloss.NewStyle().Background(bg)
-	lines := strings.Split(s, "\n")
-	for i, line := range lines {
-		w := lipgloss.Width(line)
-		if w < width {
-			line += strings.Repeat(" ", width-w)
-		}
-		lines[i] = lineStyle.Render(line)
-	}
-	return strings.Join(lines, "\n")
 }
 
 // renderReasoningBlock renders a chain-of-thought reasoning trace as a dimmed,
