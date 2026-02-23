@@ -101,6 +101,85 @@ type AppReadyMsg struct {
 	Awareness string
 }
 
+// loadingTickMsg drives the loading screen animation.
+type loadingTickMsg struct{}
+
+// loadingTick returns a command that fires loadingTickMsg after 150ms.
+func loadingTick() tea.Cmd {
+	return tea.Tick(150*time.Millisecond, func(time.Time) tea.Msg {
+		return loadingTickMsg{}
+	})
+}
+
+// loadingFrames is the toaster animation: bread rising, popping, and flying out.
+// Each entry is a multi-line ASCII art string (toaster body + bread state).
+var loadingFrames = []string{
+	// Frame 0: empty toaster, waiting
+	"        \n" +
+		"  ╔════╗\n" +
+		"  ║    ║\n" +
+		"  ╚════╝",
+
+	// Frame 1: bread just peeking out
+	"   ████ \n" +
+		"  ╔════╗\n" +
+		"  ║    ║\n" +
+		"  ╚════╝",
+
+	// Frame 2: bread rising
+	"  ██████\n" +
+		"  ╔════╗\n" +
+		"  ║    ║\n" +
+		"  ╚════╝",
+
+	// Frame 3: bread high, about to pop
+	" ████████\n" +
+		"  ╔════╗ \n" +
+		"  ║    ║ \n" +
+		"  ╚════╝ ",
+
+	// Frame 4: bread launching! sparkles appear
+	"✦ ██████ ✧\n" +
+		"  ╔════╗  \n" +
+		"  ║    ║  \n" +
+		"  ╚════╝  ",
+
+	// Frame 5: bread fully airborne with face, max sparkles
+	"✦  🍞🍞  ✦\n" +
+		" ✧      ✧ \n" +
+		"  ╔════╗  \n" +
+		"  ╚════╝  ",
+
+	// Frame 6: bread coming back down
+	"  ██████  \n" +
+		"✧ ╔════╗ ✧\n" +
+		"  ║    ║  \n" +
+		"  ╚════╝  ",
+
+	// Frame 7: bread settling back in
+	"   ████   \n" +
+		"  ╔════╗  \n" +
+		"  ║    ║  \n" +
+		"  ╚════╝  ",
+}
+
+// numLoadingFrames is the total number of animation frames.
+var numLoadingFrames = len(loadingFrames)
+
+// loadingMessages are the absurd status messages that cycle during loading.
+var loadingMessages = []string{
+	"heating elements...",
+	"calibrating crispiness...",
+	"warming up the slots...",
+	"toasting your agents...",
+	"achieving optimal browning...",
+	"do not put metal in the toaster...",
+	"this is fine 🔥",
+	"preheating to 450°...",
+	"sourcing artisanal bread...",
+	"consulting the bread oracle...",
+}
+
 // SlotTimeoutPromptExpiredMsg fires when the 1-minute user-response window elapses.
 type SlotTimeoutPromptExpiredMsg struct{ SlotID int }
 
@@ -252,7 +331,8 @@ type Model struct {
 	pendingTimeoutSlot int         // slot index awaiting timeout confirmation
 	timeoutPromptTimer *time.Timer // nil when no prompt active (unused; timer is via tea.Tick)
 
-	loading bool // true while waiting for AppReadyMsg before initializing the conversation
+	loading      bool // true while waiting for AppReadyMsg before initializing the conversation
+	loadingFrame int  // current animation frame index (0..numLoadingFrames-1)
 
 	userScrolled bool // true when user has manually scrolled up; suppresses auto-scroll
 
@@ -364,6 +444,7 @@ func (m *Model) Init() tea.Cmd {
 	cmds := []tea.Cmd{
 		tea.RequestWindowSize,
 		m.fetchModels(),
+		loadingTick(), // drive the loading screen animation
 	}
 	if m.agentNotifyCh != nil {
 		cmds = append(cmds, waitForAgentUpdate(m.agentNotifyCh))
@@ -1661,6 +1742,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.userScrolled = true
 		}
+
+	case loadingTickMsg:
+		if m.loading {
+			m.loadingFrame = (m.loadingFrame + 1) % numLoadingFrames
+			return m, loadingTick()
+		}
+		return m, nil
 	}
 
 	return m, tea.Batch(cmds...)
@@ -2010,10 +2098,56 @@ func (m *Model) View() tea.View {
 	return v
 }
 
-// renderLoading renders a centered loading screen while the app is initializing.
+// renderLoading renders a centered animated loading screen while the app is initializing.
 func (m *Model) renderLoading() tea.View {
-	label := DimStyle.Render("⟳ Initializing toasters…")
-	content := lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, label)
+	// Styles for the animation elements.
+	toasterStyle := lipgloss.NewStyle().Foreground(ColorBorder)
+	breadStyle := lipgloss.NewStyle().Foreground(ColorStreaming).Bold(true)
+	sparkleStyle := lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true)
+	msgStyle := DimStyle.Italic(true)
+
+	// Pick the current animation frame and colorize it.
+	frame := loadingFrames[m.loadingFrame%numLoadingFrames]
+	lines := strings.Split(frame, "\n")
+
+	var styledLines []string
+	for _, line := range lines {
+		// Colorize sparkle characters (✦ ✧) in purple.
+		// Colorize bread characters (█ 🍞) in orange/amber.
+		// Colorize toaster body (╔ ╗ ╚ ╝ ║ ═) in dim.
+		var out strings.Builder
+		runes := []rune(line)
+		i := 0
+		for i < len(runes) {
+			ch := runes[i]
+			switch ch {
+			case '✦', '✧':
+				out.WriteString(sparkleStyle.Render(string(ch)))
+			case '█':
+				out.WriteString(breadStyle.Render(string(ch)))
+			case '🍞':
+				// emoji is multi-byte; render as-is with bread style
+				out.WriteString(breadStyle.Render(string(ch)))
+			case '╔', '╗', '╚', '╝', '║', '═':
+				out.WriteString(toasterStyle.Render(string(ch)))
+			default:
+				out.WriteRune(ch)
+			}
+			i++
+		}
+		styledLines = append(styledLines, out.String())
+	}
+
+	art := strings.Join(styledLines, "\n")
+
+	// Cycle the status message at 1/3 the frame rate (every 3 frames).
+	msgIdx := (m.loadingFrame / 3) % len(loadingMessages)
+	statusMsg := msgStyle.Render(loadingMessages[msgIdx])
+
+	// Compose the full block: art + blank line + message.
+	block := lipgloss.JoinVertical(lipgloss.Center, art, "", statusMsg)
+
+	content := lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, block)
 	v := tea.NewView(content)
 	v.AltScreen = true
 	v.MouseMode = tea.MouseModeCellMotion
