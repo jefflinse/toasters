@@ -1804,8 +1804,12 @@ func (m *Model) renderGrid() string {
 			Padding(0, 1)
 
 		if !snap.Active {
-			empty := DimStyle.Render(fmt.Sprintf("slot %d — empty", i))
-			cells[i] = cellStyle.Render(empty)
+			emptyContent := DimStyle.Render(fmt.Sprintf("slot %d — empty", i))
+			emptyLines := strings.Split(emptyContent, "\n")
+			if len(emptyLines) > innerH {
+				emptyLines = emptyLines[:innerH]
+			}
+			cells[i] = cellStyle.Render(strings.Join(emptyLines, "\n"))
 			continue
 		}
 
@@ -1874,13 +1878,15 @@ func (m *Model) renderGrid() string {
 		}
 		var outputBody string
 		if snap.Output != "" {
-			rendered := m.renderMarkdown(snap.Output)
-			outLines := strings.Split(rendered, "\n")
+			outLines := strings.Split(snap.Output, "\n")
 			if len(outLines) > outputH {
 				outLines = outLines[len(outLines)-outputH:]
 			}
-			// Don't hard-truncate rendered lines — ANSI escape codes make byte-length
-			// truncation unreliable. The cell style width constraint clips overflow.
+			for j, l := range outLines {
+				if len([]rune(l)) > innerW {
+					outLines[j] = string([]rune(l)[:innerW])
+				}
+			}
 			outputBody = strings.Join(outLines, "\n")
 		}
 
@@ -1892,6 +1898,13 @@ func (m *Model) renderGrid() string {
 			separator,
 			outputBody,
 		}, "\n")
+
+		// Hard-clamp to innerH lines so glamour/ANSI content can never overflow the cell budget.
+		innerLines := strings.Split(inner, "\n")
+		if len(innerLines) > innerH {
+			innerLines = innerLines[:innerH]
+		}
+		inner = strings.Join(innerLines, "\n")
 
 		cells[i] = cellStyle.Render(inner)
 	}

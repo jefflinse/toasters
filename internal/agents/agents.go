@@ -41,47 +41,13 @@ type Agent struct {
 	HasToolsBlock bool            // true if a "tools:" block was present in frontmatter
 }
 
-// ClaudePermissionArgs returns the Claude CLI permission flags appropriate for
-// this agent based on its tools block.
+// ClaudePermissionArgs returns the Claude CLI permission flags for this agent.
 //
-// If no tools block is present, the agent gets full access via
-// --dangerously-skip-permissions. If a tools block is present, an allow list
-// is built from the full default tool set minus any denied tools, and
-// --allowedTools is returned with the comma-separated list.
+// Background agents run non-interactively and need full tool access.
+// The OpenCode tools: block is informational for now; we always bypass
+// permissions for subprocess agents since they cannot respond to prompts.
 func (a Agent) ClaudePermissionArgs() []string {
-	if !a.HasToolsBlock {
-		return []string{"--dangerously-skip-permissions"}
-	}
-
-	fullSet := []string{"Bash", "Read", "Write", "Edit", "Glob", "Grep", "WebFetch", "TodoRead", "TodoWrite"}
-
-	// Map OpenCode tool keys to Claude Code tool names.
-	openCodeToClaudeCode := map[string]string{
-		"bash":  "Bash",
-		"write": "Write",
-		"edit":  "Edit",
-	}
-
-	denied := map[string]bool{}
-	for ocKey, allowed := range a.Tools {
-		if !allowed {
-			if ccName, ok := openCodeToClaudeCode[ocKey]; ok {
-				denied[ccName] = true
-			}
-		}
-	}
-
-	var allowed []string
-	for _, tool := range fullSet {
-		if !denied[tool] {
-			allowed = append(allowed, tool)
-		}
-	}
-
-	if len(allowed) == 0 {
-		return []string{"--allowedTools", ""}
-	}
-	return []string{"--allowedTools", strings.Join(allowed, ",")}
+	return []string{"--dangerously-skip-permissions"}
 }
 
 // Registry holds a set of agents split into a coordinator and workers.

@@ -3,7 +3,6 @@ package agents
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -25,13 +24,9 @@ func TestClaudePermissionArgs_BashDenied(t *testing.T) {
 		Tools:         map[string]bool{"bash": false},
 	}
 	got := a.ClaudePermissionArgs()
-	if len(got) != 2 || got[0] != "--allowedTools" {
-		t.Fatalf("unexpected args: %v", got)
-	}
-	tools := strings.Split(got[1], ",")
-	wantTools := []string{"Read", "Write", "Edit", "Glob", "Grep", "WebFetch", "TodoRead", "TodoWrite"}
-	if !sliceEqual(tools, wantTools) {
-		t.Errorf("got tools %v, want %v", tools, wantTools)
+	want := []string{"--dangerously-skip-permissions"}
+	if !sliceEqual(got, want) {
+		t.Errorf("got %v, want %v", got, want)
 	}
 }
 
@@ -42,13 +37,9 @@ func TestClaudePermissionArgs_WriteEditDenied(t *testing.T) {
 		Tools:         map[string]bool{"write": false, "edit": false},
 	}
 	got := a.ClaudePermissionArgs()
-	if len(got) != 2 || got[0] != "--allowedTools" {
-		t.Fatalf("unexpected args: %v", got)
-	}
-	tools := strings.Split(got[1], ",")
-	wantTools := []string{"Bash", "Read", "Glob", "Grep", "WebFetch", "TodoRead", "TodoWrite"}
-	if !sliceEqual(tools, wantTools) {
-		t.Errorf("got tools %v, want %v", tools, wantTools)
+	want := []string{"--dangerously-skip-permissions"}
+	if !sliceEqual(got, want) {
+		t.Errorf("got %v, want %v", got, want)
 	}
 }
 
@@ -59,13 +50,9 @@ func TestClaudePermissionArgs_AllDenied(t *testing.T) {
 		Tools:         map[string]bool{"bash": false, "write": false, "edit": false},
 	}
 	got := a.ClaudePermissionArgs()
-	if len(got) != 2 || got[0] != "--allowedTools" {
-		t.Fatalf("unexpected args: %v", got)
-	}
-	tools := strings.Split(got[1], ",")
-	wantTools := []string{"Read", "Glob", "Grep", "WebFetch", "TodoRead", "TodoWrite"}
-	if !sliceEqual(tools, wantTools) {
-		t.Errorf("got tools %v, want %v", tools, wantTools)
+	want := []string{"--dangerously-skip-permissions"}
+	if !sliceEqual(got, want) {
+		t.Errorf("got %v, want %v", got, want)
 	}
 }
 
