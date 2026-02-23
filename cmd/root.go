@@ -81,6 +81,10 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 
 	p := tea.NewProgram(&m)
 
+	gw.SetSend(func(msg gateway.SlotTimeoutMsg) {
+		p.Send(msg)
+	})
+
 	// Generate team awareness in the background so the TUI appears immediately.
 	// Always send AppReadyMsg so the TUI exits its loading state even on error.
 	go func() {

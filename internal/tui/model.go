@@ -101,6 +101,9 @@ type AppReadyMsg struct {
 	Awareness string
 }
 
+// SlotTimeoutPromptExpiredMsg fires when the 1-minute user-response window elapses.
+type SlotTimeoutPromptExpiredMsg struct{ SlotID int }
+
 // claudeMetaMsg carries model/mode info parsed from the claude CLI system/init event.
 type claudeMetaMsg struct {
 	Model          string
@@ -244,6 +247,10 @@ type Model struct {
 	confirmKill     bool // true when promptMode is a kill confirmation
 	pendingKillSlot int  // slot index awaiting kill confirmation
 
+	confirmTimeout     bool        // true when promptMode is a slot-timeout confirmation
+	pendingTimeoutSlot int         // slot index awaiting timeout confirmation
+	timeoutPromptTimer *time.Timer // nil when no prompt active (unused; timer is via tea.Tick)
+
 	loading bool // true while waiting for AppReadyMsg before initializing the conversation
 
 	userScrolled bool // true when user has manually scrolled up; suppresses auto-scroll
@@ -365,6 +372,14 @@ func waitForAgentUpdate(ch <-chan struct{}) tea.Cmd {
 		<-ch
 		return AgentOutputMsg{}
 	}
+}
+
+// slotTimeoutPromptCmd fires SlotTimeoutPromptExpiredMsg after 1 minute,
+// giving the user a window to respond before auto-continuing.
+func slotTimeoutPromptCmd(slotID int) tea.Cmd {
+	return tea.Tick(time.Minute, func(time.Time) tea.Msg {
+		return SlotTimeoutPromptExpiredMsg{SlotID: slotID}
+	})
 }
 
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -1249,6 +1264,30 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.startStream(m.messages)
 
 	case AskUserResponseMsg:
+		// Handle slot-timeout confirmation flow.
+		if m.confirmTimeout {
+			m.confirmTimeout = false
+			m.promptMode = false
+			m.promptOptions = nil
+			m.promptSelected = 0
+			m.promptPendingCall = llm.ToolCall{}
+			switch msg.Result {
+			case "Continue (+15m)":
+				_ = m.gateway.ExtendSlot(m.pendingTimeoutSlot)
+				m.messages = append(m.messages, llm.Message{Role: "assistant", Content: fmt.Sprintf("Slot %d extended by 15m.", m.pendingTimeoutSlot)})
+			default: // "Kill"
+				_ = m.gateway.Kill(m.pendingTimeoutSlot)
+				m.messages = append(m.messages, llm.Message{Role: "assistant", Content: fmt.Sprintf("Slot %d killed.", m.pendingTimeoutSlot)})
+			}
+			m.reasoning = append(m.reasoning, "")
+			m.claudeMeta = append(m.claudeMeta, "tool-call-indicator")
+			m.updateViewportContent()
+			if !m.userScrolled {
+				m.chatViewport.GotoBottom()
+			}
+			return m, m.input.Focus()
+		}
+
 		// Handle kill confirmation flow.
 		if m.confirmKill {
 			m.confirmKill = false
@@ -1459,6 +1498,55 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.initMessages()
 		m.loading = false
 		return m, tea.Batch(cmds...)
+
+	case gateway.SlotTimeoutMsg:
+		// Look up the slot snapshot to get team/job info for the prompt message.
+		snapshots := m.gateway.Slots()
+		snap := snapshots[msg.SlotID]
+		slotDesc := fmt.Sprintf("slot %d", msg.SlotID)
+		if snap.Active {
+			slotDesc = fmt.Sprintf("slot %d (%s on %s)", msg.SlotID, snap.AgentName, snap.JobID)
+		}
+		promptText := fmt.Sprintf("⏱ %s has been running for 15m. Continue for another 15m, or kill it?\n\n(Auto-continuing in 1 minute...)", slotDesc)
+		// Append as an assistant message so it shows in the chat.
+		m.messages = append(m.messages, llm.Message{Role: "assistant", Content: promptText})
+		m.reasoning = append(m.reasoning, "")
+		m.claudeMeta = append(m.claudeMeta, "ask-user-prompt")
+		// Enter prompt mode.
+		m.promptMode = true
+		m.confirmTimeout = true
+		m.pendingTimeoutSlot = msg.SlotID
+		m.promptOptions = []string{"Continue (+15m)", "Kill"}
+		m.promptSelected = 0
+		// Zero out the pending tool call so the AskUserResponseMsg handler
+		// doesn't try to execute a real tool.
+		m.promptPendingCall = llm.ToolCall{}
+		m.updateViewportContent()
+		if !m.userScrolled {
+			m.chatViewport.GotoBottom()
+		}
+		return m, tea.Batch(m.input.Focus(), slotTimeoutPromptCmd(msg.SlotID))
+
+	case SlotTimeoutPromptExpiredMsg:
+		// Only act if this prompt is still active for this slot.
+		if !m.confirmTimeout || m.pendingTimeoutSlot != msg.SlotID {
+			return m, nil
+		}
+		// Auto-continue: extend the slot.
+		m.confirmTimeout = false
+		m.promptMode = false
+		m.promptOptions = nil
+		m.promptSelected = 0
+		m.promptPendingCall = llm.ToolCall{}
+		_ = m.gateway.ExtendSlot(msg.SlotID)
+		m.messages = append(m.messages, llm.Message{Role: "assistant", Content: fmt.Sprintf("Slot %d auto-continued (no response within 1m).", msg.SlotID)})
+		m.reasoning = append(m.reasoning, "")
+		m.claudeMeta = append(m.claudeMeta, "tool-call-indicator")
+		m.updateViewportContent()
+		if !m.userScrolled {
+			m.chatViewport.GotoBottom()
+		}
+		return m, m.input.Focus()
 
 	case TeamsAutoDetectDoneMsg:
 		m.teamsModal.autoDetecting = false
@@ -2586,6 +2674,8 @@ func (m *Model) initMessages() {
 	m.pendingDispatch = llm.ToolCall{}
 	m.confirmKill = false
 	m.pendingKillSlot = 0
+	m.confirmTimeout = false
+	m.pendingTimeoutSlot = 0
 }
 
 // hasConversation reports whether the conversation contains at least one user or

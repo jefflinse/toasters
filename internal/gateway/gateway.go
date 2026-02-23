@@ -30,6 +30,9 @@ const (
 	SlotDone
 )
 
+// SlotTimeoutMsg is sent to the TUI when a slot's timeout fires.
+type SlotTimeoutMsg struct{ SlotID int }
+
 // SlotSnapshot is a lock-free copy of slot state for rendering.
 type SlotSnapshot struct {
 	Active    bool
@@ -46,16 +49,17 @@ type SlotSnapshot struct {
 
 // slot is the internal mutable state (mutex-protected via Gateway).
 type slot struct {
-	agentName string
-	jobID     string
-	status    SlotStatus
-	startTime time.Time
-	endTime   time.Time
-	output    strings.Builder
-	cancel    context.CancelFunc
-	summary   string // one-sentence description of what the agent was asked to do
-	model     string // model name from the system/init event
-	prompt    string // the full assembled prompt passed to claude
+	agentName  string
+	jobID      string
+	status     SlotStatus
+	startTime  time.Time
+	endTime    time.Time
+	output     strings.Builder
+	cancel     context.CancelFunc
+	summary    string             // one-sentence description of what the agent was asked to do
+	model      string             // model name from the system/init event
+	prompt     string             // the full assembled prompt passed to claude
+	resetTimer chan time.Duration // signals the timer goroutine to reset
 }
 
 // Gateway manages up to MaxSlots concurrent Claude subprocess slots.
@@ -63,8 +67,9 @@ type Gateway struct {
 	mu             sync.Mutex
 	slots          [MaxSlots]*slot
 	claudeCfg      config.ClaudeConfig
-	notify         func()        // called on every output update; wired to TUI re-render
-	defaultTimeout time.Duration // per-slot subprocess timeout
+	notify         func()               // called on every output update; wired to TUI re-render
+	send           func(SlotTimeoutMsg) // called when a slot's timeout fires
+	defaultTimeout time.Duration        // per-slot subprocess timeout
 }
 
 // New returns an initialized Gateway with all slots nil.
@@ -72,7 +77,8 @@ func New(claudeCfg config.ClaudeConfig, notify func()) *Gateway {
 	return &Gateway{
 		claudeCfg:      claudeCfg,
 		notify:         notify,
-		defaultTimeout: 5 * time.Minute,
+		send:           func(SlotTimeoutMsg) {},
+		defaultTimeout: 15 * time.Minute,
 	}
 }
 
@@ -166,20 +172,49 @@ func (g *Gateway) SpawnTeam(teamName, jobID, task string, team agents.Team) (slo
 	}
 
 	// Create the slot and assign it.
-	ctx, cancel := context.WithTimeout(context.Background(), g.defaultTimeout)
+	ctx, cancel := context.WithCancel(context.Background())
 	s := &slot{
-		agentName: teamName,
-		jobID:     jobID,
-		status:    SlotRunning,
-		startTime: time.Now(),
-		cancel:    cancel,
-		summary:   summary,
-		prompt:    prompt,
+		agentName:  teamName,
+		jobID:      jobID,
+		status:     SlotRunning,
+		startTime:  time.Now(),
+		cancel:     cancel,
+		summary:    summary,
+		prompt:     prompt,
+		resetTimer: make(chan time.Duration, 1),
 	}
 
 	g.mu.Lock()
 	g.slots[idx] = s
 	g.mu.Unlock()
+
+	// Start the timer goroutine that fires SlotTimeoutMsg after defaultTimeout.
+	go func() {
+		timer := time.NewTimer(g.defaultTimeout)
+		defer timer.Stop()
+		for {
+			select {
+			case <-timer.C:
+				g.mu.Lock()
+				stillRunning := g.slots[idx] == s && s.status == SlotRunning
+				sendFn := g.send
+				g.mu.Unlock()
+				if !stillRunning {
+					return
+				}
+				sendFn(SlotTimeoutMsg{SlotID: idx})
+				// Wait for a reset signal or context cancellation.
+				select {
+				case d := <-s.resetTimer:
+					timer.Reset(d)
+				case <-ctx.Done():
+					return
+				}
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
 
 	// Start the subprocess goroutine.
 	go func() {
@@ -224,6 +259,33 @@ func (g *Gateway) SetNotify(fn func()) {
 	g.mu.Lock()
 	g.notify = fn
 	g.mu.Unlock()
+}
+
+// SetSend replaces the send callback used to deliver SlotTimeoutMsg to the TUI.
+func (g *Gateway) SetSend(fn func(SlotTimeoutMsg)) {
+	g.mu.Lock()
+	g.send = fn
+	g.mu.Unlock()
+}
+
+// ExtendSlot resets the timeout timer for a running slot by another defaultTimeout duration.
+func (g *Gateway) ExtendSlot(slotID int) error {
+	if slotID < 0 || slotID >= MaxSlots {
+		return fmt.Errorf("slot ID %d out of range (0-%d)", slotID, MaxSlots-1)
+	}
+	g.mu.Lock()
+	s := g.slots[slotID]
+	if s == nil || s.status != SlotRunning {
+		g.mu.Unlock()
+		return fmt.Errorf("slot %d is not running", slotID)
+	}
+	d := g.defaultTimeout
+	g.mu.Unlock()
+	select {
+	case s.resetTimer <- d:
+	default:
+	}
+	return nil
 }
 
 // Slots returns a snapshot of all slot states.
