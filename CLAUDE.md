@@ -24,15 +24,15 @@ internal/
   gateway/                  # Claude subprocess slot management (4 concurrent slots)
   llm/                      # LM Studio OpenAI-compatible client + tool definitions
   tui/                      # Bubble Tea TUI (model, styles, commands, claude subprocess)
-  workeffort/               # Work effort file persistence (OVERVIEW.md + TODO.md)
+  job/                      # Job file persistence (OVERVIEW.md + TODO.md)
 ```
 
 ## Architecture
 
-- **Operator**: LM Studio LLM that coordinates work. Receives user messages, decides which team to assign work to, and manages work efforts.
+- **Operator**: LM Studio LLM that coordinates work. Receives user messages, decides which team to assign work to, and manages jobs.
 - **Teams**: Groups of agents defined in `~/.config/toasters/teams/` (or configured via `operator.teams_dir`). Each team has one coordinator and multiple workers.
-- **Gateway**: Manages up to 4 concurrent Claude CLI subprocesses (`MaxSlots = 4`). Each slot runs a Claude agent with a specific prompt and work effort context.
-- **Work Efforts**: Disk-persisted task units stored in `~/.config/toasters/work-efforts/`. Each has an `OVERVIEW.md` (YAML frontmatter + markdown) and `TODO.md` (GFM checkboxes).
+- **Gateway**: Manages up to 4 concurrent Claude CLI subprocesses (`MaxSlots = 4`). Each slot runs a Claude agent with a specific prompt and job context.
+- **Jobs**: Disk-persisted task units stored in `~/.config/toasters/jobs/`. Each has an `OVERVIEW.md` (YAML frontmatter + markdown) and `TODO.md` (GFM checkboxes).
 - **Agents**: Defined as `.md` files with YAML frontmatter (name, description, mode, color, temperature, tools). Discovered from directories and hot-reloaded via fsnotify.
 
 ## Tech Stack
@@ -46,8 +46,8 @@ internal/
 
 ## Code Conventions
 
-- **Packages**: lowercase single word (`agents`, `config`, `gateway`, `llm`, `tui`, `workeffort`)
-- **Types**: PascalCase (`Agent`, `Team`, `Gateway`, `SlotSnapshot`, `WorkEffort`)
+- **Packages**: lowercase single word (`agents`, `config`, `gateway`, `llm`, `tui`, `job`)
+- **Types**: PascalCase (`Agent`, `Team`, `Gateway`, `SlotSnapshot`, `Job`)
 - **Constants**: SCREAMING_SNAKE or PascalCase for exported (`MaxSlots`, `InputHeight`)
 - **Error handling**: Always `if err != nil` with `fmt.Errorf("context: %w", err)` wrapping. Return errors, don't log and swallow.
 - **Concurrency**: `sync.Mutex` for shared state, channels for TUI messages, `context.Context` for cancellation

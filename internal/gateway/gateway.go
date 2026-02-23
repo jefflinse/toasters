@@ -15,8 +15,8 @@ import (
 
 	"github.com/jefflinse/toasters/internal/agents"
 	"github.com/jefflinse/toasters/internal/config"
+	"github.com/jefflinse/toasters/internal/job"
 	"github.com/jefflinse/toasters/internal/llm"
-	"github.com/jefflinse/toasters/internal/workeffort"
 )
 
 // MaxSlots is the maximum number of concurrent Claude subprocess slots.
@@ -32,30 +32,30 @@ const (
 
 // SlotSnapshot is a lock-free copy of slot state for rendering.
 type SlotSnapshot struct {
-	Active       bool
-	AgentName    string
-	WorkEffortID string
-	Status       SlotStatus
-	StartTime    time.Time
-	EndTime      time.Time // zero if still running
-	Output       string    // accumulated text output
-	Summary      string
-	Model        string
-	Prompt       string
+	Active    bool
+	AgentName string
+	JobID     string
+	Status    SlotStatus
+	StartTime time.Time
+	EndTime   time.Time // zero if still running
+	Output    string    // accumulated text output
+	Summary   string
+	Model     string
+	Prompt    string
 }
 
 // slot is the internal mutable state (mutex-protected via Gateway).
 type slot struct {
-	agentName    string
-	workEffortID string
-	status       SlotStatus
-	startTime    time.Time
-	endTime      time.Time
-	output       strings.Builder
-	cancel       context.CancelFunc
-	summary      string // one-sentence description of what the agent was asked to do
-	model        string // model name from the system/init event
-	prompt       string // the full assembled prompt passed to claude
+	agentName string
+	jobID     string
+	status    SlotStatus
+	startTime time.Time
+	endTime   time.Time
+	output    strings.Builder
+	cancel    context.CancelFunc
+	summary   string // one-sentence description of what the agent was asked to do
+	model     string // model name from the system/init event
+	prompt    string // the full assembled prompt passed to claude
 }
 
 // Gateway manages up to MaxSlots concurrent Claude subprocess slots.
@@ -83,7 +83,7 @@ func New(claudeCfg config.ClaudeConfig, repoRoot string, notify func()) *Gateway
 // Spawn starts a new Claude subprocess in a free slot. It returns the slot
 // index, a boolean indicating whether the agent was already running (idempotent
 // duplicate call), and an error if no slot is available or the agent fails to start.
-func (g *Gateway) Spawn(agentName, workEffortID, task string) (slotID int, alreadyRunning bool, err error) {
+func (g *Gateway) Spawn(agentName, jobID, task string) (slotID int, alreadyRunning bool, err error) {
 	g.mu.Lock()
 
 	// Find a free slot: first nil slot, then first done slot.
@@ -107,11 +107,11 @@ func (g *Gateway) Spawn(agentName, workEffortID, task string) (slotID int, alrea
 		return -1, false, fmt.Errorf("all slots busy")
 	}
 
-	// Check for an already-running slot with the same agent+work-effort.
+	// Check for an already-running slot with the same agent+job.
 	// Return the existing slot index as a success so the operator doesn't retry.
 	for i, s := range g.slots {
 		if s != nil && s.status == SlotRunning &&
-			s.agentName == agentName && s.workEffortID == workEffortID {
+			s.agentName == agentName && s.jobID == jobID {
 			g.mu.Unlock()
 			return i, true, nil // idempotent: treat duplicate spawn as success
 		}
@@ -131,16 +131,16 @@ func (g *Gateway) Spawn(agentName, workEffortID, task string) (slotID int, alrea
 	// No frontmatter parsed for disk fallback — default to full access.
 	permissionArgs = []string{"--dangerously-skip-permissions"}
 
-	// Read work effort context outside the lock (I/O).
+	// Read job context outside the lock (I/O).
 	configDir, _ := config.Dir()
-	weDir := filepath.Join(workeffort.WorkEffortsDir(configDir), workEffortID)
-	overview, _ := workeffort.ReadOverview(weDir)
-	todos, _ := workeffort.ReadTodos(weDir)
+	jobDir := filepath.Join(job.JobsDir(configDir), jobID)
+	overview, _ := job.ReadOverview(jobDir)
+	todos, _ := job.ReadTodos(jobDir)
 
 	// Assemble prompt.
 	var sb strings.Builder
 	sb.WriteString(agentBody)
-	sb.WriteString("\n\n---\n\n## Work Effort Context\n\n### OVERVIEW.md\n")
+	sb.WriteString("\n\n---\n\n## Job Context\n\n### OVERVIEW.md\n")
 	sb.WriteString(overview)
 	sb.WriteString("\n\n### TODO.md\n")
 	sb.WriteString(todos)
@@ -150,8 +150,8 @@ func (g *Gateway) Spawn(agentName, workEffortID, task string) (slotID int, alrea
 	}
 	prompt := sb.String()
 
-	// Build summary: "agentName on workEffortID" optionally with ": task", max 80 chars.
-	summary := agentName + " on " + workEffortID
+	// Build summary: "agentName on jobID" optionally with ": task", max 80 chars.
+	summary := agentName + " on " + jobID
 	if task != "" {
 		summary += ": " + task
 	}
@@ -162,13 +162,13 @@ func (g *Gateway) Spawn(agentName, workEffortID, task string) (slotID int, alrea
 	// Create the slot and assign it.
 	ctx, cancel := context.WithTimeout(context.Background(), g.defaultTimeout)
 	s := &slot{
-		agentName:    agentName,
-		workEffortID: workEffortID,
-		status:       SlotRunning,
-		startTime:    time.Now(),
-		cancel:       cancel,
-		summary:      summary,
-		prompt:       prompt,
+		agentName: agentName,
+		jobID:     jobID,
+		status:    SlotRunning,
+		startTime: time.Now(),
+		cancel:    cancel,
+		summary:   summary,
+		prompt:    prompt,
 	}
 
 	g.mu.Lock()
@@ -206,7 +206,7 @@ func (g *Gateway) Spawn(agentName, workEffortID, task string) (slotID int, alrea
 // SpawnTeam starts a Claude subprocess for a team coordinator in a free slot.
 // It returns the slot index, a boolean indicating whether the team was already
 // running (idempotent duplicate call), and an error if no slot is available.
-func (g *Gateway) SpawnTeam(teamName, workEffortID, task string, team agents.Team) (slotID int, alreadyRunning bool, err error) {
+func (g *Gateway) SpawnTeam(teamName, jobID, task string, team agents.Team) (slotID int, alreadyRunning bool, err error) {
 	g.mu.Lock()
 
 	// Find a free slot: first nil slot, then first done slot.
@@ -230,10 +230,10 @@ func (g *Gateway) SpawnTeam(teamName, workEffortID, task string, team agents.Tea
 		return -1, false, fmt.Errorf("all slots busy")
 	}
 
-	// Check for an already-running slot with the same team+work-effort.
+	// Check for an already-running slot with the same team+job.
 	for i, s := range g.slots {
 		if s != nil && s.status == SlotRunning &&
-			s.agentName == teamName && s.workEffortID == workEffortID {
+			s.agentName == teamName && s.jobID == jobID {
 			g.mu.Unlock()
 			return i, true, nil
 		}
@@ -264,16 +264,16 @@ func (g *Gateway) SpawnTeam(teamName, workEffortID, task string, team agents.Tea
 		}
 	}
 
-	// Read work effort context outside the lock (I/O).
+	// Read job context outside the lock (I/O).
 	configDir, _ := config.Dir()
-	weDir := filepath.Join(workeffort.WorkEffortsDir(configDir), workEffortID)
-	overview, _ := workeffort.ReadOverview(weDir)
-	todos, _ := workeffort.ReadTodos(weDir)
+	jobDir := filepath.Join(job.JobsDir(configDir), jobID)
+	overview, _ := job.ReadOverview(jobDir)
+	todos, _ := job.ReadTodos(jobDir)
 
 	// Assemble prompt.
 	var sb strings.Builder
 	sb.WriteString(agents.BuildTeamCoordinatorPrompt(team))
-	sb.WriteString("\n\n---\n\n## Work Effort Context\n\n### OVERVIEW.md\n")
+	sb.WriteString("\n\n---\n\n## Job Context\n\n### OVERVIEW.md\n")
 	sb.WriteString(overview)
 	sb.WriteString("\n\n### TODO.md\n")
 	sb.WriteString(todos)
@@ -283,8 +283,8 @@ func (g *Gateway) SpawnTeam(teamName, workEffortID, task string, team agents.Tea
 	}
 	prompt := sb.String()
 
-	// Build summary: "teamName on workEffortID" optionally with ": task", max 80 chars.
-	summary := teamName + " on " + workEffortID
+	// Build summary: "teamName on jobID" optionally with ": task", max 80 chars.
+	summary := teamName + " on " + jobID
 	if task != "" {
 		summary += ": " + task
 	}
@@ -295,13 +295,13 @@ func (g *Gateway) SpawnTeam(teamName, workEffortID, task string, team agents.Tea
 	// Create the slot and assign it.
 	ctx, cancel := context.WithTimeout(context.Background(), g.defaultTimeout)
 	s := &slot{
-		agentName:    teamName,
-		workEffortID: workEffortID,
-		status:       SlotRunning,
-		startTime:    time.Now(),
-		cancel:       cancel,
-		summary:      summary,
-		prompt:       prompt,
+		agentName: teamName,
+		jobID:     jobID,
+		status:    SlotRunning,
+		startTime: time.Now(),
+		cancel:    cancel,
+		summary:   summary,
+		prompt:    prompt,
 	}
 
 	g.mu.Lock()
@@ -332,8 +332,8 @@ func (g *Gateway) SpawnTeam(teamName, workEffortID, task string, team agents.Tea
 			}
 		}
 
-		// After stream closes, read REPORT.md from the work effort dir.
-		reportPath := filepath.Join(weDir, "REPORT.md")
+		// After stream closes, read REPORT.md from the job dir.
+		reportPath := filepath.Join(jobDir, "REPORT.md")
 		if reportData, err := os.ReadFile(reportPath); err == nil {
 			g.mu.Lock()
 			s.output.WriteString("\n\n---\n\n## Team Report\n\n")
@@ -365,16 +365,16 @@ func (g *Gateway) Slots() [MaxSlots]SlotSnapshot {
 			continue
 		}
 		snapshots[i] = SlotSnapshot{
-			Active:       true,
-			AgentName:    s.agentName,
-			WorkEffortID: s.workEffortID,
-			Status:       s.status,
-			StartTime:    s.startTime,
-			EndTime:      s.endTime,
-			Output:       s.output.String(),
-			Summary:      s.summary,
-			Model:        s.model,
-			Prompt:       s.prompt,
+			Active:    true,
+			AgentName: s.agentName,
+			JobID:     s.jobID,
+			Status:    s.status,
+			StartTime: s.startTime,
+			EndTime:   s.endTime,
+			Output:    s.output.String(),
+			Summary:   s.summary,
+			Model:     s.model,
+			Prompt:    s.prompt,
 		}
 	}
 	return snapshots

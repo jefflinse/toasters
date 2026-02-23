@@ -192,14 +192,14 @@ var (
 	LeftPanelDividerStyle = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("237"))
 
-	// WorkEffortSelectedStyle styles the currently selected work effort.
-	WorkEffortSelectedStyle = lipgloss.NewStyle().
+	// JobSelectedStyle styles the currently selected job.
+	JobSelectedStyle = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("51")).
 				Bold(true)
 
-	// WorkEffortItemStyle styles unselected work effort items.
-	WorkEffortItemStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("245"))
+	// JobItemStyle styles unselected job items.
+	JobItemStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("245"))
 
 	// PlaceholderPaneStyle styles placeholder text in unimplemented panes.
 	PlaceholderPaneStyle = lipgloss.NewStyle().

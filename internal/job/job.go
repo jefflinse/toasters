@@ -1,4 +1,4 @@
-package workeffort
+package job
 
 import (
 	"errors"
@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-// Status represents the lifecycle state of a work effort.
+// Status represents the lifecycle state of a job.
 type Status string
 
 const (
@@ -32,79 +32,79 @@ type Frontmatter struct {
 	Completed   string `yaml:"completed"` // RFC3339 or ""
 }
 
-// WorkEffort represents a single work effort on disk.
-type WorkEffort struct {
+// Job represents a single job on disk.
+type Job struct {
 	Frontmatter
-	Dir string // absolute path to the work effort directory
+	Dir string // absolute path to the job directory
 }
 
 var validID = regexp.MustCompile(`^[a-z0-9-]+$`)
 
-// WorkEffortsDir returns the path to the work-efforts directory within configDir.
-func WorkEffortsDir(configDir string) string {
-	return filepath.Join(configDir, "work-efforts")
+// JobsDir returns the path to the jobs directory within configDir.
+func JobsDir(configDir string) string {
+	return filepath.Join(configDir, "jobs")
 }
 
-// List returns all work efforts in configDir, sorted by Created ascending.
-// It creates the work-efforts directory if it does not exist.
-func List(configDir string) ([]WorkEffort, error) {
-	dir := WorkEffortsDir(configDir)
+// List returns all jobs in configDir, sorted by Created ascending.
+// It creates the jobs directory if it does not exist.
+func List(configDir string) ([]Job, error) {
+	dir := JobsDir(configDir)
 	if err := os.MkdirAll(dir, 0755); err != nil {
-		return nil, fmt.Errorf("creating work-efforts dir: %w", err)
+		return nil, fmt.Errorf("creating jobs dir: %w", err)
 	}
 
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return nil, fmt.Errorf("reading work-efforts dir: %w", err)
+		return nil, fmt.Errorf("reading jobs dir: %w", err)
 	}
 
-	var efforts []WorkEffort
+	var jobs []Job
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
 		}
-		we, err := Load(filepath.Join(dir, entry.Name()))
+		j, err := Load(filepath.Join(dir, entry.Name()))
 		if err != nil {
 			continue // skip entries that fail to load
 		}
-		efforts = append(efforts, we)
+		jobs = append(jobs, j)
 	}
 
-	sort.Slice(efforts, func(i, j int) bool {
-		return efforts[i].Created < efforts[j].Created
+	sort.Slice(jobs, func(i, k int) bool {
+		return jobs[i].Created < jobs[k].Created
 	})
 
-	return efforts, nil
+	return jobs, nil
 }
 
-// Load reads and parses the OVERVIEW.md from dir, returning a WorkEffort.
-func Load(dir string) (WorkEffort, error) {
+// Load reads and parses the OVERVIEW.md from dir, returning a Job.
+func Load(dir string) (Job, error) {
 	overviewPath := filepath.Join(dir, "OVERVIEW.md")
 	data, err := os.ReadFile(overviewPath)
 	if err != nil {
-		return WorkEffort{}, fmt.Errorf("reading OVERVIEW.md: %w", err)
+		return Job{}, fmt.Errorf("reading OVERVIEW.md: %w", err)
 	}
 
 	fm, _, err := parseFrontmatter(string(data))
 	if err != nil {
-		return WorkEffort{}, fmt.Errorf("parsing frontmatter in %s: %w", overviewPath, err)
+		return Job{}, fmt.Errorf("parsing frontmatter in %s: %w", overviewPath, err)
 	}
 
-	return WorkEffort{Frontmatter: fm, Dir: dir}, nil
+	return Job{Frontmatter: fm, Dir: dir}, nil
 }
 
-// Create initialises a new work effort directory with OVERVIEW.md and TODO.md.
-func Create(configDir, id, name, description string) (WorkEffort, error) {
+// Create initialises a new job directory with OVERVIEW.md and TODO.md.
+func Create(configDir, id, name, description string) (Job, error) {
 	if id == "" {
-		return WorkEffort{}, errors.New("id must not be empty")
+		return Job{}, errors.New("id must not be empty")
 	}
 	if !validID.MatchString(id) {
-		return WorkEffort{}, fmt.Errorf("id %q contains invalid characters (only [a-z0-9-] allowed)", id)
+		return Job{}, fmt.Errorf("id %q contains invalid characters (only [a-z0-9-] allowed)", id)
 	}
 
-	dir := filepath.Join(WorkEffortsDir(configDir), id)
+	dir := filepath.Join(JobsDir(configDir), id)
 	if err := os.MkdirAll(dir, 0755); err != nil {
-		return WorkEffort{}, fmt.Errorf("creating work effort dir: %w", err)
+		return Job{}, fmt.Errorf("creating job dir: %w", err)
 	}
 
 	now := time.Now().UTC().Format(time.RFC3339)
@@ -120,11 +120,11 @@ func Create(configDir, id, name, description string) (WorkEffort, error) {
 
 	overview := serializeFrontmatter(fm) + "\n"
 	if err := os.WriteFile(filepath.Join(dir, "OVERVIEW.md"), []byte(overview), 0644); err != nil {
-		return WorkEffort{}, fmt.Errorf("writing OVERVIEW.md: %w", err)
+		return Job{}, fmt.Errorf("writing OVERVIEW.md: %w", err)
 	}
 
 	if err := os.WriteFile(filepath.Join(dir, "TODO.md"), []byte("# TODOs\n"), 0644); err != nil {
-		return WorkEffort{}, fmt.Errorf("writing TODO.md: %w", err)
+		return Job{}, fmt.Errorf("writing TODO.md: %w", err)
 	}
 
 	return Load(dir)

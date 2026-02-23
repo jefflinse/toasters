@@ -9,7 +9,7 @@ The core insight: LLMs are good at reasoning and writing code, but bad at mainta
 ## Table of Contents
 
 - [What It Is Not](#what-it-is-not)
-- [Work Effort Types](#work-effort-types)
+- [Job Types](#job-types)
 - [Architecture](#architecture)
   - [Local LLM (LM Studio)](#local-llm-lm-studio)
   - [The `claude` CLI](#the-claude-cli)
@@ -35,7 +35,7 @@ The core insight: LLMs are good at reasoning and writing code, but bad at mainta
 
 ---
 
-## Work Effort Types
+## Job Types
 
 Toasters automatically classifies incoming tasks into one of four types. The classification drives which agents are selected, what data sources are consulted, and how the task DAG is structured.
 
@@ -55,9 +55,9 @@ Toasters automatically classifies incoming tasks into one of four types. The cla
 The local LLM (served via LM Studio at `localhost:1234`) acts as a cheap coordinator and classifier. It is explicitly **not** responsible for planning or executing actual work — that is `claude`'s job.
 
 Responsibilities:
-- Classify incoming tasks into one of the four work effort types
+- Classify incoming tasks into one of the four job types
 - Reach out to external data sources (Jira, Slack, GitHub, etc.) or instruct `claude` to do so and report back
-- Maintain overall work effort state as `.md` files that persist between sessions
+- Maintain overall job state as `.md` files that persist between sessions
 - Shift orchestration state management away from LLM context — Go's concurrency model owns this, not the LLM
 
 The local LLM is intentionally low-capability and low-cost. It coordinates; it does not think.
@@ -79,7 +79,7 @@ Design principles:
 
 ### Agent System
 
-- By default, Toasters bundles a set of default agents for each work effort type
+- By default, Toasters bundles a set of default agents for each job type
 - If the user already has agents defined in their Claude config directory, those are auto-detected and preferred
 - Specific agents can be configured per task type (e.g., "for debugging, always use agent X")
 - Each agent invocation uses a specific prompt envelope with a defined request schema and response schema
@@ -95,7 +95,7 @@ Toasters **consumes** existing MCP servers — it does not host one.
 
 ### State Persistence
 
-Each work effort has a directory of associated `.md` files on disk:
+Each job has a directory of associated `.md` files on disk:
 - Investigations and findings
 - Task lists and their statuses
 - Results and summaries
@@ -169,13 +169,13 @@ The TUI uses a two-column layout. The left column is the primary work management
 ```
 ┌─────────────────────────────────────┬──────────────────┐
 │                                     │  Connection      │
-│  [Work Efforts List]                │  Model: ...      │
+│  [Jobs List]                        │  Model: ...      │
 │  (scrollable, focused)              │  Endpoint: ...   │
 │                                     │  Status: ...     │
 ├─────────────────────────────────────│                  │
 │                                     │  Session         │
 │  [Task DAG]                         │  Messages: ...   │
-│  (for selected work effort)         │  Tokens in: ...  │
+│  (for selected job)                 │  Tokens in: ...  │
 │  node statuses shown inline         │  Tokens out: ... │
 │                                     │  Speed: ...      │
 ├─────────────────────────────────────│  Context: ████░░ │
@@ -192,14 +192,14 @@ The TUI uses a two-column layout. The left column is the primary work management
 
 ### Left Panel (split horizontally into three sections)
 
-- **Top**: Scrollable list of work efforts. Receives focus for keyboard navigation.
-- **Middle**: DAG visualization of tasks for the selected work effort, with per-node status indicators.
-- **Bottom**: Live streaming output from tasks currently executing in the selected work effort.
+- **Top**: Scrollable list of jobs. Receives focus for keyboard navigation.
+- **Middle**: DAG visualization of tasks for the selected job, with per-node status indicators.
+- **Bottom**: Live streaming output from tasks currently executing in the selected job.
 
 ### Right Panel (split vertically into two sections)
 
-- **Top**: Stats, usage, and connection info — model name, endpoint, connection status, token counts (in/out/reasoning), generation speed, context window usage bar, last and average response times.
-- **Bottom**: Active task list for the selected work effort, showing each task's status and most recent update.
+- **Top**: Stats, usage, and connection info — model name, endpoint, connection status, token counts (in/out/reasoning), generation speed (t/s), context window usage bar with color-coded fill (green/yellow/red), last and average response times.
+- **Bottom**: Active task list for the selected job, showing each task's status and most recent update.
 
 ---
 
@@ -250,9 +250,9 @@ What exists today is a functional TUI prototype that establishes the streaming i
 
 ### Not Yet Built
 
-- Left panel: work effort list, task DAG visualization, streaming updates pane
+- Left panel: job list, task DAG visualization, streaming updates pane
 - Right panel bottom section: active task list
-- Work effort classification (local LLM integration beyond direct chat)
+- Job classification (local LLM integration beyond direct chat)
 - Task DAG data model and planner
 - State persistence (`.md` files on disk)
 - Agent configuration and selection

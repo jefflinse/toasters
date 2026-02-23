@@ -3,9 +3,9 @@ package tui
 import (
 	"context"
 	"encoding/json"
-	"log"
 	"fmt"
 	"image/color"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -21,8 +21,8 @@ import (
 	"github.com/jefflinse/toasters/internal/agents"
 	"github.com/jefflinse/toasters/internal/config"
 	"github.com/jefflinse/toasters/internal/gateway"
+	"github.com/jefflinse/toasters/internal/job"
 	"github.com/jefflinse/toasters/internal/llm"
-	"github.com/jefflinse/toasters/internal/workeffort"
 )
 
 const (
@@ -38,9 +38,9 @@ const (
 type focusedPanel int
 
 const (
-	focusChat        focusedPanel = iota
-	focusWorkEfforts focusedPanel = iota
-	focusAgents      focusedPanel = iota
+	focusChat   focusedPanel = iota
+	focusJobs   focusedPanel = iota
+	focusAgents focusedPanel = iota
 )
 
 // SessionStats tracks session-level statistics displayed in the sidebar.
@@ -176,9 +176,9 @@ type Model struct {
 	filteredCmds   []SlashCommand
 	selectedCmdIdx int
 
-	workEfforts        []workeffort.WorkEffort
-	selectedWorkEffort int
-	focused            focusedPanel
+	jobs        []job.Job
+	selectedJob int
+	focused     focusedPanel
 
 	gateway *gateway.Gateway
 
@@ -278,9 +278,9 @@ func NewModel(client *llm.Client, claudeCfg config.ClaudeConfig, configDir strin
 		},
 	}
 
-	efforts, _ := workeffort.List(configDir)
-	m.workEfforts = efforts
-	m.selectedWorkEffort = 0
+	jobs, _ := job.List(configDir)
+	m.jobs = jobs
+	m.selectedJob = 0
 	m.focused = focusChat
 	m.gateway = gw
 
@@ -725,14 +725,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 
 		case "tab":
-			// Cycle focus: chat → work efforts → agents → chat.
+			// Cycle focus: chat → jobs → agents → chat.
 			// (Tab inside the slash command popup is handled above and returns early.)
 			switch m.focused {
 			case focusChat:
-				m.focused = focusWorkEfforts
+				m.focused = focusJobs
 				m.input.Blur()
 				return m, nil
-			case focusWorkEfforts:
+			case focusJobs:
 				m.focused = focusAgents
 				return m, nil
 			case focusAgents:
@@ -741,10 +741,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case "up":
-			// Navigate work efforts when that panel is focused.
-			if m.focused == focusWorkEfforts && len(m.workEfforts) > 0 {
-				if m.selectedWorkEffort > 0 {
-					m.selectedWorkEffort--
+			// Navigate jobs when that panel is focused.
+			if m.focused == focusJobs && len(m.jobs) > 0 {
+				if m.selectedJob > 0 {
+					m.selectedJob--
 				}
 				return m, nil
 			}
@@ -757,10 +757,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case "down":
-			// Navigate work efforts when that panel is focused.
-			if m.focused == focusWorkEfforts && len(m.workEfforts) > 0 {
-				if m.selectedWorkEffort < len(m.workEfforts)-1 {
-					m.selectedWorkEffort++
+			// Navigate jobs when that panel is focused.
+			if m.focused == focusJobs && len(m.jobs) > 0 {
+				if m.selectedJob < len(m.jobs)-1 {
+					m.selectedJob++
 				}
 				return m, nil
 			}
@@ -1239,8 +1239,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						outputTail = "…" + outputTail[len(outputTail)-maxTail:]
 					}
 					notification := fmt.Sprintf(
-						"Team '%s' in slot %d has completed (work effort: %s).\n\nOutput:\n%s",
-						snap.AgentName, i, snap.WorkEffortID, outputTail,
+						"Team '%s' in slot %d has completed (job: %s).\n\nOutput:\n%s",
+						snap.AgentName, i, snap.JobID, outputTail,
 					)
 					m.messages = append(m.messages, llm.Message{
 						Role:    "user",
@@ -1462,7 +1462,7 @@ func (m *Model) View() tea.View {
 	if m.attachedSlot >= 0 && m.gateway != nil {
 		slots := m.gateway.Slots()
 		snap := slots[m.attachedSlot]
-		header := fmt.Sprintf("⬡ %s · %s", snap.AgentName, snap.WorkEffortID)
+		header := fmt.Sprintf("⬡ %s · %s", snap.AgentName, snap.JobID)
 		if snap.Status == gateway.SlotDone {
 			header += " [done]"
 		} else {
@@ -1524,7 +1524,7 @@ func (m *Model) View() tea.View {
 		var rows []string
 		for i, slotIdx := range m.killModalSlots {
 			snap := slots[slotIdx]
-			label := fmt.Sprintf("[%d] %s · %s", slotIdx, snap.AgentName, snap.WorkEffortID)
+			label := fmt.Sprintf("[%d] %s · %s", slotIdx, snap.AgentName, snap.JobID)
 			if i == m.selectedKillIdx {
 				row := CmdPopupSelectedStyle.Width(mainWidth).Render(
 					CmdPopupNameSelectedStyle.Render(label),
@@ -1861,18 +1861,18 @@ func (m Model) renderLeftPanel(panelWidth, panelHeight int) string {
 
 	divider := LeftPanelDividerStyle.Render(strings.Repeat("─", contentWidth))
 
-	// --- Top pane: Work Efforts ---
+	// --- Top pane: Jobs ---
 	var topLines []string
-	topLines = append(topLines, LeftPanelHeaderStyle.Render("Work Efforts"))
-	if len(m.workEfforts) == 0 {
-		topLines = append(topLines, PlaceholderPaneStyle.Render("No work efforts"))
+	topLines = append(topLines, LeftPanelHeaderStyle.Render("Jobs"))
+	if len(m.jobs) == 0 {
+		topLines = append(topLines, PlaceholderPaneStyle.Render("No jobs"))
 	} else {
-		for i, we := range m.workEfforts {
-			name := truncateStr(we.Name, contentWidth-3)
-			if i == m.selectedWorkEffort {
-				topLines = append(topLines, WorkEffortSelectedStyle.Render("🍞 "+name))
+		for i, j := range m.jobs {
+			name := truncateStr(j.Name, contentWidth-3)
+			if i == m.selectedJob {
+				topLines = append(topLines, JobSelectedStyle.Render("🍞 "+name))
 			} else {
-				topLines = append(topLines, WorkEffortItemStyle.Render("   "+name))
+				topLines = append(topLines, JobItemStyle.Render("   "+name))
 			}
 		}
 	}
@@ -1882,8 +1882,8 @@ func (m Model) renderLeftPanel(panelWidth, panelHeight int) string {
 
 	// --- Middle pane: DAG ---
 	selectedName := ""
-	if len(m.workEfforts) > 0 && m.selectedWorkEffort < len(m.workEfforts) {
-		selectedName = m.workEfforts[m.selectedWorkEffort].Name
+	if len(m.jobs) > 0 && m.selectedJob < len(m.jobs) {
+		selectedName = m.jobs[m.selectedJob].Name
 	}
 	middlePane := lipgloss.NewStyle().Height(middleH).Render(
 		lipgloss.JoinVertical(lipgloss.Left,
@@ -2006,7 +2006,7 @@ func (m Model) renderSidebar(sbWidth int) string {
 				continue
 			}
 			hasAny = true
-			label := snap.AgentName + " · " + snap.WorkEffortID
+			label := snap.AgentName + " · " + snap.JobID
 			var statusIcon string
 			if snap.Status == gateway.SlotRunning {
 				statusIcon = "▶ "
@@ -2015,7 +2015,7 @@ func (m Model) renderSidebar(sbWidth int) string {
 			}
 			line := statusIcon + truncateStr(label, contentWidth-2)
 			if m.focused == focusAgents && i == m.selectedAgentSlot {
-				sb.WriteString(WorkEffortSelectedStyle.Render("🍞 " + truncateStr(label, contentWidth-3)))
+				sb.WriteString(JobSelectedStyle.Render("🍞 " + truncateStr(label, contentWidth-3)))
 			} else if snap.Status == gateway.SlotDone {
 				sb.WriteString(DimStyle.Render(statusIcon + truncateStr(label, contentWidth-2)))
 			} else {
@@ -2091,7 +2091,7 @@ func (m *Model) renderGrid() string {
 			continue
 		}
 
-		// 1. Header: statusMark · agent · work-effort · elapsed
+		// 1. Header: statusMark · agent · job · elapsed
 		elapsed := time.Since(snap.StartTime).Round(time.Second)
 		if snap.Status == gateway.SlotDone && !snap.EndTime.IsZero() {
 			elapsed = snap.EndTime.Sub(snap.StartTime).Round(time.Second)
@@ -2100,13 +2100,13 @@ func (m *Model) renderGrid() string {
 		if snap.Status == gateway.SlotDone {
 			statusMark = "✓"
 		}
-		header := fmt.Sprintf("%s %s · %s · %s", statusMark, snap.AgentName, snap.WorkEffortID, elapsed)
+		header := fmt.Sprintf("%s %s · %s · %s", statusMark, snap.AgentName, snap.JobID, elapsed)
 		headerLine := headerStyle.Render(truncateStr(header, innerW))
 
 		// 2. Summary
 		summary := snap.Summary
 		if summary == "" {
-			summary = snap.AgentName + " on " + snap.WorkEffortID
+			summary = snap.AgentName + " on " + snap.JobID
 		}
 		summaryLine := truncateStr(summary, innerW)
 

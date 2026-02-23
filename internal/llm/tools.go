@@ -15,13 +15,13 @@ import (
 
 	"github.com/jefflinse/toasters/internal/agents"
 	"github.com/jefflinse/toasters/internal/config"
-	"github.com/jefflinse/toasters/internal/workeffort"
+	"github.com/jefflinse/toasters/internal/job"
 )
 
 // AgentSpawner is the interface satisfied by *gateway.Gateway.
 // Using an interface here avoids an import cycle (gateway imports llm).
 type AgentSpawner interface {
-	SpawnTeam(teamName, workEffortID, task string, team agents.Team) (slotID int, alreadyRunning bool, err error)
+	SpawnTeam(teamName, jobID, task string, team agents.Team) (slotID int, alreadyRunning bool, err error)
 }
 
 // activeGateway is the gateway instance used by the assign_team tool.
@@ -55,16 +55,16 @@ var staticTools = []Tool{
 						"type":        "string",
 						"description": "The name of the team to assign the task to.",
 					},
-					"work_effort_id": map[string]any{
+					"job_id": map[string]any{
 						"type":        "string",
-						"description": "The ID of the work effort this task belongs to.",
+						"description": "The ID of the job this task belongs to.",
 					},
 					"task": map[string]any{
 						"type":        "string",
 						"description": "A clear description of what the team should accomplish.",
 					},
 				},
-				"required": []string{"team_name", "work_effort_id", "task"},
+				"required": []string{"team_name", "job_id", "task"},
 			},
 		},
 	},
@@ -126,8 +126,8 @@ var staticTools = []Tool{
 	{
 		Type: "function",
 		Function: ToolFunction{
-			Name:        "work_effort_list",
-			Description: "List all work efforts.",
+			Name:        "job_list",
+			Description: "List all jobs.",
 			Parameters: map[string]any{
 				"type":       "object",
 				"properties": map[string]any{},
@@ -137,14 +137,14 @@ var staticTools = []Tool{
 	{
 		Type: "function",
 		Function: ToolFunction{
-			Name:        "work_effort_create",
-			Description: "Create a new work effort.",
+			Name:        "job_create",
+			Description: "Create a new job.",
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"id":          map[string]any{"type": "string", "description": "Slug identifier (lowercase letters, digits, hyphens only, e.g. 'auth-refactor')."},
 					"name":        map[string]any{"type": "string", "description": "Human-readable name."},
-					"description": map[string]any{"type": "string", "description": "1-3 sentence summary of the work effort."},
+					"description": map[string]any{"type": "string", "description": "1-3 sentence summary of the job."},
 				},
 				"required": []string{"id", "name", "description"},
 			},
@@ -153,12 +153,12 @@ var staticTools = []Tool{
 	{
 		Type: "function",
 		Function: ToolFunction{
-			Name:        "work_effort_read_overview",
-			Description: "Read the OVERVIEW.md file for a work effort.",
+			Name:        "job_read_overview",
+			Description: "Read the OVERVIEW.md file for a job.",
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"id": map[string]any{"type": "string", "description": "The work effort ID."},
+					"id": map[string]any{"type": "string", "description": "The job ID."},
 				},
 				"required": []string{"id"},
 			},
@@ -167,12 +167,12 @@ var staticTools = []Tool{
 	{
 		Type: "function",
 		Function: ToolFunction{
-			Name:        "work_effort_read_todos",
-			Description: "Read the TODO.md file for a work effort.",
+			Name:        "job_read_todos",
+			Description: "Read the TODO.md file for a job.",
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"id": map[string]any{"type": "string", "description": "The work effort ID."},
+					"id": map[string]any{"type": "string", "description": "The job ID."},
 				},
 				"required": []string{"id"},
 			},
@@ -181,12 +181,12 @@ var staticTools = []Tool{
 	{
 		Type: "function",
 		Function: ToolFunction{
-			Name:        "work_effort_update_overview",
-			Description: "Overwrite or append to the OVERVIEW.md body for a work effort. Does not touch frontmatter.",
+			Name:        "job_update_overview",
+			Description: "Overwrite or append to the OVERVIEW.md body for a job. Does not touch frontmatter.",
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"id":      map[string]any{"type": "string", "description": "The work effort ID."},
+					"id":      map[string]any{"type": "string", "description": "The job ID."},
 					"content": map[string]any{"type": "string", "description": "Markdown content to write."},
 					"mode":    map[string]any{"type": "string", "enum": []string{"overwrite", "append"}, "description": "Whether to overwrite or append."},
 				},
@@ -197,12 +197,12 @@ var staticTools = []Tool{
 	{
 		Type: "function",
 		Function: ToolFunction{
-			Name:        "work_effort_add_todo",
-			Description: "Append a new TODO item to the TODO.md file for a work effort.",
+			Name:        "job_add_todo",
+			Description: "Append a new TODO item to the TODO.md file for a job.",
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"id":   map[string]any{"type": "string", "description": "The work effort ID."},
+					"id":   map[string]any{"type": "string", "description": "The job ID."},
 					"task": map[string]any{"type": "string", "description": "Task description (plain text)."},
 				},
 				"required": []string{"id", "task"},
@@ -212,12 +212,12 @@ var staticTools = []Tool{
 	{
 		Type: "function",
 		Function: ToolFunction{
-			Name:        "work_effort_complete_todo",
-			Description: "Mark a TODO item as done in the TODO.md file for a work effort.",
+			Name:        "job_complete_todo",
+			Description: "Mark a TODO item as done in the TODO.md file for a job.",
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"id":            map[string]any{"type": "string", "description": "The work effort ID."},
+					"id":            map[string]any{"type": "string", "description": "The job ID."},
 					"index_or_text": map[string]any{"type": "string", "description": "1-based index of the TODO item, or a substring of the task text to match."},
 				},
 				"required": []string{"id", "index_or_text"},
@@ -277,14 +277,14 @@ func ExecuteTool(call ToolCall) (string, error) {
 			return "", fmt.Errorf("parsing list_directory args: %w", err)
 		}
 		return listDirectory(args.Path)
-	case "work_effort_list":
+	case "job_list":
 		configDir, err := config.Dir()
 		if err != nil {
 			return "", fmt.Errorf("resolving config dir: %w", err)
 		}
-		efforts, err := workeffort.List(configDir)
+		jobs, err := job.List(configDir)
 		if err != nil {
-			return "", fmt.Errorf("listing work efforts: %w", err)
+			return "", fmt.Errorf("listing jobs: %w", err)
 		}
 		type item struct {
 			ID          string `json:"id"`
@@ -292,68 +292,68 @@ func ExecuteTool(call ToolCall) (string, error) {
 			Description string `json:"description"`
 			Status      string `json:"status"`
 		}
-		items := make([]item, len(efforts))
-		for i, e := range efforts {
-			items[i] = item{ID: e.ID, Name: e.Name, Description: e.Description, Status: string(e.Status)}
+		items := make([]item, len(jobs))
+		for i, j := range jobs {
+			items[i] = item{ID: j.ID, Name: j.Name, Description: j.Description, Status: string(j.Status)}
 		}
 		b, _ := json.Marshal(items)
 		return string(b), nil
 
-	case "work_effort_create":
+	case "job_create":
 		var args struct {
 			ID          string `json:"id"`
 			Name        string `json:"name"`
 			Description string `json:"description"`
 		}
 		if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
-			return "", fmt.Errorf("parsing work_effort_create args: %w", err)
+			return "", fmt.Errorf("parsing job_create args: %w", err)
 		}
 		configDir, err := config.Dir()
 		if err != nil {
 			return "", fmt.Errorf("resolving config dir: %w", err)
 		}
-		we, err := workeffort.Create(configDir, args.ID, args.Name, args.Description)
+		j, err := job.Create(configDir, args.ID, args.Name, args.Description)
 		if err != nil {
-			return "", fmt.Errorf("creating work effort: %w", err)
+			return "", fmt.Errorf("creating job: %w", err)
 		}
-		return "created: " + we.ID, nil
+		return "created: " + j.ID, nil
 
-	case "work_effort_read_overview":
+	case "job_read_overview":
 		var args struct {
 			ID string `json:"id"`
 		}
 		if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
-			return "", fmt.Errorf("parsing work_effort_read_overview args: %w", err)
+			return "", fmt.Errorf("parsing job_read_overview args: %w", err)
 		}
 		configDir, err := config.Dir()
 		if err != nil {
 			return "", fmt.Errorf("resolving config dir: %w", err)
 		}
-		dir := filepath.Join(workeffort.WorkEffortsDir(configDir), args.ID)
-		return workeffort.ReadOverview(dir)
+		dir := filepath.Join(job.JobsDir(configDir), args.ID)
+		return job.ReadOverview(dir)
 
-	case "work_effort_read_todos":
+	case "job_read_todos":
 		var args struct {
 			ID string `json:"id"`
 		}
 		if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
-			return "", fmt.Errorf("parsing work_effort_read_todos args: %w", err)
+			return "", fmt.Errorf("parsing job_read_todos args: %w", err)
 		}
 		configDir, err := config.Dir()
 		if err != nil {
 			return "", fmt.Errorf("resolving config dir: %w", err)
 		}
-		dir := filepath.Join(workeffort.WorkEffortsDir(configDir), args.ID)
-		return workeffort.ReadTodos(dir)
+		dir := filepath.Join(job.JobsDir(configDir), args.ID)
+		return job.ReadTodos(dir)
 
-	case "work_effort_update_overview":
+	case "job_update_overview":
 		var args struct {
 			ID      string `json:"id"`
 			Content string `json:"content"`
 			Mode    string `json:"mode"`
 		}
 		if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
-			return "", fmt.Errorf("parsing work_effort_update_overview args: %w", err)
+			return "", fmt.Errorf("parsing job_update_overview args: %w", err)
 		}
 		if args.Mode != "overwrite" && args.Mode != "append" {
 			return "", fmt.Errorf("invalid mode %q: must be 'overwrite' or 'append'", args.Mode)
@@ -362,49 +362,49 @@ func ExecuteTool(call ToolCall) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("resolving config dir: %w", err)
 		}
-		dir := filepath.Join(workeffort.WorkEffortsDir(configDir), args.ID)
+		dir := filepath.Join(job.JobsDir(configDir), args.ID)
 		if args.Mode == "overwrite" {
-			err = workeffort.WriteOverview(dir, args.Content)
+			err = job.WriteOverview(dir, args.Content)
 		} else {
-			err = workeffort.AppendOverview(dir, args.Content)
+			err = job.AppendOverview(dir, args.Content)
 		}
 		if err != nil {
 			return "", err
 		}
 		return "ok", nil
 
-	case "work_effort_add_todo":
+	case "job_add_todo":
 		var args struct {
 			ID   string `json:"id"`
 			Task string `json:"task"`
 		}
 		if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
-			return "", fmt.Errorf("parsing work_effort_add_todo args: %w", err)
+			return "", fmt.Errorf("parsing job_add_todo args: %w", err)
 		}
 		configDir, err := config.Dir()
 		if err != nil {
 			return "", fmt.Errorf("resolving config dir: %w", err)
 		}
-		dir := filepath.Join(workeffort.WorkEffortsDir(configDir), args.ID)
-		if err := workeffort.AddTodo(dir, args.Task); err != nil {
+		dir := filepath.Join(job.JobsDir(configDir), args.ID)
+		if err := job.AddTodo(dir, args.Task); err != nil {
 			return "", err
 		}
 		return "ok", nil
 
-	case "work_effort_complete_todo":
+	case "job_complete_todo":
 		var args struct {
 			ID          string `json:"id"`
 			IndexOrText string `json:"index_or_text"`
 		}
 		if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
-			return "", fmt.Errorf("parsing work_effort_complete_todo args: %w", err)
+			return "", fmt.Errorf("parsing job_complete_todo args: %w", err)
 		}
 		configDir, err := config.Dir()
 		if err != nil {
 			return "", fmt.Errorf("resolving config dir: %w", err)
 		}
-		dir := filepath.Join(workeffort.WorkEffortsDir(configDir), args.ID)
-		if err := workeffort.CompleteTodo(dir, args.IndexOrText); err != nil {
+		dir := filepath.Join(job.JobsDir(configDir), args.ID)
+		if err := job.CompleteTodo(dir, args.IndexOrText); err != nil {
 			return "", err
 		}
 		return "ok", nil
@@ -414,9 +414,9 @@ func ExecuteTool(call ToolCall) (string, error) {
 			return "", fmt.Errorf("gateway not initialized")
 		}
 		var args struct {
-			TeamName     string `json:"team_name"`
-			WorkEffortID string `json:"work_effort_id"`
-			Task         string `json:"task"`
+			TeamName string `json:"team_name"`
+			JobID    string `json:"job_id"`
+			Task     string `json:"task"`
 		}
 		if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
 			return "", fmt.Errorf("parsing assign_team args: %w", err)
@@ -434,7 +434,7 @@ func ExecuteTool(call ToolCall) (string, error) {
 		if !found {
 			return "", fmt.Errorf("team %q not found", args.TeamName)
 		}
-		slotID, alreadyRunning, err := activeGateway.SpawnTeam(args.TeamName, args.WorkEffortID, args.Task, team)
+		slotID, alreadyRunning, err := activeGateway.SpawnTeam(args.TeamName, args.JobID, args.Task, team)
 		if err != nil {
 			return "", fmt.Errorf("spawning team: %w", err)
 		}

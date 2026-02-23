@@ -76,13 +76,13 @@ func Dir() (string, error) {
 	return home + "/.config/toasters", nil
 }
 
-// WorkEffortsDir returns the directory where work efforts are stored.
-func WorkEffortsDir() (string, error) {
+// JobsDir returns the directory where jobs are stored.
+func JobsDir() (string, error) {
 	dir, err := Dir()
 	if err != nil {
 		return "", err
 	}
-	return dir + "/work-efforts", nil
+	return dir + "/jobs", nil
 }
 
 // BindFlags binds relevant cobra pflags to their Viper configuration keys.
