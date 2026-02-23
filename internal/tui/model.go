@@ -339,12 +339,49 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Teams modal key handling — intercept all keys when modal is open.
 		if m.teamsModal.show {
 			var modalCmds []tea.Cmd
-			switch msg.String() {
-			case "esc":
-				if m.teamsModal.inputMode {
+
+			// When typing a new team name, only esc/enter/backspace have special
+			// meaning. Everything else — including named keys like "space" — feeds
+			// into the name input via msg.Text (which is the actual typed character
+			// for all printable input, unlike msg.String() which returns key names).
+			if m.teamsModal.inputMode {
+				switch msg.String() {
+				case "esc":
 					m.teamsModal.inputMode = false
 					m.teamsModal.nameInput = ""
-				} else if m.teamsModal.confirmDelete {
+				case "enter":
+					name := m.teamsModal.nameInput
+					valid := name != "" && !strings.ContainsAny(name, `/\.`)
+					if valid {
+						_ = os.MkdirAll(filepath.Join(m.teamsDir, name), 0755)
+						m.reloadTeamsForModal()
+						for i, t := range m.teamsModal.teams {
+							if t.Name == name {
+								m.teamsModal.teamIdx = i
+								break
+							}
+						}
+					}
+					m.teamsModal.inputMode = false
+					m.teamsModal.nameInput = ""
+				case "backspace":
+					if len(m.teamsModal.nameInput) > 0 {
+						runes := []rune(m.teamsModal.nameInput)
+						m.teamsModal.nameInput = string(runes[:len(runes)-1])
+					}
+				default:
+					// msg.Text is the actual typed character(s); empty for
+					// non-printable keys (arrows, function keys, etc.).
+					if msg.Text != "" {
+						m.teamsModal.nameInput += msg.Text
+					}
+				}
+				return m, tea.Batch(modalCmds...)
+			}
+
+			switch msg.String() {
+			case "esc":
+				if m.teamsModal.confirmDelete {
 					m.teamsModal.confirmDelete = false
 				} else {
 					m.teamsModal.show = false
@@ -360,9 +397,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 
 			case "up":
-				if m.teamsModal.inputMode {
-					break
-				}
 				if m.teamsModal.focus == 0 {
 					if m.teamsModal.teamIdx > 0 {
 						m.teamsModal.teamIdx--
@@ -387,9 +421,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 
 			case "down":
-				if m.teamsModal.inputMode {
-					break
-				}
 				if m.teamsModal.focus == 0 {
 					if m.teamsModal.teamIdx < len(m.teamsModal.teams)-1 {
 						m.teamsModal.teamIdx++
@@ -414,9 +445,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 
 			case "n":
-				if m.teamsModal.inputMode {
-					m.teamsModal.nameInput += "n"
-				} else if m.teamsModal.focus == 0 {
+				if m.teamsModal.focus == 0 {
 					// Creating a new team is never gated on the selected team's
 					// read-only status — you can always create a new user-defined team.
 					m.teamsModal.inputMode = true
@@ -424,9 +453,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 
 			case "d":
-				if m.teamsModal.inputMode {
-					m.teamsModal.nameInput += "d"
-				} else if m.teamsModal.focus == 0 && !m.teamsModal.confirmDelete {
+				if m.teamsModal.focus == 0 && !m.teamsModal.confirmDelete {
 					if len(m.teamsModal.teams) > 0 && m.teamsModal.teamIdx < len(m.teamsModal.teams) {
 						if !isReadOnlyTeam(m.teamsModal.teams[m.teamsModal.teamIdx]) {
 							m.teamsModal.confirmDelete = true
@@ -447,28 +474,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.teamsModal.teamIdx = 0
 					}
 					m.teamsModal.confirmDelete = false
-				} else if m.teamsModal.inputMode {
-					name := m.teamsModal.nameInput
-					valid := name != "" && !strings.ContainsAny(name, `/\.`)
-					if valid {
-						_ = os.MkdirAll(filepath.Join(m.teamsDir, name), 0755)
-						m.reloadTeamsForModal()
-						// Find the newly created team and select it.
-						for i, t := range m.teamsModal.teams {
-							if t.Name == name {
-								m.teamsModal.teamIdx = i
-								break
-							}
-						}
-					}
-					m.teamsModal.inputMode = false
-					m.teamsModal.nameInput = ""
 				}
 
 			case "c":
-				if m.teamsModal.inputMode {
-					m.teamsModal.nameInput += "c"
-				} else if m.teamsModal.focus == 1 && len(m.teamsModal.teams) > 0 && m.teamsModal.teamIdx < len(m.teamsModal.teams) {
+				if m.teamsModal.focus == 1 && len(m.teamsModal.teams) > 0 && m.teamsModal.teamIdx < len(m.teamsModal.teams) {
 					team := m.teamsModal.teams[m.teamsModal.teamIdx]
 					if !isReadOnlyTeam(team) {
 						// Build the ordered agent list: coordinator first, then workers.
@@ -485,21 +494,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 				}
 
-			case "backspace":
-				if m.teamsModal.inputMode && len(m.teamsModal.nameInput) > 0 {
-					runes := []rune(m.teamsModal.nameInput)
-					m.teamsModal.nameInput = string(runes[:len(runes)-1])
-				}
-
-			default:
-				// Printable characters go into the name input when in input mode.
-				if m.teamsModal.inputMode {
-					r := msg.String()
-					// Only accept single printable characters.
-					if len([]rune(r)) == 1 {
-						m.teamsModal.nameInput += r
-					}
-				}
 			}
 			return m, tea.Batch(modalCmds...)
 		}
