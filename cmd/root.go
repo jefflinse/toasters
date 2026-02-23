@@ -84,7 +84,7 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 	}
 	m := tui.NewModel(client, cfg.Claude, configDir, gw, repoRoot, registry)
 
-	p := tea.NewProgram(m)
+	p := tea.NewProgram(&m)
 
 	watchCtx, watchCancel := context.WithCancel(context.Background())
 	defer watchCancel()

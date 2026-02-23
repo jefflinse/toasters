@@ -186,6 +186,11 @@ type Model struct {
 	promptModalContent string // the full prompt text being displayed
 	promptModalScroll  int    // scroll offset in lines
 
+	// Output modal state.
+	showOutputModal    bool
+	outputModalContent string // the full output text being displayed
+	outputModalScroll  int    // scroll offset in lines
+
 	// Prompt mode — active when the operator calls ask_user
 	promptMode        bool
 	promptQuestion    string
@@ -276,7 +281,7 @@ func NewModel(client *llm.Client, claudeCfg config.ClaudeConfig, configDir strin
 	return m
 }
 
-func (m Model) Init() tea.Cmd {
+func (m *Model) Init() tea.Cmd {
 	cmds := []tea.Cmd{
 		tea.RequestWindowSize,
 		m.fetchModels(),
@@ -295,7 +300,7 @@ func waitForAgentUpdate(ch <-chan struct{}) tea.Cmd {
 	}
 }
 
-func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 
 	switch msg := msg.(type) {
@@ -388,6 +393,28 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
+		// When the output modal is visible, intercept all keys before grid navigation.
+		if m.showOutputModal {
+			switch msg.String() {
+			case "esc", "o", "q":
+				m.showOutputModal = false
+			case "up", "k":
+				if m.outputModalScroll > 0 {
+					m.outputModalScroll--
+				}
+			case "down", "j":
+				m.outputModalScroll++
+			case "ctrl+u":
+				m.outputModalScroll -= 10
+				if m.outputModalScroll < 0 {
+					m.outputModalScroll = 0
+				}
+			case "ctrl+d":
+				m.outputModalScroll += 10
+			}
+			return m, tea.Batch(cmds...)
+		}
+
 		// When the grid screen is visible, handle navigation and dismiss it.
 		if m.showGrid {
 			switch msg.String() {
@@ -397,6 +424,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "k", "ctrl+k":
 				if m.gateway != nil {
 					_ = m.gateway.Kill(m.gridFocusCell)
+				}
+				return m, nil
+			case "enter":
+				if m.gateway != nil {
+					slots := m.gateway.Slots()
+					snap := slots[m.gridFocusCell]
+					if snap.Active && snap.Output != "" {
+						m.showOutputModal = true
+						m.outputModalContent = snap.Output
+						m.outputModalScroll = 0
+					}
 				}
 				return m, nil
 			case "p":
@@ -593,7 +631,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				snap := slots[m.selectedAgentSlot]
 				if snap.Active {
 					m.attachedSlot = m.selectedAgentSlot
-					m.agentViewport.SetContent(snap.Output)
+					m.agentViewport.SetContent(m.renderMarkdown(snap.Output))
 					m.agentViewport.GotoBottom()
 					// Resize agent viewport to match chat viewport dimensions.
 					m.agentViewport.SetWidth(m.chatViewport.Width())
@@ -944,7 +982,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			slots := m.gateway.Slots()
 			snap := slots[m.attachedSlot]
 			if snap.Active {
-				m.agentViewport.SetContent(snap.Output)
+				m.agentViewport.SetContent(m.renderMarkdown(snap.Output))
 				m.agentViewport.GotoBottom()
 			}
 		}
@@ -966,7 +1004,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
-func (m Model) View() tea.View {
+func (m *Model) View() tea.View {
 	if m.width == 0 || m.height == 0 {
 		v := tea.NewView("")
 		v.AltScreen = true
@@ -1033,6 +1071,68 @@ func (m Model) View() tea.View {
 
 			// Place modal centered over the grid using lipgloss.Place.
 			// WithWhitespaceStyle sets the background of the surrounding area.
+			overlaid := lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, modal,
+				lipgloss.WithWhitespaceStyle(lipgloss.NewStyle().Background(lipgloss.Color("235"))))
+
+			v := tea.NewView(overlaid)
+			v.AltScreen = true
+			v.MouseMode = tea.MouseModeCellMotion
+			return v
+		} else if m.showOutputModal {
+			// Render output modal as a centered overlay.
+			modalW := m.width * 3 / 4
+			modalH := m.height * 3 / 4
+			if modalW < 40 {
+				modalW = 40
+			}
+			if modalH < 10 {
+				modalH = 10
+			}
+
+			// Slice the output into lines, apply scroll offset.
+			allLines := strings.Split(m.outputModalContent, "\n")
+			maxScroll := len(allLines) - modalH + 4
+			if maxScroll < 0 {
+				maxScroll = 0
+			}
+			if m.outputModalScroll > maxScroll {
+				m.outputModalScroll = maxScroll
+			}
+
+			start := m.outputModalScroll
+			end := start + modalH - 4 // -4 for title + footer + borders
+			if end > len(allLines) {
+				end = len(allLines)
+			}
+			visibleLines := allLines[start:end]
+
+			// Truncate each line to modal inner width.
+			innerW := modalW - 4
+			truncated := make([]string, len(visibleLines))
+			for i, l := range visibleLines {
+				if len(l) > innerW {
+					truncated[i] = l[:innerW]
+				} else {
+					truncated[i] = l
+				}
+			}
+
+			body := strings.Join(truncated, "\n")
+			scrollInfo := fmt.Sprintf("line %d/%d", m.outputModalScroll+1, len(allLines))
+			footer := DimStyle.Render("↑↓ scroll · Esc to close · " + scrollInfo)
+
+			modalContent := HeaderStyle.Render("Output") + "\n\n" + body + "\n\n" + footer
+
+			modalStyle := lipgloss.NewStyle().
+				Width(modalW).
+				Height(modalH).
+				Border(lipgloss.RoundedBorder()).
+				BorderForeground(ColorPrimary).
+				Padding(0, 2)
+
+			modal := modalStyle.Render(modalContent)
+
+			// Place modal centered over the grid using lipgloss.Place.
 			overlaid := lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, modal,
 				lipgloss.WithWhitespaceStyle(lipgloss.NewStyle().Background(lipgloss.Color("235"))))
 
@@ -1660,7 +1760,7 @@ func (m Model) renderSidebar(sbWidth int) string {
 }
 
 // renderGrid renders the 2×2 agent grid screen.
-func (m Model) renderGrid() string {
+func (m *Model) renderGrid() string {
 	cellW := m.width / 2
 	cellH := (m.height - 1) / 2 // -1 to make room for the hotkey bar
 
@@ -1774,15 +1874,13 @@ func (m Model) renderGrid() string {
 		}
 		var outputBody string
 		if snap.Output != "" {
-			outLines := strings.Split(snap.Output, "\n")
+			rendered := m.renderMarkdown(snap.Output)
+			outLines := strings.Split(rendered, "\n")
 			if len(outLines) > outputH {
 				outLines = outLines[len(outLines)-outputH:]
 			}
-			for j, l := range outLines {
-				if len(l) > innerW {
-					outLines[j] = l[:innerW]
-				}
-			}
+			// Don't hard-truncate rendered lines — ANSI escape codes make byte-length
+			// truncation unreliable. The cell style width constraint clips overflow.
 			outputBody = strings.Join(outLines, "\n")
 		}
 
@@ -1798,7 +1896,7 @@ func (m Model) renderGrid() string {
 		cells[i] = cellStyle.Render(inner)
 	}
 
-	hotkeyBar := DimStyle.Render("  arrows: navigate   ·   k/ctrl+k: kill   ·   p: view prompt   ·   ctrl+g / esc: close")
+	hotkeyBar := DimStyle.Render("  arrows: navigate   ·   k/ctrl+k: kill   ·   enter: view output   ·   p: view prompt   ·   ctrl+g / esc: close")
 	hotkeyBar = lipgloss.NewStyle().Width(m.width).Render(hotkeyBar)
 
 	top := lipgloss.JoinHorizontal(lipgloss.Top, cells[0], cells[1])
