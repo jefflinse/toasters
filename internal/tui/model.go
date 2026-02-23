@@ -2056,13 +2056,9 @@ func (m *Model) View() tea.View {
 
 // renderLoading renders a centered animated loading screen while the app is initializing.
 func (m *Model) renderLoading() tea.View {
-	breadStyle := lipgloss.NewStyle().Foreground(ColorStreaming).Bold(true)
-	trackStyle := lipgloss.NewStyle().Foreground(ColorBorder)
 	msgStyle := DimStyle.Italic(true)
 
 	// Compute blob position: ping-pong across the bar.
-	// Frame 0..W-2 → moving right (pos 0..W-2)
-	// Frame W-1..2W-3 → moving left (pos W-2..0, but we skip the endpoints to avoid stutter)
 	frame := m.loadingFrame % numLoadingFrames
 	var blobPos int
 	if frame < loadingBarWidth-1 {
@@ -2073,28 +2069,42 @@ func (m *Model) renderLoading() tea.View {
 
 	// Pick blob color from the palette, cycling with the frame.
 	colorCode := loadingBarColors[m.loadingFrame%len(loadingBarColors)]
+
+	// Build the bar using only single-byte ASCII chars so lipgloss width
+	// measurement is exact. '-' for track, 'O' for blob.
+	var barRunes [loadingBarWidth]byte
+	for i := range barRunes {
+		barRunes[i] = '-'
+	}
+	barRunes[blobPos] = 'O'
+
+	left := string(barRunes[:blobPos])
+	blob := string(barRunes[blobPos : blobPos+1])
+	right := string(barRunes[blobPos+1:])
+
+	trackStyle := lipgloss.NewStyle().Foreground(ColorBorder)
 	blobStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colorCode)).Bold(true)
-
-	// Build the bar by styling three segments: left track, blob, right track.
-	// Keeping it as three Render calls on plain ASCII-width strings lets lipgloss
-	// measure the container width correctly in JoinVertical.
-	leftTrack := strings.Repeat("░", blobPos)
-	rightTrack := strings.Repeat("░", loadingBarWidth-blobPos-1)
-	barStr := trackStyle.Render(leftTrack) + blobStyle.Render("█") + trackStyle.Render(rightTrack)
-
-	// Wrap in a fixed-width container so JoinVertical can measure it correctly.
-	barContainer := lipgloss.NewStyle().Width(loadingBarWidth).Render(barStr)
-
-	bread := breadStyle.Render("🍞")
+	barStr := trackStyle.Render(left) + blobStyle.Render(blob) + trackStyle.Render(right)
 
 	// Cycle the status message every 5 frames (~750ms).
 	msgIdx := (m.loadingFrame / 5) % len(loadingMessages)
 	statusMsg := msgStyle.Render(loadingMessages[msgIdx])
 
-	// Compose: bar on top, bread centered below, message below that.
-	block := lipgloss.JoinVertical(lipgloss.Center, barContainer, bread, "", statusMsg)
+	// Place each element independently at the center of the screen,
+	// stacked vertically. Avoids JoinVertical width-measurement issues
+	// with multi-column emoji.
+	barLine := lipgloss.Place(m.width, 1, lipgloss.Center, lipgloss.Center, barStr)
+	breadLine := lipgloss.Place(m.width, 1, lipgloss.Center, lipgloss.Center, "🍞")
+	msgLine := lipgloss.Place(m.width, 1, lipgloss.Center, lipgloss.Center, statusMsg)
 
-	content := lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, block)
+	content := lipgloss.JoinVertical(lipgloss.Left,
+		strings.Repeat("\n", m.height/2-2),
+		barLine,
+		breadLine,
+		"",
+		msgLine,
+	)
+
 	v := tea.NewView(content)
 	v.AltScreen = true
 	v.MouseMode = tea.MouseModeCellMotion
