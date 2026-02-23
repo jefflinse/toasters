@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -483,6 +484,66 @@ func (c *Client) streamCompletionWithTools(ctx context.Context, messages []Messa
 
 	// Stream ended without [DONE] — treat as done.
 	ch <- StreamResponse{Done: true, Model: lastModel, Usage: lastUsage}
+}
+
+// ChatCompletion sends a one-shot (non-streaming) chat completion request and
+// returns the trimmed text content of the first choice. Intended for quick
+// classification tasks where streaming is unnecessary.
+func (c *Client) ChatCompletion(ctx context.Context, msgs []Message) (string, error) {
+	type chatCompletionResponse struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+
+	reqBody := struct {
+		Model    string    `json:"model"`
+		Messages []Message `json:"messages"`
+		Stream   bool      `json:"stream"`
+	}{
+		Model:    c.model,
+		Messages: msgs,
+		Stream:   false,
+	}
+
+	body, err := json.Marshal(reqBody)
+	if err != nil {
+		return "", fmt.Errorf("chat completion: marshaling request: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v1/chat/completions", bytes.NewReader(body))
+	if err != nil {
+		return "", fmt.Errorf("chat completion: creating request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("chat completion: sending request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("chat completion: reading response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("chat completion: status %d: %s", resp.StatusCode, respBody)
+	}
+
+	var result chatCompletionResponse
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return "", fmt.Errorf("chat completion: decoding response: %w", err)
+	}
+
+	if len(result.Choices) == 0 {
+		return "", fmt.Errorf("chat completion: no choices in response")
+	}
+
+	return strings.TrimSpace(result.Choices[0].Message.Content), nil
 }
 
 // ModelInfo holds metadata about an available model.

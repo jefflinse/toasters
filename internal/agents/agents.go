@@ -516,6 +516,118 @@ Do not ask for confirmation before starting work. Do not ask for approval of you
 	return sb.String()
 }
 
+// SetCoordinator atomically rewrites all .md files in teamDir so that exactly
+// one agent — the one whose filename stem matches agentName — has mode: primary.
+// All other agents are set to mode: worker. Partial updates are acceptable on
+// write failure (prototype behaviour).
+func SetCoordinator(teamDir, agentName string) error {
+	matches, err := filepath.Glob(filepath.Join(teamDir, "*.md"))
+	if err != nil {
+		return fmt.Errorf("globbing agent files in %s: %w", teamDir, err)
+	}
+	if len(matches) == 0 {
+		return fmt.Errorf("no agent files found in %s", teamDir)
+	}
+
+	// Verify the target agent exists.
+	found := false
+	for _, p := range matches {
+		stem := strings.TrimSuffix(filepath.Base(p), ".md")
+		if stem == agentName {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return fmt.Errorf("agent %q not found in %s", agentName, teamDir)
+	}
+
+	for _, p := range matches {
+		stem := strings.TrimSuffix(filepath.Base(p), ".md")
+		targetMode := "worker"
+		if stem == agentName {
+			targetMode = "primary"
+		}
+
+		data, err := os.ReadFile(p)
+		if err != nil {
+			return fmt.Errorf("reading %s: %w", p, err)
+		}
+
+		newContent := rewriteMode(string(data), targetMode)
+
+		tmp, err := os.CreateTemp(teamDir, "agent-*.md.tmp")
+		if err != nil {
+			return fmt.Errorf("creating temp file in %s: %w", teamDir, err)
+		}
+		tmpName := tmp.Name()
+
+		if _, err := tmp.WriteString(newContent); err != nil {
+			tmp.Close()
+			os.Remove(tmpName)
+			return fmt.Errorf("writing temp file %s: %w", tmpName, err)
+		}
+		if err := tmp.Close(); err != nil {
+			os.Remove(tmpName)
+			return fmt.Errorf("closing temp file %s: %w", tmpName, err)
+		}
+		if err := os.Rename(tmpName, p); err != nil {
+			os.Remove(tmpName)
+			return fmt.Errorf("renaming %s to %s: %w", tmpName, p, err)
+		}
+	}
+
+	return nil
+}
+
+// rewriteMode returns content with the frontmatter mode: field set to mode.
+// It handles three cases:
+//  1. File has frontmatter with an existing mode: line — replace it.
+//  2. File has frontmatter but no mode: line — insert before closing ---.
+//  3. File has no frontmatter — prepend a minimal frontmatter block.
+func rewriteMode(content, mode string) string {
+	const delim = "---"
+	modeLine := "mode: " + mode
+
+	if !strings.HasPrefix(content, delim+"\n") {
+		// No frontmatter — prepend a minimal block.
+		return delim + "\n" + modeLine + "\n" + delim + "\n" + content
+	}
+
+	// Split into opening delimiter, frontmatter body, and the rest.
+	// content starts with "---\n"; find the closing "\n---".
+	rest := content[len(delim)+1:] // strip leading "---\n"
+	closingIdx := strings.Index(rest, "\n"+delim)
+	if closingIdx < 0 {
+		// Malformed — no closing delimiter; prepend a block anyway.
+		return delim + "\n" + modeLine + "\n" + delim + "\n" + content
+	}
+
+	fmBlock := rest[:closingIdx]                 // lines between the two ---
+	afterClose := rest[closingIdx+1+len(delim):] // everything after closing ---
+
+	lines := strings.Split(fmBlock, "\n")
+	modeFound := false
+	for i, line := range lines {
+		if strings.HasPrefix(line, "mode:") {
+			lines[i] = modeLine
+			modeFound = true
+			break
+		}
+	}
+	if !modeFound {
+		// Insert mode: just before the closing ---.
+		lines = append(lines, modeLine)
+	}
+
+	var sb strings.Builder
+	sb.WriteString(delim + "\n")
+	sb.WriteString(strings.Join(lines, "\n"))
+	sb.WriteString("\n" + delim)
+	sb.WriteString(afterClose)
+	return sb.String()
+}
+
 // BuildOperatorPrompt returns the hardcoded toasters operator system prompt,
 // listing all available teams.
 func BuildOperatorPrompt(teams []Team) string {

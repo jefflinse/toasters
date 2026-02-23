@@ -16,6 +16,7 @@ var allCommands = []SlashCommand{
 	{Name: "/claude", Description: "Ask Claude (via claude CLI)"},
 	{Name: "/new", Description: "Start a new session"},
 	{Name: "/kill", Description: "Kill a running background agent"},
+	{Name: "/teams", Description: "Browse and manage agent teams"},
 }
 
 // filterCommands returns commands whose Name has the given prefix.

@@ -210,4 +210,37 @@ var (
 	TaskUpdatesPaneStyle = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("237")).
 				Italic(true)
+
+	// ColorAccent is the accent color used for focused borders in modals.
+	ColorAccent = compat.AdaptiveColor{Light: lipgloss.Color("51"), Dark: lipgloss.Color("51")}
+
+	// TeamsModalStyle wraps the entire teams modal.
+	TeamsModalStyle = lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(ColorAccent).
+			Padding(0, 1)
+
+	// TeamsPanelStyle styles an unfocused panel within the teams modal.
+	TeamsPanelStyle = lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(ColorBorder)
+
+	// TeamsFocusedPanel styles the focused panel within the teams modal.
+	TeamsFocusedPanel = lipgloss.NewStyle().
+				Border(lipgloss.RoundedBorder()).
+				BorderForeground(ColorAccent)
+
+	// TeamsSelectedStyle highlights the selected item in a teams panel.
+	TeamsSelectedStyle = lipgloss.NewStyle().
+				Background(lipgloss.Color("#333333")).
+				Bold(true)
+
+	// TeamsReadOnlyStyle dims read-only team entries.
+	TeamsReadOnlyStyle = lipgloss.NewStyle().
+				Foreground(ColorDim)
+
+	// TeamsWarningStyle styles delete-confirmation warnings.
+	TeamsWarningStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("196")).
+				Bold(true)
 )

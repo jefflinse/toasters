@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"image/color"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -105,6 +107,27 @@ type AskUserResponseMsg struct {
 	Result string
 }
 
+// TeamsAutoDetectDoneMsg is sent when the LLM coordinator auto-detection finishes.
+type TeamsAutoDetectDoneMsg struct {
+	teamDir   string // team.Dir, used to match back
+	agentName string // matched agent name; empty if no match or error
+	err       error
+}
+
+// teamsModalState holds all state for the /teams modal overlay.
+type teamsModalState struct {
+	show              bool
+	teams             []agents.Team   // local copy for the modal; separate from m.teams
+	teamIdx           int             // selected team in left panel
+	agentIdx          int             // selected agent in right panel (for 'c' key)
+	focus             int             // 0=left panel, 1=right panel
+	nameInput         string          // text being typed for new team name
+	inputMode         bool            // true when typing a new team name
+	confirmDelete     bool            // true when delete confirmation is showing
+	autoDetectPending map[string]bool // keyed by team.Dir; prevents re-firing
+	autoDetecting     bool            // true while LLM call is in flight
+}
+
 // leftPanelWidth returns the width of the left panel for the given terminal width.
 func leftPanelWidth(termWidth int) int {
 	w := termWidth / 6
@@ -159,8 +182,12 @@ type Model struct {
 	gateway *gateway.Gateway
 
 	teams        []agents.Team // available teams
+	teamsDir     string        // path to the configured teams directory
 	systemPrompt string        // assembled at startup; prepended to every LLM call
 	repoRoot     string        // path to repo root (for /claude slash command path)
+
+	// Teams modal state.
+	teamsModal teamsModalState
 
 	// Gateway notify channel — gateway writes to this; TUI polls it.
 	agentNotifyCh chan struct{}
@@ -206,7 +233,7 @@ type Model struct {
 }
 
 // NewModel returns an initialized root model.
-func NewModel(client *llm.Client, claudeCfg config.ClaudeConfig, configDir string, gw *gateway.Gateway, repoRoot string, teams []agents.Team) Model {
+func NewModel(client *llm.Client, claudeCfg config.ClaudeConfig, configDir string, gw *gateway.Gateway, repoRoot string, teamsDir string, teams []agents.Team) Model {
 	ta := textarea.New()
 	ta.Placeholder = "Type your message here..."
 	ta.Prompt = ""
@@ -257,6 +284,7 @@ func NewModel(client *llm.Client, claudeCfg config.ClaudeConfig, configDir strin
 	m.gateway = gw
 
 	m.repoRoot = repoRoot
+	m.teamsDir = teamsDir
 	m.teams = teams
 	m.systemPrompt = agents.BuildOperatorPrompt(teams)
 	m.initMessages()
@@ -308,6 +336,160 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case tea.KeyPressMsg:
+		// Teams modal key handling — intercept all keys when modal is open.
+		if m.teamsModal.show {
+			var modalCmds []tea.Cmd
+			switch msg.String() {
+			case "esc":
+				if m.teamsModal.inputMode {
+					m.teamsModal.inputMode = false
+					m.teamsModal.nameInput = ""
+				} else if m.teamsModal.confirmDelete {
+					m.teamsModal.confirmDelete = false
+				} else {
+					m.teamsModal.show = false
+				}
+
+			case "tab":
+				if m.teamsModal.focus == 0 {
+					m.teamsModal.focus = 1
+				} else {
+					m.teamsModal.focus = 0
+				}
+
+			case "up":
+				if m.teamsModal.focus == 0 {
+					if m.teamsModal.teamIdx > 0 {
+						m.teamsModal.teamIdx--
+					}
+					m.teamsModal.confirmDelete = false
+					m.teamsModal.agentIdx = 0
+					if len(m.teamsModal.teams) > 0 {
+						modalCmds = append(modalCmds, m.maybeAutoDetectCoordinator(m.teamsModal.teams[m.teamsModal.teamIdx]))
+					}
+				} else {
+					// Right panel: navigate agents (coordinator first, then workers).
+					if len(m.teamsModal.teams) > 0 && m.teamsModal.teamIdx < len(m.teamsModal.teams) {
+						team := m.teamsModal.teams[m.teamsModal.teamIdx]
+						total := len(team.Workers)
+						if team.Coordinator != nil {
+							total++
+						}
+						if m.teamsModal.agentIdx > 0 {
+							m.teamsModal.agentIdx--
+						}
+					}
+				}
+
+			case "down":
+				if m.teamsModal.focus == 0 {
+					if m.teamsModal.teamIdx < len(m.teamsModal.teams)-1 {
+						m.teamsModal.teamIdx++
+					}
+					m.teamsModal.confirmDelete = false
+					m.teamsModal.agentIdx = 0
+					if len(m.teamsModal.teams) > 0 {
+						modalCmds = append(modalCmds, m.maybeAutoDetectCoordinator(m.teamsModal.teams[m.teamsModal.teamIdx]))
+					}
+				} else {
+					// Right panel: navigate agents (coordinator first, then workers).
+					if len(m.teamsModal.teams) > 0 && m.teamsModal.teamIdx < len(m.teamsModal.teams) {
+						team := m.teamsModal.teams[m.teamsModal.teamIdx]
+						total := len(team.Workers)
+						if team.Coordinator != nil {
+							total++
+						}
+						if m.teamsModal.agentIdx < total-1 {
+							m.teamsModal.agentIdx++
+						}
+					}
+				}
+
+			case "n":
+				if m.teamsModal.focus == 0 && !m.teamsModal.inputMode {
+					if len(m.teamsModal.teams) == 0 || !isReadOnlyTeam(m.teamsModal.teams[m.teamsModal.teamIdx]) {
+						m.teamsModal.inputMode = true
+						m.teamsModal.nameInput = ""
+					}
+				}
+
+			case "d":
+				if m.teamsModal.focus == 0 && !m.teamsModal.confirmDelete {
+					if len(m.teamsModal.teams) > 0 && m.teamsModal.teamIdx < len(m.teamsModal.teams) {
+						if !isReadOnlyTeam(m.teamsModal.teams[m.teamsModal.teamIdx]) {
+							m.teamsModal.confirmDelete = true
+						}
+					}
+				}
+
+			case "enter":
+				if m.teamsModal.confirmDelete {
+					if len(m.teamsModal.teams) > 0 && m.teamsModal.teamIdx < len(m.teamsModal.teams) {
+						team := m.teamsModal.teams[m.teamsModal.teamIdx]
+						_ = os.RemoveAll(team.Dir)
+					}
+					m.reloadTeamsForModal()
+					if m.teamsModal.teamIdx >= len(m.teamsModal.teams) && len(m.teamsModal.teams) > 0 {
+						m.teamsModal.teamIdx = len(m.teamsModal.teams) - 1
+					} else if len(m.teamsModal.teams) == 0 {
+						m.teamsModal.teamIdx = 0
+					}
+					m.teamsModal.confirmDelete = false
+				} else if m.teamsModal.inputMode {
+					name := m.teamsModal.nameInput
+					valid := name != "" && !strings.ContainsAny(name, `/\.`)
+					if valid {
+						_ = os.MkdirAll(filepath.Join(m.teamsDir, name), 0755)
+						m.reloadTeamsForModal()
+						// Find the newly created team and select it.
+						for i, t := range m.teamsModal.teams {
+							if t.Name == name {
+								m.teamsModal.teamIdx = i
+								break
+							}
+						}
+					}
+					m.teamsModal.inputMode = false
+					m.teamsModal.nameInput = ""
+				}
+
+			case "c":
+				if m.teamsModal.focus == 1 && len(m.teamsModal.teams) > 0 && m.teamsModal.teamIdx < len(m.teamsModal.teams) {
+					team := m.teamsModal.teams[m.teamsModal.teamIdx]
+					if !isReadOnlyTeam(team) {
+						// Build the ordered agent list: coordinator first, then workers.
+						var agentList []agents.Agent
+						if team.Coordinator != nil {
+							agentList = append(agentList, *team.Coordinator)
+						}
+						agentList = append(agentList, team.Workers...)
+						if m.teamsModal.agentIdx < len(agentList) {
+							target := agentList[m.teamsModal.agentIdx]
+							_ = agents.SetCoordinator(team.Dir, target.Name)
+							m.reloadTeamsForModal()
+						}
+					}
+				}
+
+			case "backspace":
+				if m.teamsModal.inputMode && len(m.teamsModal.nameInput) > 0 {
+					runes := []rune(m.teamsModal.nameInput)
+					m.teamsModal.nameInput = string(runes[:len(runes)-1])
+				}
+
+			default:
+				// Printable characters go into the name input when in input mode.
+				if m.teamsModal.inputMode {
+					r := msg.String()
+					// Only accept single printable characters.
+					if len([]rune(r)) == 1 {
+						m.teamsModal.nameInput += r
+					}
+				}
+			}
+			return m, tea.Batch(modalCmds...)
+		}
+
 		// Prompt mode key handling — highest priority.
 		if m.promptMode {
 			allOptions := append(m.promptOptions, "Custom response...")
@@ -686,6 +868,16 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.showKillModal = true
 					}
 					return m, nil
+				case "/teams":
+					m.input.Reset()
+					m.showCmdPopup = false
+					m.teamsModal = teamsModalState{show: true, autoDetectPending: make(map[string]bool)}
+					m.reloadTeamsForModal()
+					var teamCmd tea.Cmd
+					if len(m.teamsModal.teams) > 0 {
+						teamCmd = m.maybeAutoDetectCoordinator(m.teamsModal.teams[0])
+					}
+					return m, teamCmd
 				}
 				// /claude <prompt> — stream via the claude CLI subprocess.
 				if strings.HasPrefix(text, "/claude ") {
@@ -1007,6 +1199,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, tea.Batch(cmds...)
 
+	case TeamsAutoDetectDoneMsg:
+		m.teamsModal.autoDetecting = false
+		if msg.agentName != "" && msg.err == nil {
+			_ = agents.SetCoordinator(msg.teamDir, msg.agentName)
+			m.reloadTeamsForModal()
+		}
+		return m, tea.Batch(cmds...)
+
 	case AgentOutputMsg:
 		// Re-arm the poller.
 		if m.agentNotifyCh != nil {
@@ -1076,6 +1276,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *Model) View() tea.View {
 	if m.width == 0 || m.height == 0 {
 		v := tea.NewView("")
+		v.AltScreen = true
+		v.MouseMode = tea.MouseModeCellMotion
+		return v
+	}
+
+	// Teams modal takes over the full terminal as a centered overlay.
+	if m.teamsModal.show {
+		teamsView := m.renderTeamsModal()
+		v := tea.NewView(teamsView)
 		v.AltScreen = true
 		v.MouseMode = tea.MouseModeCellMotion
 		return v
@@ -2303,4 +2512,285 @@ func truncateStr(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen-3] + "..."
+}
+
+// isReadOnlyTeam returns true if the team's directory is one of the well-known
+// auto-detected read-only directories (~/.opencode/agents, ~/.claude/agents).
+func isReadOnlyTeam(team agents.Team) bool {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return false
+	}
+	readOnlyDirs := []string{
+		filepath.Join(home, ".opencode", "agents"),
+		filepath.Join(home, ".claude", "agents"),
+	}
+	for _, d := range readOnlyDirs {
+		if team.Dir == d {
+			return true
+		}
+	}
+	return false
+}
+
+// reloadTeamsForModal refreshes m.teamsModal.teams from disk.
+func (m *Model) reloadTeamsForModal() {
+	discovered, _ := agents.DiscoverTeams(m.teamsDir)
+	auto := agents.AutoDetectTeams()
+	m.teamsModal.teams = append(discovered, auto...)
+}
+
+// maybeAutoDetectCoordinator fires an LLM call to pick a coordinator for team
+// if the team has no coordinator, is not read-only, and hasn't been attempted yet.
+func (m *Model) maybeAutoDetectCoordinator(team agents.Team) tea.Cmd {
+	if isReadOnlyTeam(team) {
+		return nil
+	}
+	if team.Coordinator != nil {
+		return nil
+	}
+	allAgents := team.Workers // no coordinator, so all agents are workers
+	if len(allAgents) == 0 {
+		return nil
+	}
+	if m.teamsModal.autoDetectPending == nil {
+		m.teamsModal.autoDetectPending = make(map[string]bool)
+	}
+	if m.teamsModal.autoDetectPending[team.Dir] {
+		return nil
+	}
+	m.teamsModal.autoDetectPending[team.Dir] = true
+	m.teamsModal.autoDetecting = true
+
+	// Capture values for the goroutine.
+	client := m.llmClient
+	teamDir := team.Dir
+	agentsCopy := make([]agents.Agent, len(allAgents))
+	copy(agentsCopy, allAgents)
+
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		var sb strings.Builder
+		sb.WriteString("Given these agents, which one is best suited to be the team coordinator? Respond with just the agent name, nothing else.\n\nAgents:\n")
+		for _, a := range agentsCopy {
+			desc := a.Description
+			if desc == "" {
+				desc = "(no description)"
+			}
+			fmt.Fprintf(&sb, "- %s: %s\n", a.Name, desc)
+		}
+
+		msgs := []llm.Message{{Role: "user", Content: sb.String()}}
+		result, err := client.ChatCompletion(ctx, msgs)
+		if err != nil {
+			return TeamsAutoDetectDoneMsg{teamDir: teamDir, err: err}
+		}
+
+		// Match result to an agent name (case-insensitive, trimmed).
+		result = strings.TrimSpace(result)
+		for _, a := range agentsCopy {
+			if strings.EqualFold(result, a.Name) {
+				return TeamsAutoDetectDoneMsg{teamDir: teamDir, agentName: a.Name}
+			}
+		}
+		// No match.
+		return TeamsAutoDetectDoneMsg{teamDir: teamDir}
+	}
+}
+
+// renderTeamsModal renders the full-screen teams management modal.
+func (m *Model) renderTeamsModal() string {
+	teams := m.teamsModal.teams
+
+	// Modal dimensions: use most of the terminal.
+	modalW := m.width - 4
+	if modalW < 60 {
+		modalW = 60
+	}
+	if modalW > m.width {
+		modalW = m.width
+	}
+	modalH := m.height - 4
+	if modalH < 20 {
+		modalH = 20
+	}
+
+	// Inner width after modal border + padding (border=2, padding=2 each side).
+	innerW := modalW - TeamsModalStyle.GetHorizontalFrameSize()
+	if innerW < 10 {
+		innerW = 10
+	}
+
+	// Left panel: ~32 chars inner content.
+	leftInnerW := 30
+	leftPanelW := leftInnerW + TeamsPanelStyle.GetHorizontalFrameSize()
+	if leftPanelW > innerW/2 {
+		leftPanelW = innerW / 2
+		leftInnerW = leftPanelW - TeamsPanelStyle.GetHorizontalFrameSize()
+	}
+
+	// Right panel: remaining width.
+	rightPanelW := innerW - leftPanelW - 1 // -1 for spacing
+	rightInnerW := rightPanelW - TeamsPanelStyle.GetHorizontalFrameSize()
+	if rightInnerW < 5 {
+		rightInnerW = 5
+	}
+
+	// Panel inner height (subtract border + footer line).
+	footerLines := 1
+	panelH := modalH - TeamsModalStyle.GetVerticalFrameSize() - footerLines - 1
+	if panelH < 5 {
+		panelH = 5
+	}
+	panelInnerH := panelH - TeamsPanelStyle.GetVerticalFrameSize()
+	if panelInnerH < 3 {
+		panelInnerH = 3
+	}
+
+	// --- Left panel: team list ---
+	var leftLines []string
+	for i, t := range teams {
+		var icon string
+		if t.Coordinator != nil {
+			icon = "◆"
+		} else {
+			icon = "■"
+		}
+		name := truncateStr(t.Name, leftInnerW-4)
+		line := fmt.Sprintf(" %s %s", icon, name)
+		if isReadOnlyTeam(t) {
+			line += " 🔒"
+		}
+		if i == m.teamsModal.teamIdx {
+			line = TeamsSelectedStyle.Width(leftInnerW).Render(line)
+		} else if isReadOnlyTeam(t) {
+			line = TeamsReadOnlyStyle.Render(line)
+		}
+		leftLines = append(leftLines, line)
+	}
+
+	// Input mode: show name-entry prompt at the bottom.
+	if m.teamsModal.inputMode {
+		leftLines = append(leftLines, "")
+		leftLines = append(leftLines, DimStyle.Render("> New team name:"))
+		cursor := m.teamsModal.nameInput + "█"
+		leftLines = append(leftLines, "  "+cursor)
+	}
+
+	// Pad left panel to fill height.
+	for len(leftLines) < panelInnerH {
+		leftLines = append(leftLines, "")
+	}
+	if len(leftLines) > panelInnerH {
+		leftLines = leftLines[:panelInnerH]
+	}
+
+	leftContent := strings.Join(leftLines, "\n")
+	var leftPanel string
+	if m.teamsModal.focus == 0 {
+		leftPanel = TeamsFocusedPanel.Width(leftPanelW).Height(panelH).Render(leftContent)
+	} else {
+		leftPanel = TeamsPanelStyle.Width(leftPanelW).Height(panelH).Render(leftContent)
+	}
+
+	// --- Right panel: team detail ---
+	var rightLines []string
+	if len(teams) == 0 {
+		rightLines = append(rightLines, DimStyle.Render("No teams configured."))
+		rightLines = append(rightLines, DimStyle.Render("Press [n] to create one."))
+	} else if m.teamsModal.teamIdx < len(teams) {
+		team := teams[m.teamsModal.teamIdx]
+
+		// Header.
+		rightLines = append(rightLines, HeaderStyle.Render(truncateStr(team.Name, rightInnerW)))
+		rightLines = append(rightLines, DimStyle.Render(strings.Repeat("─", rightInnerW)))
+
+		// Coordinator line.
+		coordName := "(none)"
+		if team.Coordinator != nil {
+			coordName = team.Coordinator.Name
+		}
+		coordLine := "Coordinator: " + coordName
+		if m.teamsModal.autoDetecting {
+			coordLine += DimStyle.Render(" [detecting...]")
+		}
+		rightLines = append(rightLines, coordLine)
+		rightLines = append(rightLines, "")
+
+		// Build ordered agent list for right panel: coordinator first, then workers.
+		var agentList []agents.Agent
+		if team.Coordinator != nil {
+			agentList = append(agentList, *team.Coordinator)
+		}
+		agentList = append(agentList, team.Workers...)
+
+		// Workers section.
+		rightLines = append(rightLines, fmt.Sprintf("Workers (%d)", len(team.Workers)))
+		for i, a := range agentList {
+			prefix := "  ■ "
+			if team.Coordinator != nil && i == 0 {
+				prefix = "  ◆ " // coordinator marker
+			}
+			line := prefix + truncateStr(a.Name, rightInnerW-4)
+			if m.teamsModal.focus == 1 && i == m.teamsModal.agentIdx {
+				line = TeamsSelectedStyle.Width(rightInnerW).Render(line)
+			}
+			rightLines = append(rightLines, line)
+		}
+
+		// Delete confirmation.
+		if m.teamsModal.confirmDelete {
+			rightLines = append(rightLines, "")
+			rightLines = append(rightLines, TeamsWarningStyle.Render(
+				fmt.Sprintf("⚠ Delete '%s'? [Enter] confirm  [Esc] cancel", truncateStr(team.Name, rightInnerW-30)),
+			))
+		}
+	}
+
+	// Pad right panel to fill height.
+	for len(rightLines) < panelInnerH {
+		rightLines = append(rightLines, "")
+	}
+	if len(rightLines) > panelInnerH {
+		rightLines = rightLines[:panelInnerH]
+	}
+
+	rightContent := strings.Join(rightLines, "\n")
+	var rightPanel string
+	if m.teamsModal.focus == 1 {
+		rightPanel = TeamsFocusedPanel.Width(rightPanelW).Height(panelH).Render(rightContent)
+	} else {
+		rightPanel = TeamsPanelStyle.Width(rightPanelW).Height(panelH).Render(rightContent)
+	}
+
+	// Join panels horizontally.
+	panels := lipgloss.JoinHorizontal(lipgloss.Top, leftPanel, " ", rightPanel)
+
+	// Footer with key hints — dim read-only-gated keys when team is read-only.
+	readOnly := len(teams) > 0 && m.teamsModal.teamIdx < len(teams) && isReadOnlyTeam(teams[m.teamsModal.teamIdx])
+	nHint := "[n] New"
+	dHint := "[d] Delete"
+	cHint := "[c] Set Coordinator"
+	if readOnly {
+		nHint = DimStyle.Render(nHint)
+		dHint = DimStyle.Render(dHint)
+		cHint = DimStyle.Render(cHint)
+	}
+	footer := lipgloss.JoinHorizontal(lipgloss.Left,
+		nHint, "  ", dHint, "  ", cHint, "  ",
+		DimStyle.Render("[Tab] Switch"), "  ",
+		DimStyle.Render("[Esc] Close"),
+	)
+
+	inner := lipgloss.JoinVertical(lipgloss.Left, panels, footer)
+
+	modal := TeamsModalStyle.Width(modalW).Render(inner)
+
+	return lipgloss.Place(m.width, m.height,
+		lipgloss.Center, lipgloss.Center,
+		modal,
+		lipgloss.WithWhitespaceStyle(lipgloss.NewStyle().Background(lipgloss.Color("235"))),
+	)
 }

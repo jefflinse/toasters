@@ -112,6 +112,51 @@ func parseContent(t *testing.T, name, content string) Agent {
 	return a
 }
 
+// --- SetCoordinator tests ---
+
+func TestSetCoordinator(t *testing.T) {
+	dir := t.TempDir()
+
+	builderContent := "---\nmode: worker\n---\nbuilder body"
+	coordContent := "---\nmode: primary\n---\ncoord body"
+
+	writeFile := func(name, content string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+			t.Fatalf("writing %s: %v", name, err)
+		}
+	}
+	writeFile("builder.md", builderContent)
+	writeFile("coordinator.md", coordContent)
+
+	if err := SetCoordinator(dir, "builder"); err != nil {
+		t.Fatalf("SetCoordinator: %v", err)
+	}
+
+	// builder.md should now have mode: primary
+	builderAgent, err := ParseFile(filepath.Join(dir, "builder.md"))
+	if err != nil {
+		t.Fatalf("ParseFile builder.md: %v", err)
+	}
+	if builderAgent.Mode != "primary" {
+		t.Errorf("builder.md: got mode=%q, want %q", builderAgent.Mode, "primary")
+	}
+
+	// coordinator.md should now have mode: worker
+	coordAgent, err := ParseFile(filepath.Join(dir, "coordinator.md"))
+	if err != nil {
+		t.Fatalf("ParseFile coordinator.md: %v", err)
+	}
+	if coordAgent.Mode != "worker" {
+		t.Errorf("coordinator.md: got mode=%q, want %q", coordAgent.Mode, "worker")
+	}
+
+	// Nonexistent agent should return an error.
+	if err := SetCoordinator(dir, "nonexistent"); err == nil {
+		t.Error("expected error for nonexistent agent, got nil")
+	}
+}
+
 func sliceEqual(a, b []string) bool {
 	if len(a) != len(b) {
 		return false

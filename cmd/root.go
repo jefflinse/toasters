@@ -75,7 +75,7 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 	if cfg.Operator.LogRequests {
 		client.SetRequestLogging(true, filepath.Join(configDir, "requests.log"))
 	}
-	m := tui.NewModel(client, cfg.Claude, configDir, gw, repoRoot, teams)
+	m := tui.NewModel(client, cfg.Claude, configDir, gw, repoRoot, teamsDir, teams)
 
 	p := tea.NewProgram(&m)
 
