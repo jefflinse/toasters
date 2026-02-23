@@ -200,6 +200,11 @@ type Model struct {
 	promptPendingCall llm.ToolCall // the tool call to resume after input
 
 	userScrolled bool // true when user has manually scrolled up; suppresses auto-scroll
+
+	// prevSlotActive/Status track the last-seen state of each gateway slot so
+	// AgentOutputMsg can detect Running→Done transitions and notify the operator.
+	prevSlotActive [gateway.MaxSlots]bool
+	prevSlotStatus [gateway.MaxSlots]gateway.SlotStatus
 }
 
 // NewModel returns an initialized root model.
@@ -977,13 +982,47 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.agentNotifyCh != nil {
 			cmds = append(cmds, waitForAgentUpdate(m.agentNotifyCh))
 		}
-		// If attached to a slot, update the agent viewport.
-		if m.attachedSlot >= 0 && m.gateway != nil {
+
+		if m.gateway != nil {
 			slots := m.gateway.Slots()
-			snap := slots[m.attachedSlot]
-			if snap.Active {
-				m.agentViewport.SetContent(m.renderMarkdown(snap.Output))
-				m.agentViewport.GotoBottom()
+
+			// Detect Running→Done transitions and notify the operator LLM.
+			for i, snap := range slots {
+				wasRunning := m.prevSlotActive[i] && m.prevSlotStatus[i] == gateway.SlotRunning
+				isDone := snap.Active && snap.Status == gateway.SlotDone
+				if wasRunning && isDone && !m.streaming {
+					// Build a concise completion notification for the operator.
+					outputTail := snap.Output
+					const maxTail = 2000
+					if len(outputTail) > maxTail {
+						outputTail = "…" + outputTail[len(outputTail)-maxTail:]
+					}
+					notification := fmt.Sprintf(
+						"Agent '%s' in slot %d has completed (work effort: %s).\n\nOutput:\n%s",
+						snap.AgentName, i, snap.WorkEffortID, outputTail,
+					)
+					m.messages = append(m.messages, llm.Message{
+						Role:    "user",
+						Content: notification,
+					})
+					m.updateViewportContent()
+					if !m.userScrolled {
+						m.chatViewport.GotoBottom()
+					}
+					cmds = append(cmds, m.startStream(m.messages))
+				}
+				// Update tracked state.
+				m.prevSlotActive[i] = snap.Active
+				m.prevSlotStatus[i] = snap.Status
+			}
+
+			// If attached to a slot, update the agent viewport.
+			if m.attachedSlot >= 0 {
+				snap := slots[m.attachedSlot]
+				if snap.Active {
+					m.agentViewport.SetContent(m.renderMarkdown(snap.Output))
+					m.agentViewport.GotoBottom()
+				}
 			}
 		}
 		return m, tea.Batch(cmds...)
