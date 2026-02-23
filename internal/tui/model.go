@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -189,6 +190,12 @@ type TeamsAutoDetectDoneMsg struct {
 	err       error
 }
 
+// blockerAnswersSubmittedMsg is sent when the user has submitted answers for a blocker.
+type blockerAnswersSubmittedMsg struct {
+	jobID   string
+	blocker *job.Blocker
+}
+
 // teamsModalState holds all state for the /teams modal overlay.
 type teamsModalState struct {
 	show              bool
@@ -251,6 +258,7 @@ type Model struct {
 	selectedCmdIdx int
 
 	jobs        []job.Job
+	blockers    map[string]*job.Blocker // keyed by job ID
 	selectedJob int
 	focused     focusedPanel
 
@@ -264,6 +272,15 @@ type Model struct {
 
 	// Teams modal state.
 	teamsModal teamsModalState
+
+	// Blocker modal state.
+	blockerModal struct {
+		show        bool
+		jobID       string
+		blocker     *job.Blocker
+		questionIdx int
+		inputText   string
+	}
 
 	// Gateway notify channel — gateway writes to this; TUI polls it.
 	agentNotifyCh chan struct{}
@@ -378,6 +395,7 @@ func NewModel(client *llm.Client, claudeCfg config.ClaudeConfig, configDir strin
 
 	jobs, _ := job.List(configDir)
 	m.jobs = jobs
+	m.blockers = make(map[string]*job.Blocker)
 	m.selectedJob = 0
 	m.focused = focusChat
 	m.gateway = gw
@@ -616,6 +634,82 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			}
 			return m, tea.Batch(modalCmds...)
+		}
+
+		// Blocker modal key handling — intercept all keys when modal is open.
+		if m.blockerModal.show {
+			b := m.blockerModal.blocker
+			if b != nil && len(b.Questions) > 0 {
+				q := b.Questions[m.blockerModal.questionIdx]
+
+				switch msg.String() {
+				case "esc":
+					m.blockerModal.show = false
+					m.blockerModal.inputText = ""
+
+				case "up", "k":
+					if m.blockerModal.questionIdx > 0 {
+						m.blockerModal.questionIdx--
+						m.blockerModal.inputText = b.Questions[m.blockerModal.questionIdx].Answer
+					}
+
+				case "down", "j":
+					if m.blockerModal.questionIdx < len(b.Questions)-1 {
+						m.blockerModal.questionIdx++
+						m.blockerModal.inputText = b.Questions[m.blockerModal.questionIdx].Answer
+					}
+
+				case "1", "2", "3", "4", "5", "6", "7", "8", "9":
+					if len(q.Options) > 0 {
+						idx, _ := strconv.Atoi(msg.String())
+						idx-- // 0-based
+						if idx >= 0 && idx < len(q.Options) {
+							b.Questions[m.blockerModal.questionIdx].Answer = q.Options[idx]
+							// Advance to next question if not on last.
+							if m.blockerModal.questionIdx < len(b.Questions)-1 {
+								m.blockerModal.questionIdx++
+								m.blockerModal.inputText = b.Questions[m.blockerModal.questionIdx].Answer
+							}
+						}
+					} else {
+						// Free-form: append digit to input.
+						m.blockerModal.inputText += msg.String()
+					}
+
+				case "enter":
+					// Confirm free-form answer.
+					if len(q.Options) == 0 && m.blockerModal.inputText != "" {
+						b.Questions[m.blockerModal.questionIdx].Answer = m.blockerModal.inputText
+						m.blockerModal.inputText = ""
+						if m.blockerModal.questionIdx < len(b.Questions)-1 {
+							m.blockerModal.questionIdx++
+						}
+					}
+
+				case "backspace":
+					if len(m.blockerModal.inputText) > 0 {
+						runes := []rune(m.blockerModal.inputText)
+						m.blockerModal.inputText = string(runes[:len(runes)-1])
+					}
+
+				case "s":
+					// Submit all answers.
+					return m, m.submitBlockerAnswers()
+
+				default:
+					// Free-form: append printable chars.
+					if len(q.Options) == 0 && len(msg.String()) == 1 {
+						m.blockerModal.inputText += msg.String()
+					}
+				}
+			} else {
+				// No questions — just allow closing.
+				switch msg.String() {
+				case "esc", "s":
+					m.blockerModal.show = false
+				}
+			}
+			return m, nil
 		}
 
 		// Prompt mode key handling — highest priority.
@@ -997,6 +1091,20 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case "enter":
+			// Open blocker modal when jobs pane is focused and selected job has a blocker.
+			if m.focused == focusJobs && len(m.jobs) > 0 && m.selectedJob < len(m.jobs) {
+				selectedJob := m.jobs[m.selectedJob]
+				if m.hasBlocker(selectedJob) {
+					m.blockerModal.show = true
+					m.blockerModal.jobID = selectedJob.Frontmatter.ID
+					m.blockerModal.blocker = m.blockers[selectedJob.Frontmatter.ID]
+					m.blockerModal.questionIdx = 0
+					m.blockerModal.inputText = ""
+					return m, nil
+				}
+				// Non-blocked job: no action on Enter for now.
+				return m, nil
+			}
 			// Attach to an agent slot when the agents pane is focused.
 			if m.focused == focusAgents && m.gateway != nil {
 				slots := m.gateway.Slots()
@@ -1592,6 +1700,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.selectedJob = 0
 			}
 		}
+		for _, j := range m.jobs {
+			if _, exists := m.blockers[j.Frontmatter.ID]; !exists {
+				if b, err := job.ReadBlocker(j.Dir); err == nil && b != nil {
+					m.blockers[j.Frontmatter.ID] = b
+				}
+			}
+		}
 		return m, nil
 
 	case AppReadyMsg:
@@ -1658,6 +1773,32 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, tea.Batch(cmds...)
 
+	case blockerAnswersSubmittedMsg:
+		// Mark answered, close modal.
+		if b, ok := m.blockers[msg.jobID]; ok {
+			b.Answered = true
+		}
+		m.blockerModal.show = false
+		m.blockerModal.inputText = ""
+
+		// Re-spawn the team with blocker context.
+		j, ok := m.jobByID(msg.jobID)
+		if ok && m.gateway != nil {
+			spawnPrompt := fmt.Sprintf("A blocker was encountered on job '%s' and the user has provided responses. See BLOCKER.md in the job directory for the full context and answers. Resume the job addressing the blocker.", msg.jobID)
+			// Find the team by name.
+			var matchedTeam agents.Team
+			for _, t := range m.teams {
+				if t.Name == msg.blocker.Team {
+					matchedTeam = t
+					break
+				}
+			}
+			if _, _, err := m.gateway.SpawnTeam(msg.blocker.Team, j.Frontmatter.ID, spawnPrompt, matchedTeam); err != nil {
+				log.Printf("failed to re-spawn team after blocker: %v", err)
+			}
+		}
+		return m, nil
+
 	case AgentOutputMsg:
 		// Re-arm the poller.
 		if m.agentNotifyCh != nil {
@@ -1695,6 +1836,16 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.chatViewport.GotoBottom()
 					}
 					cmds = append(cmds, m.startStream(m.messages))
+
+					// Check for BLOCKER.md in the completed job's directory.
+					for _, j := range m.jobs {
+						if j.Frontmatter.ID == snap.JobID {
+							if b, err := job.ReadBlocker(j.Dir); err == nil && b != nil {
+								m.blockers[j.Frontmatter.ID] = b
+							}
+							break
+						}
+					}
 				}
 				// Update tracked state.
 				m.prevSlotActive[i] = snap.Active
@@ -1751,6 +1902,15 @@ func (m *Model) View() tea.View {
 	if m.teamsModal.show {
 		teamsView := m.renderTeamsModal()
 		v := tea.NewView(teamsView)
+		v.AltScreen = true
+		v.MouseMode = tea.MouseModeCellMotion
+		return v
+	}
+
+	// Blocker modal takes over the full terminal as a centered overlay.
+	if m.blockerModal.show {
+		blockerView := m.renderBlockerModal()
+		v := tea.NewView(blockerView)
 		v.AltScreen = true
 		v.MouseMode = tea.MouseModeCellMotion
 		return v
@@ -2381,6 +2541,12 @@ func (m *Model) updateViewportContent() {
 	m.chatViewport.SetContent(sb.String())
 }
 
+// hasBlocker reports whether the given job has an unanswered blocker recorded.
+func (m Model) hasBlocker(j job.Job) bool {
+	b, ok := m.blockers[j.Frontmatter.ID]
+	return ok && b != nil && !b.Answered
+}
+
 // renderLeftPanel builds the left panel with three vertically-stacked sub-panes:
 // Work Efforts (top 40%), DAG (middle 30%), and Chat (bottom 30%).
 func (m Model) renderLeftPanel(panelWidth, panelHeight int) string {
@@ -2404,10 +2570,18 @@ func (m Model) renderLeftPanel(panelWidth, panelHeight int) string {
 	} else {
 		for i, j := range m.jobs {
 			name := truncateStr(j.Name, contentWidth-3)
+			icon := "🍞"
+			if m.hasBlocker(j) {
+				icon = "⚠️"
+			}
 			if i == m.selectedJob {
-				topLines = append(topLines, JobSelectedStyle.Render("🍞 "+name))
+				topLines = append(topLines, JobSelectedStyle.Render(icon+" "+name))
 			} else {
-				topLines = append(topLines, JobItemStyle.Render("   "+name))
+				if m.hasBlocker(j) {
+					topLines = append(topLines, JobItemStyle.Render(icon+" "+name))
+				} else {
+					topLines = append(topLines, JobItemStyle.Render("   "+name))
+				}
 			}
 		}
 	}
@@ -3471,6 +3645,137 @@ func (m *Model) renderTeamsModal() string {
 	return lipgloss.Place(m.width, m.height,
 		lipgloss.Center, lipgloss.Center,
 		modal,
+		lipgloss.WithWhitespaceStyle(lipgloss.NewStyle().Background(lipgloss.Color("235"))),
+	)
+}
+
+// jobByID returns the job with the given ID, or false if not found.
+func (m *Model) jobByID(id string) (job.Job, bool) {
+	for _, j := range m.jobs {
+		if j.Frontmatter.ID == id {
+			return j, true
+		}
+	}
+	return job.Job{}, false
+}
+
+// submitBlockerAnswers writes the answered blocker questions to BLOCKER.md
+// and emits a blockerAnswersSubmittedMsg to the event loop.
+func (m *Model) submitBlockerAnswers() tea.Cmd {
+	// Capture values for the closure.
+	b := m.blockerModal.blocker
+	jobID := m.blockerModal.jobID
+	return func() tea.Msg {
+		j, ok := m.jobByID(jobID)
+		if !ok {
+			return nil
+		}
+		if err := job.WriteBlockerAnswers(j.Dir, b); err != nil {
+			log.Printf("failed to write blocker answers: %v", err)
+		}
+		return blockerAnswersSubmittedMsg{jobID: jobID, blocker: b}
+	}
+}
+
+// renderBlockerModal renders the full-screen blocker Q&A modal.
+func (m *Model) renderBlockerModal() string {
+	if !m.blockerModal.show || m.blockerModal.blocker == nil {
+		return ""
+	}
+	b := m.blockerModal.blocker
+
+	modalW := m.width - 8
+	if modalW > 90 {
+		modalW = 90
+	}
+	if modalW < 40 {
+		modalW = 40
+	}
+	modalH := m.height - 6
+	if modalH > 30 {
+		modalH = 30
+	}
+	if modalH < 10 {
+		modalH = 10
+	}
+	innerW := modalW - 4 // account for border + padding
+
+	// Header.
+	header := lipgloss.NewStyle().Bold(true).Foreground(ColorStreaming).Render(
+		fmt.Sprintf("⚠  Blocker: %s", b.BlockerSummary),
+	)
+
+	var sections []string
+
+	// Context (truncated to 6 lines).
+	if b.Context != "" {
+		lines := strings.Split(b.Context, "\n")
+		if len(lines) > 6 {
+			lines = lines[:6]
+			lines = append(lines, DimStyle.Render("..."))
+		}
+		sections = append(sections, HeaderStyle.Render("Context"))
+		sections = append(sections, strings.Join(lines, "\n"))
+	}
+
+	// Questions.
+	sections = append(sections, HeaderStyle.Render(fmt.Sprintf("Questions (%d total)", len(b.Questions))))
+	for i, q := range b.Questions {
+		prefix := "  "
+		qStyle := DimStyle
+		if i == m.blockerModal.questionIdx {
+			prefix = "▶ "
+			qStyle = lipgloss.NewStyle() // normal weight for current
+		}
+
+		qLine := prefix + qStyle.Render(fmt.Sprintf("%d. %s", i+1, q.Text))
+		sections = append(sections, qLine)
+
+		if i == m.blockerModal.questionIdx {
+			if len(q.Options) > 0 {
+				for oi, opt := range q.Options {
+					optStyle := DimStyle
+					if q.Answer == opt {
+						optStyle = lipgloss.NewStyle().Foreground(ColorConnected).Bold(true)
+					}
+					sections = append(sections, optStyle.Render(fmt.Sprintf("    [%d] %s", oi+1, opt)))
+				}
+			} else {
+				// Free-form input line.
+				inputVal := m.blockerModal.inputText
+				if q.Answer != "" && inputVal == "" {
+					inputVal = q.Answer
+				}
+				sections = append(sections, fmt.Sprintf("    > %s_", inputVal))
+			}
+		} else if q.Answer != "" {
+			sections = append(sections, DimStyle.Render(fmt.Sprintf("    ✓ %s", q.Answer)))
+		}
+	}
+
+	// Footer hints.
+	var footerHint string
+	if len(b.Questions) > 0 && len(b.Questions[m.blockerModal.questionIdx].Options) > 0 {
+		footerHint = "[1-9] select  [↑↓] navigate  [s] submit  [Esc] close"
+	} else {
+		footerHint = "[Enter] confirm  [↑↓] navigate  [s] submit  [Esc] close"
+	}
+	footer := DimStyle.Render(footerHint)
+
+	allParts := append([]string{header, ""}, append(sections, "", footer)...)
+	body := lipgloss.NewStyle().Width(innerW).Render(
+		lipgloss.JoinVertical(lipgloss.Left, allParts...),
+	)
+
+	modal := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(ColorStreaming).
+		Padding(1, 2).
+		Width(modalW).
+		Height(modalH).
+		Render(body)
+
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, modal,
 		lipgloss.WithWhitespaceStyle(lipgloss.NewStyle().Background(lipgloss.Color("235"))),
 	)
 }

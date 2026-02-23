@@ -99,6 +99,7 @@ type ClaudeMeta struct {
 	Model          string
 	PermissionMode string
 	Version        string
+	SessionID      string
 }
 
 // StreamResponse carries a single update from the streaming API.

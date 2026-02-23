@@ -53,6 +53,7 @@ type SlotSnapshot struct {
 	ExitSummary    string
 	ThinkingOutput string
 	SubagentOutput string
+	SessionID      string
 }
 
 // slot is the internal mutable state (mutex-protected via Gateway).
@@ -66,6 +67,7 @@ type slot struct {
 	cancel         context.CancelFunc
 	summary        string             // one-sentence description of what the agent was asked to do
 	model          string             // model name from the system/init event
+	sessionID      string             // session ID from the system/init event
 	prompt         string             // the full assembled prompt passed to claude
 	resetTimer     chan time.Duration // signals the timer goroutine to reset
 	inputTokens    int
@@ -176,6 +178,14 @@ func (g *Gateway) SpawnTeam(teamName, jobID, task string, team agents.Team) (slo
 	sb.WriteString(overview)
 	sb.WriteString("\n\n### TODO.md\n")
 	sb.WriteString(todos)
+
+	// Inject BLOCKER.md if present — provides full blocker context and user responses.
+	blockerPath := filepath.Join(jobDir, "BLOCKER.md")
+	if blockerData, err := os.ReadFile(blockerPath); err == nil && len(blockerData) > 0 {
+		sb.WriteString("\n\n## Blocker Resolution\n\nA blocker was previously encountered on this job. The following file contains the blocker details and the user's responses. Address the blocker using the provided answers before continuing with the job.\n\n")
+		sb.WriteString(string(blockerData))
+	}
+
 	if task != "" {
 		sb.WriteString("\n\n---\n\n## Task\n")
 		sb.WriteString(task)
@@ -244,6 +254,7 @@ func (g *Gateway) SpawnTeam(teamName, jobID, task string, team agents.Team) (slo
 			case resp.Meta != nil:
 				g.mu.Lock()
 				s.model = resp.Meta.Model
+				s.sessionID = resp.Meta.SessionID
 				g.mu.Unlock()
 				g.notify()
 			case resp.Content != "":
@@ -373,6 +384,7 @@ func (g *Gateway) Slots() [MaxSlots]SlotSnapshot {
 			ExitSummary:    s.exitSummary,
 			ThinkingOutput: s.thinkingOutput.String(),
 			SubagentOutput: s.subagentOutput.String(),
+			SessionID:      s.sessionID,
 		}
 	}
 	return snapshots
@@ -460,6 +472,7 @@ type claudeInitEvent struct {
 	Model             string `json:"model"`
 	PermissionMode    string `json:"permissionMode"`
 	ClaudeCodeVersion string `json:"claude_code_version"`
+	SessionID         string `json:"session_id"`
 }
 
 // claudeInnerEvent is the inner event shape nested inside stream_event wrappers.
@@ -615,6 +628,7 @@ func spawnClaudeStream(ctx context.Context, prompt string, claudeCfg config.Clau
 						Model:          init.Model,
 						PermissionMode: init.PermissionMode,
 						Version:        init.ClaudeCodeVersion,
+						SessionID:      init.SessionID,
 					}}
 					continue
 				}
