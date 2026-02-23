@@ -406,11 +406,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 
 			case "n":
+				// Creating a new team is never gated on the selected team's
+				// read-only status — you can always create a new user-defined team.
 				if m.teamsModal.focus == 0 && !m.teamsModal.inputMode {
-					if len(m.teamsModal.teams) == 0 || !isReadOnlyTeam(m.teamsModal.teams[m.teamsModal.teamIdx]) {
-						m.teamsModal.inputMode = true
-						m.teamsModal.nameInput = ""
-					}
+					m.teamsModal.inputMode = true
+					m.teamsModal.nameInput = ""
 				}
 
 			case "d":
@@ -2726,9 +2726,40 @@ func (m *Model) renderTeamsModal() string {
 		}
 		agentList = append(agentList, team.Workers...)
 
-		// Workers section.
+		// Workers section — scroll a window around the selected agent so long
+		// lists don't get clipped by the panel height.
 		rightLines = append(rightLines, fmt.Sprintf("Workers (%d)", len(team.Workers)))
-		for i, a := range agentList {
+		// How many lines are left for agents after header rows (name, divider,
+		// coordinator, blank, workers-header = 5 lines) and optional confirm (2).
+		confirmExtra := 0
+		if m.teamsModal.confirmDelete {
+			confirmExtra = 2
+		}
+		agentAreaH := panelInnerH - 5 - confirmExtra
+		if agentAreaH < 1 {
+			agentAreaH = 1
+		}
+		// Compute scroll offset so selected agent is always visible.
+		scrollOffset := 0
+		if len(agentList) > agentAreaH {
+			scrollOffset = m.teamsModal.agentIdx - agentAreaH/2
+			if scrollOffset < 0 {
+				scrollOffset = 0
+			}
+			if scrollOffset > len(agentList)-agentAreaH {
+				scrollOffset = len(agentList) - agentAreaH
+			}
+		}
+		visibleAgents := agentList
+		if scrollOffset > 0 || len(agentList) > agentAreaH {
+			end := scrollOffset + agentAreaH
+			if end > len(agentList) {
+				end = len(agentList)
+			}
+			visibleAgents = agentList[scrollOffset:end]
+		}
+		for vi, a := range visibleAgents {
+			i := vi + scrollOffset
 			prefix := "  ■ "
 			if team.Coordinator != nil && i == 0 {
 				prefix = "  ◆ " // coordinator marker
