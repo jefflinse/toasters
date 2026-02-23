@@ -236,6 +236,7 @@ func NewModel(client *llm.Client, claudeCfg config.ClaudeConfig, configDir strin
 	m.repoRoot = repoRoot
 	m.registry = registry
 	m.systemPrompt = buildSystemPrompt(registry, repoRoot)
+	m.initMessages()
 
 	m.agentNotifyCh = make(chan struct{}, 8) // buffered to avoid blocking gateway goroutines
 	m.attachedSlot = -1
@@ -721,12 +722,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		// Re-invoke the stream with the updated messages for the final answer.
-		var msgs []llm.Message
-		if m.systemPrompt != "" {
-			msgs = append(msgs, llm.Message{Role: "system", Content: m.systemPrompt})
-		}
-		msgs = append(msgs, m.messages...)
-		return m, m.startStream(msgs)
+		return m, m.startStream(m.messages)
 
 	case StreamErrMsg:
 		m.streaming = false
@@ -788,6 +784,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.registry = msg.Registry
 		m.systemPrompt = buildSystemPrompt(m.registry, m.repoRoot)
 		llm.SetAvailableTools(llm.BuildTools(msg.Registry.Workers))
+		// Update system message in place if present, otherwise reinit.
+		if len(m.messages) > 0 && m.messages[0].Role == "system" {
+			m.messages[0].Content = m.systemPrompt
+		} else {
+			m.initMessages()
+		}
 		return m, tea.Batch(cmds...)
 
 	case AgentOutputMsg:
@@ -1156,7 +1158,7 @@ func (m *Model) updateViewportContent() {
 	}
 
 	// Show welcome message when there's no conversation yet.
-	if len(m.messages) == 0 && !m.streaming {
+	if !m.hasConversation() && !m.streaming {
 		// ASCII art: an angry toaster wielding a hammer.
 		// Each line is rendered with HeaderStyle so it picks up the accent color.
 		const toasterArt = `                     [###]
@@ -1684,9 +1686,29 @@ func (m *Model) appendHelpMessage() {
 }
 
 // newSession resets the conversation and all session statistics.
-func (m *Model) newSession() {
+// initMessages resets m.messages and seeds it with the system prompt as message[0]
+// (if a system prompt is set). Call this at startup and on /new.
+func (m *Model) initMessages() {
 	m.messages = nil
+	if m.systemPrompt != "" {
+		m.messages = []llm.Message{{Role: "system", Content: m.systemPrompt}}
+	}
+}
+
+// hasConversation reports whether the conversation contains at least one user or
+// assistant message (i.e. the welcome screen should be hidden).
+func (m *Model) hasConversation() bool {
+	for _, msg := range m.messages {
+		if msg.Role == "user" || msg.Role == "assistant" {
+			return true
+		}
+	}
+	return false
+}
+
+func (m *Model) newSession() {
 	m.systemPrompt = buildSystemPrompt(m.registry, m.repoRoot)
+	m.initMessages()
 	m.reasoning = nil
 	m.claudeMeta = nil
 	m.claudeActiveMeta = ""
@@ -1752,14 +1774,7 @@ func (m *Model) sendMessage() tea.Cmd {
 	m.updateViewportContent()
 	m.chatViewport.GotoBottom()
 
-	// Build message slice: system prompt (if any) + conversation history.
-	var msgs []llm.Message
-	if m.systemPrompt != "" {
-		msgs = append(msgs, llm.Message{Role: "system", Content: m.systemPrompt})
-	}
-	msgs = append(msgs, m.messages...)
-
-	return m.startStream(msgs)
+	return m.startStream(m.messages)
 }
 
 // sendClaudeMessage appends the user prompt to history and starts a subprocess
