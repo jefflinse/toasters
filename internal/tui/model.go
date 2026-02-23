@@ -351,13 +351,18 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 
 			case "tab":
-				if m.teamsModal.focus == 0 {
-					m.teamsModal.focus = 1
-				} else {
-					m.teamsModal.focus = 0
+				if !m.teamsModal.inputMode {
+					if m.teamsModal.focus == 0 {
+						m.teamsModal.focus = 1
+					} else {
+						m.teamsModal.focus = 0
+					}
 				}
 
 			case "up":
+				if m.teamsModal.inputMode {
+					break
+				}
 				if m.teamsModal.focus == 0 {
 					if m.teamsModal.teamIdx > 0 {
 						m.teamsModal.teamIdx--
@@ -382,6 +387,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 
 			case "down":
+				if m.teamsModal.inputMode {
+					break
+				}
 				if m.teamsModal.focus == 0 {
 					if m.teamsModal.teamIdx < len(m.teamsModal.teams)-1 {
 						m.teamsModal.teamIdx++
@@ -406,15 +414,19 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 
 			case "n":
-				// Creating a new team is never gated on the selected team's
-				// read-only status — you can always create a new user-defined team.
-				if m.teamsModal.focus == 0 && !m.teamsModal.inputMode {
+				if m.teamsModal.inputMode {
+					m.teamsModal.nameInput += "n"
+				} else if m.teamsModal.focus == 0 {
+					// Creating a new team is never gated on the selected team's
+					// read-only status — you can always create a new user-defined team.
 					m.teamsModal.inputMode = true
 					m.teamsModal.nameInput = ""
 				}
 
 			case "d":
-				if m.teamsModal.focus == 0 && !m.teamsModal.confirmDelete {
+				if m.teamsModal.inputMode {
+					m.teamsModal.nameInput += "d"
+				} else if m.teamsModal.focus == 0 && !m.teamsModal.confirmDelete {
 					if len(m.teamsModal.teams) > 0 && m.teamsModal.teamIdx < len(m.teamsModal.teams) {
 						if !isReadOnlyTeam(m.teamsModal.teams[m.teamsModal.teamIdx]) {
 							m.teamsModal.confirmDelete = true
@@ -454,7 +466,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 
 			case "c":
-				if m.teamsModal.focus == 1 && len(m.teamsModal.teams) > 0 && m.teamsModal.teamIdx < len(m.teamsModal.teams) {
+				if m.teamsModal.inputMode {
+					m.teamsModal.nameInput += "c"
+				} else if m.teamsModal.focus == 1 && len(m.teamsModal.teams) > 0 && m.teamsModal.teamIdx < len(m.teamsModal.teams) {
 					team := m.teamsModal.teams[m.teamsModal.teamIdx]
 					if !isReadOnlyTeam(team) {
 						// Build the ordered agent list: coordinator first, then workers.
