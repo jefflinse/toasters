@@ -1298,15 +1298,14 @@ func (m Model) renderLeftPanel(panelWidth, panelHeight int) string {
 	if m.registry.Coordinator == nil && len(m.registry.Workers) == 0 {
 		bottomLines = append(bottomLines, PlaceholderPaneStyle.Render("(no agents)"))
 	} else {
-		// Coordinator first.
+		// Coordinator first — always shown with a ◆ prefix to distinguish it from workers.
 		if m.registry.Coordinator != nil {
 			a := m.registry.Coordinator
-			var prefix string
-			if a.Color != "" {
-				prefix = lipgloss.NewStyle().Foreground(lipgloss.Color(a.Color)).Render("■") + " "
-			} else {
-				prefix = "  "
+			coordColor := lipgloss.Color(a.Color)
+			if a.Color == "" {
+				coordColor = lipgloss.Color("135") // accent purple matching ColorPrimary dark
 			}
+			prefix := lipgloss.NewStyle().Foreground(coordColor).Render("◆") + " "
 			name := truncateStr(a.Name, contentWidth-2)
 			bottomLines = append(bottomLines, SidebarValueStyle.Bold(true).Render(prefix+name))
 		}
