@@ -215,7 +215,8 @@ type Model struct {
 
 	// Grid screen state.
 	showGrid      bool
-	gridFocusCell int // 0-3
+	gridFocusCell int // 0-3 within current page
+	gridPage      int // 0-3 (each page shows 4 slots)
 
 	// Kill modal state.
 	showKillModal   bool
@@ -667,19 +668,20 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// When the grid screen is visible, handle navigation and dismiss it.
 		if m.showGrid {
+			absSlot := m.gridPage*4 + m.gridFocusCell
 			switch msg.String() {
 			case "ctrl+g", "esc":
 				m.showGrid = false
 				return m, nil
 			case "k", "ctrl+k":
 				if m.gateway != nil {
-					_ = m.gateway.Kill(m.gridFocusCell)
+					_ = m.gateway.Kill(absSlot)
 				}
 				return m, nil
 			case "enter":
 				if m.gateway != nil {
 					slots := m.gateway.Slots()
-					snap := slots[m.gridFocusCell]
+					snap := slots[absSlot]
 					if snap.Active && snap.Output != "" {
 						m.showOutputModal = true
 						m.outputModalContent = snap.Output
@@ -690,13 +692,25 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "p":
 				if m.gateway != nil {
 					slots := m.gateway.Slots()
-					snap := slots[m.gridFocusCell]
+					snap := slots[absSlot]
 					if snap.Active && snap.Prompt != "" {
 						m.showPromptModal = true
 						m.promptModalContent = snap.Prompt
 						m.promptModalScroll = 0
 					}
 				}
+				return m, nil
+			case "[":
+				if m.gridPage > 0 {
+					m.gridPage--
+				}
+				m.gridFocusCell = 0
+				return m, nil
+			case "]":
+				if m.gridPage < 3 {
+					m.gridPage++
+				}
+				m.gridFocusCell = 0
 				return m, nil
 			case "left":
 				if m.gridFocusCell%2 == 1 {
@@ -2431,6 +2445,25 @@ func (m Model) renderSidebar(sbWidth int) string {
 		if !hasAny {
 			sb.WriteString(TaskUpdatesPaneStyle.Render("No agents running"))
 		}
+
+		// Aggregated agent token stats.
+		var totalAgentIn, totalAgentOut int
+		for _, snap := range slots {
+			totalAgentIn += snap.InputTokens
+			totalAgentOut += snap.OutputTokens
+		}
+		if totalAgentIn > 0 || totalAgentOut > 0 {
+			sb.WriteString("\n")
+			sb.WriteString(sidebarRow("Agent ↑ tok", compactNum(totalAgentIn)))
+			sb.WriteString(sidebarRow("Agent ↓ tok", compactNum(totalAgentOut)))
+			for i, snap := range slots {
+				if snap.InputTokens > 0 || snap.OutputTokens > 0 {
+					perSlot := fmt.Sprintf("  s%d: ↑%s ↓%s", i, compactNum(snap.InputTokens), compactNum(snap.OutputTokens))
+					sb.WriteString(DimStyle.Render(truncateStr(perSlot, contentWidth)))
+					sb.WriteString("\n")
+				}
+			}
+		}
 	} else {
 		sb.WriteString(TaskUpdatesPaneStyle.Render("No agents running"))
 	}
@@ -2442,19 +2475,22 @@ func (m Model) renderSidebar(sbWidth int) string {
 		Render(sb.String())
 }
 
-// renderGrid renders the 2×2 agent grid screen.
+// renderGrid renders the 2×2 agent grid screen (4 slots per page, 4 pages total).
 func (m *Model) renderGrid() string {
 	cellW := m.width / 2
 	cellH := (m.height - 1) / 2 // -1 to make room for the hotkey bar
 
 	var cells [4]string
-	slots := [4]gateway.SlotSnapshot{}
+	var slots [gateway.MaxSlots]gateway.SlotSnapshot
 	if m.gateway != nil {
 		slots = m.gateway.Slots()
 	}
 
+	pageOffset := m.gridPage * 4
+
 	for i := 0; i < 4; i++ {
-		snap := slots[i]
+		absIdx := pageOffset + i
+		snap := slots[absIdx]
 		focused := i == m.gridFocusCell
 
 		innerH := cellH - 2 // top + bottom border
@@ -2487,7 +2523,7 @@ func (m *Model) renderGrid() string {
 			Padding(0, 1)
 
 		if !snap.Active {
-			emptyContent := DimStyle.Render(fmt.Sprintf("slot %d — empty", i))
+			emptyContent := DimStyle.Render(fmt.Sprintf("slot %d — empty", absIdx))
 			emptyLines := strings.Split(emptyContent, "\n")
 			if len(emptyLines) > innerH {
 				emptyLines = emptyLines[:innerH]
@@ -2508,19 +2544,37 @@ func (m *Model) renderGrid() string {
 		header := fmt.Sprintf("%s %s · %s · %s", statusMark, snap.AgentName, snap.JobID, elapsed)
 		headerLine := headerStyle.Render(truncateStr(header, innerW))
 
-		// 2. Summary
+		// 2. Summary (prefer ExitSummary when done)
 		summary := snap.Summary
+		if snap.Status == gateway.SlotDone && snap.ExitSummary != "" {
+			summary = snap.ExitSummary
+		}
 		if summary == "" {
 			summary = snap.AgentName + " on " + snap.JobID
 		}
 		summaryLine := truncateStr(summary, innerW)
 
-		// 3. Model line
+		// 3. Model line (with optional turn count and stop reason)
 		modelStr := snap.Model
 		if modelStr == "" {
 			modelStr = "model: unknown"
 		}
+		if snap.TurnCount > 0 {
+			modelStr += fmt.Sprintf(" · %d turns", snap.TurnCount)
+		}
+		if snap.StopReason != "" && snap.Status == gateway.SlotDone {
+			modelStr += " · stop:" + snap.StopReason
+		}
 		modelLine := DimStyle.Render(truncateStr(modelStr, innerW))
+
+		// 3b. Token line (only if any tokens recorded)
+		var tokenLine string
+		if snap.InputTokens > 0 || snap.OutputTokens > 0 {
+			tokenLine = DimStyle.Render(truncateStr(
+				fmt.Sprintf("↑%s ↓%s", compactNum(snap.InputTokens), compactNum(snap.OutputTokens)),
+				innerW,
+			))
+		}
 
 		// 4. Prompt preview: first 3 non-empty lines of the prompt
 		var promptLines []string
@@ -2550,39 +2604,88 @@ func (m *Model) renderGrid() string {
 		separator := DimStyle.Render(strings.Repeat("─", innerW))
 
 		// 6. Output: tail of snap.Output to fill remaining height.
-		// Budget: 1 header + 1 summary + 1 model + 3 prompt + 1 p-hint(focused) + 1 separator = 8 (focused) or 7 (unfocused)
-		metaLines := 7
+		// Budget:
+		//   1 header + 1 summary + 1 model + (1 token if present) +
+		//   3 prompt + 1 p-hint(focused) + 1 separator
+		// = 8 (unfocused, no token) / 9 (unfocused, token) /
+		//   9 (focused, no token) / 10 (focused, token)
+		metaLines := 7 // header + summary + model + 3 prompt + separator
 		if focused {
-			metaLines = 8
+			metaLines++ // p-hint line
+		}
+		if tokenLine != "" {
+			metaLines++ // token line
 		}
 		outputH := innerH - metaLines
-		if outputH < 1 {
-			outputH = 1
+		if outputH < 0 {
+			outputH = 0
 		}
-		var outputBody string
-		if snap.Output != "" {
+
+		// Build output body lines, prepending special indicators.
+		var outputBodyLines []string
+
+		// PendingTool indicator
+		if snap.Status == gateway.SlotRunning && snap.PendingTool != "" {
+			toolIndicator := lipgloss.NewStyle().Foreground(ColorStreaming).Render(
+				truncateStr("⚙ "+snap.PendingTool, innerW),
+			)
+			outputBodyLines = append(outputBodyLines, toolIndicator)
+		}
+
+		// ThinkingOutput indicator
+		if snap.ThinkingOutput != "" {
+			thinkLine := DimStyle.Render(truncateStr(
+				fmt.Sprintf("[thinking: %s chars]", compactNum(len(snap.ThinkingOutput))),
+				innerW,
+			))
+			outputBodyLines = append(outputBodyLines, thinkLine)
+		}
+
+		// SubagentOutput indicator
+		if snap.SubagentOutput != "" {
+			subLine := DimStyle.Render(truncateStr(
+				fmt.Sprintf("[subagent: %s chars]", compactNum(len(snap.SubagentOutput))),
+				innerW,
+			))
+			outputBodyLines = append(outputBodyLines, subLine)
+		}
+
+		// Reserve lines for the indicators we just added.
+		indicatorLines := len(outputBodyLines)
+		tailH := outputH - indicatorLines
+		if tailH < 0 {
+			tailH = 0
+		}
+
+		if snap.Output != "" && tailH > 0 {
 			outLines := strings.Split(snap.Output, "\n")
-			if len(outLines) > outputH {
-				outLines = outLines[len(outLines)-outputH:]
+			if len(outLines) > tailH {
+				outLines = outLines[len(outLines)-tailH:]
 			}
 			for j, l := range outLines {
 				if len([]rune(l)) > innerW {
 					outLines[j] = string([]rune(l)[:innerW])
 				}
 			}
-			outputBody = strings.Join(outLines, "\n")
+			outputBodyLines = append(outputBodyLines, outLines...)
 		}
 
-		inner := strings.Join([]string{
+		outputBody := strings.Join(outputBodyLines, "\n")
+
+		// Assemble cell content parts.
+		parts := []string{
 			headerLine,
 			summaryLine,
 			modelLine,
-			promptPreview,
-			separator,
-			outputBody,
-		}, "\n")
+		}
+		if tokenLine != "" {
+			parts = append(parts, tokenLine)
+		}
+		parts = append(parts, promptPreview, separator, outputBody)
 
-		// Hard-clamp to innerH lines so glamour/ANSI content can never overflow the cell budget.
+		inner := strings.Join(parts, "\n")
+
+		// Hard-clamp to innerH lines so ANSI content can never overflow the cell budget.
 		innerLines := strings.Split(inner, "\n")
 		if len(innerLines) > innerH {
 			innerLines = innerLines[:innerH]
@@ -2592,7 +2695,10 @@ func (m *Model) renderGrid() string {
 		cells[i] = cellStyle.Render(inner)
 	}
 
-	hotkeyBar := DimStyle.Render("  arrows: navigate   ·   k/ctrl+k: kill   ·   enter: view output   ·   p: view prompt   ·   ctrl+g / esc: close")
+	hotkeyBar := DimStyle.Render(fmt.Sprintf(
+		"  arrows: navigate   ·   k/ctrl+k: kill   ·   enter: view output   ·   p: view prompt   ·   [/]: page %d/4   ·   ctrl+g / esc: close",
+		m.gridPage+1,
+	))
 	hotkeyBar = lipgloss.NewStyle().Width(m.width).Render(hotkeyBar)
 
 	top := lipgloss.JoinHorizontal(lipgloss.Top, cells[0], cells[1])

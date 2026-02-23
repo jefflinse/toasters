@@ -20,7 +20,7 @@ import (
 )
 
 // MaxSlots is the maximum number of concurrent Claude subprocess slots.
-const MaxSlots = 4
+const MaxSlots = 16
 
 // SlotStatus represents the lifecycle state of a slot.
 type SlotStatus int
