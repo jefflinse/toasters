@@ -43,11 +43,10 @@ func Load() (*Config, error) {
 	viper.SetConfigType("yaml")
 	viper.AddConfigPath(home + "/.config/toasters")
 
-	teamsHome, _ := os.UserHomeDir() // fall back to "" on error
 	viper.SetDefault("operator.endpoint", "http://localhost:1234")
 	viper.SetDefault("operator.api_key", "")
 	viper.SetDefault("operator.model", "")
-	viper.SetDefault("operator.teams_dir", filepath.Join(teamsHome, ".opencode", "teams"))
+	viper.SetDefault("operator.teams_dir", filepath.Join(home, ".config", "toasters", "teams"))
 	viper.SetDefault("operator.log_requests", false)
 	viper.SetDefault("claude.path", "claude")
 	viper.SetDefault("claude.default_model", "")
