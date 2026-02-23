@@ -1292,12 +1292,38 @@ func (m Model) renderLeftPanel(panelWidth, panelHeight int) string {
 		),
 	)
 
-	// --- Bottom pane: Chat ---
+	// --- Bottom pane: Agents (registry) ---
+	var bottomLines []string
+	bottomLines = append(bottomLines, LeftPanelHeaderStyle.Render("Agents"))
+	if m.registry.Coordinator == nil && len(m.registry.Workers) == 0 {
+		bottomLines = append(bottomLines, PlaceholderPaneStyle.Render("(no agents)"))
+	} else {
+		// Coordinator first.
+		if m.registry.Coordinator != nil {
+			a := m.registry.Coordinator
+			var prefix string
+			if a.Color != "" {
+				prefix = lipgloss.NewStyle().Foreground(lipgloss.Color(a.Color)).Render("■") + " "
+			} else {
+				prefix = "  "
+			}
+			name := truncateStr(a.Name, contentWidth-2)
+			bottomLines = append(bottomLines, SidebarValueStyle.Bold(true).Render(prefix+name))
+		}
+		// Workers.
+		for _, w := range m.registry.Workers {
+			var prefix string
+			if w.Color != "" {
+				prefix = lipgloss.NewStyle().Foreground(lipgloss.Color(w.Color)).Render("■") + " "
+			} else {
+				prefix = "  "
+			}
+			name := truncateStr(w.Name, contentWidth-2)
+			bottomLines = append(bottomLines, WorkEffortItemStyle.Render(prefix+name))
+		}
+	}
 	bottomPane := lipgloss.NewStyle().Height(bottomH).Render(
-		lipgloss.JoinVertical(lipgloss.Left,
-			LeftPanelHeaderStyle.Render("Chat"),
-			PlaceholderPaneStyle.Render("—"),
-		),
+		lipgloss.JoinVertical(lipgloss.Left, bottomLines...),
 	)
 
 	inner := lipgloss.JoinVertical(lipgloss.Left, topPane, divider, middlePane, divider, bottomPane)
@@ -1416,44 +1442,6 @@ func (m Model) renderSidebar(sbWidth int) string {
 		sb.WriteString(TaskUpdatesPaneStyle.Render("No agents running"))
 	}
 	sb.WriteString("\n")
-
-	// Registry section.
-	sb.WriteString("\n")
-	sb.WriteString(SidebarHeaderStyle.Render("Registry"))
-	sb.WriteString("\n\n")
-
-	// Coordinator row.
-	if m.registry.Coordinator != nil {
-		coordLine := "coordinator: " + m.registry.Coordinator.Name
-		sb.WriteString(SidebarValueStyle.Render(truncateStr(coordLine, contentWidth)))
-	} else {
-		sb.WriteString("coordinator: " + DimStyle.Render("(none)"))
-	}
-	sb.WriteString("\n")
-
-	// Workers header.
-	workerCount := len(m.registry.Workers)
-	sb.WriteString(SidebarValueStyle.Render(fmt.Sprintf("workers (%d):", workerCount)))
-	sb.WriteString("\n")
-
-	// Worker list.
-	if workerCount == 0 {
-		sb.WriteString("  " + DimStyle.Render("(none)"))
-		sb.WriteString("\n")
-	} else {
-		for _, w := range m.registry.Workers {
-			var line string
-			if w.Description != "" {
-				// "  name — description" truncated to fit contentWidth.
-				full := "  " + w.Name + " \u2014 " + w.Description
-				line = truncateStr(full, contentWidth)
-			} else {
-				line = truncateStr("  "+w.Name, contentWidth)
-			}
-			sb.WriteString(SidebarValueStyle.Render(line))
-			sb.WriteString("\n")
-		}
-	}
 
 	return SidebarStyle.
 		Width(sbWidth).

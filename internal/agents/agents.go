@@ -34,6 +34,7 @@ type Agent struct {
 	Name        string  // filename stem (e.g. "prototyper" from "prototyper.md")
 	Description string  // from frontmatter "description" field
 	Mode        string  // from frontmatter "mode" field ("primary" = coordinator, anything else = worker)
+	Color       string  // from frontmatter "color" field (hex color, e.g. "#FF9800")
 	Temperature float64 // from frontmatter "temperature" field (0 if absent)
 	Body        string  // the system prompt text (everything after the closing --- of frontmatter)
 }
@@ -114,6 +115,8 @@ func parseFrontmatter(agent *Agent, block string) {
 			agent.Description = val
 		case "mode":
 			agent.Mode = val
+		case "color":
+			agent.Color = val
 		case "temperature":
 			if f, err := strconv.ParseFloat(val, 64); err == nil {
 				agent.Temperature = f
