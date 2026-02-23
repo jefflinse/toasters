@@ -170,6 +170,28 @@ var staticTools = []Tool{
 			},
 		},
 	},
+	{
+		Type: "function",
+		Function: ToolFunction{
+			Name:        "ask_user",
+			Description: "Pause execution and ask the user a question with a set of options to choose from. Use this when you need the user to make a decision before proceeding. The user can select one of the provided options or type a custom response.",
+			Parameters: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"question": map[string]any{
+						"type":        "string",
+						"description": "The question to ask the user.",
+					},
+					"options": map[string]any{
+						"type":        "array",
+						"items":       map[string]any{"type": "string"},
+						"description": "A list of options for the user to choose from. A 'Custom response...' option is always appended automatically.",
+					},
+				},
+				"required": []string{"question", "options"},
+			},
+		},
+	},
 }
 
 // AvailableTools is the set of tools exposed to the LLM. It is initialized

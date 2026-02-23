@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"image/color"
 	"os"
@@ -100,6 +101,12 @@ type ToolCallMsg struct {
 	Calls []llm.ToolCall
 }
 
+// AskUserResponseMsg is dispatched when the user submits a response in prompt mode.
+type AskUserResponseMsg struct {
+	Call   llm.ToolCall
+	Result string
+}
+
 // leftPanelWidth returns the width of the left panel for the given terminal width.
 func leftPanelWidth(termWidth int) int {
 	w := termWidth / 6
@@ -178,6 +185,14 @@ type Model struct {
 	showPromptModal    bool
 	promptModalContent string // the full prompt text being displayed
 	promptModalScroll  int    // scroll offset in lines
+
+	// Prompt mode — active when the operator calls ask_user
+	promptMode        bool
+	promptQuestion    string
+	promptOptions     []string     // LLM-provided options; "Custom response..." appended at render time
+	promptSelected    int          // cursor index
+	promptCustom      bool         // true when user selected "Custom response..." and is typing
+	promptPendingCall llm.ToolCall // the tool call to resume after input
 
 	userScrolled bool // true when user has manually scrolled up; suppresses auto-scroll
 }
@@ -285,6 +300,67 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case tea.KeyPressMsg:
+		// Prompt mode key handling — highest priority.
+		if m.promptMode {
+			allOptions := append(m.promptOptions, "Custom response...")
+			switch msg.String() {
+			case "up", "k":
+				if m.promptSelected > 0 {
+					m.promptSelected--
+				}
+			case "down", "j":
+				if m.promptSelected < len(allOptions)-1 {
+					m.promptSelected++
+				}
+			case "enter":
+				if !m.promptCustom {
+					if m.promptSelected == len(allOptions)-1 {
+						// Selected "Custom response..."
+						m.promptCustom = true
+						m.input.Reset()
+						cmds = append(cmds, m.input.Focus())
+					} else {
+						// Selected a pre-defined option.
+						result := allOptions[m.promptSelected]
+						call := m.promptPendingCall
+						cmds = append(cmds, func() tea.Msg {
+							return AskUserResponseMsg{Call: call, Result: result}
+						})
+					}
+				} else {
+					// Custom text submitted.
+					result := strings.TrimSpace(m.input.Value())
+					if result == "" {
+						result = "User provided no response."
+					}
+					call := m.promptPendingCall
+					cmds = append(cmds, func() tea.Msg {
+						return AskUserResponseMsg{Call: call, Result: result}
+					})
+				}
+			case "esc":
+				if m.promptCustom {
+					// Go back to option selection.
+					m.promptCustom = false
+					m.input.Reset()
+				} else {
+					// Cancel entirely.
+					call := m.promptPendingCall
+					cmds = append(cmds, func() tea.Msg {
+						return AskUserResponseMsg{Call: call, Result: "User cancelled."}
+					})
+				}
+			default:
+				if m.promptCustom {
+					// Delegate to textarea.
+					var inputCmd tea.Cmd
+					m.input, inputCmd = m.input.Update(msg)
+					cmds = append(cmds, inputCmd)
+				}
+			}
+			return m, tea.Batch(cmds...)
+		}
+
 		// When the prompt modal is visible, intercept all keys before any other handling.
 		if m.showPromptModal {
 			switch msg.String() {
@@ -679,6 +755,42 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// then re-invoke the stream for the final answer.
 		m.streaming = false
 
+		// Check for ask_user — intercept before ExecuteTool.
+		for _, call := range msg.Calls {
+			if call.Function.Name == "ask_user" {
+				// Parse arguments.
+				var args struct {
+					Question string   `json:"question"`
+					Options  []string `json:"options"`
+				}
+				if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
+					args.Question = "What would you like to do?"
+					args.Options = []string{}
+				}
+				// Render question into chat history as an assistant message.
+				m.messages = append(m.messages, llm.Message{
+					Role:    "assistant",
+					Content: args.Question,
+				})
+				m.reasoning = append(m.reasoning, "")
+				m.claudeMeta = append(m.claudeMeta, "ask-user-prompt")
+				// Enter prompt mode.
+				m.streaming = false
+				m.promptMode = true
+				m.promptQuestion = args.Question
+				m.promptOptions = args.Options
+				m.promptSelected = 0
+				m.promptCustom = false
+				m.promptPendingCall = call
+				m.updateViewportContent()
+				if !m.userScrolled {
+					m.chatViewport.GotoBottom()
+				}
+				cmds = append(cmds, m.input.Focus())
+				return m, tea.Batch(cmds...)
+			}
+		}
+
 		// Append the assistant "tool call" turn to the conversation.
 		// Content is empty for tool-call-only turns; ToolCalls carries the calls.
 		assistantMsg := llm.Message{
@@ -722,6 +834,36 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		// Re-invoke the stream with the updated messages for the final answer.
+		return m, m.startStream(m.messages)
+
+	case AskUserResponseMsg:
+		// Clear prompt mode.
+		m.promptMode = false
+		m.promptCustom = false
+		m.promptQuestion = ""
+		m.promptOptions = nil
+		m.promptSelected = 0
+		m.input.Reset()
+
+		// Inject the tool call + result into message history.
+		// First: the assistant turn with the tool call.
+		m.messages = append(m.messages, llm.Message{
+			Role:      "assistant",
+			ToolCalls: []llm.ToolCall{msg.Call},
+		})
+		m.reasoning = append(m.reasoning, "")
+		m.claudeMeta = append(m.claudeMeta, "tool-call-indicator")
+		// Then: the tool result.
+		m.messages = append(m.messages, llm.Message{
+			Role:       "tool",
+			Content:    msg.Result,
+			ToolCallID: msg.Call.ID,
+		})
+		m.updateViewportContent()
+		if !m.userScrolled {
+			m.chatViewport.GotoBottom()
+		}
+		// Resume the stream.
 		return m, m.startStream(m.messages)
 
 	case StreamErrMsg:
@@ -943,7 +1085,11 @@ func (m Model) View() tea.View {
 		)
 	} else {
 		chatContent = m.chatViewport.View()
-		inputOrStatus = InputAreaStyle.Width(mainWidth).Render(m.input.View())
+		if m.promptMode {
+			inputOrStatus = m.renderPromptWidget(mainWidth)
+		} else {
+			inputOrStatus = InputAreaStyle.Width(mainWidth).Render(m.input.View())
+		}
 	}
 
 	// Build slash command popup (if active).
@@ -1017,6 +1163,24 @@ func (m Model) View() tea.View {
 			trimTo = 0
 		}
 		chatContent = strings.Join(lines[:trimTo], "\n")
+	}
+
+	// Trim chatContent when in prompt option-selection mode to prevent overflow.
+	// The prompt widget is taller than the normal input area; subtract the extra lines.
+	if m.promptMode && !m.promptCustom {
+		allOpts := append(m.promptOptions, "Custom response...")
+		// Widget inner content: 1 question + 1 blank + N options + 1 blank + 1 hint = N+4 lines.
+		// InputAreaStyle border adds 2 vertical lines. Normal input = inputHeight(3) + 2 = 5 lines.
+		promptWidgetHeight := len(allOpts) + 4 + 2
+		extraLines := promptWidgetHeight - (inputHeight + 2)
+		if extraLines > 0 {
+			lines := strings.Split(chatContent, "\n")
+			trimTo := len(lines) - extraLines
+			if trimTo < 0 {
+				trimTo = 0
+			}
+			chatContent = strings.Join(lines[:trimTo], "\n")
+		}
 	}
 
 	chatView := ChatAreaStyle.Width(mainWidth).Render(chatContent)
@@ -1149,6 +1313,45 @@ func (m *Model) resizeComponents() {
 	m.updateViewportContent()
 }
 
+// renderPromptWidget renders the prompt mode input area, replacing the normal textarea.
+// In option-selection mode (promptCustom == false) it shows a numbered list of choices.
+// In custom-text mode (promptCustom == true) it shows the question above the textarea.
+func (m Model) renderPromptWidget(width int) string {
+	if m.promptCustom {
+		// Custom text mode: question header above the normal textarea.
+		question := HeaderStyle.Render("? " + m.promptQuestion)
+		hint := DimStyle.Render("Enter to submit · Esc to go back")
+		inner := lipgloss.JoinVertical(lipgloss.Left, question, m.input.View(), hint)
+		return InputAreaStyle.Width(width).Render(inner)
+	}
+
+	// Option selection mode: numbered list with cursor.
+	allOptions := append(m.promptOptions, "Custom response...")
+
+	var rows []string
+	for i, opt := range allOptions {
+		label := fmt.Sprintf("%d. %s", i+1, opt)
+		if i == m.promptSelected {
+			rows = append(rows, CmdPopupSelectedStyle.Render("▶ "+label))
+		} else {
+			rows = append(rows, DimStyle.Render("  "+label))
+		}
+	}
+
+	question := HeaderStyle.Render("? " + m.promptQuestion)
+	optionList := lipgloss.JoinVertical(lipgloss.Left, rows...)
+	hint := DimStyle.Render("↑↓ navigate · Enter select · Esc cancel")
+
+	inner := lipgloss.JoinVertical(lipgloss.Left,
+		question,
+		"",
+		optionList,
+		"",
+		hint,
+	)
+	return InputAreaStyle.Width(width).Render(inner)
+}
+
 // updateViewportContent rebuilds the chat history string and sets it on the viewport.
 func (m *Model) updateViewportContent() {
 	var sb strings.Builder
@@ -1196,6 +1399,12 @@ func (m *Model) updateViewportContent() {
 			block := UserMsgBlockStyle.Width(blockWidth).Render(wrapText(msg.Content, blockWidth))
 			sb.WriteString(block + "\n\n")
 		case "assistant":
+			// ask-user-prompt messages render as a styled question header.
+			if assistantIdx < len(m.claudeMeta) && m.claudeMeta[assistantIdx] == "ask-user-prompt" {
+				sb.WriteString(HeaderStyle.Render("? "+msg.Content) + "\n\n")
+				assistantIdx++
+				continue
+			}
 			// Tool-call indicator messages render as a dimmed line without byline/reasoning.
 			if assistantIdx < len(m.claudeMeta) && m.claudeMeta[assistantIdx] == "tool-call-indicator" {
 				sb.WriteString(DimStyle.Render(msg.Content) + "\n\n")
