@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"os"
+	"path/filepath"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/spf13/cobra"
@@ -78,6 +79,9 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 	llm.SetAvailableTools(llm.BuildTools(registry.Workers))
 
 	client := llm.NewClient(cfg.Operator.Endpoint, cfg.Operator.Model)
+	if cfg.Operator.LogRequests {
+		client.SetRequestLogging(true, filepath.Join(configDir, "requests.log"))
+	}
 	m := tui.NewModel(client, cfg.Claude, configDir, gw, repoRoot, registry)
 
 	p := tea.NewProgram(m)

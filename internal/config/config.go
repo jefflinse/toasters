@@ -22,6 +22,7 @@ type OperatorConfig struct {
 	Model            string `mapstructure:"model"`
 	CoordinatorAgent string `mapstructure:"coordinator_agent"`
 	AgentsDir        string `mapstructure:"agents_dir"`
+	LogRequests      bool   `mapstructure:"log_requests"`
 }
 
 // ClaudeConfig holds configuration for the Claude CLI.
@@ -49,6 +50,7 @@ func Load() (*Config, error) {
 	viper.SetDefault("operator.model", "")
 	viper.SetDefault("operator.coordinator_agent", "")
 	viper.SetDefault("operator.agents_dir", filepath.Join(agentsHome, ".opencode", "agents"))
+	viper.SetDefault("operator.log_requests", false)
 	viper.SetDefault("claude.path", "claude")
 	viper.SetDefault("claude.default_model", "")
 	viper.SetDefault("claude.permission_mode", "")
