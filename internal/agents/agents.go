@@ -83,9 +83,11 @@ func (a Agent) ClaudePermissionArgs() []string {
 	}
 
 	if len(allowed) == 0 {
-		return []string{"--allowedTools", ""}
+		return []string{"--permission-mode", "bypassPermissions"}
 	}
-	return []string{"--allowedTools", strings.Join(allowed, ",")}
+	// --permission-mode acceptEdits prevents the interactive plan-approval prompt
+	// while still respecting the --allowedTools constraint.
+	return []string{"--permission-mode", "acceptEdits", "--allowedTools", strings.Join(allowed, ",")}
 }
 
 // Registry holds a set of agents split into a coordinator and workers.

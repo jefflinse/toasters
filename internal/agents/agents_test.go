@@ -24,7 +24,7 @@ func TestClaudePermissionArgs_BashDenied(t *testing.T) {
 		Tools:         map[string]bool{"bash": false},
 	}
 	got := a.ClaudePermissionArgs()
-	want := []string{"--allowedTools", "Read,Write,Edit,Glob,Grep,WebFetch,TodoRead,TodoWrite"}
+	want := []string{"--permission-mode", "acceptEdits", "--allowedTools", "Read,Write,Edit,Glob,Grep,WebFetch,TodoRead,TodoWrite"}
 	if !sliceEqual(got, want) {
 		t.Errorf("got %v, want %v", got, want)
 	}
@@ -37,7 +37,7 @@ func TestClaudePermissionArgs_WriteEditDenied(t *testing.T) {
 		Tools:         map[string]bool{"write": false, "edit": false},
 	}
 	got := a.ClaudePermissionArgs()
-	want := []string{"--allowedTools", "Bash,Read,Glob,Grep,WebFetch,TodoRead,TodoWrite"}
+	want := []string{"--permission-mode", "acceptEdits", "--allowedTools", "Bash,Read,Glob,Grep,WebFetch,TodoRead,TodoWrite"}
 	if !sliceEqual(got, want) {
 		t.Errorf("got %v, want %v", got, want)
 	}
@@ -50,7 +50,7 @@ func TestClaudePermissionArgs_AllDenied(t *testing.T) {
 		Tools:         map[string]bool{"bash": false, "write": false, "edit": false},
 	}
 	got := a.ClaudePermissionArgs()
-	want := []string{"--allowedTools", "Read,Glob,Grep,WebFetch,TodoRead,TodoWrite"}
+	want := []string{"--permission-mode", "acceptEdits", "--allowedTools", "Read,Glob,Grep,WebFetch,TodoRead,TodoWrite"}
 	if !sliceEqual(got, want) {
 		t.Errorf("got %v, want %v", got, want)
 	}
