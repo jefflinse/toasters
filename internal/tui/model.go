@@ -111,11 +111,16 @@ func loadingTick() tea.Cmd {
 	})
 }
 
-// loadingFrames are the spinner characters that orbit the 🍞 emoji.
-var loadingFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+// loadingBarWidth is the number of cells in the bouncing bar track.
+const loadingBarWidth = 24
 
-// numLoadingFrames is the total number of animation frames.
-var numLoadingFrames = len(loadingFrames)
+// loadingBarColors are the 256-color codes the active blob cycles through as it bounces.
+// Warm amber → orange → red → purple → back, giving a toasty glow effect.
+var loadingBarColors = []string{"214", "208", "202", "198", "135", "99", "63", "99", "135", "198", "202", "208"}
+
+// numLoadingFrames is the total number of animation frames (ping-pong across the bar).
+// The blob travels loadingBarWidth-1 steps right then loadingBarWidth-1 steps left = full cycle.
+const numLoadingFrames = (loadingBarWidth - 1) * 2
 
 // loadingMessages are the absurd status messages that cycle during loading.
 var loadingMessages = []string{
@@ -2051,20 +2056,43 @@ func (m *Model) View() tea.View {
 
 // renderLoading renders a centered animated loading screen while the app is initializing.
 func (m *Model) renderLoading() tea.View {
-	spinnerStyle := lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true)
 	breadStyle := lipgloss.NewStyle().Foreground(ColorStreaming).Bold(true)
+	trackStyle := lipgloss.NewStyle().Foreground(ColorBorder)
 	msgStyle := DimStyle.Italic(true)
 
-	spinner := spinnerStyle.Render(loadingFrames[m.loadingFrame%numLoadingFrames])
+	// Compute blob position: ping-pong across the bar.
+	// Frame 0..W-2 → moving right (pos 0..W-2)
+	// Frame W-1..2W-3 → moving left (pos W-2..0, but we skip the endpoints to avoid stutter)
+	frame := m.loadingFrame % numLoadingFrames
+	var blobPos int
+	if frame < loadingBarWidth-1 {
+		blobPos = frame
+	} else {
+		blobPos = numLoadingFrames - frame
+	}
+
+	// Pick blob color from the palette, cycling with the frame.
+	colorCode := loadingBarColors[m.loadingFrame%len(loadingBarColors)]
+	blobStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colorCode)).Bold(true)
+
+	// Build the bar: dim track chars with the bright blob at blobPos.
+	var bar strings.Builder
+	for i := 0; i < loadingBarWidth; i++ {
+		if i == blobPos {
+			bar.WriteString(blobStyle.Render("█"))
+		} else {
+			bar.WriteString(trackStyle.Render("░"))
+		}
+	}
+
 	bread := breadStyle.Render("🍞")
 
-	// Cycle the status message every 4 frames (~600ms).
-	msgIdx := (m.loadingFrame / 4) % len(loadingMessages)
+	// Cycle the status message every 5 frames (~750ms).
+	msgIdx := (m.loadingFrame / 5) % len(loadingMessages)
 	statusMsg := msgStyle.Render(loadingMessages[msgIdx])
 
-	// Compose: spinner + bread on one line, message below.
-	spinLine := spinner + "  " + bread
-	block := lipgloss.JoinVertical(lipgloss.Center, spinLine, "", statusMsg)
+	// Compose: bar on top, bread centered below, message below that.
+	block := lipgloss.JoinVertical(lipgloss.Center, bar.String(), bread, "", statusMsg)
 
 	content := lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, block)
 	v := tea.NewView(content)
