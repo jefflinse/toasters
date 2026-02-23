@@ -675,8 +675,8 @@ func spawnClaudeStream(ctx context.Context, prompt string, claudeCfg config.Clau
 					case "text":
 						if block.Text != "" {
 							// Text already streamed via stream_event deltas above;
-							// emit a newline to separate turns cleanly.
-							ch <- llm.StreamResponse{Content: "\n"}
+							// emit two newlines to separate turns cleanly.
+							ch <- llm.StreamResponse{Content: "\n\n"}
 						}
 					case "tool_use":
 						ch <- llm.StreamResponse{Content: "\n" + formatToolUse(block.Name, block.Input) + "\n"}
@@ -713,7 +713,7 @@ func spawnClaudeStream(ctx context.Context, prompt string, claudeCfg config.Clau
 							}
 						}
 						if text != "" {
-							ch <- llm.StreamResponse{Content: "[subagent result] " + text}
+							ch <- llm.StreamResponse{Content: "\n[subagent result]\n" + text + "\n"}
 						}
 					}
 				}
