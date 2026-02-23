@@ -31,14 +31,27 @@ type claudeInnerEvent struct {
 	} `json:"delta"`
 }
 
+// claudeContentBlock is one element of an assistant message's content array.
+type claudeContentBlock struct {
+	Type     string `json:"type"`     // "text", "tool_use", or "thinking"
+	Text     string `json:"text"`     // for type="text"
+	Thinking string `json:"thinking"` // for type="thinking"
+}
+
+// claudeAssistantMessage is the message field inside a top-level "assistant" event.
+type claudeAssistantMessage struct {
+	Content []claudeContentBlock `json:"content"`
+}
+
 // claudeOuterEvent is the top-level shape of a JSON line emitted by
 // `claude --output-format stream-json`. Content deltas arrive wrapped in a
 // "stream_event" envelope; terminal results arrive at the top level.
 type claudeOuterEvent struct {
-	Type    string           `json:"type"`
-	Event   claudeInnerEvent `json:"event"`
-	Result  string           `json:"result"`
-	IsError bool             `json:"is_error"`
+	Type    string                 `json:"type"`
+	Event   claudeInnerEvent       `json:"event"`
+	Message claudeAssistantMessage `json:"message"` // for type="assistant"
+	Result  string                 `json:"result"`
+	IsError bool                   `json:"is_error"`
 }
 
 // streamClaudeResponse launches the claude CLI as a subprocess and returns a
@@ -120,11 +133,21 @@ func streamClaudeResponse(ctx context.Context, prompt string, claudeCfg config.C
 					event.Event.Delta.Text != "" {
 					ch <- llm.StreamResponse{Content: event.Event.Delta.Text}
 				}
+			case "assistant":
+				// Handle thinking blocks from extended thinking mode.
+				for _, block := range event.Message.Content {
+					if block.Type == "thinking" && block.Thinking != "" {
+						ch <- llm.StreamResponse{Reasoning: block.Thinking}
+					}
+				}
 			case "result":
 				done = true
 				if event.IsError {
 					ch <- llm.StreamResponse{Error: fmt.Errorf("claude error: %s", event.Result)}
 				} else {
+					if event.Result != "" {
+						ch <- llm.StreamResponse{Content: "\n[exit summary] " + event.Result}
+					}
 					ch <- llm.StreamResponse{Done: true}
 				}
 			}

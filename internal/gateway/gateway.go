@@ -35,31 +35,47 @@ type SlotTimeoutMsg struct{ SlotID int }
 
 // SlotSnapshot is a lock-free copy of slot state for rendering.
 type SlotSnapshot struct {
-	Active    bool
-	AgentName string
-	JobID     string
-	Status    SlotStatus
-	StartTime time.Time
-	EndTime   time.Time // zero if still running
-	Output    string    // accumulated text output
-	Summary   string
-	Model     string
-	Prompt    string
+	Active         bool
+	AgentName      string
+	JobID          string
+	Status         SlotStatus
+	StartTime      time.Time
+	EndTime        time.Time // zero if still running
+	Output         string    // accumulated text output
+	Summary        string
+	Model          string
+	Prompt         string
+	InputTokens    int
+	OutputTokens   int
+	TurnCount      int
+	StopReason     string
+	PendingTool    string
+	ExitSummary    string
+	ThinkingOutput string
+	SubagentOutput string
 }
 
 // slot is the internal mutable state (mutex-protected via Gateway).
 type slot struct {
-	agentName  string
-	jobID      string
-	status     SlotStatus
-	startTime  time.Time
-	endTime    time.Time
-	output     strings.Builder
-	cancel     context.CancelFunc
-	summary    string             // one-sentence description of what the agent was asked to do
-	model      string             // model name from the system/init event
-	prompt     string             // the full assembled prompt passed to claude
-	resetTimer chan time.Duration // signals the timer goroutine to reset
+	agentName      string
+	jobID          string
+	status         SlotStatus
+	startTime      time.Time
+	endTime        time.Time
+	output         strings.Builder
+	cancel         context.CancelFunc
+	summary        string             // one-sentence description of what the agent was asked to do
+	model          string             // model name from the system/init event
+	prompt         string             // the full assembled prompt passed to claude
+	resetTimer     chan time.Duration // signals the timer goroutine to reset
+	inputTokens    int
+	outputTokens   int
+	turnCount      int
+	stopReason     string
+	pendingTool    string
+	exitSummary    string
+	thinkingOutput strings.Builder
+	subagentOutput strings.Builder
 }
 
 // Gateway manages up to MaxSlots concurrent Claude subprocess slots.
@@ -235,6 +251,41 @@ func (g *Gateway) SpawnTeam(teamName, jobID, task string, team agents.Team) (slo
 				s.output.WriteString(resp.Content)
 				g.mu.Unlock()
 				g.notify()
+			case resp.Reasoning != "":
+				g.mu.Lock()
+				s.thinkingOutput.WriteString(resp.Reasoning)
+				g.mu.Unlock()
+				g.notify()
+			case resp.PendingTool != "":
+				g.mu.Lock()
+				s.pendingTool = resp.PendingTool
+				g.mu.Unlock()
+				g.notify()
+			case resp.ClearPendingTool:
+				g.mu.Lock()
+				s.pendingTool = ""
+				g.mu.Unlock()
+				g.notify()
+			case resp.ExitSummary != "":
+				g.mu.Lock()
+				s.exitSummary = resp.ExitSummary
+				g.mu.Unlock()
+				g.notify()
+			case resp.StopReason != "" || resp.Usage != nil:
+				g.mu.Lock()
+				if resp.StopReason != "" {
+					s.stopReason = resp.StopReason
+				}
+				if resp.Usage != nil {
+					if resp.Usage.PromptTokens > 0 {
+						s.inputTokens += resp.Usage.PromptTokens
+					}
+					if resp.Usage.CompletionTokens > 0 {
+						s.outputTokens += resp.Usage.CompletionTokens
+						s.turnCount++
+					}
+				}
+				g.mu.Unlock()
 			case resp.Done || resp.Error != nil:
 				g.mu.Lock()
 				s.status = SlotDone
@@ -304,16 +355,24 @@ func (g *Gateway) Slots() [MaxSlots]SlotSnapshot {
 			continue
 		}
 		snapshots[i] = SlotSnapshot{
-			Active:    true,
-			AgentName: s.agentName,
-			JobID:     s.jobID,
-			Status:    s.status,
-			StartTime: s.startTime,
-			EndTime:   s.endTime,
-			Output:    s.output.String(),
-			Summary:   s.summary,
-			Model:     s.model,
-			Prompt:    s.prompt,
+			Active:         true,
+			AgentName:      s.agentName,
+			JobID:          s.jobID,
+			Status:         s.status,
+			StartTime:      s.startTime,
+			EndTime:        s.endTime,
+			Output:         s.output.String(),
+			Summary:        s.summary,
+			Model:          s.model,
+			Prompt:         s.prompt,
+			InputTokens:    s.inputTokens,
+			OutputTokens:   s.outputTokens,
+			TurnCount:      s.turnCount,
+			StopReason:     s.stopReason,
+			PendingTool:    s.pendingTool,
+			ExitSummary:    s.exitSummary,
+			ThinkingOutput: s.thinkingOutput.String(),
+			SubagentOutput: s.subagentOutput.String(),
 		}
 	}
 	return snapshots
@@ -407,22 +466,52 @@ type claudeInitEvent struct {
 type claudeInnerEvent struct {
 	Type  string `json:"type"`
 	Delta struct {
-		Type string `json:"type"`
-		Text string `json:"text"`
+		Type       string `json:"type"`
+		Text       string `json:"text"`
+		StopReason string `json:"stop_reason"`
 	} `json:"delta"`
+	Message struct {
+		Usage struct {
+			InputTokens  int `json:"input_tokens"`
+			OutputTokens int `json:"output_tokens"`
+		} `json:"usage"`
+	} `json:"message"`
+	ContentBlock struct {
+		Type string `json:"type"`
+		Name string `json:"name"`
+	} `json:"content_block"`
+	Usage struct {
+		OutputTokens int `json:"output_tokens"`
+	} `json:"usage"`
 }
 
 // claudeContentBlock is one element of an assistant message's content array.
 type claudeContentBlock struct {
-	Type  string `json:"type"`  // "text" or "tool_use"
-	Text  string `json:"text"`  // for type="text"
-	Name  string `json:"name"`  // for type="tool_use"
-	Input any    `json:"input"` // for type="tool_use"
+	Type     string `json:"type"`     // "text", "tool_use", or "thinking"
+	Text     string `json:"text"`     // for type="text"
+	Name     string `json:"name"`     // for type="tool_use"
+	Input    any    `json:"input"`    // for type="tool_use"
+	Thinking string `json:"thinking"` // for type="thinking"
 }
 
 // claudeAssistantMessage is the message field inside a top-level "assistant" event.
 type claudeAssistantMessage struct {
 	Content []claudeContentBlock `json:"content"`
+}
+
+// claudeToolResultBlock is one element of a user message's content array,
+// carrying the result of a tool call back to the model.
+type claudeToolResultBlock struct {
+	Type      string          `json:"type"`        // "tool_result"
+	ToolUseID string          `json:"tool_use_id"` // matches the tool_use block ID
+	Content   json.RawMessage `json:"content"`     // string or []content_block
+}
+
+// claudeUserMessage is the message field inside a top-level "user" event,
+// typically carrying tool results from subagent calls.
+type claudeUserMessage struct {
+	Role    string                  `json:"role"`
+	Content []claudeToolResultBlock `json:"content"`
 }
 
 // claudeOuterEvent is the top-level shape of a JSON line emitted by
@@ -433,6 +522,13 @@ type claudeOuterEvent struct {
 	Message claudeAssistantMessage `json:"message"` // for type="assistant"
 	Result  string                 `json:"result"`
 	IsError bool                   `json:"is_error"`
+}
+
+// claudeUserOuterEvent is the top-level shape for type="user" events, which
+// carry tool results back from subagent calls.
+type claudeUserOuterEvent struct {
+	Type    string            `json:"type"`
+	Message claudeUserMessage `json:"message"`
 }
 
 // spawnClaudeStream launches the claude CLI as a subprocess and returns a
@@ -533,12 +629,42 @@ func spawnClaudeStream(ctx context.Context, prompt string, claudeCfg config.Clau
 
 			switch event.Type {
 			case "stream_event":
-				// Only capture streaming text deltas — tool input deltas are
-				// assembled server-side and surfaced via the "assistant" event.
-				if event.Event.Type == "content_block_delta" &&
-					event.Event.Delta.Type == "text_delta" &&
-					event.Event.Delta.Text != "" {
-					ch <- llm.StreamResponse{Content: event.Event.Delta.Text}
+				switch event.Event.Type {
+				case "content_block_delta":
+					// Only capture streaming text deltas — tool input deltas are
+					// assembled server-side and surfaced via the "assistant" event.
+					if event.Event.Delta.Type == "text_delta" && event.Event.Delta.Text != "" {
+						ch <- llm.StreamResponse{Content: event.Event.Delta.Text}
+					}
+				case "content_block_start":
+					// Notify when a tool_use block begins so the TUI can show which
+					// tool is currently executing.
+					if event.Event.ContentBlock.Type == "tool_use" && event.Event.ContentBlock.Name != "" {
+						ch <- llm.StreamResponse{PendingTool: event.Event.ContentBlock.Name}
+					}
+				case "content_block_stop":
+					// Clear the pending tool signal.
+					ch <- llm.StreamResponse{ClearPendingTool: true}
+				case "message_start":
+					// Accumulate input token count from the opening message event.
+					if event.Event.Message.Usage.InputTokens > 0 {
+						ch <- llm.StreamResponse{Usage: &llm.Usage{
+							PromptTokens: event.Event.Message.Usage.InputTokens,
+						}}
+					}
+				case "message_delta":
+					// Accumulate output tokens and capture stop reason.
+					if event.Event.Delta.StopReason != "" || event.Event.Usage.OutputTokens > 0 {
+						ch <- llm.StreamResponse{
+							StopReason: event.Event.Delta.StopReason,
+							Usage: &llm.Usage{
+								CompletionTokens: event.Event.Usage.OutputTokens,
+							},
+						}
+					}
+				case "message_stop":
+					// No-op: message_stop just signals end of a turn; handled by
+					// the "assistant" event that follows.
 				}
 			case "assistant":
 				// Top-level assistant event: emitted after each model turn with
@@ -554,6 +680,41 @@ func spawnClaudeStream(ctx context.Context, prompt string, claudeCfg config.Clau
 						}
 					case "tool_use":
 						ch <- llm.StreamResponse{Content: "\n" + formatToolUse(block.Name, block.Input) + "\n"}
+					case "thinking":
+						if block.Thinking != "" {
+							ch <- llm.StreamResponse{Reasoning: block.Thinking}
+						}
+					}
+				}
+			case "user":
+				// User events carry tool results back from subagent calls.
+				var userEvent claudeUserOuterEvent
+				if err := json.Unmarshal([]byte(line), &userEvent); err == nil {
+					for _, block := range userEvent.Message.Content {
+						if block.Type != "tool_result" {
+							continue
+						}
+						// Content can be a plain string or an array of content blocks.
+						var text string
+						if err := json.Unmarshal(block.Content, &text); err != nil {
+							// Try array of {type, text} blocks.
+							var blocks []struct {
+								Type string `json:"type"`
+								Text string `json:"text"`
+							}
+							if err := json.Unmarshal(block.Content, &blocks); err == nil {
+								var sb strings.Builder
+								for _, b := range blocks {
+									if b.Type == "text" && b.Text != "" {
+										sb.WriteString(b.Text)
+									}
+								}
+								text = sb.String()
+							}
+						}
+						if text != "" {
+							ch <- llm.StreamResponse{Content: "[subagent result] " + text}
+						}
 					}
 				}
 			case "result":
@@ -561,6 +722,9 @@ func spawnClaudeStream(ctx context.Context, prompt string, claudeCfg config.Clau
 				if event.IsError {
 					ch <- llm.StreamResponse{Error: fmt.Errorf("claude error: %s", event.Result)}
 				} else {
+					if event.Result != "" {
+						ch <- llm.StreamResponse{ExitSummary: event.Result}
+					}
 					ch <- llm.StreamResponse{Done: true}
 				}
 			}
