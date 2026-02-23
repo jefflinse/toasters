@@ -340,17 +340,32 @@ func spawnClaudeStream(ctx context.Context, prompt string, claudeCfg config.Clau
 			args = append(args, "--model", claudeCfg.DefaultModel)
 		}
 		// Use per-agent permission args if provided, otherwise fall back to config.
+		// Track whether we're using --allowedTools: if so, the prompt must be
+		// passed via stdin rather than as a positional arg (--allowedTools is
+		// greedy and consumes subsequent positional arguments as tool names).
+		useStdin := false
 		if len(permissionArgs) > 0 {
 			args = append(args, permissionArgs...)
+			for _, a := range permissionArgs {
+				if a == "--allowedTools" {
+					useStdin = true
+					break
+				}
+			}
 		} else if claudeCfg.PermissionMode != "" {
 			args = append(args, "--permission-mode", claudeCfg.PermissionMode)
 		} else {
 			// Default: bypass permissions for non-interactive background agents.
 			args = append(args, "--dangerously-skip-permissions")
 		}
-		args = append(args, prompt)
+		if !useStdin {
+			args = append(args, prompt)
+		}
 
 		cmd := exec.CommandContext(ctx, claudeCfg.Path, args...)
+		if useStdin {
+			cmd.Stdin = strings.NewReader(prompt)
+		}
 
 		stderrPipe, err := cmd.StderrPipe()
 		if err != nil {
