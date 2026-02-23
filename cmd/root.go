@@ -77,11 +77,16 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 		client.SetRequestLogging(true, filepath.Join(configDir, "requests.log"))
 	}
 
-	awareness := generateTeamAwareness(context.Background(), client, teams, configDir)
-
-	m := tui.NewModel(client, cfg.Claude, configDir, gw, repoRoot, teamsDir, teams, awareness)
+	m := tui.NewModel(client, cfg.Claude, configDir, gw, repoRoot, teamsDir, teams, "")
 
 	p := tea.NewProgram(&m)
+
+	// Generate team awareness in the background so the TUI appears immediately.
+	// Always send AppReadyMsg so the TUI exits its loading state even on error.
+	go func() {
+		awareness := generateTeamAwareness(context.Background(), client, teams, configDir)
+		p.Send(tui.AppReadyMsg{Awareness: awareness})
+	}()
 
 	watchCtx, watchCancel := context.WithCancel(context.Background())
 	defer watchCancel()

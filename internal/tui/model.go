@@ -96,6 +96,11 @@ type JobsReloadedMsg struct {
 	Jobs []job.Job
 }
 
+// AppReadyMsg is sent when the app has finished loading and is ready to start.
+type AppReadyMsg struct {
+	Awareness string
+}
+
 // claudeMetaMsg carries model/mode info parsed from the claude CLI system/init event.
 type claudeMetaMsg struct {
 	Model          string
@@ -239,6 +244,8 @@ type Model struct {
 	confirmKill     bool // true when promptMode is a kill confirmation
 	pendingKillSlot int  // slot index awaiting kill confirmation
 
+	loading bool // true while waiting for AppReadyMsg before initializing the conversation
+
 	userScrolled bool // true when user has manually scrolled up; suppresses auto-scroll
 
 	// prevSlotActive/Status track the last-seen state of each gateway slot so
@@ -307,8 +314,12 @@ func NewModel(client *llm.Client, claudeCfg config.ClaudeConfig, configDir strin
 	m.teamsDir = teamsDir
 	m.teams = teams
 	m.awareness = awareness
-	m.systemPrompt = agents.BuildOperatorPrompt(teams, awareness)
-	m.initMessages()
+	if awareness == "" {
+		m.loading = true
+	} else {
+		m.systemPrompt = agents.BuildOperatorPrompt(teams, awareness)
+		m.initMessages()
+	}
 
 	m.agentNotifyCh = make(chan struct{}, 8) // buffered to avoid blocking gateway goroutines
 	m.attachedSlot = -1
@@ -1442,6 +1453,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case AppReadyMsg:
+		m.awareness = msg.Awareness
+		m.systemPrompt = agents.BuildOperatorPrompt(m.teams, m.awareness)
+		m.initMessages()
+		m.loading = false
+		return m, tea.Batch(cmds...)
+
 	case TeamsAutoDetectDoneMsg:
 		m.teamsModal.autoDetecting = false
 		if msg.agentName != "" && msg.err == nil {
@@ -1526,6 +1544,10 @@ func (m *Model) View() tea.View {
 		v.AltScreen = true
 		v.MouseMode = tea.MouseModeCellMotion
 		return v
+	}
+
+	if m.loading {
+		return m.renderLoading()
 	}
 
 	// Teams modal takes over the full terminal as a centered overlay.
@@ -1854,6 +1876,16 @@ func (m *Model) View() tea.View {
 		content = mainColumn
 	}
 
+	v := tea.NewView(content)
+	v.AltScreen = true
+	v.MouseMode = tea.MouseModeCellMotion
+	return v
+}
+
+// renderLoading renders a centered loading screen while the app is initializing.
+func (m *Model) renderLoading() tea.View {
+	label := DimStyle.Render("⟳ Initializing toasters…")
+	content := lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, label)
 	v := tea.NewView(content)
 	v.AltScreen = true
 	v.MouseMode = tea.MouseModeCellMotion
