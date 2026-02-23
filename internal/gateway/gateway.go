@@ -309,13 +309,27 @@ type claudeInnerEvent struct {
 	} `json:"delta"`
 }
 
+// claudeContentBlock is one element of an assistant message's content array.
+type claudeContentBlock struct {
+	Type  string `json:"type"`  // "text" or "tool_use"
+	Text  string `json:"text"`  // for type="text"
+	Name  string `json:"name"`  // for type="tool_use"
+	Input any    `json:"input"` // for type="tool_use"
+}
+
+// claudeAssistantMessage is the message field inside a top-level "assistant" event.
+type claudeAssistantMessage struct {
+	Content []claudeContentBlock `json:"content"`
+}
+
 // claudeOuterEvent is the top-level shape of a JSON line emitted by
 // `claude --output-format stream-json`.
 type claudeOuterEvent struct {
-	Type    string           `json:"type"`
-	Event   claudeInnerEvent `json:"event"`
-	Result  string           `json:"result"`
-	IsError bool             `json:"is_error"`
+	Type    string                 `json:"type"`
+	Event   claudeInnerEvent       `json:"event"`
+	Message claudeAssistantMessage `json:"message"` // for type="assistant"
+	Result  string                 `json:"result"`
+	IsError bool                   `json:"is_error"`
 }
 
 // spawnClaudeStream launches the claude CLI as a subprocess and returns a
@@ -413,10 +427,28 @@ func spawnClaudeStream(ctx context.Context, prompt string, claudeCfg config.Clau
 
 			switch event.Type {
 			case "stream_event":
+				// Only capture streaming text deltas — tool input deltas are
+				// assembled server-side and surfaced via the "assistant" event.
 				if event.Event.Type == "content_block_delta" &&
 					event.Event.Delta.Type == "text_delta" &&
 					event.Event.Delta.Text != "" {
 					ch <- llm.StreamResponse{Content: event.Event.Delta.Text}
+				}
+			case "assistant":
+				// Top-level assistant event: emitted after each model turn with
+				// the full accumulated message. Extract text blocks and emit
+				// tool-call summaries so slot output shows what the agent did.
+				for _, block := range event.Message.Content {
+					switch block.Type {
+					case "text":
+						if block.Text != "" {
+							// Text already streamed via stream_event deltas above;
+							// emit a newline to separate turns cleanly.
+							ch <- llm.StreamResponse{Content: "\n"}
+						}
+					case "tool_use":
+						ch <- llm.StreamResponse{Content: fmt.Sprintf("\n[tool: %s]\n", block.Name)}
+					}
 				}
 			case "result":
 				done = true
