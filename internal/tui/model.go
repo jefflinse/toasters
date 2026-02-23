@@ -2569,19 +2569,17 @@ func (m Model) renderLeftPanel(panelWidth, panelHeight int) string {
 		topLines = append(topLines, PlaceholderPaneStyle.Render("No jobs"))
 	} else {
 		for i, j := range m.jobs {
-			name := truncateStr(j.Name, contentWidth-3)
-			icon := "🍞"
+			name := truncateStr(j.Name, contentWidth-4)
+			var prefix string
 			if m.hasBlocker(j) {
-				icon = "⚠️"
+				prefix = "⚠  " // warning + 2 spaces (⚠ is 1 col, pad to match 🍞 width)
+			} else {
+				prefix = "🍞 " // bread + 1 space = 3 visual cols
 			}
 			if i == m.selectedJob {
-				topLines = append(topLines, JobSelectedStyle.Render(icon+" "+name))
+				topLines = append(topLines, JobSelectedStyle.Render(prefix+name))
 			} else {
-				if m.hasBlocker(j) {
-					topLines = append(topLines, JobItemStyle.Render(icon+" "+name))
-				} else {
-					topLines = append(topLines, JobItemStyle.Render("   "+name))
-				}
+				topLines = append(topLines, JobItemStyle.Render(prefix+name))
 			}
 		}
 	}
