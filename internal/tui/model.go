@@ -17,6 +17,7 @@ import (
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/atotto/clipboard"
 	"github.com/charmbracelet/glamour"
 
 	"github.com/jefflinse/toasters/internal/agents"
@@ -109,6 +110,16 @@ type loadingTickMsg struct{}
 func loadingTick() tea.Cmd {
 	return tea.Tick(150*time.Millisecond, func(time.Time) tea.Msg {
 		return loadingTickMsg{}
+	})
+}
+
+// clearFlashMsg is sent after a delay to clear the transient flash status line.
+type clearFlashMsg struct{}
+
+// clearFlash returns a command that fires clearFlashMsg once after 1500ms.
+func clearFlash() tea.Cmd {
+	return tea.Tick(1500*time.Millisecond, func(time.Time) tea.Msg {
+		return clearFlashMsg{}
 	})
 }
 
@@ -331,6 +342,11 @@ type Model struct {
 
 	loading      bool // true while waiting for AppReadyMsg before initializing the conversation
 	loadingFrame int  // current animation frame index (0..numLoadingFrames-1)
+
+	flashText string // transient status line; empty = hidden
+
+	lpWidth int // cached left panel width for mouse hit-testing
+	sbWidth int // cached sidebar width for mouse hit-testing
 
 	userScrolled bool // true when user has manually scrolled up; suppresses auto-scroll
 
@@ -1039,6 +1055,19 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.expandedReasoning[lastReasoningIdx] = !m.expandedReasoning[lastReasoningIdx]
 					m.updateViewportContent()
 					return m, nil
+				}
+			}
+
+		case "y":
+			// Copy the last assistant message to the clipboard when chat is focused.
+			if m.focused == focusChat && !m.streaming && !m.promptMode {
+				for i := len(m.messages) - 1; i >= 0; i-- {
+					if m.messages[i].Role == "assistant" {
+						_ = clipboard.WriteAll(m.messages[i].Content)
+						m.flashText = "  ✓ copied to clipboard"
+						cmds = append(cmds, clearFlash())
+						break
+					}
 				}
 			}
 
@@ -1863,6 +1892,27 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, tea.Batch(cmds...)
 
+	case tea.MouseClickMsg:
+		// Click-to-focus: route clicks to the appropriate panel.
+		// Don't steal clicks when any overlay is active.
+		if !m.teamsModal.show && !m.blockerModal.show && !m.showGrid &&
+			!m.showKillModal && !m.showPromptModal && !m.showOutputModal && !m.loading {
+			showLeftPanel := m.width >= minWidthForLeftPanel
+			if showLeftPanel && msg.X < m.lpWidth {
+				// Clicked left panel — focus jobs pane.
+				if m.focused != focusJobs && m.focused != focusAgents {
+					m.focused = focusJobs
+					m.input.Blur()
+				}
+			} else if msg.X >= m.lpWidth {
+				// Clicked chat area (or sidebar) — focus chat.
+				if m.focused != focusChat {
+					m.focused = focusChat
+					cmds = append(cmds, m.input.Focus())
+				}
+			}
+		}
+
 	case tea.MouseWheelMsg:
 		// Forward mouse wheel events to viewport for scroll support.
 		var cmd tea.Cmd
@@ -1880,6 +1930,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.loadingFrame = (m.loadingFrame + 1) % numLoadingFrames
 			return m, loadingTick()
 		}
+		return m, nil
+
+	case clearFlashMsg:
+		m.flashText = ""
 		return m, nil
 	}
 
@@ -2071,6 +2125,22 @@ func (m *Model) View() tea.View {
 		mainWidth = m.width
 	}
 
+	// Build input area style — dim borders when chat is not focused.
+	inputStyle := InputAreaStyle
+	if m.focused != focusChat {
+		inputStyle = inputStyle.
+			BorderLeftForeground(ColorBorder).
+			BorderTopForeground(ColorBorder).
+			BorderRightForeground(ColorBorder).
+			BorderBottomForeground(ColorBorder)
+	}
+
+	// Build flash line (zero height when empty).
+	var flashLine string
+	if m.flashText != "" {
+		flashLine = DimStyle.Render(m.flashText)
+	}
+
 	// Determine chat content and input area — swapped when attached to an agent slot.
 	var chatContent string
 	var inputOrStatus string
@@ -2084,15 +2154,26 @@ func (m *Model) View() tea.View {
 			header += " [running]"
 		}
 		chatContent = m.agentViewport.View()
-		inputOrStatus = InputAreaStyle.Width(mainWidth).Render(
+		inputArea := inputStyle.Width(mainWidth).Render(
 			DimStyle.Render(header + "  ·  Esc to detach · d to dismiss"),
 		)
+		if flashLine != "" {
+			inputOrStatus = lipgloss.JoinVertical(lipgloss.Left, flashLine, inputArea)
+		} else {
+			inputOrStatus = inputArea
+		}
 	} else {
 		chatContent = m.chatViewport.View()
+		var inputArea string
 		if m.promptMode {
-			inputOrStatus = m.renderPromptWidget(mainWidth)
+			inputArea = m.renderPromptWidget(mainWidth, inputStyle)
 		} else {
-			inputOrStatus = InputAreaStyle.Width(mainWidth).Render(m.input.View())
+			inputArea = inputStyle.Width(mainWidth).Render(m.input.View())
+		}
+		if flashLine != "" {
+			inputOrStatus = lipgloss.JoinVertical(lipgloss.Left, flashLine, inputArea)
+		} else {
+			inputOrStatus = inputArea
 		}
 	}
 
@@ -2332,6 +2413,10 @@ func (m *Model) resizeComponents() {
 	sbWidth := sidebarWidth(m.width)
 	lpWidth := leftPanelWidth(m.width)
 
+	// Cache for mouse hit-testing.
+	m.lpWidth = lpWidth
+	m.sbWidth = sbWidth
+
 	var mainWidth int
 	if showSidebar && showLeftPanel {
 		// Left panel right border (1) + sidebar left border (1).
@@ -2377,13 +2462,14 @@ func (m *Model) resizeComponents() {
 // renderPromptWidget renders the prompt mode input area, replacing the normal textarea.
 // In option-selection mode (promptCustom == false) it shows a numbered list of choices.
 // In custom-text mode (promptCustom == true) it shows the question above the textarea.
-func (m Model) renderPromptWidget(width int) string {
+// style is the InputAreaStyle variant to use (may have dimmed borders when unfocused).
+func (m Model) renderPromptWidget(width int, style lipgloss.Style) string {
 	if m.promptCustom {
 		// Custom text mode: question header above the normal textarea.
 		question := HeaderStyle.Render("? " + m.promptQuestion)
 		hint := DimStyle.Render("Enter to submit · Esc to go back")
 		inner := lipgloss.JoinVertical(lipgloss.Left, question, m.input.View(), hint)
-		return InputAreaStyle.Width(width).Render(inner)
+		return style.Width(width).Render(inner)
 	}
 
 	// Option selection mode: numbered list with cursor.
@@ -2410,7 +2496,7 @@ func (m Model) renderPromptWidget(width int) string {
 		"",
 		hint,
 	)
-	return InputAreaStyle.Width(width).Render(inner)
+	return style.Width(width).Render(inner)
 }
 
 // updateViewportContent rebuilds the chat history string and sets it on the viewport.
@@ -2622,7 +2708,13 @@ func (m Model) renderLeftPanel(panelWidth, panelHeight int) string {
 	)
 
 	inner := lipgloss.JoinVertical(lipgloss.Left, topPane, divider, middlePane, divider, bottomPane)
-	return LeftPanelStyle.Width(panelWidth).Height(panelHeight).Render(inner)
+	panelStyle := LeftPanelStyle.Width(panelWidth).Height(panelHeight)
+	if m.focused == focusJobs || m.focused == focusAgents {
+		panelStyle = panelStyle.BorderForeground(ColorPrimary)
+	} else {
+		panelStyle = panelStyle.BorderForeground(ColorBorder)
+	}
+	return panelStyle.Render(inner)
 }
 
 // renderSidebar builds the right sidebar with stats.
