@@ -91,6 +91,11 @@ type TeamsReloadedMsg struct {
 	Awareness string
 }
 
+// JobsReloadedMsg is sent when the jobs directory changes on disk.
+type JobsReloadedMsg struct {
+	Jobs []job.Job
+}
+
 // claudeMetaMsg carries model/mode info parsed from the claude CLI system/init event.
 type claudeMetaMsg struct {
 	Model          string
@@ -1246,6 +1251,17 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.initMessages()
 		}
 		return m, tea.Batch(cmds...)
+
+	case JobsReloadedMsg:
+		m.jobs = msg.Jobs
+		if m.selectedJob >= len(m.jobs) {
+			if len(m.jobs) > 0 {
+				m.selectedJob = len(m.jobs) - 1
+			} else {
+				m.selectedJob = 0
+			}
+		}
+		return m, nil
 
 	case TeamsAutoDetectDoneMsg:
 		m.teamsModal.autoDetecting = false

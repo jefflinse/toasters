@@ -314,6 +314,55 @@ func Watch(ctx context.Context, dir string, onChange func()) error {
 	}
 }
 
+// WatchRecursive watches dir and all immediate subdirectories for .md file
+// changes, calling onChange on any event. New subdirectories are added to the
+// watch automatically. Blocks until ctx is cancelled.
+func WatchRecursive(ctx context.Context, dir string, onChange func()) error {
+	w, err := fsnotify.NewWatcher()
+	if err != nil {
+		return fmt.Errorf("creating watcher: %w", err)
+	}
+	defer w.Close()
+
+	// Watch the top-level dir.
+	_ = w.Add(dir) // best-effort
+
+	// Also watch all existing subdirectories.
+	entries, _ := os.ReadDir(dir)
+	for _, e := range entries {
+		if e.IsDir() {
+			_ = w.Add(filepath.Join(dir, e.Name()))
+		}
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case event, ok := <-w.Events:
+			if !ok {
+				return nil
+			}
+			// If a new directory was created, start watching it.
+			if event.Op&fsnotify.Create != 0 {
+				info, err := os.Stat(event.Name)
+				if err == nil && info.IsDir() {
+					_ = w.Add(event.Name)
+				}
+			}
+			// Fire onChange for any .md file event.
+			if strings.HasSuffix(event.Name, ".md") {
+				onChange()
+			}
+		case err, ok := <-w.Errors:
+			if !ok {
+				return nil
+			}
+			log.Printf("jobs watcher error: %v", err)
+		}
+	}
+}
+
 // Team represents a named group of agents loaded from a subdirectory.
 // The coordinator is the agent with mode=="primary"; all others are workers.
 type Team struct {
