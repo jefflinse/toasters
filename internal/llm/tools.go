@@ -18,10 +18,21 @@ import (
 	"github.com/jefflinse/toasters/internal/job"
 )
 
+// GatewaySlot holds a summary of a single gateway slot for operator visibility.
+type GatewaySlot struct {
+	Index   int
+	Team    string
+	JobID   string
+	Status  string // "running", "done", "idle"
+	Elapsed string
+}
+
 // AgentSpawner is the interface satisfied by *gateway.Gateway.
 // Using an interface here avoids an import cycle (gateway imports llm).
 type AgentSpawner interface {
 	SpawnTeam(teamName, jobID, task string, team agents.Team) (slotID int, alreadyRunning bool, err error)
+	SlotSummaries() []GatewaySlot
+	Kill(slotID int) error
 }
 
 // activeGateway is the gateway instance used by the assign_team tool.
@@ -246,6 +257,53 @@ var staticTools = []Tool{
 			},
 		},
 	},
+	{
+		Type: "function",
+		Function: ToolFunction{
+			Name:        "list_slots",
+			Description: "List all gateway slots with their current status, team, job, and elapsed time.",
+			Parameters:  map[string]any{"type": "object", "properties": map[string]any{}, "required": []string{}},
+		},
+	},
+	{
+		Type: "function",
+		Function: ToolFunction{
+			Name:        "kill_slot",
+			Description: "Kill a running agent slot by its slot index. Use list_slots to find the slot index.",
+			Parameters: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"slot_id": map[string]any{
+						"type":        "integer",
+						"description": "The index of the slot to kill.",
+					},
+				},
+				"required": []string{"slot_id"},
+			},
+		},
+	},
+	{
+		Type: "function",
+		Function: ToolFunction{
+			Name:        "job_set_status",
+			Description: "Update the status of a job. Valid statuses: active, done, cancelled, paused.",
+			Parameters: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"id": map[string]any{
+						"type":        "string",
+						"description": "The job ID.",
+					},
+					"status": map[string]any{
+						"type":        "string",
+						"description": "The new status: active, done, cancelled, or paused.",
+						"enum":        []string{"active", "done", "cancelled", "paused"},
+					},
+				},
+				"required": []string{"id", "status"},
+			},
+		},
+	},
 }
 
 // AvailableTools is the set of tools exposed to the LLM.
@@ -461,6 +519,62 @@ func ExecuteTool(call ToolCall) (string, error) {
 			return "", fmt.Errorf("parsing escalate_to_user args: %w", err)
 		}
 		return fmt.Sprintf("__escalate__:%s\n\nContext: %s", args.Question, args.Context), nil
+
+	case "list_slots":
+		if activeGateway == nil {
+			return "gateway not initialized", nil
+		}
+		slots := activeGateway.SlotSummaries()
+		if len(slots) == 0 {
+			return "no active slots", nil
+		}
+		var lines []string
+		for _, s := range slots {
+			lines = append(lines, fmt.Sprintf("slot %d: %s on %s — %s (%s)", s.Index, s.Team, s.JobID, s.Status, s.Elapsed))
+		}
+		return strings.Join(lines, "\n"), nil
+
+	case "kill_slot":
+		if activeGateway == nil {
+			return "gateway not initialized", nil
+		}
+		var args struct {
+			SlotID int `json:"slot_id"`
+		}
+		if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
+			return "", fmt.Errorf("parsing kill_slot args: %w", err)
+		}
+		if err := activeGateway.Kill(args.SlotID); err != nil {
+			return fmt.Sprintf("error killing slot %d: %v", args.SlotID, err), nil
+		}
+		return fmt.Sprintf("killed slot %d", args.SlotID), nil
+
+	case "ask_user":
+		// ask_user is normally intercepted by the TUI before ExecuteTool is called.
+		// This case is a safety fallback.
+		return "ask_user was handled by the TUI", nil
+
+	case "job_set_status":
+		var args struct {
+			ID     string `json:"id"`
+			Status string `json:"status"`
+		}
+		if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
+			return "", fmt.Errorf("parsing job_set_status args: %w", err)
+		}
+		validStatuses := map[string]bool{"active": true, "done": true, "cancelled": true, "paused": true}
+		if !validStatuses[args.Status] {
+			return fmt.Sprintf("invalid status %q: must be one of active, done, cancelled, paused", args.Status), nil
+		}
+		configDir, err := config.Dir()
+		if err != nil {
+			return "", fmt.Errorf("getting config dir: %w", err)
+		}
+		dir := filepath.Join(job.JobsDir(configDir), args.ID)
+		if err := job.UpdateFrontmatter(dir, map[string]string{"status": args.Status}); err != nil {
+			return "", fmt.Errorf("updating job status: %w", err)
+		}
+		return fmt.Sprintf("job %s status set to %s", args.ID, args.Status), nil
 
 	default:
 		return "", fmt.Errorf("unknown tool: %s", call.Function.Name)

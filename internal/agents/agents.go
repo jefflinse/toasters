@@ -707,7 +707,7 @@ Create a job only when explicitly triggered:
 - User message starts with `+"`[JOB REQUEST]`"+`
 - User explicitly says "create a job", "new job:", "start a job", or similar
 
-When creating a job: call `+"`job_create`"+`, then immediately call `+"`assign_team`"+` with the job ID to select the best team. The TUI will confirm with the user before the team starts work.
+When creating a job: call `+"`job_create`"+`, then immediately call `+"`assign_team`"+` with the job ID to select the best team. The TUI will confirm with the user before the team starts work. To start work on an existing job, call `+"`assign_team`"+` directly with the existing job ID — no need to call `+"`job_create`"+` again.
 
 ## When NOT to Create a Job
 
@@ -725,7 +725,11 @@ Respond directly using available tools (`+"`job_list`"+`, `+"`job_read_overview`
 
 ## Job Tools
 
-`+"`job_create`"+`, `+"`job_list`"+`, `+"`job_read_overview`"+`, `+"`job_read_todos`"+`, `+"`job_update_overview`"+`, `+"`job_add_todo`"+`, `+"`job_complete_todo`"+`
+`+"`job_create`"+`, `+"`job_list`"+`, `+"`job_read_overview`"+`, `+"`job_read_todos`"+`, `+"`job_update_overview`"+`, `+"`job_add_todo`"+`, `+"`job_complete_todo`"+`, `+"`job_set_status`"+`, `+"`assign_team`"+`, `+"`list_slots`"+`, `+"`kill_slot`"+`
+
+## Slot Management
+
+Use `+"`list_slots`"+` to see what's running. Use `+"`kill_slot`"+` to stop a running team (the TUI will confirm before killing).
 
 ## Available Teams
 %s`, teamsSection)

@@ -272,6 +272,37 @@ func (g *Gateway) Dismiss(slotID int) error {
 	return nil
 }
 
+// SlotSummaries returns a summary of all non-idle slots for operator visibility.
+func (g *Gateway) SlotSummaries() []llm.GatewaySlot {
+	snapshots := g.Slots()
+	var summaries []llm.GatewaySlot
+	for i, snap := range snapshots {
+		if !snap.Active {
+			continue
+		}
+		elapsed := ""
+		if !snap.StartTime.IsZero() {
+			if snap.EndTime.IsZero() {
+				elapsed = time.Since(snap.StartTime).Round(time.Second).String()
+			} else {
+				elapsed = snap.EndTime.Sub(snap.StartTime).Round(time.Second).String()
+			}
+		}
+		status := "running"
+		if snap.Status == SlotDone {
+			status = "done"
+		}
+		summaries = append(summaries, llm.GatewaySlot{
+			Index:   i,
+			Team:    snap.AgentName,
+			JobID:   snap.JobID,
+			Status:  status,
+			Elapsed: elapsed,
+		})
+	}
+	return summaries
+}
+
 // Kill cancels a running slot's subprocess and marks it done.
 // Returns an error if the slot is out of range or not running.
 func (g *Gateway) Kill(slotID int) error {

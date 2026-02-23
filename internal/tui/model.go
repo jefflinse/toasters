@@ -236,6 +236,9 @@ type Model struct {
 	changingTeam    bool         // true when promptMode is the "change team" sub-prompt
 	pendingDispatch llm.ToolCall // the assign_team call awaiting confirmation
 
+	confirmKill     bool // true when promptMode is a kill confirmation
+	pendingKillSlot int  // slot index awaiting kill confirmation
+
 	userScrolled bool // true when user has manually scrolled up; suppresses auto-scroll
 
 	// prevSlotActive/Status track the last-seen state of each gateway slot so
@@ -1056,8 +1059,44 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// then re-invoke the stream for the final answer.
 		m.streaming = false
 
-		// Check for assign_team, ask_user, or escalate_to_user — intercept before ExecuteTool.
+		// Check for kill_slot, assign_team, ask_user, or escalate_to_user — intercept before ExecuteTool.
 		for _, call := range msg.Calls {
+			if call.Function.Name == "kill_slot" {
+				var args struct {
+					SlotID int `json:"slot_id"`
+				}
+				_ = json.Unmarshal([]byte(call.Function.Arguments), &args)
+
+				// Look up slot info for the confirmation message.
+				question := fmt.Sprintf("Kill slot %d?", args.SlotID)
+				snapshots := m.gateway.Slots()
+				if args.SlotID >= 0 && args.SlotID < len(snapshots) {
+					snap := snapshots[args.SlotID]
+					if snap.AgentName != "" {
+						question = fmt.Sprintf("Kill slot %d (%s on %s)?", args.SlotID, snap.AgentName, snap.JobID)
+					}
+				}
+
+				m.messages = append(m.messages, llm.Message{Role: "assistant", Content: question})
+				m.reasoning = append(m.reasoning, "")
+				m.claudeMeta = append(m.claudeMeta, "kill-confirm")
+				m.streaming = false
+				m.promptMode = true
+				m.confirmKill = true
+				m.confirmDispatch = false
+				m.pendingKillSlot = args.SlotID
+				m.promptPendingCall = call
+				m.promptQuestion = question
+				m.promptOptions = []string{"Yes, kill", "Cancel"}
+				m.promptSelected = 0
+				m.promptCustom = false
+				m.updateViewportContent()
+				if !m.userScrolled {
+					m.chatViewport.GotoBottom()
+				}
+				cmds = append(cmds, m.input.Focus())
+				return m, tea.Batch(cmds...)
+			}
 			if call.Function.Name == "assign_team" {
 				var args struct {
 					TeamName string `json:"team_name"`
@@ -1199,6 +1238,29 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.startStream(m.messages)
 
 	case AskUserResponseMsg:
+		// Handle kill confirmation flow.
+		if m.confirmKill {
+			m.confirmKill = false
+			m.promptMode = false
+			m.promptCustom = false
+			m.promptOptions = nil
+			m.promptSelected = 0
+
+			var result string
+			if msg.Result == "Yes, kill" {
+				_ = m.gateway.Kill(m.pendingKillSlot)
+				result = fmt.Sprintf("killed slot %d", m.pendingKillSlot)
+			} else {
+				result = "User cancelled the kill."
+			}
+			m.messages = append(m.messages, llm.Message{Role: "assistant", ToolCalls: []llm.ToolCall{m.promptPendingCall}})
+			m.reasoning = append(m.reasoning, "")
+			m.claudeMeta = append(m.claudeMeta, "tool-call-indicator")
+			m.messages = append(m.messages, llm.Message{Role: "tool", Content: result, ToolCallID: m.promptPendingCall.ID})
+			m.updateViewportContent()
+			return m, m.startStream(m.messages)
+		}
+
 		// Handle dispatch confirmation flow.
 		if m.confirmDispatch {
 			m.promptMode = false
@@ -2490,6 +2552,8 @@ func (m *Model) initMessages() {
 	m.confirmDispatch = false
 	m.changingTeam = false
 	m.pendingDispatch = llm.ToolCall{}
+	m.confirmKill = false
+	m.pendingKillSlot = 0
 }
 
 // hasConversation reports whether the conversation contains at least one user or
