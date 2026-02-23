@@ -54,7 +54,7 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 	llm.SetGateway(gw)
 
 	client := llm.NewClient(cfg.Operator.Endpoint, cfg.Operator.Model)
-	m := tui.NewModel(client, cfg.Claude, configDir, gw)
+	m := tui.NewModel(client, cfg.Claude, configDir, gw, repoRoot)
 
 	_, err = tea.NewProgram(m).Run()
 	return err

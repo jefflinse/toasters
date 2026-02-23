@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"image/color"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -145,6 +147,9 @@ type Model struct {
 
 	gateway *gateway.Gateway
 
+	systemPrompt string // loaded from agents/operator.md; prepended to every LLM call
+	repoRoot     string // path to repo root (for loading agent files)
+
 	// Gateway notify channel — gateway writes to this; TUI polls it.
 	agentNotifyCh chan struct{}
 
@@ -171,7 +176,7 @@ type Model struct {
 }
 
 // NewModel returns an initialized root model.
-func NewModel(client *llm.Client, claudeCfg config.ClaudeConfig, configDir string, gw *gateway.Gateway) Model {
+func NewModel(client *llm.Client, claudeCfg config.ClaudeConfig, configDir string, gw *gateway.Gateway, repoRoot string) Model {
 	ta := textarea.New()
 	ta.Placeholder = "Type your message here..."
 	ta.Prompt = ""
@@ -220,6 +225,9 @@ func NewModel(client *llm.Client, claudeCfg config.ClaudeConfig, configDir strin
 	m.selectedWorkEffort = 0
 	m.focused = focusChat
 	m.gateway = gw
+
+	m.repoRoot = repoRoot
+	m.systemPrompt = loadSystemPrompt(repoRoot)
 
 	m.agentNotifyCh = make(chan struct{}, 8) // buffered to avoid blocking gateway goroutines
 	m.attachedSlot = -1
@@ -705,8 +713,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		// Re-invoke the stream with the updated messages for the final answer.
-		msgs := make([]llm.Message, len(m.messages))
-		copy(msgs, m.messages)
+		var msgs []llm.Message
+		if m.systemPrompt != "" {
+			msgs = append(msgs, llm.Message{Role: "system", Content: m.systemPrompt})
+		}
+		msgs = append(msgs, m.messages...)
 		return m, m.startStream(msgs)
 
 	case StreamErrMsg:
@@ -1636,6 +1647,7 @@ func (m *Model) appendHelpMessage() {
 // newSession resets the conversation and all session statistics.
 func (m *Model) newSession() {
 	m.messages = nil
+	m.systemPrompt = loadSystemPrompt(m.repoRoot)
 	m.reasoning = nil
 	m.claudeMeta = nil
 	m.claudeActiveMeta = ""
@@ -1696,9 +1708,12 @@ func (m *Model) sendMessage() tea.Cmd {
 	m.updateViewportContent()
 	m.chatViewport.GotoBottom()
 
-	// Copy messages for the goroutine.
-	msgs := make([]llm.Message, len(m.messages))
-	copy(msgs, m.messages)
+	// Build message slice: system prompt (if any) + conversation history.
+	var msgs []llm.Message
+	if m.systemPrompt != "" {
+		msgs = append(msgs, llm.Message{Role: "system", Content: m.systemPrompt})
+	}
+	msgs = append(msgs, m.messages...)
 
 	return m.startStream(msgs)
 }
@@ -1843,6 +1858,19 @@ func wrapText(s string, maxWidth int) string {
 // formatClaudeMeta returns a short byline string for a claudeMetaMsg.
 func formatClaudeMeta(msg claudeMetaMsg) string {
 	return msg.Model + " · " + msg.PermissionMode + " mode"
+}
+
+// loadSystemPrompt reads agents/operator.md from the repo root.
+// Returns empty string on any error (system prompt is optional).
+func loadSystemPrompt(repoRoot string) string {
+	if repoRoot == "" {
+		return ""
+	}
+	data, err := os.ReadFile(filepath.Join(repoRoot, "agents", "operator.md"))
+	if err != nil {
+		return ""
+	}
+	return string(data)
 }
 
 // truncateStr truncates s to maxLen, adding "..." if truncated.
