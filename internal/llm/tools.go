@@ -47,7 +47,7 @@ var staticTools = []Tool{
 		Type: "function",
 		Function: ToolFunction{
 			Name:        "assign_team",
-			Description: "Assign a task to a team. The team will work autonomously to complete it.",
+			Description: "Assign a task to a team to work on autonomously. The job_id must be the ID of an existing job — call job_create first if no job exists yet.",
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -420,6 +420,13 @@ func ExecuteTool(call ToolCall) (string, error) {
 		}
 		if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
 			return "", fmt.Errorf("parsing assign_team args: %w", err)
+		}
+		// Guard: verify the job exists before dispatching to a team.
+		if configDir, err := config.Dir(); err == nil {
+			jobDir := filepath.Join(job.JobsDir(configDir), args.JobID)
+			if _, loadErr := job.Load(jobDir); loadErr != nil {
+				return fmt.Sprintf("job %q does not exist; call job_create first", args.JobID), nil
+			}
 		}
 		// Look up team by name.
 		var team agents.Team
