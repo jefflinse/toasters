@@ -2075,15 +2075,15 @@ func (m *Model) renderLoading() tea.View {
 	colorCode := loadingBarColors[m.loadingFrame%len(loadingBarColors)]
 	blobStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colorCode)).Bold(true)
 
-	// Build the bar: dim track chars with the bright blob at blobPos.
-	var bar strings.Builder
-	for i := 0; i < loadingBarWidth; i++ {
-		if i == blobPos {
-			bar.WriteString(blobStyle.Render("█"))
-		} else {
-			bar.WriteString(trackStyle.Render("░"))
-		}
-	}
+	// Build the bar by styling three segments: left track, blob, right track.
+	// Keeping it as three Render calls on plain ASCII-width strings lets lipgloss
+	// measure the container width correctly in JoinVertical.
+	leftTrack := strings.Repeat("░", blobPos)
+	rightTrack := strings.Repeat("░", loadingBarWidth-blobPos-1)
+	barStr := trackStyle.Render(leftTrack) + blobStyle.Render("█") + trackStyle.Render(rightTrack)
+
+	// Wrap in a fixed-width container so JoinVertical can measure it correctly.
+	barContainer := lipgloss.NewStyle().Width(loadingBarWidth).Render(barStr)
 
 	bread := breadStyle.Render("🍞")
 
@@ -2092,7 +2092,7 @@ func (m *Model) renderLoading() tea.View {
 	statusMsg := msgStyle.Render(loadingMessages[msgIdx])
 
 	// Compose: bar on top, bread centered below, message below that.
-	block := lipgloss.JoinVertical(lipgloss.Center, bar.String(), bread, "", statusMsg)
+	block := lipgloss.JoinVertical(lipgloss.Center, barContainer, bread, "", statusMsg)
 
 	content := lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, block)
 	v := tea.NewView(content)
