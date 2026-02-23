@@ -61,6 +61,8 @@ func streamClaudeResponse(ctx context.Context, prompt string, claudeCfg config.C
 		}
 		if claudeCfg.PermissionMode != "" {
 			args = append(args, "--permission-mode", claudeCfg.PermissionMode)
+		} else {
+			args = append(args, "--dangerously-skip-permissions")
 		}
 		args = append(args, prompt)
 

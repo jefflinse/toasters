@@ -114,10 +114,12 @@ func (g *Gateway) Spawn(agentName, workEffortID, task string) (int, error) {
 		}
 	}
 
-	// Resolve agent body: registry first, then disk fallback.
+	// Resolve agent body and permission args: registry first, then disk fallback.
 	var agentBody string
+	var permissionArgs []string
 	if a, ok := g.agentRegistry[agentName]; ok {
 		agentBody = a.Body
+		permissionArgs = a.ClaudePermissionArgs()
 		g.mu.Unlock()
 	} else {
 		g.mu.Unlock()
@@ -127,6 +129,8 @@ func (g *Gateway) Spawn(agentName, workEffortID, task string) (int, error) {
 			return -1, fmt.Errorf("reading agent file %s: %w", agentPath, err)
 		}
 		agentBody = string(agentData)
+		// No frontmatter parsed for disk fallback — default to full access.
+		permissionArgs = []string{"--dangerously-skip-permissions"}
 	}
 
 	// Read work effort context outside the lock (I/O).
@@ -175,7 +179,7 @@ func (g *Gateway) Spawn(agentName, workEffortID, task string) (int, error) {
 
 	// Start the subprocess goroutine.
 	go func() {
-		ch := spawnClaudeStream(ctx, prompt, g.claudeCfg)
+		ch := spawnClaudeStream(ctx, prompt, g.claudeCfg, permissionArgs)
 		for resp := range ch {
 			switch {
 			case resp.Meta != nil:
@@ -317,7 +321,11 @@ type claudeOuterEvent struct {
 // spawnClaudeStream launches the claude CLI as a subprocess and returns a
 // channel that delivers streamed response chunks. The channel is closed when
 // the stream ends, either normally or due to an error.
-func spawnClaudeStream(ctx context.Context, prompt string, claudeCfg config.ClaudeConfig) <-chan llm.StreamResponse {
+//
+// permissionArgs are per-agent Claude CLI permission flags (e.g.
+// ["--dangerously-skip-permissions"] or ["--allowedTools", "Read,Bash,..."]).
+// If non-empty they take precedence over claudeCfg.PermissionMode.
+func spawnClaudeStream(ctx context.Context, prompt string, claudeCfg config.ClaudeConfig, permissionArgs []string) <-chan llm.StreamResponse {
 	ch := make(chan llm.StreamResponse, 64)
 
 	go func() {
@@ -331,8 +339,14 @@ func spawnClaudeStream(ctx context.Context, prompt string, claudeCfg config.Clau
 		if claudeCfg.DefaultModel != "" {
 			args = append(args, "--model", claudeCfg.DefaultModel)
 		}
-		if claudeCfg.PermissionMode != "" {
+		// Use per-agent permission args if provided, otherwise fall back to config.
+		if len(permissionArgs) > 0 {
+			args = append(args, permissionArgs...)
+		} else if claudeCfg.PermissionMode != "" {
 			args = append(args, "--permission-mode", claudeCfg.PermissionMode)
+		} else {
+			// Default: bypass permissions for non-interactive background agents.
+			args = append(args, "--dangerously-skip-permissions")
 		}
 		args = append(args, prompt)
 

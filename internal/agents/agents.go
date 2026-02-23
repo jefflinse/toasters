@@ -31,12 +31,57 @@ Available agents:
 
 // Agent represents a single agent loaded from a Markdown file.
 type Agent struct {
-	Name        string  // filename stem (e.g. "prototyper" from "prototyper.md")
-	Description string  // from frontmatter "description" field
-	Mode        string  // from frontmatter "mode" field ("primary" = coordinator, anything else = worker)
-	Color       string  // from frontmatter "color" field (hex color, e.g. "#FF9800")
-	Temperature float64 // from frontmatter "temperature" field (0 if absent)
-	Body        string  // the system prompt text (everything after the closing --- of frontmatter)
+	Name          string          // filename stem (e.g. "prototyper" from "prototyper.md")
+	Description   string          // from frontmatter "description" field
+	Mode          string          // from frontmatter "mode" field ("primary" = coordinator, anything else = worker)
+	Color         string          // from frontmatter "color" field (hex color, e.g. "#FF9800")
+	Temperature   float64         // from frontmatter "temperature" field (0 if absent)
+	Body          string          // the system prompt text (everything after the closing --- of frontmatter)
+	Tools         map[string]bool // from frontmatter "tools:" block; key=tool name, value=allowed (false=denied)
+	HasToolsBlock bool            // true if a "tools:" block was present in frontmatter
+}
+
+// ClaudePermissionArgs returns the Claude CLI permission flags appropriate for
+// this agent based on its tools block.
+//
+// If no tools block is present, the agent gets full access via
+// --dangerously-skip-permissions. If a tools block is present, an allow list
+// is built from the full default tool set minus any denied tools, and
+// --allowedTools is returned with the comma-separated list.
+func (a Agent) ClaudePermissionArgs() []string {
+	if !a.HasToolsBlock {
+		return []string{"--dangerously-skip-permissions"}
+	}
+
+	fullSet := []string{"Bash", "Read", "Write", "Edit", "Glob", "Grep", "WebFetch", "TodoRead", "TodoWrite"}
+
+	// Map OpenCode tool keys to Claude Code tool names.
+	openCodeToClaudeCode := map[string]string{
+		"bash":  "Bash",
+		"write": "Write",
+		"edit":  "Edit",
+	}
+
+	denied := map[string]bool{}
+	for ocKey, allowed := range a.Tools {
+		if !allowed {
+			if ccName, ok := openCodeToClaudeCode[ocKey]; ok {
+				denied[ccName] = true
+			}
+		}
+	}
+
+	var allowed []string
+	for _, tool := range fullSet {
+		if !denied[tool] {
+			allowed = append(allowed, tool)
+		}
+	}
+
+	if len(allowed) == 0 {
+		return []string{"--allowedTools", ""}
+	}
+	return []string{"--allowedTools", strings.Join(allowed, ",")}
 }
 
 // Registry holds a set of agents split into a coordinator and workers.
@@ -96,8 +141,31 @@ func ParseFile(path string) (Agent, error) {
 
 // parseFrontmatter scans the frontmatter block line by line and populates
 // the known fields on agent. Lines that don't match "key: value" are ignored.
+// Multi-line blocks (e.g. "tools:") are handled by entering a block-parsing
+// mode when a line has no value after the colon.
 func parseFrontmatter(agent *Agent, block string) {
+	inToolsBlock := false
+
 	for _, line := range strings.Split(block, "\n") {
+		// A line starting with whitespace may be a tools block entry.
+		if inToolsBlock {
+			trimmed := strings.TrimSpace(line)
+			if trimmed == "" || !strings.HasPrefix(line, " ") {
+				// Blank line or non-indented line exits the tools block.
+				inToolsBlock = false
+				// Fall through to process this line as a top-level key.
+			} else {
+				// Parse "  key: value" tool entry.
+				idx := strings.Index(trimmed, ":")
+				if idx >= 0 {
+					toolKey := strings.TrimSpace(trimmed[:idx])
+					toolVal := strings.TrimSpace(trimmed[idx+1:])
+					agent.Tools[toolKey] = toolVal != "false"
+				}
+				continue
+			}
+		}
+
 		idx := strings.Index(line, ":")
 		if idx < 0 {
 			continue
@@ -120,6 +188,13 @@ func parseFrontmatter(agent *Agent, block string) {
 		case "temperature":
 			if f, err := strconv.ParseFloat(val, 64); err == nil {
 				agent.Temperature = f
+			}
+		case "tools":
+			if val == "" {
+				// Multi-line tools block — enter block mode.
+				agent.HasToolsBlock = true
+				agent.Tools = make(map[string]bool)
+				inToolsBlock = true
 			}
 		}
 	}
