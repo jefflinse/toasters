@@ -231,6 +231,11 @@ type Model struct {
 	// AgentOutputMsg can detect Running→Done transitions and notify the operator.
 	prevSlotActive [gateway.MaxSlots]bool
 	prevSlotStatus [gateway.MaxSlots]gateway.SlotStatus
+
+	// Collapsible completion message state.
+	completionMsgIdx map[int]bool // indices of team-completion messages in m.messages
+	expandedMsgs     map[int]bool // which completion messages are currently expanded
+	selectedMsgIdx   int          // currently selected message index (-1 = none)
 }
 
 // NewModel returns an initialized root model.
@@ -294,6 +299,10 @@ func NewModel(client *llm.Client, claudeCfg config.ClaudeConfig, configDir strin
 	m.attachedSlot = -1
 	m.selectedAgentSlot = 0
 	m.gridFocusCell = 0
+
+	m.completionMsgIdx = make(map[int]bool)
+	m.expandedMsgs = make(map[int]bool)
+	m.selectedMsgIdx = -1
 
 	agentVP := viewport.New()
 	agentVP.MouseWheelEnabled = true
@@ -755,6 +764,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, nil
 			}
+			// Navigate completion messages when chat is focused and not streaming.
+			if m.focused == focusChat && !m.streaming && len(m.completionMsgIdx) > 0 {
+				if m.selectedMsgIdx > 0 {
+					m.selectedMsgIdx--
+				}
+				m.updateViewportContent()
+				return m, nil
+			}
 
 		case "down":
 			// Navigate jobs when that panel is focused.
@@ -769,6 +786,22 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.selectedAgentSlot < gateway.MaxSlots-1 {
 					m.selectedAgentSlot++
 				}
+				return m, nil
+			}
+			// Navigate completion messages when chat is focused and not streaming.
+			if m.focused == focusChat && !m.streaming && len(m.completionMsgIdx) > 0 {
+				if m.selectedMsgIdx < len(m.messages)-1 {
+					m.selectedMsgIdx++
+				}
+				m.updateViewportContent()
+				return m, nil
+			}
+
+		case "x":
+			// Toggle expand/collapse on the selected completion message when chat is focused.
+			if m.focused == focusChat && !m.streaming && m.selectedMsgIdx >= 0 && m.completionMsgIdx[m.selectedMsgIdx] {
+				m.expandedMsgs[m.selectedMsgIdx] = !m.expandedMsgs[m.selectedMsgIdx]
+				m.updateViewportContent()
 				return m, nil
 			}
 
@@ -1246,6 +1279,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						Role:    "user",
 						Content: notification,
 					})
+					// Tag this message as a collapsible completion entry and auto-select it.
+					completionIdx := len(m.messages) - 1
+					m.completionMsgIdx[completionIdx] = true
+					m.selectedMsgIdx = completionIdx
 					m.updateViewportContent()
 					if !m.userScrolled {
 						m.chatViewport.GotoBottom()
@@ -1778,9 +1815,28 @@ func (m *Model) updateViewportContent() {
 	}
 
 	assistantIdx := 0
-	for _, msg := range m.messages {
+	for i, msg := range m.messages {
 		switch msg.Role {
 		case "user":
+			// Completion messages render as collapsible blocks.
+			if m.completionMsgIdx[i] {
+				firstLine := firstLineOf(msg.Content)
+				if m.expandedMsgs[i] {
+					hint := ""
+					if i == m.selectedMsgIdx {
+						hint = DimStyle.Render(" [x to collapse]")
+					}
+					header := DimStyle.Render("▼ "+firstLine) + hint
+					sb.WriteString(header + "\n" + renderCompletionBlock(msg.Content) + "\n")
+				} else {
+					hint := ""
+					if i == m.selectedMsgIdx {
+						hint = DimStyle.Render(" [x to expand]")
+					}
+					sb.WriteString(DimStyle.Render("▶ "+firstLine) + hint + "\n\n")
+				}
+				continue
+			}
 			blockWidth := contentWidth - UserMsgBlockStyle.GetHorizontalFrameSize()
 			if blockWidth < 1 {
 				blockWidth = 1
@@ -2291,6 +2347,9 @@ func (m *Model) initMessages() {
 	if m.systemPrompt != "" {
 		m.messages = []llm.Message{{Role: "system", Content: m.systemPrompt}}
 	}
+	m.completionMsgIdx = make(map[int]bool)
+	m.expandedMsgs = make(map[int]bool)
+	m.selectedMsgIdx = -1
 }
 
 // hasConversation reports whether the conversation contains at least one user or
@@ -2835,4 +2894,25 @@ func (m *Model) renderTeamsModal() string {
 		modal,
 		lipgloss.WithWhitespaceStyle(lipgloss.NewStyle().Background(lipgloss.Color("235"))),
 	)
+}
+
+// firstLineOf returns the first non-empty line of s.
+func firstLineOf(s string) string {
+	for _, line := range strings.Split(s, "\n") {
+		if strings.TrimSpace(line) != "" {
+			return strings.TrimSpace(line)
+		}
+	}
+	return s
+}
+
+// renderCompletionBlock renders the full content of a completion message as a
+// dimmed indented block, skipping the first line (already shown in the header).
+func renderCompletionBlock(content string) string {
+	lines := strings.Split(strings.TrimSpace(content), "\n")
+	var sb strings.Builder
+	for _, line := range lines {
+		sb.WriteString(DimStyle.Render("  "+line) + "\n")
+	}
+	return sb.String()
 }
