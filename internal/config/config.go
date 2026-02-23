@@ -16,9 +16,10 @@ type Config struct {
 
 // OperatorConfig holds configuration for the operator LLM backend.
 type OperatorConfig struct {
-	Endpoint string `mapstructure:"endpoint"`
-	APIKey   string `mapstructure:"api_key"`
-	Model    string `mapstructure:"model"`
+	Endpoint         string `mapstructure:"endpoint"`
+	APIKey           string `mapstructure:"api_key"`
+	Model            string `mapstructure:"model"`
+	CoordinatorAgent string `mapstructure:"coordinator_agent"`
 }
 
 // ClaudeConfig holds configuration for the Claude CLI.
@@ -43,6 +44,7 @@ func Load() (*Config, error) {
 	viper.SetDefault("operator.endpoint", "http://localhost:1234")
 	viper.SetDefault("operator.api_key", "")
 	viper.SetDefault("operator.model", "")
+	viper.SetDefault("operator.coordinator_agent", "")
 	viper.SetDefault("claude.path", "claude")
 	viper.SetDefault("claude.default_model", "")
 	viper.SetDefault("claude.permission_mode", "")

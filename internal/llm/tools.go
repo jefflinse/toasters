@@ -13,6 +13,7 @@ import (
 
 	"golang.org/x/net/html"
 
+	"github.com/jefflinse/toasters/internal/agents"
 	"github.com/jefflinse/toasters/internal/config"
 	"github.com/jefflinse/toasters/internal/workeffort"
 )
@@ -32,8 +33,8 @@ func SetGateway(g AgentSpawner) {
 	activeGateway = g
 }
 
-// AvailableTools is the set of tools exposed to the LLM.
-var AvailableTools = []Tool{
+// staticTools contains all tools except run_agent, which is built dynamically.
+var staticTools = []Tool{
 	{
 		Type: "function",
 		Function: ToolFunction{
@@ -169,17 +170,66 @@ var AvailableTools = []Tool{
 			},
 		},
 	},
-	{
+}
+
+// AvailableTools is the set of tools exposed to the LLM. It is initialized
+// with the static tools plus a default run_agent tool. Call SetAvailableTools
+// (typically via BuildTools) at startup to replace it with a registry-aware version.
+var AvailableTools = append(staticTools, Tool{
+	Type: "function",
+	Function: ToolFunction{
+		Name:        "run_agent",
+		Description: "Spawn a background agent to handle a task. No worker agents currently configured.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"agent_name": map[string]any{
+					"type":        "string",
+					"description": "The name of the agent to run.",
+				},
+				"work_effort_id": map[string]any{
+					"type":        "string",
+					"description": "The ID of the work effort to operate on.",
+				},
+				"task": map[string]any{
+					"type":        "string",
+					"description": "Optional extra instruction appended to the agent prompt.",
+				},
+			},
+			"required": []string{"agent_name", "work_effort_id"},
+		},
+	},
+})
+
+// BuildTools constructs the full tool slice with a dynamic run_agent description
+// derived from the provided worker agents.
+func BuildTools(workers []agents.Agent) []Tool {
+	var rosterLines []string
+	for _, w := range workers {
+		if w.Description == "" {
+			continue
+		}
+		rosterLines = append(rosterLines, fmt.Sprintf("- `%s`: %s", w.Name, w.Description))
+	}
+
+	var desc string
+	if len(rosterLines) == 0 {
+		desc = "Spawn a background agent to handle a task. No worker agents currently configured."
+	} else {
+		desc = "Spawn a background agent to handle a task. Available agents:\n" + strings.Join(rosterLines, "\n")
+	}
+
+	runAgentTool := Tool{
 		Type: "function",
 		Function: ToolFunction{
 			Name:        "run_agent",
-			Description: "Spawn a named background Claude agent to work on a work effort. Available agents: investigator, planner, executor, summarizer.",
+			Description: desc,
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"agent_name": map[string]any{
 						"type":        "string",
-						"description": "The agent to run. One of: investigator, planner, executor, summarizer.",
+						"description": "The name of the agent to run.",
 					},
 					"work_effort_id": map[string]any{
 						"type":        "string",
@@ -193,7 +243,18 @@ var AvailableTools = []Tool{
 				"required": []string{"agent_name", "work_effort_id"},
 			},
 		},
-	},
+	}
+
+	tools := make([]Tool, 0, len(staticTools)+1)
+	tools = append(tools, staticTools...)
+	tools = append(tools, runAgentTool)
+	return tools
+}
+
+// SetAvailableTools replaces the package-level AvailableTools slice.
+// Call this at startup after building the agent registry.
+func SetAvailableTools(tools []Tool) {
+	AvailableTools = tools
 }
 
 // ExecuteTool dispatches a tool call to the appropriate handler and returns

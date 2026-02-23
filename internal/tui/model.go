@@ -16,6 +16,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/glamour"
 
+	"github.com/jefflinse/toasters/internal/agents"
 	"github.com/jefflinse/toasters/internal/config"
 	"github.com/jefflinse/toasters/internal/gateway"
 	"github.com/jefflinse/toasters/internal/llm"
@@ -147,8 +148,9 @@ type Model struct {
 
 	gateway *gateway.Gateway
 
-	systemPrompt string // loaded from agents/operator.md; prepended to every LLM call
-	repoRoot     string // path to repo root (for loading agent files)
+	registry     agents.Registry // agent registry (coordinator + workers)
+	systemPrompt string          // assembled at startup; prepended to every LLM call
+	repoRoot     string          // path to repo root (for loading agent files)
 
 	// Gateway notify channel — gateway writes to this; TUI polls it.
 	agentNotifyCh chan struct{}
@@ -176,7 +178,7 @@ type Model struct {
 }
 
 // NewModel returns an initialized root model.
-func NewModel(client *llm.Client, claudeCfg config.ClaudeConfig, configDir string, gw *gateway.Gateway, repoRoot string) Model {
+func NewModel(client *llm.Client, claudeCfg config.ClaudeConfig, configDir string, gw *gateway.Gateway, repoRoot string, registry agents.Registry) Model {
 	ta := textarea.New()
 	ta.Placeholder = "Type your message here..."
 	ta.Prompt = ""
@@ -227,7 +229,8 @@ func NewModel(client *llm.Client, claudeCfg config.ClaudeConfig, configDir strin
 	m.gateway = gw
 
 	m.repoRoot = repoRoot
-	m.systemPrompt = loadSystemPrompt(repoRoot)
+	m.registry = registry
+	m.systemPrompt = buildSystemPrompt(registry, repoRoot)
 
 	m.agentNotifyCh = make(chan struct{}, 8) // buffered to avoid blocking gateway goroutines
 	m.attachedSlot = -1
@@ -1647,7 +1650,7 @@ func (m *Model) appendHelpMessage() {
 // newSession resets the conversation and all session statistics.
 func (m *Model) newSession() {
 	m.messages = nil
-	m.systemPrompt = loadSystemPrompt(m.repoRoot)
+	m.systemPrompt = buildSystemPrompt(m.registry, m.repoRoot)
 	m.reasoning = nil
 	m.claudeMeta = nil
 	m.claudeActiveMeta = ""
@@ -1860,9 +1863,14 @@ func formatClaudeMeta(msg claudeMetaMsg) string {
 	return msg.Model + " · " + msg.PermissionMode + " mode"
 }
 
-// loadSystemPrompt reads agents/operator.md from the repo root.
-// Returns empty string on any error (system prompt is optional).
-func loadSystemPrompt(repoRoot string) string {
+// buildSystemPrompt assembles the system prompt from the registry when a
+// coordinator is present, falling back to reading agents/operator.md from disk.
+// Returns empty string if neither source is available.
+func buildSystemPrompt(registry agents.Registry, repoRoot string) string {
+	if registry.Coordinator != nil {
+		return agents.BuildSystemPrompt(*registry.Coordinator, registry.Workers)
+	}
+	// Fallback: read agents/operator.md from repo root.
 	if repoRoot == "" {
 		return ""
 	}

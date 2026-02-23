@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jefflinse/toasters/internal/agents"
 	"github.com/jefflinse/toasters/internal/config"
 	"github.com/jefflinse/toasters/internal/llm"
 	"github.com/jefflinse/toasters/internal/workeffort"
@@ -62,7 +63,8 @@ type Gateway struct {
 	mu             sync.Mutex
 	slots          [MaxSlots]*slot
 	claudeCfg      config.ClaudeConfig
-	repoRoot       string        // path to repo root (agents/ dir is repoRoot/agents/)
+	repoRoot       string // path to repo root (agents/ dir is repoRoot/agents/)
+	agentRegistry  map[string]agents.Agent
 	notify         func()        // called on every output update; wired to TUI re-render
 	defaultTimeout time.Duration // per-slot subprocess timeout
 }
@@ -112,15 +114,20 @@ func (g *Gateway) Spawn(agentName, workEffortID, task string) (int, error) {
 		}
 	}
 
-	// Read agent file.
-	agentPath := filepath.Join(g.repoRoot, "agents", agentName+".md")
-	agentData, err := os.ReadFile(agentPath)
-	if err != nil {
+	// Resolve agent body: registry first, then disk fallback.
+	var agentBody string
+	if a, ok := g.agentRegistry[agentName]; ok {
+		agentBody = a.Body
 		g.mu.Unlock()
-		return -1, fmt.Errorf("reading agent file %s: %w", agentPath, err)
+	} else {
+		g.mu.Unlock()
+		agentPath := filepath.Join(g.repoRoot, "agents", agentName+".md")
+		agentData, err := os.ReadFile(agentPath)
+		if err != nil {
+			return -1, fmt.Errorf("reading agent file %s: %w", agentPath, err)
+		}
+		agentBody = string(agentData)
 	}
-
-	g.mu.Unlock()
 
 	// Read work effort context outside the lock (I/O).
 	configDir, _ := config.Dir()
@@ -130,7 +137,7 @@ func (g *Gateway) Spawn(agentName, workEffortID, task string) (int, error) {
 
 	// Assemble prompt.
 	var sb strings.Builder
-	sb.WriteString(string(agentData))
+	sb.WriteString(agentBody)
 	sb.WriteString("\n\n---\n\n## Work Effort Context\n\n### OVERVIEW.md\n")
 	sb.WriteString(overview)
 	sb.WriteString("\n\n### TODO.md\n")
@@ -192,6 +199,14 @@ func (g *Gateway) Spawn(agentName, workEffortID, task string) (int, error) {
 	}()
 
 	return idx, nil
+}
+
+// SetAgentRegistry wires a pre-built agent registry into the gateway so that
+// Spawn can resolve agent bodies without hitting disk.
+func (g *Gateway) SetAgentRegistry(registry map[string]agents.Agent) {
+	g.mu.Lock()
+	g.agentRegistry = registry
+	g.mu.Unlock()
 }
 
 // SetNotify replaces the notify callback. Safe to call after New.
