@@ -111,57 +111,8 @@ func loadingTick() tea.Cmd {
 	})
 }
 
-// loadingFrames is the toaster animation: bread rising, popping, and flying out.
-// Each entry is a multi-line ASCII art string (toaster body + bread state).
-var loadingFrames = []string{
-	// Frame 0: empty toaster, waiting
-	"        \n" +
-		"  ╔════╗\n" +
-		"  ║    ║\n" +
-		"  ╚════╝",
-
-	// Frame 1: bread just peeking out
-	"   ████ \n" +
-		"  ╔════╗\n" +
-		"  ║    ║\n" +
-		"  ╚════╝",
-
-	// Frame 2: bread rising
-	"  ██████\n" +
-		"  ╔════╗\n" +
-		"  ║    ║\n" +
-		"  ╚════╝",
-
-	// Frame 3: bread high, about to pop
-	" ████████\n" +
-		"  ╔════╗ \n" +
-		"  ║    ║ \n" +
-		"  ╚════╝ ",
-
-	// Frame 4: bread launching! sparkles appear
-	"✦ ██████ ✧\n" +
-		"  ╔════╗  \n" +
-		"  ║    ║  \n" +
-		"  ╚════╝  ",
-
-	// Frame 5: bread fully airborne with face, max sparkles
-	"✦  🍞🍞  ✦\n" +
-		" ✧      ✧ \n" +
-		"  ╔════╗  \n" +
-		"  ╚════╝  ",
-
-	// Frame 6: bread coming back down
-	"  ██████  \n" +
-		"✧ ╔════╗ ✧\n" +
-		"  ║    ║  \n" +
-		"  ╚════╝  ",
-
-	// Frame 7: bread settling back in
-	"   ████   \n" +
-		"  ╔════╗  \n" +
-		"  ║    ║  \n" +
-		"  ╚════╝  ",
-}
+// loadingFrames are the spinner characters that orbit the 🍞 emoji.
+var loadingFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
 // numLoadingFrames is the total number of animation frames.
 var numLoadingFrames = len(loadingFrames)
@@ -2100,52 +2051,20 @@ func (m *Model) View() tea.View {
 
 // renderLoading renders a centered animated loading screen while the app is initializing.
 func (m *Model) renderLoading() tea.View {
-	// Styles for the animation elements.
-	toasterStyle := lipgloss.NewStyle().Foreground(ColorBorder)
+	spinnerStyle := lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true)
 	breadStyle := lipgloss.NewStyle().Foreground(ColorStreaming).Bold(true)
-	sparkleStyle := lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true)
 	msgStyle := DimStyle.Italic(true)
 
-	// Pick the current animation frame and colorize it.
-	frame := loadingFrames[m.loadingFrame%numLoadingFrames]
-	lines := strings.Split(frame, "\n")
+	spinner := spinnerStyle.Render(loadingFrames[m.loadingFrame%numLoadingFrames])
+	bread := breadStyle.Render("🍞")
 
-	var styledLines []string
-	for _, line := range lines {
-		// Colorize sparkle characters (✦ ✧) in purple.
-		// Colorize bread characters (█ 🍞) in orange/amber.
-		// Colorize toaster body (╔ ╗ ╚ ╝ ║ ═) in dim.
-		var out strings.Builder
-		runes := []rune(line)
-		i := 0
-		for i < len(runes) {
-			ch := runes[i]
-			switch ch {
-			case '✦', '✧':
-				out.WriteString(sparkleStyle.Render(string(ch)))
-			case '█':
-				out.WriteString(breadStyle.Render(string(ch)))
-			case '🍞':
-				// emoji is multi-byte; render as-is with bread style
-				out.WriteString(breadStyle.Render(string(ch)))
-			case '╔', '╗', '╚', '╝', '║', '═':
-				out.WriteString(toasterStyle.Render(string(ch)))
-			default:
-				out.WriteRune(ch)
-			}
-			i++
-		}
-		styledLines = append(styledLines, out.String())
-	}
-
-	art := strings.Join(styledLines, "\n")
-
-	// Cycle the status message at 1/3 the frame rate (every 3 frames).
-	msgIdx := (m.loadingFrame / 3) % len(loadingMessages)
+	// Cycle the status message every 4 frames (~600ms).
+	msgIdx := (m.loadingFrame / 4) % len(loadingMessages)
 	statusMsg := msgStyle.Render(loadingMessages[msgIdx])
 
-	// Compose the full block: art + blank line + message.
-	block := lipgloss.JoinVertical(lipgloss.Center, art, "", statusMsg)
+	// Compose: spinner + bread on one line, message below.
+	spinLine := spinner + "  " + bread
+	block := lipgloss.JoinVertical(lipgloss.Center, spinLine, "", statusMsg)
 
 	content := lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, block)
 	v := tea.NewView(content)
