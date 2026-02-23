@@ -583,7 +583,7 @@ func spawnClaudeStream(ctx context.Context, prompt string, claudeCfg config.Clau
 							ch <- llm.StreamResponse{Content: "\n"}
 						}
 					case "tool_use":
-						ch <- llm.StreamResponse{Content: fmt.Sprintf("\n[tool: %s]\n", block.Name)}
+						ch <- llm.StreamResponse{Content: "\n" + formatToolUse(block.Name, block.Input) + "\n"}
 					}
 				}
 			case "result":
@@ -609,4 +609,58 @@ func spawnClaudeStream(ctx context.Context, prompt string, claudeCfg config.Clau
 	}()
 
 	return ch
+}
+
+// formatToolUse returns a compact one-line annotation for a Claude tool call,
+// surfacing the most useful parameter for each known tool.
+func formatToolUse(name string, input any) string {
+	m, _ := input.(map[string]any)
+
+	switch name {
+	case "Read":
+		if p, _ := m["file_path"].(string); p != "" {
+			return fmt.Sprintf("[tool: Read] %s", p)
+		}
+	case "Write":
+		if p, _ := m["file_path"].(string); p != "" {
+			return fmt.Sprintf("[tool: Write] %s", p)
+		}
+	case "Edit", "MultiEdit":
+		if p, _ := m["file_path"].(string); p != "" {
+			return fmt.Sprintf("[tool: Edit] %s", p)
+		}
+	case "Bash":
+		if cmd, _ := m["command"].(string); cmd != "" {
+			if len(cmd) > 72 {
+				cmd = cmd[:72] + "…"
+			}
+			return fmt.Sprintf("[tool: Bash] %s", cmd)
+		}
+	case "Task":
+		if desc, _ := m["description"].(string); desc != "" {
+			return fmt.Sprintf("[tool: Task] %s", desc)
+		}
+	case "Glob":
+		if p, _ := m["pattern"].(string); p != "" {
+			return fmt.Sprintf("[tool: Glob] %s", p)
+		}
+	case "Grep":
+		if p, _ := m["pattern"].(string); p != "" {
+			return fmt.Sprintf("[tool: Grep] %s", p)
+		}
+	case "WebFetch":
+		if u, _ := m["url"].(string); u != "" {
+			return fmt.Sprintf("[tool: WebFetch] %s", u)
+		}
+	case "TodoWrite":
+		return "[tool: TodoWrite]"
+	case "TodoRead":
+		return "[tool: TodoRead]"
+	case "LS":
+		if p, _ := m["path"].(string); p != "" {
+			return fmt.Sprintf("[tool: LS] %s", p)
+		}
+	}
+
+	return fmt.Sprintf("[tool: %s]", name)
 }
