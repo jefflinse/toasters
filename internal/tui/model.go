@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"image/color"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -84,9 +82,9 @@ type ModelsMsg struct {
 // AgentOutputMsg is sent by the gateway notify callback when any slot output changes.
 type AgentOutputMsg struct{}
 
-// RegistryReloadedMsg is sent by the hot-reload watcher when the agents directory changes.
-type RegistryReloadedMsg struct {
-	Registry agents.Registry
+// TeamsReloadedMsg is sent by the hot-reload watcher when the teams directory changes.
+type TeamsReloadedMsg struct {
+	Teams []agents.Team
 }
 
 // claudeMetaMsg carries model/mode info parsed from the claude CLI system/init event.
@@ -160,9 +158,9 @@ type Model struct {
 
 	gateway *gateway.Gateway
 
-	registry     agents.Registry // agent registry (coordinator + workers)
-	systemPrompt string          // assembled at startup; prepended to every LLM call
-	repoRoot     string          // path to repo root (for loading agent files)
+	teams        []agents.Team // available teams
+	systemPrompt string        // assembled at startup; prepended to every LLM call
+	repoRoot     string        // path to repo root (for /claude slash command path)
 
 	// Gateway notify channel — gateway writes to this; TUI polls it.
 	agentNotifyCh chan struct{}
@@ -208,7 +206,7 @@ type Model struct {
 }
 
 // NewModel returns an initialized root model.
-func NewModel(client *llm.Client, claudeCfg config.ClaudeConfig, configDir string, gw *gateway.Gateway, repoRoot string, registry agents.Registry) Model {
+func NewModel(client *llm.Client, claudeCfg config.ClaudeConfig, configDir string, gw *gateway.Gateway, repoRoot string, teams []agents.Team) Model {
 	ta := textarea.New()
 	ta.Placeholder = "Type your message here..."
 	ta.Prompt = ""
@@ -259,8 +257,8 @@ func NewModel(client *llm.Client, claudeCfg config.ClaudeConfig, configDir strin
 	m.gateway = gw
 
 	m.repoRoot = repoRoot
-	m.registry = registry
-	m.systemPrompt = buildSystemPrompt(registry, repoRoot)
+	m.teams = teams
+	m.systemPrompt = agents.BuildOperatorPrompt(teams)
 	m.initMessages()
 
 	m.agentNotifyCh = make(chan struct{}, 8) // buffered to avoid blocking gateway goroutines
@@ -798,8 +796,41 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// then re-invoke the stream for the final answer.
 		m.streaming = false
 
-		// Check for ask_user — intercept before ExecuteTool.
+		// Check for ask_user or escalate_to_user — intercept before ExecuteTool.
 		for _, call := range msg.Calls {
+			if call.Function.Name == "escalate_to_user" {
+				var args struct {
+					Question string `json:"question"`
+					Context  string `json:"context"`
+				}
+				if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
+					args.Question = "A team has encountered a blocker."
+					args.Context = ""
+				}
+				fullQuestion := args.Question
+				if args.Context != "" {
+					fullQuestion = args.Question + "\n\n" + args.Context
+				}
+				m.messages = append(m.messages, llm.Message{
+					Role:    "assistant",
+					Content: fullQuestion,
+				})
+				m.reasoning = append(m.reasoning, "")
+				m.claudeMeta = append(m.claudeMeta, "escalate-prompt")
+				m.streaming = false
+				m.promptMode = true
+				m.promptQuestion = fullQuestion
+				m.promptOptions = []string{"Provide answer"}
+				m.promptSelected = 0
+				m.promptCustom = false
+				m.promptPendingCall = call
+				m.updateViewportContent()
+				if !m.userScrolled {
+					m.chatViewport.GotoBottom()
+				}
+				cmds = append(cmds, m.input.Focus())
+				return m, tea.Batch(cmds...)
+			}
 			if call.Function.Name == "ask_user" {
 				// Parse arguments.
 				var args struct {
@@ -965,12 +996,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.claudeActiveMeta = formatClaudeMeta(msg)
 		return m, waitForChunk(m.streamCh)
 
-	case RegistryReloadedMsg:
-		m.registry = msg.Registry
-		m.systemPrompt = buildSystemPrompt(m.registry, m.repoRoot)
-		llm.SetAvailableTools(llm.BuildTools(msg.Registry.Workers))
-		// Update system message in place if present, otherwise reinit.
-		if len(m.messages) > 0 && m.messages[0].Role == "system" {
+	case TeamsReloadedMsg:
+		m.teams = msg.Teams
+		m.systemPrompt = agents.BuildOperatorPrompt(m.teams)
+		llm.SetTeams(m.teams)
+		if m.hasConversation() {
 			m.messages[0].Content = m.systemPrompt
 		} else {
 			m.initMessages()
@@ -998,7 +1028,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						outputTail = "…" + outputTail[len(outputTail)-maxTail:]
 					}
 					notification := fmt.Sprintf(
-						"Agent '%s' in slot %d has completed (work effort: %s).\n\nOutput:\n%s",
+						"Team '%s' in slot %d has completed (work effort: %s).\n\nOutput:\n%s",
 						snap.AgentName, i, snap.WorkEffortID, outputTail,
 					)
 					m.messages = append(m.messages, llm.Message{
@@ -1538,8 +1568,8 @@ func (m *Model) updateViewportContent() {
 			block := UserMsgBlockStyle.Width(blockWidth).Render(wrapText(msg.Content, blockWidth))
 			sb.WriteString(block + "\n\n")
 		case "assistant":
-			// ask-user-prompt messages render as a styled question header.
-			if assistantIdx < len(m.claudeMeta) && m.claudeMeta[assistantIdx] == "ask-user-prompt" {
+			// ask-user-prompt and escalate-prompt messages render as a styled question header.
+			if assistantIdx < len(m.claudeMeta) && (m.claudeMeta[assistantIdx] == "ask-user-prompt" || m.claudeMeta[assistantIdx] == "escalate-prompt") {
 				sb.WriteString(HeaderStyle.Render("? "+msg.Content) + "\n\n")
 				assistantIdx++
 				continue
@@ -1642,33 +1672,22 @@ func (m Model) renderLeftPanel(panelWidth, panelHeight int) string {
 		),
 	)
 
-	// --- Bottom pane: Agents (registry) ---
+	// --- Bottom pane: Teams ---
 	var bottomLines []string
-	bottomLines = append(bottomLines, LeftPanelHeaderStyle.Render("Agents"))
-	if m.registry.Coordinator == nil && len(m.registry.Workers) == 0 {
-		bottomLines = append(bottomLines, PlaceholderPaneStyle.Render("(no agents)"))
+	bottomLines = append(bottomLines, LeftPanelHeaderStyle.Render("Teams"))
+	if len(m.teams) == 0 {
+		bottomLines = append(bottomLines, PlaceholderPaneStyle.Render("No teams configured"))
 	} else {
-		// Coordinator first — always shown with a ◆ prefix to distinguish it from workers.
-		if m.registry.Coordinator != nil {
-			a := m.registry.Coordinator
-			coordColor := lipgloss.Color(a.Color)
-			if a.Color == "" {
-				coordColor = lipgloss.Color("135") // accent purple matching ColorPrimary dark
+		for _, t := range m.teams {
+			teamColor := lipgloss.Color("135")
+			if t.Coordinator != nil && t.Coordinator.Color != "" {
+				teamColor = lipgloss.Color(t.Coordinator.Color)
 			}
-			prefix := lipgloss.NewStyle().Foreground(coordColor).Render("◆") + " "
-			name := truncateStr(a.Name, contentWidth-2)
-			bottomLines = append(bottomLines, SidebarValueStyle.Bold(true).Render(prefix+name))
-		}
-		// Workers.
-		for _, w := range m.registry.Workers {
-			var prefix string
-			if w.Color != "" {
-				prefix = lipgloss.NewStyle().Foreground(lipgloss.Color(w.Color)).Render("■") + " "
-			} else {
-				prefix = "  "
-			}
-			name := truncateStr(w.Name, contentWidth-2)
-			bottomLines = append(bottomLines, WorkEffortItemStyle.Render(prefix+name))
+			prefix := lipgloss.NewStyle().Foreground(teamColor).Render("◆") + " "
+			workerCount := fmt.Sprintf("(%d workers)", len(t.Workers))
+			name := truncateStr(t.Name, contentWidth-2)
+			line := SidebarValueStyle.Bold(true).Render(prefix+name) + " " + DimStyle.Render(workerCount)
+			bottomLines = append(bottomLines, line)
 		}
 	}
 	bottomPane := lipgloss.NewStyle().Height(bottomH).Render(
@@ -2066,7 +2085,7 @@ func (m *Model) hasConversation() bool {
 }
 
 func (m *Model) newSession() {
-	m.systemPrompt = buildSystemPrompt(m.registry, m.repoRoot)
+	m.systemPrompt = agents.BuildOperatorPrompt(m.teams)
 	m.initMessages()
 	m.reasoning = nil
 	m.claudeMeta = nil
@@ -2098,9 +2117,6 @@ func (m *Model) startStream(msgs []llm.Message) tea.Cmd {
 	m.stats.ResponseStart = time.Now()
 
 	var temperature float64
-	if m.registry.Coordinator != nil && m.registry.Coordinator.Temperature > 0 {
-		temperature = m.registry.Coordinator.Temperature
-	}
 
 	client := m.llmClient
 	return func() tea.Msg {
@@ -2276,24 +2292,6 @@ func wrapText(s string, maxWidth int) string {
 // formatClaudeMeta returns a short byline string for a claudeMetaMsg.
 func formatClaudeMeta(msg claudeMetaMsg) string {
 	return msg.Model + " · " + msg.PermissionMode + " mode"
-}
-
-// buildSystemPrompt assembles the system prompt from the registry when a
-// coordinator is present, falling back to reading agents/operator.md from disk.
-// Returns empty string if neither source is available.
-func buildSystemPrompt(registry agents.Registry, repoRoot string) string {
-	if registry.Coordinator != nil {
-		return agents.BuildSystemPrompt(*registry.Coordinator, registry.Workers)
-	}
-	// Fallback: read agents/operator.md from repo root.
-	if repoRoot == "" {
-		return ""
-	}
-	data, err := os.ReadFile(filepath.Join(repoRoot, "agents", "operator.md"))
-	if err != nil {
-		return ""
-	}
-	return string(data)
 }
 
 // truncateStr truncates s to maxLen, adding "..." if truncated.

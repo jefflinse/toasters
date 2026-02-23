@@ -21,20 +21,74 @@ import (
 // AgentSpawner is the interface satisfied by *gateway.Gateway.
 // Using an interface here avoids an import cycle (gateway imports llm).
 type AgentSpawner interface {
-	Spawn(agentName, workEffortID, task string) (slotID int, alreadyRunning bool, err error)
+	SpawnTeam(teamName, workEffortID, task string, team agents.Team) (slotID int, alreadyRunning bool, err error)
 }
 
-// activeGateway is the gateway instance used by the run_agent tool.
+// activeGateway is the gateway instance used by the assign_team tool.
 // Set via SetGateway before the TUI starts.
 var activeGateway AgentSpawner
+
+// activeTeams is the set of available teams, used by the assign_team tool.
+var activeTeams []agents.Team
 
 // SetGateway wires the gateway instance into the tool executor.
 func SetGateway(g AgentSpawner) {
 	activeGateway = g
 }
 
-// staticTools contains all tools except run_agent, which is built dynamically.
+// SetTeams updates the set of available teams used by the assign_team tool.
+func SetTeams(teams []agents.Team) {
+	activeTeams = teams
+}
+
+// staticTools contains all tools available to the operator LLM.
 var staticTools = []Tool{
+	{
+		Type: "function",
+		Function: ToolFunction{
+			Name:        "assign_team",
+			Description: "Assign a task to a team. The team will work autonomously to complete it.",
+			Parameters: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"team_name": map[string]any{
+						"type":        "string",
+						"description": "The name of the team to assign the task to.",
+					},
+					"work_effort_id": map[string]any{
+						"type":        "string",
+						"description": "The ID of the work effort this task belongs to.",
+					},
+					"task": map[string]any{
+						"type":        "string",
+						"description": "A clear description of what the team should accomplish.",
+					},
+				},
+				"required": []string{"team_name", "work_effort_id", "task"},
+			},
+		},
+	},
+	{
+		Type: "function",
+		Function: ToolFunction{
+			Name:        "escalate_to_user",
+			Description: "Surface a blocker or question to the user that requires human input before work can continue.",
+			Parameters: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"question": map[string]any{
+						"type":        "string",
+						"description": "The question or blocker to present to the user.",
+					},
+					"context": map[string]any{
+						"type":        "string",
+						"description": "Additional context about why this is blocking.",
+					},
+				},
+				"required": []string{"question", "context"},
+			},
+		},
+	},
 	{
 		Type: "function",
 		Function: ToolFunction{
@@ -194,87 +248,11 @@ var staticTools = []Tool{
 	},
 }
 
-// AvailableTools is the set of tools exposed to the LLM. It is initialized
-// with the static tools plus a default run_agent tool. Call SetAvailableTools
-// (typically via BuildTools) at startup to replace it with a registry-aware version.
-var AvailableTools = append(staticTools, Tool{
-	Type: "function",
-	Function: ToolFunction{
-		Name:        "run_agent",
-		Description: "Spawn a background agent to handle a task. No worker agents currently configured.",
-		Parameters: map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"agent_name": map[string]any{
-					"type":        "string",
-					"description": "The name of the agent to run.",
-				},
-				"work_effort_id": map[string]any{
-					"type":        "string",
-					"description": "The ID of the work effort to operate on.",
-				},
-				"task": map[string]any{
-					"type":        "string",
-					"description": "Optional extra instruction appended to the agent prompt.",
-				},
-			},
-			"required": []string{"agent_name", "work_effort_id"},
-		},
-	},
-})
-
-// BuildTools constructs the full tool slice with a dynamic run_agent description
-// derived from the provided worker agents.
-func BuildTools(workers []agents.Agent) []Tool {
-	var rosterLines []string
-	for _, w := range workers {
-		if w.Description == "" {
-			continue
-		}
-		rosterLines = append(rosterLines, fmt.Sprintf("- `%s`: %s", w.Name, w.Description))
-	}
-
-	var desc string
-	if len(rosterLines) == 0 {
-		desc = "Spawn a background agent to handle a task. No worker agents currently configured."
-	} else {
-		desc = "Spawn a background agent to handle a task. Available agents:\n" + strings.Join(rosterLines, "\n")
-	}
-
-	runAgentTool := Tool{
-		Type: "function",
-		Function: ToolFunction{
-			Name:        "run_agent",
-			Description: desc,
-			Parameters: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"agent_name": map[string]any{
-						"type":        "string",
-						"description": "The name of the agent to run.",
-					},
-					"work_effort_id": map[string]any{
-						"type":        "string",
-						"description": "The ID of the work effort to operate on.",
-					},
-					"task": map[string]any{
-						"type":        "string",
-						"description": "Optional extra instruction appended to the agent prompt.",
-					},
-				},
-				"required": []string{"agent_name", "work_effort_id"},
-			},
-		},
-	}
-
-	tools := make([]Tool, 0, len(staticTools)+1)
-	tools = append(tools, staticTools...)
-	tools = append(tools, runAgentTool)
-	return tools
-}
+// AvailableTools is the set of tools exposed to the LLM.
+// It is initialized with staticTools (which includes assign_team and escalate_to_user).
+var AvailableTools = staticTools
 
 // SetAvailableTools replaces the package-level AvailableTools slice.
-// Call this at startup after building the agent registry.
 func SetAvailableTools(tools []Tool) {
 	AvailableTools = tools
 }
@@ -431,26 +409,51 @@ func ExecuteTool(call ToolCall) (string, error) {
 		}
 		return "ok", nil
 
-	case "run_agent":
+	case "assign_team":
 		if activeGateway == nil {
 			return "", fmt.Errorf("gateway not initialized")
 		}
 		var args struct {
-			AgentName    string `json:"agent_name"`
+			TeamName     string `json:"team_name"`
 			WorkEffortID string `json:"work_effort_id"`
 			Task         string `json:"task"`
 		}
 		if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
-			return "", fmt.Errorf("parsing run_agent args: %w", err)
+			return "", fmt.Errorf("parsing assign_team args: %w", err)
 		}
-		slotID, alreadyRunning, err := activeGateway.Spawn(args.AgentName, args.WorkEffortID, args.Task)
+		// Look up team by name.
+		var team agents.Team
+		found := false
+		for _, t := range activeTeams {
+			if t.Name == args.TeamName {
+				team = t
+				found = true
+				break
+			}
+		}
+		if !found {
+			return "", fmt.Errorf("team %q not found", args.TeamName)
+		}
+		slotID, alreadyRunning, err := activeGateway.SpawnTeam(args.TeamName, args.WorkEffortID, args.Task, team)
 		if err != nil {
-			return "", fmt.Errorf("spawning agent: %w", err)
+			return "", fmt.Errorf("spawning team: %w", err)
 		}
 		if alreadyRunning {
-			return fmt.Sprintf("already running: slot %d (do not call run_agent again for this agent)", slotID), nil
+			return fmt.Sprintf("already running: slot %d (do not call assign_team again for this team)", slotID), nil
 		}
 		return fmt.Sprintf("started: slot %d", slotID), nil
+
+	case "escalate_to_user":
+		// The TUI intercepts escalate_to_user before ExecuteTool is called.
+		// If we reach here, return the question as a plain string so the operator can relay it.
+		var args struct {
+			Question string `json:"question"`
+			Context  string `json:"context"`
+		}
+		if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
+			return "", fmt.Errorf("parsing escalate_to_user args: %w", err)
+		}
+		return fmt.Sprintf("__escalate__:%s\n\nContext: %s", args.Question, args.Context), nil
 
 	default:
 		return "", fmt.Errorf("unknown tool: %s", call.Function.Name)

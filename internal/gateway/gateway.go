@@ -63,8 +63,7 @@ type Gateway struct {
 	mu             sync.Mutex
 	slots          [MaxSlots]*slot
 	claudeCfg      config.ClaudeConfig
-	repoRoot       string // path to repo root (agents/ dir is repoRoot/agents/)
-	agentRegistry  map[string]agents.Agent
+	repoRoot       string        // path to repo root (agents/ dir is repoRoot/agents/)
 	notify         func()        // called on every output update; wired to TUI re-render
 	defaultTimeout time.Duration // per-slot subprocess timeout
 }
@@ -118,24 +117,19 @@ func (g *Gateway) Spawn(agentName, workEffortID, task string) (slotID int, alrea
 		}
 	}
 
-	// Resolve agent body and permission args: registry first, then disk fallback.
+	g.mu.Unlock()
+
+	// Resolve agent body from disk.
 	var agentBody string
 	var permissionArgs []string
-	if a, ok := g.agentRegistry[agentName]; ok {
-		agentBody = a.Body
-		permissionArgs = a.ClaudePermissionArgs()
-		g.mu.Unlock()
-	} else {
-		g.mu.Unlock()
-		agentPath := filepath.Join(g.repoRoot, "agents", agentName+".md")
-		agentData, err := os.ReadFile(agentPath)
-		if err != nil {
-			return -1, false, fmt.Errorf("reading agent file %s: %w", agentPath, err)
-		}
-		agentBody = string(agentData)
-		// No frontmatter parsed for disk fallback — default to full access.
-		permissionArgs = []string{"--dangerously-skip-permissions"}
+	agentPath := filepath.Join(g.repoRoot, "agents", agentName+".md")
+	agentData, err := os.ReadFile(agentPath)
+	if err != nil {
+		return -1, false, fmt.Errorf("reading agent file %s: %w", agentPath, err)
 	}
+	agentBody = string(agentData)
+	// No frontmatter parsed for disk fallback — default to full access.
+	permissionArgs = []string{"--dangerously-skip-permissions"}
 
 	// Read work effort context outside the lock (I/O).
 	configDir, _ := config.Dir()
@@ -183,7 +177,7 @@ func (g *Gateway) Spawn(agentName, workEffortID, task string) (slotID int, alrea
 
 	// Start the subprocess goroutine.
 	go func() {
-		ch := spawnClaudeStream(ctx, prompt, g.claudeCfg, permissionArgs)
+		ch := spawnClaudeStream(ctx, prompt, g.claudeCfg, permissionArgs, "")
 		for resp := range ch {
 			switch {
 			case resp.Meta != nil:
@@ -209,12 +203,147 @@ func (g *Gateway) Spawn(agentName, workEffortID, task string) (slotID int, alrea
 	return idx, false, nil
 }
 
-// SetAgentRegistry wires a pre-built agent registry into the gateway so that
-// Spawn can resolve agent bodies without hitting disk.
-func (g *Gateway) SetAgentRegistry(registry map[string]agents.Agent) {
+// SpawnTeam starts a Claude subprocess for a team coordinator in a free slot.
+// It returns the slot index, a boolean indicating whether the team was already
+// running (idempotent duplicate call), and an error if no slot is available.
+func (g *Gateway) SpawnTeam(teamName, workEffortID, task string, team agents.Team) (slotID int, alreadyRunning bool, err error) {
 	g.mu.Lock()
-	g.agentRegistry = registry
+
+	// Find a free slot: first nil slot, then first done slot.
+	idx := -1
+	for i, s := range g.slots {
+		if s == nil {
+			idx = i
+			break
+		}
+	}
+	if idx == -1 {
+		for i, s := range g.slots {
+			if s != nil && s.status == SlotDone {
+				idx = i
+				break
+			}
+		}
+	}
+	if idx == -1 {
+		g.mu.Unlock()
+		return -1, false, fmt.Errorf("all slots busy")
+	}
+
+	// Check for an already-running slot with the same team+work-effort.
+	for i, s := range g.slots {
+		if s != nil && s.status == SlotRunning &&
+			s.agentName == teamName && s.workEffortID == workEffortID {
+			g.mu.Unlock()
+			return i, true, nil
+		}
+	}
+
 	g.mu.Unlock()
+
+	// Build permission args from the team coordinator.
+	var permissionArgs []string
+	if team.Coordinator != nil {
+		permissionArgs = team.Coordinator.ClaudePermissionArgs()
+	} else {
+		permissionArgs = []string{"--dangerously-skip-permissions"}
+	}
+
+	// Build --agents JSON from team workers.
+	var agentsJSON string
+	if len(team.Workers) > 0 {
+		agentsMap := make(map[string]map[string]string, len(team.Workers))
+		for _, w := range team.Workers {
+			agentsMap[w.Name] = map[string]string{
+				"description": w.Description,
+				"prompt":      w.Body,
+			}
+		}
+		if data, err := json.Marshal(agentsMap); err == nil {
+			agentsJSON = string(data)
+		}
+	}
+
+	// Read work effort context outside the lock (I/O).
+	configDir, _ := config.Dir()
+	weDir := filepath.Join(workeffort.WorkEffortsDir(configDir), workEffortID)
+	overview, _ := workeffort.ReadOverview(weDir)
+	todos, _ := workeffort.ReadTodos(weDir)
+
+	// Assemble prompt.
+	var sb strings.Builder
+	sb.WriteString(agents.BuildTeamCoordinatorPrompt(team))
+	sb.WriteString("\n\n---\n\n## Work Effort Context\n\n### OVERVIEW.md\n")
+	sb.WriteString(overview)
+	sb.WriteString("\n\n### TODO.md\n")
+	sb.WriteString(todos)
+	if task != "" {
+		sb.WriteString("\n\n---\n\n## Task\n")
+		sb.WriteString(task)
+	}
+	prompt := sb.String()
+
+	// Build summary: "teamName on workEffortID" optionally with ": task", max 80 chars.
+	summary := teamName + " on " + workEffortID
+	if task != "" {
+		summary += ": " + task
+	}
+	if len(summary) > 80 {
+		summary = summary[:80]
+	}
+
+	// Create the slot and assign it.
+	ctx, cancel := context.WithTimeout(context.Background(), g.defaultTimeout)
+	s := &slot{
+		agentName:    teamName,
+		workEffortID: workEffortID,
+		status:       SlotRunning,
+		startTime:    time.Now(),
+		cancel:       cancel,
+		summary:      summary,
+		prompt:       prompt,
+	}
+
+	g.mu.Lock()
+	g.slots[idx] = s
+	g.mu.Unlock()
+
+	// Start the subprocess goroutine.
+	go func() {
+		ch := spawnClaudeStream(ctx, prompt, g.claudeCfg, permissionArgs, agentsJSON)
+		for resp := range ch {
+			switch {
+			case resp.Meta != nil:
+				g.mu.Lock()
+				s.model = resp.Meta.Model
+				g.mu.Unlock()
+				g.notify()
+			case resp.Content != "":
+				g.mu.Lock()
+				s.output.WriteString(resp.Content)
+				g.mu.Unlock()
+				g.notify()
+			case resp.Done || resp.Error != nil:
+				g.mu.Lock()
+				s.status = SlotDone
+				s.endTime = time.Now()
+				g.mu.Unlock()
+				g.notify()
+			}
+		}
+
+		// After stream closes, read REPORT.md from the work effort dir.
+		reportPath := filepath.Join(weDir, "REPORT.md")
+		if reportData, err := os.ReadFile(reportPath); err == nil {
+			g.mu.Lock()
+			s.output.WriteString("\n\n---\n\n## Team Report\n\n")
+			s.output.WriteString(string(reportData))
+			g.mu.Unlock()
+			g.notify()
+		}
+	}()
+
+	return idx, false, nil
 }
 
 // SetNotify replaces the notify callback. Safe to call after New.
@@ -343,7 +472,7 @@ type claudeOuterEvent struct {
 // permissionArgs are per-agent Claude CLI permission flags (e.g.
 // ["--dangerously-skip-permissions"] or ["--allowedTools", "Read,Bash,..."]).
 // If non-empty they take precedence over claudeCfg.PermissionMode.
-func spawnClaudeStream(ctx context.Context, prompt string, claudeCfg config.ClaudeConfig, permissionArgs []string) <-chan llm.StreamResponse {
+func spawnClaudeStream(ctx context.Context, prompt string, claudeCfg config.ClaudeConfig, permissionArgs []string, agentsJSON string) <-chan llm.StreamResponse {
 	ch := make(chan llm.StreamResponse, 64)
 
 	go func() {
@@ -356,6 +485,9 @@ func spawnClaudeStream(ctx context.Context, prompt string, claudeCfg config.Clau
 		}
 		if claudeCfg.DefaultModel != "" {
 			args = append(args, "--model", claudeCfg.DefaultModel)
+		}
+		if agentsJSON != "" {
+			args = append(args, "--agents", agentsJSON)
 		}
 		// Use per-agent permission args if provided, otherwise fall back to config.
 		if len(permissionArgs) > 0 {

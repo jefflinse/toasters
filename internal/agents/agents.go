@@ -316,6 +316,15 @@ func Watch(ctx context.Context, dir string, onChange func()) error {
 	}
 }
 
+// Team represents a named group of agents loaded from a subdirectory.
+// The coordinator is the agent with mode=="primary"; all others are workers.
+type Team struct {
+	Name        string  // directory name (e.g. "coding")
+	Dir         string  // absolute path to team directory
+	Coordinator *Agent  // nil if no primary agent found
+	Workers     []Agent // all non-coordinator agents
+}
+
 // BuildSystemPrompt assembles the full system prompt for the coordinator by
 // appending the toasters wrapper (with agent roster) to the coordinator's body.
 //
@@ -338,4 +347,206 @@ func BuildSystemPrompt(coordinator Agent, workers []Agent) string {
 	}
 
 	return coordinator.Body + "\n\n---\n\n" + fmt.Sprintf(WrapperPrompt, roster)
+}
+
+// DiscoverTeams loads all teams from subdirectories of teamsDir.
+//
+// Each subdirectory (excluding hidden dirs starting with ".") is treated as a
+// team. Discover is called on the subdir, then BuildRegistry splits the agents
+// into coordinator and workers. Subdirs with no .md files are skipped.
+// If teamsDir does not exist, an empty slice and nil error are returned.
+func DiscoverTeams(teamsDir string) ([]Team, error) {
+	if _, err := os.Stat(teamsDir); os.IsNotExist(err) {
+		return []Team{}, nil
+	}
+
+	entries, err := os.ReadDir(teamsDir)
+	if err != nil {
+		return nil, fmt.Errorf("reading teams directory %s: %w", teamsDir, err)
+	}
+
+	var teams []Team
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		if strings.HasPrefix(entry.Name(), ".") {
+			continue
+		}
+
+		subdir := filepath.Join(teamsDir, entry.Name())
+		discovered, err := Discover(subdir)
+		if err != nil {
+			log.Printf("warning: skipping team directory %s: %v", subdir, err)
+			continue
+		}
+		if len(discovered) == 0 {
+			continue
+		}
+
+		reg := BuildRegistry(discovered, "")
+		teams = append(teams, Team{
+			Name:        entry.Name(),
+			Dir:         subdir,
+			Coordinator: reg.Coordinator,
+			Workers:     reg.Workers,
+		})
+	}
+
+	return teams, nil
+}
+
+// AutoDetectTeams checks well-known agent directories and returns any teams found.
+//
+// It checks ~/.opencode/agents/ (team name "opencode") and ~/.claude/agents/
+// (team name "claude"). Only directories with at least one agent are included.
+// Returns an empty (non-nil) slice if neither directory exists or has agents.
+func AutoDetectTeams() []Team {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return []Team{}
+	}
+
+	candidates := []struct {
+		name string
+		dir  string
+	}{
+		{"opencode", filepath.Join(home, ".opencode", "agents")},
+		{"claude", filepath.Join(home, ".claude", "agents")},
+	}
+
+	teams := make([]Team, 0)
+	for _, c := range candidates {
+		discovered, err := Discover(c.dir)
+		if err != nil || len(discovered) == 0 {
+			continue
+		}
+		reg := BuildRegistry(discovered, "")
+		teams = append(teams, Team{
+			Name:        c.name,
+			Dir:         c.dir,
+			Coordinator: reg.Coordinator,
+			Workers:     reg.Workers,
+		})
+	}
+
+	return teams
+}
+
+// BuildTeamCoordinatorPrompt returns the full system prompt for a team coordinator
+// Claude subprocess. If team.Coordinator is nil, only the instructions block is
+// returned (no coordinator body prepended).
+func BuildTeamCoordinatorPrompt(team Team) string {
+	var sb strings.Builder
+
+	// Prepend coordinator body if present.
+	if team.Coordinator != nil && team.Coordinator.Body != "" {
+		sb.WriteString(team.Coordinator.Body)
+		sb.WriteString("\n\n---\n\n")
+	}
+
+	// Build worker roster.
+	var roster strings.Builder
+	if len(team.Workers) == 0 {
+		roster.WriteString("(no workers configured)")
+	} else {
+		for _, w := range team.Workers {
+			roster.WriteString(fmt.Sprintf("- `%s`: %s\n", w.Name, w.Description))
+		}
+	}
+
+	sb.WriteString(fmt.Sprintf(`## Toasters Team Coordinator Instructions
+
+You are the coordinator for the "%s" team inside toasters, an agentic orchestration tool.
+
+Your job is to take the assigned work effort and task, plan the work, delegate to your team members using the Task tool, and drive the effort to completion autonomously.
+
+### Your Team
+%s
+
+### Completing Work
+When the work effort is complete, write a REPORT.md file to the work effort directory with this exact format:
+
+`+"```"+`markdown
+---
+team: %s
+status: complete
+summary: One paragraph describing what was accomplished.
+artifacts: []
+---
+
+## What Was Done
+...
+
+## Key Decisions Made
+...
+
+## Remaining Work
+None.
+`+"```"+`
+
+### Escalating Blockers
+If you encounter a genuine blocker that cannot be resolved autonomously — something that requires a human decision — write a BLOCKER.md file to the work effort directory with this format:
+
+`+"```"+`markdown
+---
+team: %s
+blocker: Short one-line description of what is blocking
+---
+
+## Context
+...
+
+## What Was Tried
+...
+
+## What Is Needed From User
+...
+`+"```"+`
+
+Then stop work and exit. The operator will surface this to the user and resume the work effort once resolved.
+
+Do not ask for confirmation before starting work. Do not ask for approval of your plan. Work autonomously and escalate only genuine blockers.`,
+		team.Name,
+		strings.TrimRight(roster.String(), "\n"),
+		team.Name,
+		team.Name,
+	))
+
+	return sb.String()
+}
+
+// BuildOperatorPrompt returns the hardcoded toasters operator system prompt,
+// listing all available teams.
+func BuildOperatorPrompt(teams []Team) string {
+	var teamList strings.Builder
+	if len(teams) == 0 {
+		teamList.WriteString("No teams configured. Ask the user to set up a teams directory.")
+	} else {
+		for _, t := range teams {
+			if t.Coordinator != nil {
+				teamList.WriteString(fmt.Sprintf("- `%s`: %s\n", t.Name, t.Coordinator.Description))
+			} else {
+				teamList.WriteString(fmt.Sprintf("- `%s`: %d workers\n", t.Name, len(t.Workers)))
+			}
+		}
+	}
+
+	return fmt.Sprintf(`You are the Operator — the central dispatcher for toasters, an agentic orchestration tool.
+
+Your responsibilities:
+- Receive high-level requests from the user
+- Create work efforts to track the work
+- Assign work efforts to the appropriate team using the assign_team tool
+- Surface team blockers and completion summaries to the user
+- You do NOT plan, code, review, or do any domain work yourself — that is the teams' job
+
+When a team completes, you will receive its report. Summarize the outcome for the user and suggest next steps if appropriate.
+
+When a team is blocked, you will receive a blocker description. Present it clearly to the user and wait for their input before resuming.
+
+Assign work to teams immediately when requested — do not ask for confirmation or present a plan first.
+
+## Available Teams
+%s`, strings.TrimRight(teamList.String(), "\n"))
 }

@@ -52,54 +52,49 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 
-	// Discover agents from the configured agents directory.
-	agentsDir := cfg.Operator.AgentsDir
-	discovered, err := agents.Discover(agentsDir)
+	// Discover teams from the configured teams directory.
+	teamsDir := cfg.Operator.TeamsDir
+	teams, err := agents.DiscoverTeams(teamsDir)
 	if err != nil {
-		// Non-fatal: log a warning and proceed with no agents.
-		log.Printf("warning: failed to discover agents in %s: %v", agentsDir, err)
-		discovered = []agents.Agent{}
+		// Non-fatal: log a warning and proceed with no teams.
+		log.Printf("warning: failed to discover teams in %s: %v", teamsDir, err)
+		teams = []agents.Team{}
 	}
-	registry := agents.BuildRegistry(discovered, cfg.Operator.CoordinatorAgent)
 
-	// Build a flat map of all agents (coordinator + workers) for the gateway.
-	agentMap := make(map[string]agents.Agent, len(registry.Workers)+1)
-	for _, a := range registry.Workers {
-		agentMap[a.Name] = a
-	}
-	if registry.Coordinator != nil {
-		agentMap[registry.Coordinator.Name] = *registry.Coordinator
-	}
+	// Also include auto-detected teams (e.g. ~/.opencode/agents, ~/.claude/agents).
+	autoTeams := agents.AutoDetectTeams()
+	teams = append(teams, autoTeams...)
 
 	// Create the gateway with a no-op notify for now.
 	// The TUI will replace this with a real notify after the program starts.
 	gw := gateway.New(cfg.Claude, repoRoot, func() {})
-	gw.SetAgentRegistry(agentMap)
 	llm.SetGateway(gw)
-	llm.SetAvailableTools(llm.BuildTools(registry.Workers))
+	llm.SetTeams(teams)
 
 	client := llm.NewClient(cfg.Operator.Endpoint, cfg.Operator.Model)
 	if cfg.Operator.LogRequests {
 		client.SetRequestLogging(true, filepath.Join(configDir, "requests.log"))
 	}
-	m := tui.NewModel(client, cfg.Claude, configDir, gw, repoRoot, registry)
+	m := tui.NewModel(client, cfg.Claude, configDir, gw, repoRoot, teams)
 
 	p := tea.NewProgram(&m)
 
 	watchCtx, watchCancel := context.WithCancel(context.Background())
 	defer watchCancel()
 	go func() {
-		err := agents.Watch(watchCtx, cfg.Operator.AgentsDir, func() {
-			discovered, err := agents.Discover(cfg.Operator.AgentsDir)
+		err := agents.Watch(watchCtx, teamsDir, func() {
+			newTeams, err := agents.DiscoverTeams(teamsDir)
 			if err != nil {
-				log.Printf("agents: reload error: %v", err)
+				log.Printf("teams: reload error: %v", err)
 				return
 			}
-			newRegistry := agents.BuildRegistry(discovered, cfg.Operator.CoordinatorAgent)
-			p.Send(tui.RegistryReloadedMsg{Registry: newRegistry})
+			autoTeams := agents.AutoDetectTeams()
+			allTeams := append(newTeams, autoTeams...)
+			llm.SetTeams(allTeams)
+			p.Send(tui.TeamsReloadedMsg{Teams: allTeams})
 		})
 		if err != nil && watchCtx.Err() == nil {
-			log.Printf("agents: watcher error: %v", err)
+			log.Printf("teams watcher error: %v", err)
 		}
 	}()
 

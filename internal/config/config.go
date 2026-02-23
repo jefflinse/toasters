@@ -17,12 +17,11 @@ type Config struct {
 
 // OperatorConfig holds configuration for the operator LLM backend.
 type OperatorConfig struct {
-	Endpoint         string `mapstructure:"endpoint"`
-	APIKey           string `mapstructure:"api_key"`
-	Model            string `mapstructure:"model"`
-	CoordinatorAgent string `mapstructure:"coordinator_agent"`
-	AgentsDir        string `mapstructure:"agents_dir"`
-	LogRequests      bool   `mapstructure:"log_requests"`
+	Endpoint    string `mapstructure:"endpoint"`
+	APIKey      string `mapstructure:"api_key"`
+	Model       string `mapstructure:"model"`
+	TeamsDir    string `mapstructure:"teams_dir"`
+	LogRequests bool   `mapstructure:"log_requests"`
 }
 
 // ClaudeConfig holds configuration for the Claude CLI.
@@ -44,12 +43,11 @@ func Load() (*Config, error) {
 	viper.SetConfigType("yaml")
 	viper.AddConfigPath(home + "/.config/toasters")
 
-	agentsHome, _ := os.UserHomeDir() // fall back to "" on error
+	teamsHome, _ := os.UserHomeDir() // fall back to "" on error
 	viper.SetDefault("operator.endpoint", "http://localhost:1234")
 	viper.SetDefault("operator.api_key", "")
 	viper.SetDefault("operator.model", "")
-	viper.SetDefault("operator.coordinator_agent", "")
-	viper.SetDefault("operator.agents_dir", filepath.Join(agentsHome, ".opencode", "agents"))
+	viper.SetDefault("operator.teams_dir", filepath.Join(teamsHome, ".opencode", "teams"))
 	viper.SetDefault("operator.log_requests", false)
 	viper.SetDefault("claude.path", "claude")
 	viper.SetDefault("claude.default_model", "")
