@@ -26,9 +26,10 @@ type OperatorConfig struct {
 
 // ClaudeConfig holds configuration for the Claude CLI.
 type ClaudeConfig struct {
-	Path           string `mapstructure:"path"`
-	DefaultModel   string `mapstructure:"default_model"`
-	PermissionMode string `mapstructure:"permission_mode"`
+	Path               string `mapstructure:"path"`
+	DefaultModel       string `mapstructure:"default_model"`
+	PermissionMode     string `mapstructure:"permission_mode"`
+	SlotTimeoutMinutes int    `mapstructure:"slot_timeout_minutes"`
 }
 
 // Load reads configuration from ~/.config/toasters/config.yaml, applying
@@ -51,6 +52,7 @@ func Load() (*Config, error) {
 	viper.SetDefault("claude.path", "claude")
 	viper.SetDefault("claude.default_model", "")
 	viper.SetDefault("claude.permission_mode", "")
+	viper.SetDefault("claude.slot_timeout_minutes", 15)
 
 	if err := viper.ReadInConfig(); err != nil {
 		var notFound viper.ConfigFileNotFoundError

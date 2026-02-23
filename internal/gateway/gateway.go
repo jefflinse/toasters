@@ -74,11 +74,15 @@ type Gateway struct {
 
 // New returns an initialized Gateway with all slots nil.
 func New(claudeCfg config.ClaudeConfig, notify func()) *Gateway {
+	timeout := time.Duration(claudeCfg.SlotTimeoutMinutes) * time.Minute
+	if timeout <= 0 {
+		timeout = 15 * time.Minute
+	}
 	return &Gateway{
 		claudeCfg:      claudeCfg,
 		notify:         notify,
 		send:           func(SlotTimeoutMsg) {},
-		defaultTimeout: 15 * time.Minute,
+		defaultTimeout: timeout,
 	}
 }
 
