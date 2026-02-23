@@ -75,7 +75,10 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 	if cfg.Operator.LogRequests {
 		client.SetRequestLogging(true, filepath.Join(configDir, "requests.log"))
 	}
-	m := tui.NewModel(client, cfg.Claude, configDir, gw, repoRoot, teamsDir, teams)
+
+	awareness := generateTeamAwareness(context.Background(), client, teams, configDir)
+
+	m := tui.NewModel(client, cfg.Claude, configDir, gw, repoRoot, teamsDir, teams, awareness)
 
 	p := tea.NewProgram(&m)
 
@@ -91,7 +94,8 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 			autoTeams := agents.AutoDetectTeams()
 			allTeams := append(newTeams, autoTeams...)
 			llm.SetTeams(allTeams)
-			p.Send(tui.TeamsReloadedMsg{Teams: allTeams})
+			newAwareness := generateTeamAwareness(context.Background(), client, allTeams, configDir)
+			p.Send(tui.TeamsReloadedMsg{Teams: allTeams, Awareness: newAwareness})
 		})
 		if err != nil && watchCtx.Err() == nil {
 			log.Printf("teams watcher error: %v", err)

@@ -626,18 +626,28 @@ func rewriteMode(content, mode string) string {
 
 // BuildOperatorPrompt returns the hardcoded toasters operator system prompt,
 // listing all available teams.
-func BuildOperatorPrompt(teams []Team) string {
-	var teamList strings.Builder
-	if len(teams) == 0 {
-		teamList.WriteString("No teams configured. Ask the user to set up a teams directory.")
+//
+// When awareness is non-empty it is used verbatim as the body of the
+// "## Available Teams" section. When awareness is empty the fallback
+// one-liner-per-team list is used instead.
+func BuildOperatorPrompt(teams []Team, awareness string) string {
+	var teamsSection string
+	if awareness != "" {
+		teamsSection = awareness
 	} else {
-		for _, t := range teams {
-			if t.Coordinator != nil {
-				teamList.WriteString(fmt.Sprintf("- `%s`: %s\n", t.Name, t.Coordinator.Description))
-			} else {
-				teamList.WriteString(fmt.Sprintf("- `%s`: %d workers\n", t.Name, len(t.Workers)))
+		var teamList strings.Builder
+		if len(teams) == 0 {
+			teamList.WriteString("No teams configured. Ask the user to set up a teams directory.")
+		} else {
+			for _, t := range teams {
+				if t.Coordinator != nil {
+					teamList.WriteString(fmt.Sprintf("- `%s`: %s\n", t.Name, t.Coordinator.Description))
+				} else {
+					teamList.WriteString(fmt.Sprintf("- `%s`: %d workers\n", t.Name, len(t.Workers)))
+				}
 			}
 		}
+		teamsSection = strings.TrimRight(teamList.String(), "\n")
 	}
 
 	return fmt.Sprintf(`You are the Operator — the central dispatcher for toasters. You receive user requests, manage jobs, and assign work to teams.
@@ -662,5 +672,5 @@ When a team completes, summarize the outcome for the user and suggest next steps
 When a team is blocked, present the blocker clearly to the user and wait for their input before resuming.
 
 ## Available Teams
-%s`, strings.TrimRight(teamList.String(), "\n"))
+%s`, teamsSection)
 }

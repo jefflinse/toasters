@@ -87,7 +87,8 @@ type AgentOutputMsg struct{}
 
 // TeamsReloadedMsg is sent by the hot-reload watcher when the teams directory changes.
 type TeamsReloadedMsg struct {
-	Teams []agents.Team
+	Teams     []agents.Team
+	Awareness string
 }
 
 // claudeMetaMsg carries model/mode info parsed from the claude CLI system/init event.
@@ -184,6 +185,7 @@ type Model struct {
 
 	teams        []agents.Team // available teams
 	teamsDir     string        // path to the configured teams directory
+	awareness    string        // team-awareness content used to build the operator prompt
 	systemPrompt string        // assembled at startup; prepended to every LLM call
 	repoRoot     string        // path to repo root (for /claude slash command path)
 
@@ -239,7 +241,7 @@ type Model struct {
 }
 
 // NewModel returns an initialized root model.
-func NewModel(client *llm.Client, claudeCfg config.ClaudeConfig, configDir string, gw *gateway.Gateway, repoRoot string, teamsDir string, teams []agents.Team) Model {
+func NewModel(client *llm.Client, claudeCfg config.ClaudeConfig, configDir string, gw *gateway.Gateway, repoRoot string, teamsDir string, teams []agents.Team, awareness string) Model {
 	ta := textarea.New()
 	ta.Placeholder = "Type your message here..."
 	ta.Prompt = ""
@@ -292,7 +294,8 @@ func NewModel(client *llm.Client, claudeCfg config.ClaudeConfig, configDir strin
 	m.repoRoot = repoRoot
 	m.teamsDir = teamsDir
 	m.teams = teams
-	m.systemPrompt = agents.BuildOperatorPrompt(teams)
+	m.awareness = awareness
+	m.systemPrompt = agents.BuildOperatorPrompt(teams, awareness)
 	m.initMessages()
 
 	m.agentNotifyCh = make(chan struct{}, 8) // buffered to avoid blocking gateway goroutines
@@ -1234,7 +1237,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case TeamsReloadedMsg:
 		m.teams = msg.Teams
-		m.systemPrompt = agents.BuildOperatorPrompt(m.teams)
+		m.awareness = msg.Awareness
+		m.systemPrompt = agents.BuildOperatorPrompt(m.teams, m.awareness)
 		llm.SetTeams(m.teams)
 		if m.hasConversation() {
 			m.messages[0].Content = m.systemPrompt
@@ -2364,7 +2368,7 @@ func (m *Model) hasConversation() bool {
 }
 
 func (m *Model) newSession() {
-	m.systemPrompt = agents.BuildOperatorPrompt(m.teams)
+	m.systemPrompt = agents.BuildOperatorPrompt(m.teams, m.awareness)
 	m.initMessages()
 	m.reasoning = nil
 	m.claudeMeta = nil
