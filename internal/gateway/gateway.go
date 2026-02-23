@@ -63,144 +63,17 @@ type Gateway struct {
 	mu             sync.Mutex
 	slots          [MaxSlots]*slot
 	claudeCfg      config.ClaudeConfig
-	repoRoot       string        // path to repo root (agents/ dir is repoRoot/agents/)
 	notify         func()        // called on every output update; wired to TUI re-render
 	defaultTimeout time.Duration // per-slot subprocess timeout
 }
 
 // New returns an initialized Gateway with all slots nil.
-func New(claudeCfg config.ClaudeConfig, repoRoot string, notify func()) *Gateway {
+func New(claudeCfg config.ClaudeConfig, notify func()) *Gateway {
 	return &Gateway{
 		claudeCfg:      claudeCfg,
-		repoRoot:       repoRoot,
 		notify:         notify,
 		defaultTimeout: 5 * time.Minute,
 	}
-}
-
-// Spawn starts a new Claude subprocess in a free slot. It returns the slot
-// index on success, or -1 and an error if no slot is available.
-// Spawn starts a new Claude subprocess in a free slot. It returns the slot
-// index, a boolean indicating whether the agent was already running (idempotent
-// duplicate call), and an error if no slot is available or the agent fails to start.
-func (g *Gateway) Spawn(agentName, jobID, task string) (slotID int, alreadyRunning bool, err error) {
-	g.mu.Lock()
-
-	// Find a free slot: first nil slot, then first done slot.
-	idx := -1
-	for i, s := range g.slots {
-		if s == nil {
-			idx = i
-			break
-		}
-	}
-	if idx == -1 {
-		for i, s := range g.slots {
-			if s != nil && s.status == SlotDone {
-				idx = i
-				break
-			}
-		}
-	}
-	if idx == -1 {
-		g.mu.Unlock()
-		return -1, false, fmt.Errorf("all slots busy")
-	}
-
-	// Check for an already-running slot with the same agent+job.
-	// Return the existing slot index as a success so the operator doesn't retry.
-	for i, s := range g.slots {
-		if s != nil && s.status == SlotRunning &&
-			s.agentName == agentName && s.jobID == jobID {
-			g.mu.Unlock()
-			return i, true, nil // idempotent: treat duplicate spawn as success
-		}
-	}
-
-	g.mu.Unlock()
-
-	// Resolve agent body from disk.
-	var agentBody string
-	var permissionArgs []string
-	agentPath := filepath.Join(g.repoRoot, "agents", agentName+".md")
-	agentData, err := os.ReadFile(agentPath)
-	if err != nil {
-		return -1, false, fmt.Errorf("reading agent file %s: %w", agentPath, err)
-	}
-	agentBody = string(agentData)
-	// No frontmatter parsed for disk fallback — default to full access.
-	permissionArgs = []string{"--dangerously-skip-permissions"}
-
-	// Read job context outside the lock (I/O).
-	configDir, _ := config.Dir()
-	jobDir := filepath.Join(job.JobsDir(configDir), jobID)
-	overview, _ := job.ReadOverview(jobDir)
-	todos, _ := job.ReadTodos(jobDir)
-
-	// Assemble prompt.
-	var sb strings.Builder
-	sb.WriteString(agentBody)
-	sb.WriteString("\n\n---\n\n## Job Context\n\n### OVERVIEW.md\n")
-	sb.WriteString(overview)
-	sb.WriteString("\n\n### TODO.md\n")
-	sb.WriteString(todos)
-	if task != "" {
-		sb.WriteString("\n\n---\n\n## Task\n")
-		sb.WriteString(task)
-	}
-	prompt := sb.String()
-
-	// Build summary: "agentName on jobID" optionally with ": task", max 80 chars.
-	summary := agentName + " on " + jobID
-	if task != "" {
-		summary += ": " + task
-	}
-	if len(summary) > 80 {
-		summary = summary[:80]
-	}
-
-	// Create the slot and assign it.
-	ctx, cancel := context.WithTimeout(context.Background(), g.defaultTimeout)
-	s := &slot{
-		agentName: agentName,
-		jobID:     jobID,
-		status:    SlotRunning,
-		startTime: time.Now(),
-		cancel:    cancel,
-		summary:   summary,
-		prompt:    prompt,
-	}
-
-	g.mu.Lock()
-	g.slots[idx] = s
-	g.mu.Unlock()
-
-	// Start the subprocess goroutine.
-	go func() {
-		ch := spawnClaudeStream(ctx, prompt, g.claudeCfg, permissionArgs, "")
-		for resp := range ch {
-			switch {
-			case resp.Meta != nil:
-				g.mu.Lock()
-				s.model = resp.Meta.Model
-				g.mu.Unlock()
-				g.notify()
-			case resp.Content != "":
-				g.mu.Lock()
-				s.output.WriteString(resp.Content)
-				g.mu.Unlock()
-				g.notify()
-			case resp.Done || resp.Error != nil:
-				g.mu.Lock()
-				s.status = SlotDone
-				s.endTime = time.Now()
-				g.mu.Unlock()
-				g.notify()
-			}
-		}
-	}()
-
-	return idx, false, nil
 }
 
 // SpawnTeam starts a Claude subprocess for a team coordinator in a free slot.

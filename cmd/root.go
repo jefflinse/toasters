@@ -67,7 +67,7 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 
 	// Create the gateway with a no-op notify for now.
 	// The TUI will replace this with a real notify after the program starts.
-	gw := gateway.New(cfg.Claude, repoRoot, func() {})
+	gw := gateway.New(cfg.Claude, func() {})
 	llm.SetGateway(gw)
 	llm.SetTeams(teams)
 
