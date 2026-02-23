@@ -3,12 +3,15 @@
 package agents
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/fsnotify/fsnotify"
 )
 
 // WrapperPrompt is the toasters-owned framing text appended to every coordinator
@@ -193,6 +196,39 @@ func BuildRegistry(discovered []Agent, coordinatorName string) Registry {
 	return Registry{
 		Coordinator: &coord,
 		Workers:     workers,
+	}
+}
+
+// Watch monitors dir for Markdown file changes and calls onChange each time a
+// change is detected. It blocks until ctx is cancelled. If dir does not exist
+// the watcher is started anyway so it picks up the directory once created.
+func Watch(ctx context.Context, dir string, onChange func()) error {
+	w, err := fsnotify.NewWatcher()
+	if err != nil {
+		return fmt.Errorf("creating fsnotify watcher: %w", err)
+	}
+	defer w.Close()
+
+	// Best-effort: ignore error if dir doesn't exist yet.
+	_ = w.Add(dir)
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case event, ok := <-w.Events:
+			if !ok {
+				return nil
+			}
+			if strings.HasSuffix(event.Name, ".md") {
+				onChange()
+			}
+		case err, ok := <-w.Errors:
+			if !ok {
+				return nil
+			}
+			log.Printf("agents watcher error: %v", err)
+		}
 	}
 }
 

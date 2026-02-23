@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"os"
+	"path/filepath"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -20,6 +21,7 @@ type OperatorConfig struct {
 	APIKey           string `mapstructure:"api_key"`
 	Model            string `mapstructure:"model"`
 	CoordinatorAgent string `mapstructure:"coordinator_agent"`
+	AgentsDir        string `mapstructure:"agents_dir"`
 }
 
 // ClaudeConfig holds configuration for the Claude CLI.
@@ -41,10 +43,12 @@ func Load() (*Config, error) {
 	viper.SetConfigType("yaml")
 	viper.AddConfigPath(home + "/.config/toasters")
 
+	agentsHome, _ := os.UserHomeDir() // fall back to "" on error
 	viper.SetDefault("operator.endpoint", "http://localhost:1234")
 	viper.SetDefault("operator.api_key", "")
 	viper.SetDefault("operator.model", "")
 	viper.SetDefault("operator.coordinator_agent", "")
+	viper.SetDefault("operator.agents_dir", filepath.Join(agentsHome, ".opencode", "agents"))
 	viper.SetDefault("claude.path", "claude")
 	viper.SetDefault("claude.default_model", "")
 	viper.SetDefault("claude.permission_mode", "")

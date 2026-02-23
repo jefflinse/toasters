@@ -31,6 +31,7 @@ type ChatRequest struct {
 	Stream        bool           `json:"stream"`
 	StreamOptions *StreamOptions `json:"stream_options,omitempty"`
 	Tools         []Tool         `json:"tools,omitempty"`
+	Temperature   *float64       `json:"temperature,omitempty"`
 }
 
 // ChatCompletionChunk is a single SSE chunk from the streaming response.
@@ -133,12 +134,12 @@ func (c *Client) BaseURL() string {
 // ChatCompletionStream sends messages and returns a channel that delivers
 // streamed response chunks. The channel is closed when the stream ends,
 // either normally or due to an error.
-func (c *Client) ChatCompletionStream(ctx context.Context, messages []Message) <-chan StreamResponse {
+func (c *Client) ChatCompletionStream(ctx context.Context, messages []Message, temperature float64) <-chan StreamResponse {
 	ch := make(chan StreamResponse, 1)
 
 	go func() {
 		defer close(ch)
-		c.streamCompletion(ctx, messages, ch)
+		c.streamCompletion(ctx, messages, temperature, ch)
 	}()
 
 	return ch
@@ -146,16 +147,16 @@ func (c *Client) ChatCompletionStream(ctx context.Context, messages []Message) <
 
 // ChatCompletionStreamWithTools is like ChatCompletionStream but sends tool definitions
 // to the LLM, enabling tool calling.
-func (c *Client) ChatCompletionStreamWithTools(ctx context.Context, messages []Message, tools []Tool) <-chan StreamResponse {
+func (c *Client) ChatCompletionStreamWithTools(ctx context.Context, messages []Message, tools []Tool, temperature float64) <-chan StreamResponse {
 	ch := make(chan StreamResponse, 1)
 	go func() {
 		defer close(ch)
-		c.streamCompletionWithTools(ctx, messages, tools, ch)
+		c.streamCompletionWithTools(ctx, messages, tools, temperature, ch)
 	}()
 	return ch
 }
 
-func (c *Client) streamCompletion(ctx context.Context, messages []Message, ch chan<- StreamResponse) {
+func (c *Client) streamCompletion(ctx context.Context, messages []Message, temperature float64, ch chan<- StreamResponse) {
 	reqBody := ChatRequest{
 		Model:    c.model,
 		Messages: messages,
@@ -163,6 +164,9 @@ func (c *Client) streamCompletion(ctx context.Context, messages []Message, ch ch
 		StreamOptions: &StreamOptions{
 			IncludeUsage: true,
 		},
+	}
+	if temperature > 0 {
+		reqBody.Temperature = &temperature
 	}
 
 	body, err := json.Marshal(reqBody)
@@ -277,7 +281,7 @@ func (c *Client) streamCompletion(ctx context.Context, messages []Message, ch ch
 	ch <- StreamResponse{Done: true, Model: lastModel, Usage: lastUsage}
 }
 
-func (c *Client) streamCompletionWithTools(ctx context.Context, messages []Message, tools []Tool, ch chan<- StreamResponse) {
+func (c *Client) streamCompletionWithTools(ctx context.Context, messages []Message, tools []Tool, temperature float64, ch chan<- StreamResponse) {
 	reqBody := ChatRequest{
 		Model:    c.model,
 		Messages: messages,
@@ -286,6 +290,9 @@ func (c *Client) streamCompletionWithTools(ctx context.Context, messages []Messa
 			IncludeUsage: true,
 		},
 		Tools: tools,
+	}
+	if temperature > 0 {
+		reqBody.Temperature = &temperature
 	}
 
 	body, err := json.Marshal(reqBody)

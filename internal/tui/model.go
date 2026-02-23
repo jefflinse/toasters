@@ -83,6 +83,11 @@ type ModelsMsg struct {
 // AgentOutputMsg is sent by the gateway notify callback when any slot output changes.
 type AgentOutputMsg struct{}
 
+// RegistryReloadedMsg is sent by the hot-reload watcher when the agents directory changes.
+type RegistryReloadedMsg struct {
+	Registry agents.Registry
+}
+
 // claudeMetaMsg carries model/mode info parsed from the claude CLI system/init event.
 type claudeMetaMsg struct {
 	Model          string
@@ -779,6 +784,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.claudeActiveMeta = formatClaudeMeta(msg)
 		return m, waitForChunk(m.streamCh)
 
+	case RegistryReloadedMsg:
+		m.registry = msg.Registry
+		m.systemPrompt = buildSystemPrompt(m.registry, m.repoRoot)
+		llm.SetAvailableTools(llm.BuildTools(msg.Registry.Workers))
+		return m, tea.Batch(cmds...)
+
 	case AgentOutputMsg:
 		// Re-arm the poller.
 		if m.agentNotifyCh != nil {
@@ -1406,6 +1417,44 @@ func (m Model) renderSidebar(sbWidth int) string {
 	}
 	sb.WriteString("\n")
 
+	// Registry section.
+	sb.WriteString("\n")
+	sb.WriteString(SidebarHeaderStyle.Render("Registry"))
+	sb.WriteString("\n\n")
+
+	// Coordinator row.
+	if m.registry.Coordinator != nil {
+		coordLine := "coordinator: " + m.registry.Coordinator.Name
+		sb.WriteString(SidebarValueStyle.Render(truncateStr(coordLine, contentWidth)))
+	} else {
+		sb.WriteString("coordinator: " + DimStyle.Render("(none)"))
+	}
+	sb.WriteString("\n")
+
+	// Workers header.
+	workerCount := len(m.registry.Workers)
+	sb.WriteString(SidebarValueStyle.Render(fmt.Sprintf("workers (%d):", workerCount)))
+	sb.WriteString("\n")
+
+	// Worker list.
+	if workerCount == 0 {
+		sb.WriteString("  " + DimStyle.Render("(none)"))
+		sb.WriteString("\n")
+	} else {
+		for _, w := range m.registry.Workers {
+			var line string
+			if w.Description != "" {
+				// "  name — description" truncated to fit contentWidth.
+				full := "  " + w.Name + " \u2014 " + w.Description
+				line = truncateStr(full, contentWidth)
+			} else {
+				line = truncateStr("  "+w.Name, contentWidth)
+			}
+			sb.WriteString(SidebarValueStyle.Render(line))
+			sb.WriteString("\n")
+		}
+	}
+
 	return SidebarStyle.
 		Width(sbWidth).
 		Height(m.height).
@@ -1680,9 +1729,14 @@ func (m *Model) startStream(msgs []llm.Message) tea.Cmd {
 	m.currentReasoning = ""
 	m.stats.ResponseStart = time.Now()
 
+	var temperature float64
+	if m.registry.Coordinator != nil && m.registry.Coordinator.Temperature > 0 {
+		temperature = m.registry.Coordinator.Temperature
+	}
+
 	client := m.llmClient
 	return func() tea.Msg {
-		ch := client.ChatCompletionStreamWithTools(ctx, msgs, llm.AvailableTools)
+		ch := client.ChatCompletionStreamWithTools(ctx, msgs, llm.AvailableTools, temperature)
 		return streamStartedMsg{ch: ch}
 	}
 }

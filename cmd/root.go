@@ -1,9 +1,9 @@
 package cmd
 
 import (
+	"context"
 	"log"
 	"os"
-	"path/filepath"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/spf13/cobra"
@@ -51,12 +51,8 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 
-	// Discover agents from ~/.opencode/agents.
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return err
-	}
-	agentsDir := filepath.Join(home, ".opencode", "agents")
+	// Discover agents from the configured agents directory.
+	agentsDir := cfg.Operator.AgentsDir
 	discovered, err := agents.Discover(agentsDir)
 	if err != nil {
 		// Non-fatal: log a warning and proceed with no agents.
@@ -84,6 +80,25 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 	client := llm.NewClient(cfg.Operator.Endpoint, cfg.Operator.Model)
 	m := tui.NewModel(client, cfg.Claude, configDir, gw, repoRoot, registry)
 
-	_, err = tea.NewProgram(m).Run()
+	p := tea.NewProgram(m)
+
+	watchCtx, watchCancel := context.WithCancel(context.Background())
+	defer watchCancel()
+	go func() {
+		err := agents.Watch(watchCtx, cfg.Operator.AgentsDir, func() {
+			discovered, err := agents.Discover(cfg.Operator.AgentsDir)
+			if err != nil {
+				log.Printf("agents: reload error: %v", err)
+				return
+			}
+			newRegistry := agents.BuildRegistry(discovered, cfg.Operator.CoordinatorAgent)
+			p.Send(tui.RegistryReloadedMsg{Registry: newRegistry})
+		})
+		if err != nil && watchCtx.Err() == nil {
+			log.Printf("agents: watcher error: %v", err)
+		}
+	}()
+
+	_, err = p.Run()
 	return err
 }
