@@ -264,6 +264,9 @@ type Model struct {
 	completionMsgIdx map[int]bool // indices of team-completion messages in m.messages
 	expandedMsgs     map[int]bool // which completion messages are currently expanded
 	selectedMsgIdx   int          // currently selected message index (-1 = none)
+
+	// Collapsible reasoning (thinking) state.
+	expandedReasoning map[int]bool // which assistant message indices have reasoning expanded
 }
 
 // NewModel returns an initialized root model.
@@ -336,6 +339,7 @@ func NewModel(client *llm.Client, claudeCfg config.ClaudeConfig, configDir strin
 	m.completionMsgIdx = make(map[int]bool)
 	m.expandedMsgs = make(map[int]bool)
 	m.selectedMsgIdx = -1
+	m.expandedReasoning = make(map[int]bool)
 
 	agentVP := viewport.New()
 	agentVP.MouseWheelEnabled = true
@@ -844,6 +848,28 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.expandedMsgs[m.selectedMsgIdx] = !m.expandedMsgs[m.selectedMsgIdx]
 				m.updateViewportContent()
 				return m, nil
+			}
+
+		case "t":
+			// Toggle expand/collapse of the reasoning trace for the most recent assistant message
+			// that has a non-empty reasoning block.
+			if m.focused == focusChat && !m.streaming {
+				// Find the last assistant message index with reasoning.
+				assistantIdx := 0
+				lastReasoningIdx := -1
+				for _, msg := range m.messages {
+					if msg.Role == "assistant" {
+						if assistantIdx < len(m.reasoning) && m.reasoning[assistantIdx] != "" {
+							lastReasoningIdx = assistantIdx
+						}
+						assistantIdx++
+					}
+				}
+				if lastReasoningIdx >= 0 {
+					m.expandedReasoning[lastReasoningIdx] = !m.expandedReasoning[lastReasoningIdx]
+					m.updateViewportContent()
+					return m, nil
+				}
 			}
 
 		case "ctrl+g":
@@ -2179,10 +2205,14 @@ func (m *Model) updateViewportContent() {
 			if assistantIdx < len(m.claudeMeta) && m.claudeMeta[assistantIdx] != "" {
 				sb.WriteString(ClaudeBylineStyle.Render("⬡ "+m.claudeMeta[assistantIdx]) + "\n")
 			}
-			// Render reasoning trace (if any) above the response.
+			// Render reasoning trace (if any) above the response — only when expanded.
 			if assistantIdx < len(m.reasoning) && m.reasoning[assistantIdx] != "" {
-				sb.WriteString(renderReasoningBlock(m.reasoning[assistantIdx], contentWidth))
-				sb.WriteString("\n")
+				if m.expandedReasoning[assistantIdx] {
+					sb.WriteString(renderReasoningBlock(m.reasoning[assistantIdx], contentWidth))
+					sb.WriteString("\n")
+				} else {
+					sb.WriteString(ReasoningStyle.Render("▶ thinking (press t to expand)") + "\n\n")
+				}
 			}
 			sb.WriteString(m.renderMarkdown(msg.Content) + "\n\n")
 			assistantIdx++
@@ -2669,6 +2699,7 @@ func (m *Model) initMessages() {
 	m.completionMsgIdx = make(map[int]bool)
 	m.expandedMsgs = make(map[int]bool)
 	m.selectedMsgIdx = -1
+	m.expandedReasoning = make(map[int]bool)
 	m.confirmDispatch = false
 	m.changingTeam = false
 	m.pendingDispatch = llm.ToolCall{}
