@@ -232,6 +232,10 @@ type Model struct {
 	promptCustom      bool         // true when user selected "Custom response..." and is typing
 	promptPendingCall llm.ToolCall // the tool call to resume after input
 
+	confirmDispatch bool         // true when promptMode is a dispatch confirmation
+	changingTeam    bool         // true when promptMode is the "change team" sub-prompt
+	pendingDispatch llm.ToolCall // the assign_team call awaiting confirmation
+
 	userScrolled bool // true when user has manually scrolled up; suppresses auto-scroll
 
 	// prevSlotActive/Status track the last-seen state of each gateway slot so
@@ -931,6 +935,18 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 					return m, teamCmd
 				}
+				// /job <prompt> — create a new job via the operator LLM.
+				if strings.HasPrefix(text, "/job ") {
+					prompt := strings.TrimSpace(strings.TrimPrefix(text, "/job "))
+					if prompt == "" {
+						m.input.Reset()
+						m.showCmdPopup = false
+						return m, nil
+					}
+					m.showCmdPopup = false
+					m.input.SetValue("[JOB REQUEST] " + prompt)
+					return m, m.sendMessage()
+				}
 				// /claude <prompt> — stream via the claude CLI subprocess.
 				if strings.HasPrefix(text, "/claude ") {
 					prompt := strings.TrimSpace(strings.TrimPrefix(text, "/claude "))
@@ -1040,8 +1056,36 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// then re-invoke the stream for the final answer.
 		m.streaming = false
 
-		// Check for ask_user or escalate_to_user — intercept before ExecuteTool.
+		// Check for assign_team, ask_user, or escalate_to_user — intercept before ExecuteTool.
 		for _, call := range msg.Calls {
+			if call.Function.Name == "assign_team" {
+				var args struct {
+					TeamName string `json:"team_name"`
+					JobID    string `json:"job_id"`
+				}
+				_ = json.Unmarshal([]byte(call.Function.Arguments), &args)
+
+				question := fmt.Sprintf("Assign job '%s' to team '%s'?", args.JobID, args.TeamName)
+				m.messages = append(m.messages, llm.Message{Role: "assistant", Content: question})
+				m.reasoning = append(m.reasoning, "")
+				m.claudeMeta = append(m.claudeMeta, "dispatch-confirm")
+				m.streaming = false
+				m.promptMode = true
+				m.confirmDispatch = true
+				m.changingTeam = false
+				m.pendingDispatch = call
+				m.promptQuestion = question
+				m.promptOptions = []string{"Yes, dispatch", "Change team", "Cancel"}
+				m.promptSelected = 0
+				m.promptCustom = false
+				m.promptPendingCall = call
+				m.updateViewportContent()
+				if !m.userScrolled {
+					m.chatViewport.GotoBottom()
+				}
+				cmds = append(cmds, m.input.Focus())
+				return m, tea.Batch(cmds...)
+			}
 			if call.Function.Name == "escalate_to_user" {
 				var args struct {
 					Question string `json:"question"`
@@ -1155,6 +1199,79 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.startStream(m.messages)
 
 	case AskUserResponseMsg:
+		// Handle dispatch confirmation flow.
+		if m.confirmDispatch {
+			m.promptMode = false
+			m.promptCustom = false
+			m.promptOptions = nil
+			m.promptSelected = 0
+
+			if m.changingTeam {
+				// Second prompt: user selected a new team name.
+				m.changingTeam = false
+				m.confirmDispatch = false
+
+				// Rewrite the team_name in the pending dispatch args.
+				var args map[string]any
+				_ = json.Unmarshal([]byte(m.pendingDispatch.Function.Arguments), &args)
+				args["team_name"] = msg.Result
+				newArgs, _ := json.Marshal(args)
+				m.pendingDispatch.Function.Arguments = string(newArgs)
+
+				// Execute the modified assign_team call.
+				result, err := llm.ExecuteTool(m.pendingDispatch)
+				if err != nil {
+					result = fmt.Sprintf("error: %v", err)
+				}
+				m.messages = append(m.messages, llm.Message{Role: "assistant", ToolCalls: []llm.ToolCall{m.pendingDispatch}})
+				m.reasoning = append(m.reasoning, "")
+				m.claudeMeta = append(m.claudeMeta, "tool-call-indicator")
+				m.messages = append(m.messages, llm.Message{Role: "tool", Content: result, ToolCallID: m.pendingDispatch.ID})
+				m.updateViewportContent()
+				return m, m.startStream(m.messages)
+			}
+
+			switch msg.Result {
+			case "Yes, dispatch":
+				m.confirmDispatch = false
+				result, err := llm.ExecuteTool(m.pendingDispatch)
+				if err != nil {
+					result = fmt.Sprintf("error: %v", err)
+				}
+				m.messages = append(m.messages, llm.Message{Role: "assistant", ToolCalls: []llm.ToolCall{m.pendingDispatch}})
+				m.reasoning = append(m.reasoning, "")
+				m.claudeMeta = append(m.claudeMeta, "tool-call-indicator")
+				m.messages = append(m.messages, llm.Message{Role: "tool", Content: result, ToolCallID: m.pendingDispatch.ID})
+				m.updateViewportContent()
+				return m, m.startStream(m.messages)
+
+			case "Change team":
+				// Show second prompt with available team names.
+				teamNames := make([]string, len(m.teams))
+				for i, t := range m.teams {
+					teamNames[i] = t.Name
+				}
+				m.promptMode = true
+				m.confirmDispatch = true
+				m.changingTeam = true
+				m.promptQuestion = "Select a team:"
+				m.promptOptions = teamNames
+				m.promptSelected = 0
+				m.promptPendingCall = m.pendingDispatch
+				m.updateViewportContent()
+				return m, m.input.Focus()
+
+			default: // "Cancel" or anything else
+				m.confirmDispatch = false
+				m.messages = append(m.messages, llm.Message{Role: "assistant", ToolCalls: []llm.ToolCall{m.pendingDispatch}})
+				m.reasoning = append(m.reasoning, "")
+				m.claudeMeta = append(m.claudeMeta, "tool-call-indicator")
+				m.messages = append(m.messages, llm.Message{Role: "tool", Content: "User cancelled the dispatch.", ToolCallID: m.pendingDispatch.ID})
+				m.updateViewportContent()
+				return m, m.startStream(m.messages)
+			}
+		}
+
 		// Clear prompt mode.
 		m.promptMode = false
 		m.promptCustom = false
@@ -2370,6 +2487,9 @@ func (m *Model) initMessages() {
 	m.completionMsgIdx = make(map[int]bool)
 	m.expandedMsgs = make(map[int]bool)
 	m.selectedMsgIdx = -1
+	m.confirmDispatch = false
+	m.changingTeam = false
+	m.pendingDispatch = llm.ToolCall{}
 }
 
 // hasConversation reports whether the conversation contains at least one user or
