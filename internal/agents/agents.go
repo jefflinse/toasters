@@ -375,7 +375,7 @@ func DiscoverTeams(teamsDir string) ([]Team, error) {
 		}
 
 		subdir := filepath.Join(teamsDir, entry.Name())
-		discovered, err := Discover(subdir)
+		discovered, err := Discover(filepath.Join(subdir, "agents"))
 		if err != nil {
 			log.Printf("warning: skipping team directory %s: %v", subdir, err)
 			continue
@@ -518,12 +518,13 @@ Do not ask for confirmation before starting work. Do not ask for approval of you
 // All other agents are set to mode: worker. Partial updates are acceptable on
 // write failure (prototype behaviour).
 func SetCoordinator(teamDir, agentName string) error {
-	matches, err := filepath.Glob(filepath.Join(teamDir, "*.md"))
+	agentsDir := filepath.Join(teamDir, "agents")
+	matches, err := filepath.Glob(filepath.Join(agentsDir, "*.md"))
 	if err != nil {
-		return fmt.Errorf("globbing agent files in %s: %w", teamDir, err)
+		return fmt.Errorf("globbing agent files in %s: %w", agentsDir, err)
 	}
 	if len(matches) == 0 {
-		return fmt.Errorf("no agent files found in %s", teamDir)
+		return fmt.Errorf("no agent files found in %s", agentsDir)
 	}
 
 	// Verify the target agent exists.
@@ -536,7 +537,7 @@ func SetCoordinator(teamDir, agentName string) error {
 		}
 	}
 	if !found {
-		return fmt.Errorf("agent %q not found in %s", agentName, teamDir)
+		return fmt.Errorf("agent %q not found in %s", agentName, agentsDir)
 	}
 
 	for _, p := range matches {
@@ -553,9 +554,9 @@ func SetCoordinator(teamDir, agentName string) error {
 
 		newContent := rewriteMode(string(data), targetMode)
 
-		tmp, err := os.CreateTemp(teamDir, "agent-*.md.tmp")
+		tmp, err := os.CreateTemp(agentsDir, "agent-*.md.tmp")
 		if err != nil {
-			return fmt.Errorf("creating temp file in %s: %w", teamDir, err)
+			return fmt.Errorf("creating temp file in %s: %w", agentsDir, err)
 		}
 		tmpName := tmp.Name()
 
