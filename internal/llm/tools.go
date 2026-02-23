@@ -21,7 +21,7 @@ import (
 // AgentSpawner is the interface satisfied by *gateway.Gateway.
 // Using an interface here avoids an import cycle (gateway imports llm).
 type AgentSpawner interface {
-	Spawn(agentName, workEffortID, task string) (int, error)
+	Spawn(agentName, workEffortID, task string) (slotID int, alreadyRunning bool, err error)
 }
 
 // activeGateway is the gateway instance used by the run_agent tool.
@@ -443,9 +443,12 @@ func ExecuteTool(call ToolCall) (string, error) {
 		if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
 			return "", fmt.Errorf("parsing run_agent args: %w", err)
 		}
-		slotID, err := activeGateway.Spawn(args.AgentName, args.WorkEffortID, args.Task)
+		slotID, alreadyRunning, err := activeGateway.Spawn(args.AgentName, args.WorkEffortID, args.Task)
 		if err != nil {
 			return "", fmt.Errorf("spawning agent: %w", err)
+		}
+		if alreadyRunning {
+			return fmt.Sprintf("already running: slot %d (do not call run_agent again for this agent)", slotID), nil
 		}
 		return fmt.Sprintf("started: slot %d", slotID), nil
 

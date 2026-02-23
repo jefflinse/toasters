@@ -81,7 +81,10 @@ func New(claudeCfg config.ClaudeConfig, repoRoot string, notify func()) *Gateway
 
 // Spawn starts a new Claude subprocess in a free slot. It returns the slot
 // index on success, or -1 and an error if no slot is available.
-func (g *Gateway) Spawn(agentName, workEffortID, task string) (int, error) {
+// Spawn starts a new Claude subprocess in a free slot. It returns the slot
+// index, a boolean indicating whether the agent was already running (idempotent
+// duplicate call), and an error if no slot is available or the agent fails to start.
+func (g *Gateway) Spawn(agentName, workEffortID, task string) (slotID int, alreadyRunning bool, err error) {
 	g.mu.Lock()
 
 	// Find a free slot: first nil slot, then first done slot.
@@ -102,15 +105,16 @@ func (g *Gateway) Spawn(agentName, workEffortID, task string) (int, error) {
 	}
 	if idx == -1 {
 		g.mu.Unlock()
-		return -1, fmt.Errorf("all slots busy")
+		return -1, false, fmt.Errorf("all slots busy")
 	}
 
 	// Check for an already-running slot with the same agent+work-effort.
-	for _, s := range g.slots {
+	// Return the existing slot index as a success so the operator doesn't retry.
+	for i, s := range g.slots {
 		if s != nil && s.status == SlotRunning &&
 			s.agentName == agentName && s.workEffortID == workEffortID {
 			g.mu.Unlock()
-			return -1, fmt.Errorf("agent %q is already running on work effort %q", agentName, workEffortID)
+			return i, true, nil // idempotent: treat duplicate spawn as success
 		}
 	}
 
@@ -126,7 +130,7 @@ func (g *Gateway) Spawn(agentName, workEffortID, task string) (int, error) {
 		agentPath := filepath.Join(g.repoRoot, "agents", agentName+".md")
 		agentData, err := os.ReadFile(agentPath)
 		if err != nil {
-			return -1, fmt.Errorf("reading agent file %s: %w", agentPath, err)
+			return -1, false, fmt.Errorf("reading agent file %s: %w", agentPath, err)
 		}
 		agentBody = string(agentData)
 		// No frontmatter parsed for disk fallback — default to full access.
@@ -202,7 +206,7 @@ func (g *Gateway) Spawn(agentName, workEffortID, task string) (int, error) {
 		}
 	}()
 
-	return idx, nil
+	return idx, false, nil
 }
 
 // SetAgentRegistry wires a pre-built agent registry into the gateway so that
