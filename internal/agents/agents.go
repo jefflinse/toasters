@@ -353,7 +353,7 @@ func BuildSystemPrompt(coordinator Agent, workers []Agent) string {
 //
 // Each subdirectory (excluding hidden dirs starting with ".") is treated as a
 // team. Discover is called on the subdir, then BuildRegistry splits the agents
-// into coordinator and workers. Subdirs with no .md files are skipped.
+// into coordinator and workers. Subdirs with no .md files are included as empty teams.
 // If teamsDir does not exist, an empty slice and nil error are returned.
 func DiscoverTeams(teamsDir string) ([]Team, error) {
 	if _, err := os.Stat(teamsDir); os.IsNotExist(err) {
@@ -378,9 +378,6 @@ func DiscoverTeams(teamsDir string) ([]Team, error) {
 		discovered, err := Discover(subdir)
 		if err != nil {
 			log.Printf("warning: skipping team directory %s: %v", subdir, err)
-			continue
-		}
-		if len(discovered) == 0 {
 			continue
 		}
 

@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"encoding/json"
+	"log"
 	"fmt"
 	"image/color"
 	"os"
@@ -353,7 +354,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					name := m.teamsModal.nameInput
 					valid := name != "" && !strings.ContainsAny(name, `/\.`)
 					if valid {
-						_ = os.MkdirAll(filepath.Join(m.teamsDir, name), 0755)
+						if err := os.MkdirAll(filepath.Join(m.teamsDir, name), 0755); err != nil {
+							log.Printf("teams: failed to create directory %s: %v", name, err)
+						}
 						m.reloadTeamsForModal()
 						for i, t := range m.teamsModal.teams {
 							if t.Name == name {
@@ -444,7 +447,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 				}
 
-			case "n":
+			case "ctrl+n":
 				if m.teamsModal.focus == 0 {
 					// Creating a new team is never gated on the selected team's
 					// read-only status — you can always create a new user-defined team.
@@ -452,7 +455,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.teamsModal.nameInput = ""
 				}
 
-			case "d":
+			case "ctrl+d":
 				if m.teamsModal.focus == 0 && !m.teamsModal.confirmDelete {
 					if len(m.teamsModal.teams) > 0 && m.teamsModal.teamIdx < len(m.teamsModal.teams) {
 						if !isReadOnlyTeam(m.teamsModal.teams[m.teamsModal.teamIdx]) {
@@ -476,7 +479,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.teamsModal.confirmDelete = false
 				}
 
-			case "c":
+			case "ctrl+k":
 				if m.teamsModal.focus == 1 && len(m.teamsModal.teams) > 0 && m.teamsModal.teamIdx < len(m.teamsModal.teams) {
 					team := m.teamsModal.teams[m.teamsModal.teamIdx]
 					if !isReadOnlyTeam(team) {
@@ -2707,7 +2710,7 @@ func (m *Model) renderTeamsModal() string {
 	var rightLines []string
 	if len(teams) == 0 {
 		rightLines = append(rightLines, DimStyle.Render("No teams configured."))
-		rightLines = append(rightLines, DimStyle.Render("Press [n] to create one."))
+		rightLines = append(rightLines, DimStyle.Render("Press [Ctrl+N] to create one."))
 	} else if m.teamsModal.teamIdx < len(teams) {
 		team := teams[m.teamsModal.teamIdx]
 
@@ -2809,9 +2812,9 @@ func (m *Model) renderTeamsModal() string {
 
 	// Footer with key hints — dim read-only-gated keys when team is read-only.
 	readOnly := len(teams) > 0 && m.teamsModal.teamIdx < len(teams) && isReadOnlyTeam(teams[m.teamsModal.teamIdx])
-	nHint := "[n] New"
-	dHint := "[d] Delete"
-	cHint := "[c] Set Coordinator"
+	nHint := "[Ctrl+N] New"
+	dHint := "[Ctrl+D] Delete"
+	cHint := "[Ctrl+K] Set Coordinator"
 	if readOnly {
 		nHint = DimStyle.Render(nHint)
 		dHint = DimStyle.Render(dHint)
