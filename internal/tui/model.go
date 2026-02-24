@@ -110,7 +110,7 @@ type loadingTickMsg struct{}
 
 // loadingTick returns a command that fires loadingTickMsg after 150ms.
 func loadingTick() tea.Cmd {
-	return tea.Tick(60*time.Millisecond, func(time.Time) tea.Msg {
+	return tea.Tick(30*time.Millisecond, func(time.Time) tea.Msg {
 		return loadingTickMsg{}
 	})
 }
@@ -128,9 +128,34 @@ func clearFlash() tea.Cmd {
 // loadingBarWidth is the number of cells in the bouncing bar track.
 const loadingBarWidth = 24
 
-// loadingBarColors are the 256-color codes the active blob cycles through as it bounces.
-// Warm amber → orange → red → purple → back, giving a toasty glow effect.
-var loadingBarColors = []string{"214", "208", "202", "198", "135", "99", "63", "99", "135", "198", "202", "208"}
+// loadingBarColors are the true-color RGB values the blob cycles through as it bounces.
+// Warm amber → orange → red → purple → blue → back, giving a toasty glow effect.
+// Each entry is [R, G, B].
+var loadingBarColors = [][3]uint8{
+	{255, 175, 0},  // amber
+	{255, 135, 0},  // orange
+	{255, 95, 0},   // deep orange
+	{255, 55, 55},  // red-orange
+	{220, 50, 120}, // hot pink
+	{175, 50, 200}, // purple
+	{95, 80, 230},  // blue-purple
+	{50, 130, 255}, // blue
+	{95, 80, 230},  // blue-purple
+	{175, 50, 200}, // purple
+	{220, 50, 120}, // hot pink
+	{255, 55, 55},  // red-orange
+	{255, 95, 0},   // deep orange
+	{255, 135, 0},  // orange
+}
+
+// fadeColor returns a color.Color that is the given RGB color faded toward
+// black by factor (0.0 = original, 1.0 = black).
+func fadeColor(r, g, b uint8, factor float64) color.Color {
+	fr := uint8(float64(r) * (1.0 - factor))
+	fg := uint8(float64(g) * (1.0 - factor))
+	fb := uint8(float64(b) * (1.0 - factor))
+	return lipgloss.Color(fmt.Sprintf("#%02x%02x%02x", fr, fg, fb))
+}
 
 // numLoadingFrames is the total number of animation frames (ping-pong across the bar).
 // The blob travels loadingBarWidth-1 steps right then loadingBarWidth-1 steps left = full cycle.
@@ -2408,14 +2433,14 @@ func (m *Model) renderLoading() tea.View {
 	}
 
 	// Pick blob color from the palette, cycling with the frame.
-	colorCode := loadingBarColors[m.loadingFrame%len(loadingBarColors)]
+	rgb := loadingBarColors[m.loadingFrame%len(loadingBarColors)]
+	blobColor := fadeColor(rgb[0], rgb[1], rgb[2], 0.0)
 
 	// Determine direction: moving right when frame < loadingBarWidth-1, left otherwise.
 	movingRight := frame < loadingBarWidth-1
 
-	// Trail positions: 1, 2, 3 cells behind the blob (clamped to bar bounds).
-	// trailIntensity maps distance-behind to a dim color code.
-	trailColors := []string{"240", "237", "235"} // bright → dim
+	// Trail: 3 cells behind the blob, each progressively faded (25%, 55%, 80% toward black).
+	trailFade := [3]float64{0.35, 0.62, 0.82}
 	trailPos := [3]int{-1, -1, -1}
 	for d := 0; d < 3; d++ {
 		var p int
@@ -2431,7 +2456,7 @@ func (m *Model) renderLoading() tea.View {
 
 	// Build the bar cell by cell so each position can be styled independently.
 	trackStyle := lipgloss.NewStyle().Foreground(ColorBorder)
-	blobStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colorCode)).Bold(true)
+	blobStyle := lipgloss.NewStyle().Foreground(blobColor).Bold(true)
 
 	var barParts []string
 	for i := 0; i < loadingBarWidth; i++ {
@@ -2443,7 +2468,8 @@ func (m *Model) renderLoading() tea.View {
 		isTrail := false
 		for d, tp := range trailPos {
 			if tp == i {
-				trailStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(trailColors[d]))
+				tc := fadeColor(rgb[0], rgb[1], rgb[2], trailFade[d])
+				trailStyle := lipgloss.NewStyle().Foreground(tc)
 				barParts = append(barParts, trailStyle.Render(ch))
 				isTrail = true
 				break
@@ -2456,8 +2482,8 @@ func (m *Model) renderLoading() tea.View {
 
 	barStr := strings.Join(barParts, "")
 
-	// Cycle the status message every 12 frames (~720ms at 60ms/frame).
-	msgIdx := (m.loadingFrame / 12) % len(loadingMessages)
+	// Cycle the status message every 24 frames (~720ms at 30ms/frame).
+	msgIdx := (m.loadingFrame / 24) % len(loadingMessages)
 	statusMsg := msgStyle.Render(loadingMessages[msgIdx])
 
 	// Place each element independently at the center of the screen,
