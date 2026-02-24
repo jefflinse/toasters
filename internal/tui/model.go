@@ -225,7 +225,7 @@ type teamsModalState struct {
 
 // leftPanelWidth returns the width of the left panel for the given terminal width.
 func leftPanelWidth(termWidth int) int {
-	w := termWidth / 6
+	w := termWidth / 4
 	if w < minLeftPanelWidth {
 		return minLeftPanelWidth
 	}
@@ -2585,15 +2585,20 @@ func (m *Model) updateViewportContent() {
         |___________|
            |     |
            |     |`
-		var artLines []string
-		for _, line := range strings.Split(toasterArt, "\n") {
-			artLines = append(artLines, HeaderStyle.Render(line))
+		// Render the art as a single block with color but no per-line padding,
+		// so lipgloss.Place can measure and center it correctly as a unit.
+		artStyled := lipgloss.NewStyle().Foreground(ColorPrimary).Render(toasterArt)
+		tagline := DimStyle.Render("Your personal army of toasters to ") + lipgloss.NewStyle().Bold(true).Foreground(ColorPrimary).Render("get shit done.")
+		endpoint := DimStyle.Render("Operator connected to " + m.stats.Endpoint)
+		hints := DimStyle.Render("Esc to cancel a response · Ctrl+C to quit.")
+		block := lipgloss.JoinVertical(lipgloss.Center, artStyled, "", tagline, endpoint, "", hints)
+
+		vpH := m.chatViewport.Height()
+		if vpH < 1 {
+			vpH = 24
 		}
-		welcome := strings.Join(artLines, "\n") + "\n\n"
-		welcome += DimStyle.Render("Your personal army of toasters to") + HeaderStyle.Render("get shit done.") + "\n\n"
-		welcome += DimStyle.Render("Operator connected to "+m.stats.Endpoint) + "\n\n"
-		welcome += DimStyle.Render("Esc to cancel a response · Ctrl+C to quit.")
-		sb.WriteString(welcome + "\n\n")
+		welcome := lipgloss.Place(contentWidth, vpH, lipgloss.Center, lipgloss.Center, block)
+		sb.WriteString(welcome)
 	}
 
 	assistantIdx := 0
@@ -2736,10 +2741,36 @@ func (m Model) renderLeftPanel(panelWidth, panelHeight int) string {
 		contentWidth = 1
 	}
 
-	// Split panelHeight into 3 pane heights; give leftover rows to top.
+	// 2 dividers consume 2 rows of the panel height.
+	const dividerRows = 2
+
+	// Bottom pane: content-driven height (header + one row per team + optional hint).
+	bottomH := 1 + len(m.teams) // "Teams" header + one line per team
+	if len(m.teams) == 0 {
+		bottomH = 2 // header + "No teams configured"
+	}
+	if m.focused == focusTeams && len(m.teams) > 0 {
+		bottomH++ // hint line
+	}
+
+	// Jobs hint line appears when the jobs pane is focused.
+	jobsHintH := 0
+	if m.focused == focusJobs && len(m.displayJobs()) > 0 {
+		jobsHintH = 1
+	}
+
+	// Middle pane: fixed 30% of total, but never so large it starves top or bottom.
 	middleH := panelHeight * 30 / 100
-	bottomH := panelHeight * 30 / 100
-	topH := panelHeight - middleH - bottomH
+	// Top pane gets whatever is left after middle + bottom + dividers + jobs hint.
+	topH := panelHeight - middleH - bottomH - dividerRows - jobsHintH
+	if topH < 3 {
+		topH = 3
+		// Re-derive middleH so the total still fits.
+		middleH = panelHeight - topH - bottomH - dividerRows - jobsHintH
+		if middleH < 2 {
+			middleH = 2
+		}
+	}
 
 	divider := LeftPanelDividerStyle.Render(strings.Repeat("─", contentWidth))
 
@@ -2798,7 +2829,16 @@ func (m Model) renderLeftPanel(panelWidth, panelHeight int) string {
 			}
 		}
 	}
-	topPane := lipgloss.NewStyle().Height(topH).Render(
+	// Hint line when jobs pane is focused.
+	if m.focused == focusJobs && len(displayedJobs) > 0 {
+		dj := displayedJobs
+		hint := "↑↓ navigate"
+		if m.selectedJob < len(dj) && m.hasBlocker(dj[m.selectedJob]) {
+			hint = "Enter → resolve blocker"
+		}
+		topLines = append(topLines, DimStyle.Render(hint))
+	}
+	topPane := lipgloss.NewStyle().Height(topH + jobsHintH).Render(
 		lipgloss.JoinVertical(lipgloss.Left, topLines...),
 	)
 
@@ -2890,9 +2930,7 @@ func (m Model) renderLeftPanel(panelWidth, panelHeight int) string {
 			bottomLines = append(bottomLines, DimStyle.Render("Enter → view team details"))
 		}
 	}
-	bottomPane := lipgloss.NewStyle().Height(bottomH).Render(
-		lipgloss.JoinVertical(lipgloss.Left, bottomLines...),
-	)
+	bottomPane := lipgloss.JoinVertical(lipgloss.Left, bottomLines...)
 
 	inner := lipgloss.JoinVertical(lipgloss.Left, topPane, divider, middlePane, divider, bottomPane)
 	panelStyle := LeftPanelStyle.Width(panelWidth).Height(panelHeight)
