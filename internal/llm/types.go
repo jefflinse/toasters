@@ -1,7 +1,5 @@
 package llm
 
-import "github.com/jefflinse/toasters/internal/agents"
-
 // Message represents a single chat message.
 type Message struct {
 	Role       string     `json:"role"` // "system", "user", or "assistant"
@@ -121,21 +119,4 @@ func (m ModelInfo) ContextLength() int {
 		return m.LoadedContextLength
 	}
 	return m.MaxContextLength
-}
-
-// GatewaySlot holds a summary of a single gateway slot for operator visibility.
-type GatewaySlot struct {
-	Index   int
-	Team    string
-	JobID   string
-	Status  string // "running", "done", "idle"
-	Elapsed string
-}
-
-// AgentSpawner is the interface satisfied by *gateway.Gateway.
-// Using an interface here avoids an import cycle (gateway imports llm).
-type AgentSpawner interface {
-	SpawnTeam(teamName, jobID, task string, team agents.Team) (slotID int, alreadyRunning bool, err error)
-	SlotSummaries() []GatewaySlot
-	Kill(slotID int) error
 }

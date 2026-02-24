@@ -153,125 +153,16 @@ func (m *Model) View() tea.View {
 	if m.showGrid {
 		gridView := m.renderGrid()
 		if m.showPromptModal {
-			// Render prompt modal as a centered overlay.
-			modalW := m.width * 3 / 4
-			modalH := m.height * 3 / 4
-			if modalW < 40 {
-				modalW = 40
-			}
-			if modalH < 10 {
-				modalH = 10
-			}
-
-			// Slice the prompt into lines, apply scroll offset.
-			allLines := strings.Split(m.promptModalContent, "\n")
-			maxScroll := len(allLines) - modalH + 4
-			if maxScroll < 0 {
-				maxScroll = 0
-			}
-			if m.promptModalScroll > maxScroll {
-				m.promptModalScroll = maxScroll
-			}
-
-			start := m.promptModalScroll
-			end := start + modalH - 4 // -4 for title + footer + borders
-			if end > len(allLines) {
-				end = len(allLines)
-			}
-			visibleLines := allLines[start:end]
-
-			// Truncate each line to modal inner width.
-			innerW := modalW - 4
-			truncated := make([]string, len(visibleLines))
-			for i, l := range visibleLines {
-				if len(l) > innerW {
-					truncated[i] = l[:innerW]
-				} else {
-					truncated[i] = l
-				}
-			}
-
-			body := strings.Join(truncated, "\n")
-			scrollInfo := fmt.Sprintf("line %d/%d", m.promptModalScroll+1, len(allLines))
-			footer := DimStyle.Render("↑↓ scroll · Esc to close · " + scrollInfo)
-
-			modalContent := HeaderStyle.Render("Prompt") + "\n\n" + body + "\n\n" + footer
-
-			modalStyle := lipgloss.NewStyle().
-				Width(modalW).
-				Height(modalH).
-				Border(lipgloss.RoundedBorder()).
-				BorderForeground(ColorPrimary).
-				Padding(0, 2)
-
-			modal := modalStyle.Render(modalContent)
-
-			// Place modal centered over the grid using lipgloss.Place.
-			// WithWhitespaceStyle sets the background of the surrounding area.
-			overlaid := lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, modal,
-				lipgloss.WithWhitespaceStyle(lipgloss.NewStyle().Background(lipgloss.Color("235"))))
+			overlaid, clampedScroll := m.renderScrollableModal("Prompt", m.promptModalContent, m.promptModalScroll)
+			m.promptModalScroll = clampedScroll
 
 			v := tea.NewView(overlaid)
 			v.AltScreen = true
 			v.MouseMode = tea.MouseModeCellMotion
 			return v
 		} else if m.showOutputModal {
-			// Render output modal as a centered overlay.
-			modalW := m.width * 3 / 4
-			modalH := m.height * 3 / 4
-			if modalW < 40 {
-				modalW = 40
-			}
-			if modalH < 10 {
-				modalH = 10
-			}
-
-			// Slice the output into lines, apply scroll offset.
-			allLines := strings.Split(m.outputModalContent, "\n")
-			maxScroll := len(allLines) - modalH + 4
-			if maxScroll < 0 {
-				maxScroll = 0
-			}
-			if m.outputModalScroll > maxScroll {
-				m.outputModalScroll = maxScroll
-			}
-
-			start := m.outputModalScroll
-			end := start + modalH - 4 // -4 for title + footer + borders
-			if end > len(allLines) {
-				end = len(allLines)
-			}
-			visibleLines := allLines[start:end]
-
-			// Truncate each line to modal inner width.
-			innerW := modalW - 4
-			truncated := make([]string, len(visibleLines))
-			for i, l := range visibleLines {
-				if len(l) > innerW {
-					truncated[i] = l[:innerW]
-				} else {
-					truncated[i] = l
-				}
-			}
-
-			body := strings.Join(truncated, "\n")
-			scrollInfo := fmt.Sprintf("line %d/%d", m.outputModalScroll+1, len(allLines))
-			footer := DimStyle.Render("↑↓ scroll · Esc to close · " + scrollInfo)
-
-			modalContent := HeaderStyle.Render("Output") + "\n\n" + body + "\n\n" + footer
-
-			modalStyle := lipgloss.NewStyle().
-				Width(modalW).
-				Height(modalH).
-				Border(lipgloss.RoundedBorder()).
-				BorderForeground(ColorPrimary).
-				Padding(0, 2)
-
-			modal := modalStyle.Render(modalContent)
-
-			// Place modal centered over the grid using lipgloss.Place.
-			overlaid := lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, modal,
-				lipgloss.WithWhitespaceStyle(lipgloss.NewStyle().Background(lipgloss.Color("235"))))
+			overlaid, clampedScroll := m.renderScrollableModal("Output", m.outputModalContent, m.outputModalScroll)
+			m.outputModalScroll = clampedScroll
 
 			v := tea.NewView(overlaid)
 			v.AltScreen = true
@@ -641,6 +532,72 @@ func (m *Model) renderLoading() tea.View {
 	v.AltScreen = true
 	v.MouseMode = tea.MouseModeCellMotion
 	return v
+}
+
+// renderScrollableModal renders a scrollable modal overlay centered on the
+// terminal. It computes dimensions, slices content into visible lines, applies
+// the scroll offset, truncates lines to the inner width, and styles the box.
+// It returns the fully rendered overlay string and the clamped scroll offset
+// so the caller can write it back to the model field.
+func (m *Model) renderScrollableModal(title, content string, scroll int) (string, int) {
+	modalW := m.width * 3 / 4
+	modalH := m.height * 3 / 4
+	if modalW < 40 {
+		modalW = 40
+	}
+	if modalH < 10 {
+		modalH = 10
+	}
+
+	// Slice the content into lines, apply scroll offset.
+	allLines := strings.Split(content, "\n")
+	maxScroll := len(allLines) - modalH + 4
+	if maxScroll < 0 {
+		maxScroll = 0
+	}
+	if scroll > maxScroll {
+		scroll = maxScroll
+	}
+
+	start := scroll
+	end := start + modalH - 4 // -4 for title + footer + borders
+	if end > len(allLines) {
+		end = len(allLines)
+	}
+	visibleLines := allLines[start:end]
+
+	// Truncate each line to modal inner width.
+	innerW := modalW - 4
+	truncated := make([]string, len(visibleLines))
+	for i, l := range visibleLines {
+		if len(l) > innerW {
+			truncated[i] = l[:innerW]
+		} else {
+			truncated[i] = l
+		}
+	}
+
+	body := strings.Join(truncated, "\n")
+	scrollInfo := fmt.Sprintf("line %d/%d", scroll+1, len(allLines))
+	footer := DimStyle.Render("↑↓ scroll · Esc to close · " + scrollInfo)
+
+	modalContent := HeaderStyle.Render(title) + "\n\n" + body + "\n\n" + footer
+
+	modalStyle := lipgloss.NewStyle().
+		Width(modalW).
+		Height(modalH).
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(ColorPrimary).
+		Padding(0, 2)
+
+	modal := modalStyle.Render(modalContent)
+
+	// Place modal centered over the background using lipgloss.Place.
+	// WithWhitespaceStyle sets the background of the surrounding area.
+	overlaid := lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, modal,
+		lipgloss.WithWhitespaceStyle(lipgloss.NewStyle().Background(lipgloss.Color("235"))))
+
+	return overlaid, scroll
 }
 
 // indentLines prepends each line of s with n spaces.

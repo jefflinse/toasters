@@ -88,112 +88,7 @@ func (c *Client) streamCompletion(ctx context.Context, messages []llm.Message, t
 	if temperature > 0 {
 		reqBody.Temperature = &temperature
 	}
-
-	body, err := json.Marshal(reqBody)
-	if err != nil {
-		ch <- llm.StreamResponse{Error: fmt.Errorf("marshaling request: %w", err)}
-		return
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v1/chat/completions", bytes.NewReader(body))
-	if err != nil {
-		ch <- llm.StreamResponse{Error: fmt.Errorf("creating request: %w", err)}
-		return
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "text/event-stream")
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		ch <- llm.StreamResponse{Error: fmt.Errorf("sending request: %w", err)}
-		return
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != http.StatusOK {
-		ch <- llm.StreamResponse{Error: fmt.Errorf("unexpected status %d: %s", resp.StatusCode, resp.Status)}
-		return
-	}
-
-	var lastUsage *llm.Usage
-	var lastModel string
-
-	scanner := bufio.NewScanner(resp.Body)
-	for scanner.Scan() {
-		// Check for context cancellation between lines.
-		if ctx.Err() != nil {
-			ch <- llm.StreamResponse{Error: ctx.Err()}
-			return
-		}
-
-		line := scanner.Text()
-
-		// Skip blank lines (SSE event separators).
-		if line == "" {
-			continue
-		}
-
-		// We only care about data lines.
-		if !strings.HasPrefix(line, "data:") {
-			continue
-		}
-
-		// Strip the "data:" prefix. Handle both "data: " and "data:" (no space).
-		data := strings.TrimPrefix(line, "data:")
-		data = strings.TrimSpace(data)
-
-		if data == "[DONE]" {
-			ch <- llm.StreamResponse{Done: true, Model: lastModel, Usage: lastUsage}
-			return
-		}
-
-		var chunk llm.ChatCompletionChunk
-		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
-			ch <- llm.StreamResponse{Error: fmt.Errorf("parsing chunk: %w", err)}
-			return
-		}
-
-		if chunk.Model != "" {
-			lastModel = chunk.Model
-		}
-		if chunk.Usage != nil {
-			lastUsage = chunk.Usage
-		}
-
-		if len(chunk.Choices) > 0 {
-			choice := chunk.Choices[0]
-
-			if choice.Delta.Reasoning != "" {
-				ch <- llm.StreamResponse{
-					Reasoning: choice.Delta.Reasoning,
-					Model:     chunk.Model,
-				}
-			}
-
-			if choice.Delta.Content != "" {
-				ch <- llm.StreamResponse{
-					Content: choice.Delta.Content,
-					Model:   chunk.Model,
-				}
-			}
-
-			// On finish_reason=stop, don't return yet — with
-			// stream_options.include_usage, the server sends a final
-			// chunk with usage data after the stop chunk. Keep reading
-			// until [DONE].
-		}
-		// Chunks with no choices (e.g. usage-only after stop) are handled
-		// by the Usage capture above; keep reading for [DONE].
-	}
-
-	if err := scanner.Err(); err != nil {
-		ch <- llm.StreamResponse{Error: fmt.Errorf("reading stream: %w", err)}
-		return
-	}
-
-	// Stream ended without [DONE] — treat as done.
-	ch <- llm.StreamResponse{Done: true, Model: lastModel, Usage: lastUsage}
+	c.doStream(ctx, reqBody, ch)
 }
 
 func (c *Client) streamCompletionWithTools(ctx context.Context, messages []llm.Message, tools []llm.Tool, temperature float64, ch chan<- llm.StreamResponse) {
@@ -209,7 +104,13 @@ func (c *Client) streamCompletionWithTools(ctx context.Context, messages []llm.M
 	if temperature > 0 {
 		reqBody.Temperature = &temperature
 	}
+	c.doStream(ctx, reqBody, ch)
+}
 
+// doStream executes a streaming chat completion request and delivers parsed
+// SSE chunks to ch. When reqBody.Tools is non-empty, tool call deltas are
+// accumulated and emitted on finish_reason="tool_calls".
+func (c *Client) doStream(ctx context.Context, reqBody llm.ChatRequest, ch chan<- llm.StreamResponse) {
 	body, err := json.Marshal(reqBody)
 	if err != nil {
 		ch <- llm.StreamResponse{Error: fmt.Errorf("marshaling request: %w", err)}
@@ -239,7 +140,13 @@ func (c *Client) streamCompletionWithTools(ctx context.Context, messages []llm.M
 
 	var lastUsage *llm.Usage
 	var lastModel string
-	accumulated := make(map[int]*llm.ToolCall)
+
+	// Only allocate the tool call accumulator when tools are present.
+	hasTools := len(reqBody.Tools) > 0
+	var accumulated map[int]*llm.ToolCall
+	if hasTools {
+		accumulated = make(map[int]*llm.ToolCall)
+	}
 
 	scanner := bufio.NewScanner(resp.Body)
 	for scanner.Scan() {
@@ -286,26 +193,28 @@ func (c *Client) streamCompletionWithTools(ctx context.Context, messages []llm.M
 		if len(chunk.Choices) > 0 {
 			choice := chunk.Choices[0]
 
-			// Accumulate tool call deltas.
-			for _, partial := range choice.Delta.ToolCalls {
-				idx := partial.Index
-				if _, ok := accumulated[idx]; !ok {
-					accumulated[idx] = &llm.ToolCall{
-						Index: idx,
-						ID:    partial.ID,
-						Type:  partial.Type,
-						Function: llm.ToolCallFunction{
-							Name: partial.Function.Name,
-						},
+			// Accumulate tool call deltas when tools are in play.
+			if hasTools {
+				for _, partial := range choice.Delta.ToolCalls {
+					idx := partial.Index
+					if _, ok := accumulated[idx]; !ok {
+						accumulated[idx] = &llm.ToolCall{
+							Index: idx,
+							ID:    partial.ID,
+							Type:  partial.Type,
+							Function: llm.ToolCallFunction{
+								Name: partial.Function.Name,
+							},
+						}
 					}
-				}
-				entry := accumulated[idx]
-				entry.Function.Arguments += partial.Function.Arguments
-				if partial.ID != "" && entry.ID == "" {
-					entry.ID = partial.ID
-				}
-				if partial.Function.Name != "" && entry.Function.Name == "" {
-					entry.Function.Name = partial.Function.Name
+					entry := accumulated[idx]
+					entry.Function.Arguments += partial.Function.Arguments
+					if partial.ID != "" && entry.ID == "" {
+						entry.ID = partial.ID
+					}
+					if partial.Function.Name != "" && entry.Function.Name == "" {
+						entry.Function.Name = partial.Function.Name
+					}
 				}
 			}
 
@@ -323,7 +232,7 @@ func (c *Client) streamCompletionWithTools(ctx context.Context, messages []llm.M
 				}
 			}
 
-			if choice.FinishReason == "tool_calls" {
+			if hasTools && choice.FinishReason == "tool_calls" {
 				// Collect accumulated tool calls sorted by index.
 				indices := make([]int, 0, len(accumulated))
 				for idx := range accumulated {

@@ -19,6 +19,7 @@ import (
 	"github.com/jefflinse/toasters/internal/config"
 	"github.com/jefflinse/toasters/internal/job"
 	"github.com/jefflinse/toasters/internal/llm"
+	"github.com/jefflinse/toasters/internal/orchestration"
 )
 
 // MaxSlots is the maximum number of concurrent Claude subprocess slots.
@@ -442,9 +443,9 @@ func (g *Gateway) Dismiss(slotID int) error {
 }
 
 // SlotSummaries returns a summary of all non-idle slots for operator visibility.
-func (g *Gateway) SlotSummaries() []llm.GatewaySlot {
+func (g *Gateway) SlotSummaries() []orchestration.GatewaySlot {
 	snapshots := g.Slots()
-	var summaries []llm.GatewaySlot
+	var summaries []orchestration.GatewaySlot
 	for i, snap := range snapshots {
 		if !snap.Active {
 			continue
@@ -461,7 +462,7 @@ func (g *Gateway) SlotSummaries() []llm.GatewaySlot {
 		if snap.Status == SlotDone {
 			status = "done"
 		}
-		summaries = append(summaries, llm.GatewaySlot{
+		summaries = append(summaries, orchestration.GatewaySlot{
 			Index:   i,
 			Team:    snap.AgentName,
 			JobID:   snap.JobID,

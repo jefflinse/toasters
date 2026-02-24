@@ -98,15 +98,16 @@ func (m Model) hasBlocker(j job.Job) bool {
 // submitBlockerAnswers writes the answered blocker questions to BLOCKER.md
 // and emits a blockerAnswersSubmittedMsg to the event loop.
 func (m *Model) submitBlockerAnswers() tea.Cmd {
-	// Capture values for the closure.
+	// Capture all values for the closure so it does not reference m.
 	b := m.blockerModal.blocker
 	jobID := m.blockerModal.jobID
+	j, ok := m.jobByID(jobID)
+	if !ok {
+		return nil
+	}
+	jobDir := j.Dir
 	return func() tea.Msg {
-		j, ok := m.jobByID(jobID)
-		if !ok {
-			return nil
-		}
-		if err := job.WriteBlockerAnswers(j.Dir, b); err != nil {
+		if err := job.WriteBlockerAnswers(jobDir, b); err != nil {
 			log.Printf("failed to write blocker answers: %v", err)
 		}
 		return blockerAnswersSubmittedMsg{jobID: jobID, blocker: b}

@@ -16,18 +16,19 @@ import (
 	"github.com/jefflinse/toasters/internal/agents"
 	"github.com/jefflinse/toasters/internal/job"
 	"github.com/jefflinse/toasters/internal/llm"
+	"github.com/jefflinse/toasters/internal/orchestration"
 )
 
 // ToolExecutor holds the dependencies needed to execute operator tool calls.
 type ToolExecutor struct {
-	Gateway      llm.AgentSpawner
+	Gateway      orchestration.AgentSpawner
 	Teams        []agents.Team
 	WorkspaceDir string
 	Tools        []llm.Tool
 }
 
 // NewToolExecutor creates a ToolExecutor with the default static tools.
-func NewToolExecutor(gateway llm.AgentSpawner, teams []agents.Team, workspaceDir string) *ToolExecutor {
+func NewToolExecutor(gateway orchestration.AgentSpawner, teams []agents.Team, workspaceDir string) *ToolExecutor {
 	return &ToolExecutor{
 		Gateway:      gateway,
 		Teams:        teams,
