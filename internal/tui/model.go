@@ -2703,13 +2703,13 @@ func (m *Model) View() tea.View {
 
 	var mainWidth int
 	if showSidebar && showLeftPanel {
-		// Left panel right border (1) + sidebar left border (1).
+		// Gap after left panel (1) + sidebar left border (1).
 		mainWidth = m.width - sbWidth - 1 - lpWidth - 1
 	} else if showSidebar {
 		// Sidebar border takes 1 char on the left side.
 		mainWidth = m.width - sbWidth - 1
 	} else if showLeftPanel {
-		// Left panel right border (1).
+		// Gap after left panel (1).
 		mainWidth = m.width - lpWidth - 1
 	} else {
 		mainWidth = m.width
@@ -3095,12 +3095,12 @@ func (m *Model) resizeComponents() {
 
 	var mainWidth int
 	if showSidebar && showLeftPanel {
-		// Left panel right border (1) + sidebar left border (1).
+		// Gap after left panel (1) + sidebar left border (1).
 		mainWidth = m.width - sbWidth - 1 - lpWidth - 1
 	} else if showSidebar {
 		mainWidth = m.width - sbWidth - 1
 	} else if showLeftPanel {
-		// Left panel right border (1).
+		// Gap after left panel (1).
 		mainWidth = m.width - lpWidth - 1
 	} else {
 		mainWidth = m.width
@@ -3394,23 +3394,28 @@ func (m Model) displayJobs() []job.Job {
 }
 
 // renderLeftPanel builds the left panel with three vertically-stacked sub-panes:
-// Work Efforts (top 40%), DAG (middle 30%), and Chat (bottom 30%).
+// Jobs (top), Job Detail (middle), and Teams (bottom).
+// Each pane has its own rounded border that lights up when focused.
 func (m Model) renderLeftPanel(panelWidth, panelHeight int) string {
-	contentWidth := panelWidth - LeftPanelStyle.GetHorizontalFrameSize()
+	// Each pane border adds 2 horizontal (left+right border) + 2 horizontal (left+right padding) = 4.
+	paneFrameH := FocusedPaneStyle.GetHorizontalBorderSize() + FocusedPaneStyle.GetHorizontalPadding()
+	contentWidth := panelWidth - paneFrameH
 	if contentWidth < 1 {
 		contentWidth = 1
 	}
 
-	// 2 dividers consume 2 rows of the panel height.
-	const dividerRows = 2
+	// Each pane border adds 2 vertical rows (top + bottom border line).
+	paneFrameV := FocusedPaneStyle.GetVerticalBorderSize()
+	// 3 panes × 2 rows border = 6 rows of border overhead.
+	borderOverhead := 3 * paneFrameV
 
 	// Bottom pane: content-driven height (header + one row per team + optional hint).
-	bottomH := 1 + len(m.teams) // "Teams" header + one line per team
+	bottomContentH := 1 + len(m.teams) // "Teams" header + one line per team
 	if len(m.teams) == 0 {
-		bottomH = 2 // header + "No teams configured"
+		bottomContentH = 2 // header + "No teams configured"
 	}
 	if m.focused == focusTeams && len(m.teams) > 0 {
-		bottomH++ // hint line
+		bottomContentH++ // hint line
 	}
 
 	// Jobs hint line appears when the jobs pane is focused.
@@ -3419,20 +3424,24 @@ func (m Model) renderLeftPanel(panelWidth, panelHeight int) string {
 		jobsHintH = 1
 	}
 
-	// Middle pane: fixed 30% of total, but never so large it starves top or bottom.
-	middleH := panelHeight * 30 / 100
-	// Top pane gets whatever is left after middle + bottom + dividers + jobs hint.
-	topH := panelHeight - middleH - bottomH - dividerRows - jobsHintH
-	if topH < 3 {
-		topH = 3
-		// Re-derive middleH so the total still fits.
-		middleH = panelHeight - topH - bottomH - dividerRows - jobsHintH
-		if middleH < 2 {
-			middleH = 2
-		}
+	// Available height for content across all three panes.
+	availableH := panelHeight - borderOverhead
+	if availableH < 6 {
+		availableH = 6
 	}
 
-	divider := LeftPanelDividerStyle.Render(strings.Repeat("─", contentWidth))
+	// Middle pane: fixed 30% of available content height.
+	middleContentH := availableH * 30 / 100
+	// Top pane gets whatever is left after middle + bottom + jobs hint.
+	topContentH := availableH - middleContentH - bottomContentH - jobsHintH
+	if topContentH < 3 {
+		topContentH = 3
+		// Re-derive middleContentH so the total still fits.
+		middleContentH = availableH - topContentH - bottomContentH - jobsHintH
+		if middleContentH < 2 {
+			middleContentH = 2
+		}
+	}
 
 	displayedJobs := m.displayJobs()
 
@@ -3515,11 +3524,16 @@ func (m Model) renderLeftPanel(panelWidth, panelHeight int) string {
 		}
 		topLines = append(topLines, DimStyle.Render(hint))
 	}
-	topPane := lipgloss.NewStyle().Height(topH + jobsHintH).Render(
+	topContent := lipgloss.NewStyle().Height(topContentH + jobsHintH).Render(
 		lipgloss.JoinVertical(lipgloss.Left, topLines...),
 	)
+	topPaneStyle := UnfocusedPaneStyle
+	if m.focused == focusJobs {
+		topPaneStyle = FocusedPaneStyle
+	}
+	topPane := topPaneStyle.Width(panelWidth).Render(topContent)
 
-	// --- Middle pane: Job details ---
+	// --- Middle pane: Job details (always unfocused) ---
 	var middleLines []string
 	if len(displayedJobs) == 0 || m.selectedJob >= len(displayedJobs) {
 		middleLines = append(middleLines, LeftPanelHeaderStyle.Render("Job"))
@@ -3577,9 +3591,10 @@ func (m Model) renderLeftPanel(panelWidth, panelHeight int) string {
 			}
 		}
 	}
-	middlePane := lipgloss.NewStyle().Height(middleH).Render(
+	middleContent := lipgloss.NewStyle().Height(middleContentH).Render(
 		lipgloss.JoinVertical(lipgloss.Left, middleLines...),
 	)
+	middlePane := UnfocusedPaneStyle.Width(panelWidth).Render(middleContent)
 
 	// --- Bottom pane: Teams ---
 	var bottomLines []string
@@ -3607,16 +3622,15 @@ func (m Model) renderLeftPanel(panelWidth, panelHeight int) string {
 			bottomLines = append(bottomLines, DimStyle.Render("Enter → view team details"))
 		}
 	}
-	bottomPane := lipgloss.JoinVertical(lipgloss.Left, bottomLines...)
-
-	inner := lipgloss.JoinVertical(lipgloss.Left, topPane, divider, middlePane, divider, bottomPane)
-	panelStyle := LeftPanelStyle.Width(panelWidth).Height(panelHeight)
-	if m.focused == focusJobs || m.focused == focusTeams || m.focused == focusAgents {
-		panelStyle = panelStyle.BorderForeground(ColorPrimary)
-	} else {
-		panelStyle = panelStyle.BorderForeground(ColorBorder)
+	bottomContent := lipgloss.JoinVertical(lipgloss.Left, bottomLines...)
+	bottomPaneStyle := UnfocusedPaneStyle
+	if m.focused == focusTeams {
+		bottomPaneStyle = FocusedPaneStyle
 	}
-	return panelStyle.Render(inner)
+	bottomPane := bottomPaneStyle.Width(panelWidth).Render(bottomContent)
+
+	inner := lipgloss.JoinVertical(lipgloss.Left, topPane, middlePane, bottomPane)
+	return LeftPanelStyle.Width(panelWidth).Height(panelHeight).Render(inner)
 }
 
 // renderSidebar builds the right sidebar with stats.
@@ -3694,10 +3708,16 @@ func (m Model) renderSidebar(sbWidth int) string {
 	sb.WriteString(sidebarRow("Last resp", lastResp))
 	sb.WriteString(sidebarRow("Avg resp", avgResp))
 
-	// Agents section.
-	sb.WriteString("\n")
-	sb.WriteString(gradientText("Agents", [3]uint8{50, 130, 255}, [3]uint8{0, 200, 200}))
-	sb.WriteString("\n\n")
+	// Agents section — built separately and wrapped in a focus-aware border.
+	var agentsSB strings.Builder
+	agentsBorderFrame := FocusedPaneStyle.GetHorizontalBorderSize() + FocusedPaneStyle.GetHorizontalPadding()
+	agentsInnerW := contentWidth - agentsBorderFrame
+	if agentsInnerW < 1 {
+		agentsInnerW = 1
+	}
+
+	agentsSB.WriteString(gradientText("Agents", [3]uint8{50, 130, 255}, [3]uint8{0, 200, 200}))
+	agentsSB.WriteString("\n\n")
 
 	if m.gateway != nil {
 		slots := m.gateway.Slots()
@@ -3714,18 +3734,18 @@ func (m Model) renderSidebar(sbWidth int) string {
 			} else {
 				statusIcon = "✓ "
 			}
-			line := statusIcon + truncateStr(label, contentWidth-2)
+			line := statusIcon + truncateStr(label, agentsInnerW-2)
 			if m.focused == focusAgents && i == m.selectedAgentSlot {
-				sb.WriteString(JobSelectedStyle.Render("🍞 " + truncateStr(label, contentWidth-3)))
+				agentsSB.WriteString(JobSelectedStyle.Render("🍞 " + truncateStr(label, agentsInnerW-3)))
 			} else if snap.Status == gateway.SlotDone {
-				sb.WriteString(DimStyle.Render(statusIcon + truncateStr(label, contentWidth-2)))
+				agentsSB.WriteString(DimStyle.Render(statusIcon + truncateStr(label, agentsInnerW-2)))
 			} else {
-				sb.WriteString(SidebarValueStyle.Render(line))
+				agentsSB.WriteString(SidebarValueStyle.Render(line))
 			}
-			sb.WriteString("\n")
+			agentsSB.WriteString("\n")
 		}
 		if !hasAny {
-			sb.WriteString(TaskUpdatesPaneStyle.Render("No agents running"))
+			agentsSB.WriteString(TaskUpdatesPaneStyle.Render("No agents running"))
 		}
 
 		// Aggregated agent token stats.
@@ -3735,21 +3755,27 @@ func (m Model) renderSidebar(sbWidth int) string {
 			totalAgentOut += snap.OutputTokens
 		}
 		if totalAgentIn > 0 || totalAgentOut > 0 {
-			sb.WriteString("\n")
-			sb.WriteString(sidebarRow("Agent ↑ tok", compactNum(totalAgentIn)))
-			sb.WriteString(sidebarRow("Agent ↓ tok", compactNum(totalAgentOut)))
+			agentsSB.WriteString("\n")
+			agentsSB.WriteString(sidebarRow("Agent ↑ tok", compactNum(totalAgentIn)))
+			agentsSB.WriteString(sidebarRow("Agent ↓ tok", compactNum(totalAgentOut)))
 			for i, snap := range slots {
 				if snap.InputTokens > 0 || snap.OutputTokens > 0 {
 					perSlot := fmt.Sprintf("  s%d: ↑%s ↓%s", i, compactNum(snap.InputTokens), compactNum(snap.OutputTokens))
-					sb.WriteString(DimStyle.Render(truncateStr(perSlot, contentWidth)))
-					sb.WriteString("\n")
+					agentsSB.WriteString(DimStyle.Render(truncateStr(perSlot, agentsInnerW)))
+					agentsSB.WriteString("\n")
 				}
 			}
 		}
 	} else {
-		sb.WriteString(TaskUpdatesPaneStyle.Render("No agents running"))
+		agentsSB.WriteString(TaskUpdatesPaneStyle.Render("No agents running"))
+	}
+
+	agentsPaneStyle := UnfocusedPaneStyle
+	if m.focused == focusAgents {
+		agentsPaneStyle = FocusedPaneStyle
 	}
 	sb.WriteString("\n")
+	sb.WriteString(agentsPaneStyle.Width(contentWidth).Render(agentsSB.String()))
 
 	return SidebarStyle.
 		Width(sbWidth).

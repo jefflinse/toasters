@@ -177,20 +177,25 @@ var (
 				Italic(true)
 
 	// LeftPanelStyle is the outer container for the left panel.
-	// Right border only to separate it from the main chat area.
-	LeftPanelStyle = lipgloss.NewStyle().
-			Border(lipgloss.NormalBorder(), false, true, false, false).
-			BorderForeground(lipgloss.Color("237")).
-			PaddingLeft(1)
+	// No border — individual panes have their own borders.
+	LeftPanelStyle = lipgloss.NewStyle()
 
 	// LeftPanelHeaderStyle styles section headers within the left panel.
 	LeftPanelHeaderStyle = lipgloss.NewStyle().
 				Bold(true).
 				Foreground(lipgloss.Color("51"))
 
-	// LeftPanelDividerStyle styles the thin divider between left panel panes.
-	LeftPanelDividerStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("237"))
+	// FocusedPaneStyle wraps a left-panel pane that currently has keyboard focus.
+	FocusedPaneStyle = lipgloss.NewStyle().
+				Border(lipgloss.RoundedBorder()).
+				BorderForeground(ColorAccent).
+				PaddingLeft(1).PaddingRight(1)
+
+	// UnfocusedPaneStyle wraps a left-panel pane that does not have keyboard focus.
+	UnfocusedPaneStyle = lipgloss.NewStyle().
+				Border(lipgloss.RoundedBorder()).
+				BorderForeground(ColorBorder).
+				PaddingLeft(1).PaddingRight(1)
 
 	// JobSelectedStyle styles the currently selected job.
 	JobSelectedStyle = lipgloss.NewStyle().
