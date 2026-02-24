@@ -9,12 +9,47 @@ This is the master plan for evolving Toasters from a TUI prototype into a full a
 
 ## Table of Contents
 
+- [Pre-Phase 1: Code Health](#pre-phase-1-code-health-completed-2026-02-24)
 - [Phase 1: The Foundation](#phase-1-the-foundation)
 - [Phase 2: Connect to the World](#phase-2-connect-to-the-world)
 - [Phase 3: Structure and Polish](#phase-3-structure-and-polish)
 - [Phase 4: Intelligence](#phase-4-intelligence)
 - [Dependency Graph](#dependency-graph)
 - [Principles](#principles)
+
+---
+
+## Pre-Phase 1: Code Health (Completed 2026-02-24)
+
+**Goal:** Establish a clean, lint-free, well-structured codebase before starting Phase 1 feature work. No functional or visual changes — the TUI looks and functions identically.
+
+**What was done:**
+
+| Item | Description | Status |
+|------|-------------|--------|
+| HTTP client timeouts | Added connect/response timeouts to LLM client | ✅ Done |
+| Permission mode default | Replaced `--dangerously-skip-permissions` with `--permission-mode plan` | ✅ Done |
+| Dependency updates | Updated `x/crypto`, `x/net`, `x/sync`, `x/term`, `x/text` to latest | ✅ Done |
+| Error handling | Fixed all 19 unchecked error returns across 8 files | ✅ Done |
+| Global state elimination | Replaced package-level globals in `llm/tools.go` with `ToolExecutor` struct | ✅ Done |
+| Type deduplication | Extracted shared Claude CLI stream types into `internal/claude` package | ✅ Done |
+| Dead code removal | Removed unused fields, functions, and ineffectual assignments | ✅ Done |
+| Lint cleanup | Fixed all staticcheck findings; `golangci-lint run` reports 0 issues | ✅ Done |
+
+**Remaining tech debt (to address incrementally during Phase 1):**
+
+| Item | Description | Effort |
+|------|-------------|--------|
+| Break up `model.go` | 5,300+ line god file — extract modals, grid, key handling | XL |
+| Parallel slices → struct | Replace 4 parallel slices with `ChatEntry` struct | L |
+| Unify frontmatter parsing | 4 duplicate parsers across `job/` and `agents/` | M |
+| Split `internal/llm` | Package has too many responsibilities (client + types + tools + HTML) | M |
+| macOS Keychain guard | Add platform check for Keychain-dependent auth | S |
+| Charm v2 stable update | Update pre-release Charm v2 deps to stable releases | M |
+| Test coverage | Overall 12.1% — target 40% before Phase 1 completion | L |
+| Vulnerability scan | Run `govulncheck` once compatible binary is available | S |
+
+See `HEALTH_REPORT.md` for the full audit details.
 
 ---
 

@@ -87,7 +87,7 @@ func WriteBlockerAnswers(jobDir string, b *Blocker) error {
 	if err != nil {
 		return fmt.Errorf("opening BLOCKER.md for append: %w", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	ts := time.Now().UTC().Format(time.RFC3339)
 	if _, err := fmt.Fprintf(f, "\n## User Responses\n_Answered: %s_\n\n", ts); err != nil {

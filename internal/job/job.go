@@ -202,7 +202,7 @@ func AppendOverview(dir, content string) error {
 	if err != nil {
 		return fmt.Errorf("opening OVERVIEW.md for append: %w", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	if _, err := fmt.Fprintf(f, "\n%s", content); err != nil {
 		return fmt.Errorf("appending to OVERVIEW.md: %w", err)
@@ -229,7 +229,7 @@ func AddTodo(dir, task string) error {
 	if err != nil {
 		return fmt.Errorf("opening TODO.md: %w", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	if _, err := fmt.Fprintf(f, "- [ ] %s\n", task); err != nil {
 		return fmt.Errorf("writing to TODO.md: %w", err)
@@ -288,16 +288,16 @@ func CompleteTodo(dir, indexOrText string) error {
 	tmpPath := tmp.Name()
 
 	if _, err := tmp.WriteString(newContent); err != nil {
-		tmp.Close()
-		os.Remove(tmpPath)
+		_ = tmp.Close()
+		_ = os.Remove(tmpPath)
 		return fmt.Errorf("writing temp file: %w", err)
 	}
 	if err := tmp.Close(); err != nil {
-		os.Remove(tmpPath)
+		_ = os.Remove(tmpPath)
 		return fmt.Errorf("closing temp file: %w", err)
 	}
 	if err := os.Rename(tmpPath, path); err != nil {
-		os.Remove(tmpPath)
+		_ = os.Remove(tmpPath)
 		return fmt.Errorf("renaming temp file: %w", err)
 	}
 

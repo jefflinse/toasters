@@ -7,9 +7,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"sort"
 	"strings"
+	"time"
 )
 
 // Message represents a single chat message.
@@ -128,9 +130,19 @@ type Client struct {
 // The model parameter may be empty — LM Studio will use whatever model is loaded.
 func NewClient(baseURL string, model string) *Client {
 	return &Client{
-		baseURL:    strings.TrimRight(baseURL, "/"),
-		httpClient: &http.Client{},
-		model:      model,
+		baseURL: strings.TrimRight(baseURL, "/"),
+		httpClient: &http.Client{
+			Transport: &http.Transport{
+				DialContext: (&net.Dialer{
+					Timeout:   30 * time.Second,
+					KeepAlive: 30 * time.Second,
+				}).DialContext,
+				TLSHandshakeTimeout:   10 * time.Second,
+				ResponseHeaderTimeout: 5 * time.Minute,
+				ExpectContinueTimeout: 1 * time.Second,
+			},
+		},
+		model: model,
 	}
 }
 
@@ -197,7 +209,7 @@ func (c *Client) streamCompletion(ctx context.Context, messages []Message, tempe
 		ch <- StreamResponse{Error: fmt.Errorf("sending request: %w", err)}
 		return
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		ch <- StreamResponse{Error: fmt.Errorf("unexpected status %d: %s", resp.StatusCode, resp.Status)}
@@ -206,7 +218,6 @@ func (c *Client) streamCompletion(ctx context.Context, messages []Message, tempe
 
 	var lastUsage *Usage
 	var lastModel string
-	sawStop := false
 
 	scanner := bufio.NewScanner(resp.Body)
 	for scanner.Scan() {
@@ -267,17 +278,13 @@ func (c *Client) streamCompletion(ctx context.Context, messages []Message, tempe
 				}
 			}
 
-			if choice.FinishReason == "stop" {
-				sawStop = true
-				// Don't return yet — with stream_options.include_usage, the
-				// server sends a final chunk with usage data after the stop
-				// chunk. Keep reading until [DONE].
-			}
-		} else if sawStop && chunk.Usage != nil {
-			// This is the usage-only chunk that arrives after finish_reason=stop
-			// when stream_options.include_usage is true. Usage is already
-			// captured above; keep reading for [DONE].
+			// On finish_reason=stop, don't return yet — with
+			// stream_options.include_usage, the server sends a final
+			// chunk with usage data after the stop chunk. Keep reading
+			// until [DONE].
 		}
+		// Chunks with no choices (e.g. usage-only after stop) are handled
+		// by the Usage capture above; keep reading for [DONE].
 	}
 
 	if err := scanner.Err(); err != nil {
@@ -323,7 +330,7 @@ func (c *Client) streamCompletionWithTools(ctx context.Context, messages []Messa
 		ch <- StreamResponse{Error: fmt.Errorf("sending request: %w", err)}
 		return
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		ch <- StreamResponse{Error: fmt.Errorf("unexpected status %d: %s", resp.StatusCode, resp.Status)}
@@ -332,7 +339,6 @@ func (c *Client) streamCompletionWithTools(ctx context.Context, messages []Messa
 
 	var lastUsage *Usage
 	var lastModel string
-	sawStop := false
 	accumulated := make(map[int]*ToolCall)
 
 	scanner := bufio.NewScanner(resp.Body)
@@ -432,17 +438,13 @@ func (c *Client) streamCompletionWithTools(ctx context.Context, messages []Messa
 				return
 			}
 
-			if choice.FinishReason == "stop" {
-				sawStop = true
-				// Don't return yet — with stream_options.include_usage, the
-				// server sends a final chunk with usage data after the stop
-				// chunk. Keep reading until [DONE].
-			}
-		} else if sawStop && chunk.Usage != nil {
-			// This is the usage-only chunk that arrives after finish_reason=stop
-			// when stream_options.include_usage is true. Usage is already
-			// captured above; keep reading for [DONE].
+			// On finish_reason=stop, don't return yet — with
+			// stream_options.include_usage, the server sends a final
+			// chunk with usage data after the stop chunk. Keep reading
+			// until [DONE].
 		}
+		// Chunks with no choices (e.g. usage-only after stop) are handled
+		// by the Usage capture above; keep reading for [DONE].
 	}
 
 	if err := scanner.Err(); err != nil {
@@ -491,7 +493,7 @@ func (c *Client) ChatCompletion(ctx context.Context, msgs []Message) (string, er
 	if err != nil {
 		return "", fmt.Errorf("chat completion: sending request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -570,7 +572,7 @@ func (c *Client) fetchLMStudioModels(ctx context.Context) ([]ModelInfo, error) {
 	if err != nil {
 		return nil, fmt.Errorf("fetching models: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("unexpected status %d: %s", resp.StatusCode, resp.Status)
@@ -604,7 +606,7 @@ func (c *Client) fetchOpenAIModels(ctx context.Context) ([]ModelInfo, error) {
 	if err != nil {
 		return nil, fmt.Errorf("fetching models: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("unexpected status %d: %s", resp.StatusCode, resp.Status)

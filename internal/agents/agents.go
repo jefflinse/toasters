@@ -127,9 +127,7 @@ func ParseFile(path string) (Agent, error) {
 			fmBlock := rest[:closingIdx]
 			// Advance past "\n---"; skip an optional trailing newline
 			afterClose := rest[closingIdx+1+len(fmDelim):]
-			if strings.HasPrefix(afterClose, "\n") {
-				afterClose = afterClose[1:]
-			}
+			afterClose = strings.TrimPrefix(afterClose, "\n")
 			agent.Body = strings.TrimSpace(afterClose)
 			parseFrontmatter(&agent, fmBlock)
 		} else {
@@ -289,7 +287,7 @@ func Watch(ctx context.Context, dir string, onChange func()) error {
 	if err != nil {
 		return fmt.Errorf("creating fsnotify watcher: %w", err)
 	}
-	defer w.Close()
+	defer func() { _ = w.Close() }()
 
 	// Best-effort: ignore error if dir doesn't exist yet.
 	_ = w.Add(dir)
@@ -322,7 +320,7 @@ func WatchRecursive(ctx context.Context, dir string, onChange func()) error {
 	if err != nil {
 		return fmt.Errorf("creating watcher: %w", err)
 	}
-	defer w.Close()
+	defer func() { _ = w.Close() }()
 
 	// Watch the top-level dir.
 	_ = w.Add(dir) // best-effort
@@ -496,11 +494,11 @@ func BuildTeamCoordinatorPrompt(team Team, jobDir string) string {
 		roster.WriteString("(no workers configured)")
 	} else {
 		for _, w := range team.Workers {
-			roster.WriteString(fmt.Sprintf("- `%s`: %s\n", w.Name, w.Description))
+			fmt.Fprintf(&roster, "- `%s`: %s\n", w.Name, w.Description)
 		}
 	}
 
-	sb.WriteString(fmt.Sprintf(`## Toasters Team Coordinator Instructions
+	fmt.Fprintf(&sb, `## Toasters Team Coordinator Instructions
 
 You are the coordinator for the "%s" team inside toasters, an agentic orchestration tool.
 
@@ -556,9 +554,9 @@ Do not ask for confirmation before starting work. Do not ask for approval of you
 		strings.TrimRight(roster.String(), "\n"),
 		team.Name,
 		team.Name,
-	))
+	)
 
-	sb.WriteString(fmt.Sprintf(`
+	fmt.Fprintf(&sb, `
 
 ### Job Directory
 Your job directory is: %s
@@ -566,7 +564,7 @@ Your job directory is: %s
 All work artifacts (code, cloned repositories, generated files, etc.) must be written under this directory.
 Clone repositories to: %s/repos/<owner>/<repo>/
 Write REPORT.md to: %s/REPORT.md
-Write BLOCKER.md to: %s/BLOCKER.md`, jobDir, jobDir, jobDir, jobDir))
+Write BLOCKER.md to: %s/BLOCKER.md`, jobDir, jobDir, jobDir, jobDir)
 
 	return sb.String()
 }
@@ -619,16 +617,16 @@ func SetCoordinator(teamDir, agentName string) error {
 		tmpName := tmp.Name()
 
 		if _, err := tmp.WriteString(newContent); err != nil {
-			tmp.Close()
-			os.Remove(tmpName)
+			_ = tmp.Close()
+			_ = os.Remove(tmpName)
 			return fmt.Errorf("writing temp file %s: %w", tmpName, err)
 		}
 		if err := tmp.Close(); err != nil {
-			os.Remove(tmpName)
+			_ = os.Remove(tmpName)
 			return fmt.Errorf("closing temp file %s: %w", tmpName, err)
 		}
 		if err := os.Rename(tmpName, p); err != nil {
-			os.Remove(tmpName)
+			_ = os.Remove(tmpName)
 			return fmt.Errorf("renaming %s to %s: %w", tmpName, p, err)
 		}
 	}
@@ -701,9 +699,9 @@ func BuildOperatorPrompt(teams []Team, awareness string) string {
 		} else {
 			for _, t := range teams {
 				if t.Coordinator != nil {
-					teamList.WriteString(fmt.Sprintf("- `%s`: %s\n", t.Name, t.Coordinator.Description))
+					fmt.Fprintf(&teamList, "- `%s`: %s\n", t.Name, t.Coordinator.Description)
 				} else {
-					teamList.WriteString(fmt.Sprintf("- `%s`: %d workers\n", t.Name, len(t.Workers)))
+					fmt.Fprintf(&teamList, "- `%s`: %d workers\n", t.Name, len(t.Workers))
 				}
 			}
 		}

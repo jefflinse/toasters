@@ -34,21 +34,22 @@ type AgentSpawner interface {
 	Kill(slotID int) error
 }
 
-// activeGateway is the gateway instance used by the assign_team tool.
-// Set via SetGateway before the TUI starts.
-var activeGateway AgentSpawner
-
-// activeTeams is the set of available teams, used by the assign_team tool.
-var activeTeams []agents.Team
-
-// SetGateway wires the gateway instance into the tool executor.
-func SetGateway(g AgentSpawner) {
-	activeGateway = g
+// ToolExecutor holds the dependencies needed to execute operator tool calls.
+type ToolExecutor struct {
+	Gateway      AgentSpawner
+	Teams        []agents.Team
+	WorkspaceDir string
+	Tools        []Tool
 }
 
-// SetTeams updates the set of available teams used by the assign_team tool.
-func SetTeams(teams []agents.Team) {
-	activeTeams = teams
+// NewToolExecutor creates a ToolExecutor with the default static tools.
+func NewToolExecutor(gateway AgentSpawner, teams []agents.Team, workspaceDir string) *ToolExecutor {
+	return &ToolExecutor{
+		Gateway:      gateway,
+		Teams:        teams,
+		WorkspaceDir: workspaceDir,
+		Tools:        staticTools,
+	}
 }
 
 // staticTools contains all tools available to the operator LLM.
@@ -331,27 +332,9 @@ var staticTools = []Tool{
 	},
 }
 
-// AvailableTools is the set of tools exposed to the LLM.
-// It is initialized with staticTools (which includes assign_team and escalate_to_user).
-var AvailableTools = staticTools
-
-// SetAvailableTools replaces the package-level AvailableTools slice.
-func SetAvailableTools(tools []Tool) {
-	AvailableTools = tools
-}
-
-// activeWorkspaceDir is the workspace directory, set at startup.
-// All job paths are rooted at job.JobsDir(activeWorkspaceDir).
-var activeWorkspaceDir string
-
-// SetJobsDir sets the workspace directory used by all job tool handlers.
-func SetJobsDir(dir string) {
-	activeWorkspaceDir = dir
-}
-
 // ExecuteTool dispatches a tool call to the appropriate handler and returns
 // the result as plain text.
-func ExecuteTool(call ToolCall) (string, error) {
+func (te *ToolExecutor) ExecuteTool(call ToolCall) (string, error) {
 	switch call.Function.Name {
 	case "fetch_webpage":
 		var args struct {
@@ -370,7 +353,7 @@ func ExecuteTool(call ToolCall) (string, error) {
 		}
 		return listDirectory(args.Path)
 	case "job_list":
-		jobs, err := job.List(activeWorkspaceDir)
+		jobs, err := job.List(te.WorkspaceDir)
 		if err != nil {
 			return "", fmt.Errorf("listing jobs: %w", err)
 		}
@@ -396,7 +379,7 @@ func ExecuteTool(call ToolCall) (string, error) {
 		if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
 			return "", fmt.Errorf("parsing job_create args: %w", err)
 		}
-		j, err := job.Create(activeWorkspaceDir, args.ID, args.Name, args.Description)
+		j, err := job.Create(te.WorkspaceDir, args.ID, args.Name, args.Description)
 		if err != nil {
 			return "", fmt.Errorf("creating job: %w", err)
 		}
@@ -409,7 +392,7 @@ func ExecuteTool(call ToolCall) (string, error) {
 		if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
 			return "", fmt.Errorf("parsing job_read_overview args: %w", err)
 		}
-		dir := filepath.Join(job.JobsDir(activeWorkspaceDir), args.ID)
+		dir := filepath.Join(job.JobsDir(te.WorkspaceDir), args.ID)
 		return job.ReadOverview(dir)
 
 	case "job_read_todos":
@@ -419,7 +402,7 @@ func ExecuteTool(call ToolCall) (string, error) {
 		if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
 			return "", fmt.Errorf("parsing job_read_todos args: %w", err)
 		}
-		dir := filepath.Join(job.JobsDir(activeWorkspaceDir), args.ID)
+		dir := filepath.Join(job.JobsDir(te.WorkspaceDir), args.ID)
 		return job.ReadTodos(dir)
 
 	case "job_update_overview":
@@ -434,7 +417,7 @@ func ExecuteTool(call ToolCall) (string, error) {
 		if args.Mode != "overwrite" && args.Mode != "append" {
 			return "", fmt.Errorf("invalid mode %q: must be 'overwrite' or 'append'", args.Mode)
 		}
-		dir := filepath.Join(job.JobsDir(activeWorkspaceDir), args.ID)
+		dir := filepath.Join(job.JobsDir(te.WorkspaceDir), args.ID)
 		var overviewErr error
 		if args.Mode == "overwrite" {
 			overviewErr = job.WriteOverview(dir, args.Content)
@@ -454,7 +437,7 @@ func ExecuteTool(call ToolCall) (string, error) {
 		if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
 			return "", fmt.Errorf("parsing job_add_todo args: %w", err)
 		}
-		dir := filepath.Join(job.JobsDir(activeWorkspaceDir), args.ID)
+		dir := filepath.Join(job.JobsDir(te.WorkspaceDir), args.ID)
 		if err := job.AddTodo(dir, args.Task); err != nil {
 			return "", err
 		}
@@ -468,14 +451,14 @@ func ExecuteTool(call ToolCall) (string, error) {
 		if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
 			return "", fmt.Errorf("parsing job_complete_todo args: %w", err)
 		}
-		dir := filepath.Join(job.JobsDir(activeWorkspaceDir), args.ID)
+		dir := filepath.Join(job.JobsDir(te.WorkspaceDir), args.ID)
 		if err := job.CompleteTodo(dir, args.IndexOrText); err != nil {
 			return "", err
 		}
 		return "ok", nil
 
 	case "assign_team":
-		if activeGateway == nil {
+		if te.Gateway == nil {
 			return "", fmt.Errorf("gateway not initialized")
 		}
 		var args struct {
@@ -487,14 +470,14 @@ func ExecuteTool(call ToolCall) (string, error) {
 			return "", fmt.Errorf("parsing assign_team args: %w", err)
 		}
 		// Guard: verify the job exists before dispatching to a team.
-		jobDir := filepath.Join(job.JobsDir(activeWorkspaceDir), args.JobID)
+		jobDir := filepath.Join(job.JobsDir(te.WorkspaceDir), args.JobID)
 		if _, loadErr := job.Load(jobDir); loadErr != nil {
 			return fmt.Sprintf("job %q does not exist; call job_create first", args.JobID), nil
 		}
 		// Look up team by name.
 		var team agents.Team
 		found := false
-		for _, t := range activeTeams {
+		for _, t := range te.Teams {
 			if t.Name == args.TeamName {
 				team = t
 				found = true
@@ -508,7 +491,7 @@ func ExecuteTool(call ToolCall) (string, error) {
 		if tasks, err := job.ListTasks(jobDir); err == nil && len(tasks) > 0 {
 			_ = job.SetTaskTeam(tasks[0].Dir, args.TeamName)
 		}
-		slotID, alreadyRunning, err := activeGateway.SpawnTeam(args.TeamName, args.JobID, args.Task, team)
+		slotID, alreadyRunning, err := te.Gateway.SpawnTeam(args.TeamName, args.JobID, args.Task, team)
 		if err != nil {
 			return "", fmt.Errorf("spawning team: %w", err)
 		}
@@ -530,10 +513,10 @@ func ExecuteTool(call ToolCall) (string, error) {
 		return fmt.Sprintf("__escalate__:%s\n\nContext: %s", args.Question, args.Context), nil
 
 	case "list_slots":
-		if activeGateway == nil {
+		if te.Gateway == nil {
 			return "gateway not initialized", nil
 		}
-		slots := activeGateway.SlotSummaries()
+		slots := te.Gateway.SlotSummaries()
 		if len(slots) == 0 {
 			return "no active slots", nil
 		}
@@ -544,7 +527,7 @@ func ExecuteTool(call ToolCall) (string, error) {
 		return strings.Join(lines, "\n"), nil
 
 	case "kill_slot":
-		if activeGateway == nil {
+		if te.Gateway == nil {
 			return "gateway not initialized", nil
 		}
 		var args struct {
@@ -553,7 +536,7 @@ func ExecuteTool(call ToolCall) (string, error) {
 		if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
 			return "", fmt.Errorf("parsing kill_slot args: %w", err)
 		}
-		if err := activeGateway.Kill(args.SlotID); err != nil {
+		if err := te.Gateway.Kill(args.SlotID); err != nil {
 			return fmt.Sprintf("error killing slot %d: %v", args.SlotID, err), nil
 		}
 		return fmt.Sprintf("killed slot %d", args.SlotID), nil
@@ -576,7 +559,7 @@ func ExecuteTool(call ToolCall) (string, error) {
 		if !validStatuses[args.Status] {
 			return fmt.Sprintf("invalid status %q: must be one of active, done, paused", args.Status), nil
 		}
-		jobDir := filepath.Join(job.JobsDir(activeWorkspaceDir), args.JobID)
+		jobDir := filepath.Join(job.JobsDir(te.WorkspaceDir), args.JobID)
 		tasks, err := job.ListTasks(jobDir)
 		if err != nil {
 			return "", fmt.Errorf("listing tasks: %w", err)
@@ -603,7 +586,7 @@ func ExecuteTool(call ToolCall) (string, error) {
 		if !validStatuses[args.Status] {
 			return fmt.Sprintf("invalid status %q: must be one of active, done, cancelled, paused", args.Status), nil
 		}
-		dir := filepath.Join(job.JobsDir(activeWorkspaceDir), args.ID)
+		dir := filepath.Join(job.JobsDir(te.WorkspaceDir), args.ID)
 		updates := map[string]string{"status": args.Status}
 		if args.Status == "done" {
 			updates["completed"] = time.Now().UTC().Format(time.RFC3339)
@@ -632,7 +615,7 @@ func fetchWebpage(url string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("fetching %s: %w", url, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("unexpected status %d fetching %s", resp.StatusCode, url)

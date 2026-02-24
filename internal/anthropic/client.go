@@ -170,7 +170,7 @@ func (c *Client) ChatCompletion(ctx context.Context, msgs []llm.Message) (string
 	if err != nil {
 		return "", fmt.Errorf("sending request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -352,7 +352,7 @@ func (c *Client) streamMessages(ctx context.Context, system string, messages []a
 		ch <- llm.StreamResponse{Error: fmt.Errorf("sending request: %w", err)}
 		return
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
@@ -402,7 +402,7 @@ func (c *Client) streamMessagesWithTools(ctx context.Context, system string, mes
 		ch <- llm.StreamResponse{Error: fmt.Errorf("sending request: %w", err)}
 		return
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
@@ -453,7 +453,7 @@ func streamMessage(ctx context.Context, model string, prompt string, ch chan<- l
 		ch <- llm.StreamResponse{Error: fmt.Errorf("sending request: %w", err)}
 		return
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
@@ -740,7 +740,7 @@ func refreshAccessToken(refreshToken string) (*tokenResponse, error) {
 	if err != nil {
 		return nil, fmt.Errorf("token refresh request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, _ := io.ReadAll(resp.Body)
 

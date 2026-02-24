@@ -201,10 +201,11 @@ What exists today is a functional TUI prototype with operator chat, agent team d
 ### Implemented
 
 **`internal/llm` — LM Studio client**
-- `Client` connects to any OpenAI-compatible API endpoint
+- `Client` connects to any OpenAI-compatible API endpoint with proper HTTP timeouts
 - `ChatCompletionStream` sends messages and returns a channel of streamed response chunks
 - `ChatCompletionStreamWithTools` supports function calling
 - `FetchModels` queries available models
+- `ToolExecutor` struct for dependency-injected tool execution (no global state)
 - Token usage tracking and context window monitoring
 
 **`internal/tui` — TUI application**
@@ -219,6 +220,14 @@ What exists today is a functional TUI prototype with operator chat, agent team d
 - Agent discovery from `.md` files with YAML frontmatter
 - Team definitions with coordinator + worker roles
 - Hot-reload via fsnotify
+
+**`internal/claude` — Shared Claude CLI stream types**
+- Exported types for parsing `--output-format stream-json` output
+- Used by both `internal/tui` and `internal/gateway` (eliminates duplication)
+
+**`internal/anthropic` — Anthropic API client**
+- Direct Anthropic Messages API client with SSE streaming
+- OAuth/Keychain integration for authentication (macOS)
 
 **`internal/gateway` — Claude subprocess management**
 - Up to 4 concurrent Claude CLI subprocess slots

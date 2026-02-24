@@ -36,6 +36,7 @@ func newMinimalModel(t *testing.T) Model {
 		chatViewport:   vp,
 		agentViewport:  agentVP,
 		input:          ta,
+		toolExec:       llm.NewToolExecutor(nil, nil, ""),
 		attachedSlot:   -1,
 		selectedMsgIdx: -1,
 

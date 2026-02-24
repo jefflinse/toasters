@@ -44,10 +44,10 @@ func jobSetStatusCall(jobID, status string) ToolCall {
 	}
 }
 
-// redirectHome sets HOME to a temp directory and wires SetJobsDir so that
+// newTestExecutor creates a ToolExecutor wired to a temp directory so that
 // ExecuteTool resolves job paths under <tempDir>/.config/toasters.
-// It returns the config dir path (which acts as the workspace dir in tests).
-func redirectHome(t *testing.T) string {
+// It returns the executor and the config dir path.
+func newTestExecutor(t *testing.T) (*ToolExecutor, string) {
 	t.Helper()
 
 	home := t.TempDir()
@@ -58,11 +58,8 @@ func redirectHome(t *testing.T) string {
 		t.Fatalf("creating config dir: %v", err)
 	}
 
-	// Wire the workspace dir so ExecuteTool finds jobs under configDir/jobs/.
-	SetJobsDir(configDir)
-	t.Cleanup(func() { SetJobsDir("") })
-
-	return configDir
+	te := NewToolExecutor(nil, nil, configDir)
+	return te, configDir
 }
 
 // loadFrontmatter reads and parses the OVERVIEW.md from jobDir, returning the
@@ -81,12 +78,12 @@ func loadFrontmatter(t *testing.T, jobDir string) job.Frontmatter {
 // TestJobSetStatus_DoneSetCompleted verifies that calling job_set_status with
 // status "done" auto-populates the completed field with an RFC3339 timestamp.
 func TestJobSetStatus_DoneSetCompleted(t *testing.T) {
-	configDir := redirectHome(t)
+	te, configDir := newTestExecutor(t)
 	jobDir := makeJobDir(t, configDir, "test-job-done", "active", "")
 
 	before := time.Now().UTC().Add(-time.Second) // allow for sub-second skew
 
-	result, err := ExecuteTool(jobSetStatusCall("test-job-done", "done"))
+	result, err := te.ExecuteTool(jobSetStatusCall("test-job-done", "done"))
 	if err != nil {
 		t.Fatalf("ExecuteTool returned error: %v", err)
 	}
@@ -119,10 +116,10 @@ func TestJobSetStatus_DoneSetCompleted(t *testing.T) {
 // TestJobSetStatus_ActiveDoesNotSetCompleted verifies that calling job_set_status
 // with status "active" leaves the completed field empty.
 func TestJobSetStatus_ActiveDoesNotSetCompleted(t *testing.T) {
-	configDir := redirectHome(t)
+	te, configDir := newTestExecutor(t)
 	jobDir := makeJobDir(t, configDir, "test-job-active", "done", "")
 
-	_, err := ExecuteTool(jobSetStatusCall("test-job-active", "active"))
+	_, err := te.ExecuteTool(jobSetStatusCall("test-job-active", "active"))
 	if err != nil {
 		t.Fatalf("ExecuteTool returned error: %v", err)
 	}
@@ -144,10 +141,10 @@ func TestJobSetStatus_ActiveDoesNotSetCompleted(t *testing.T) {
 func TestJobSetStatus_PausedDoesNotSetCompleted(t *testing.T) {
 	originalCompleted := "2026-01-15T10:30:00Z"
 
-	configDir := redirectHome(t)
+	te, configDir := newTestExecutor(t)
 	jobDir := makeJobDir(t, configDir, "test-job-paused", "done", originalCompleted)
 
-	_, err := ExecuteTool(jobSetStatusCall("test-job-paused", "paused"))
+	_, err := te.ExecuteTool(jobSetStatusCall("test-job-paused", "paused"))
 	if err != nil {
 		t.Fatalf("ExecuteTool returned error: %v", err)
 	}

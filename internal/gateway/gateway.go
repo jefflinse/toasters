@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"github.com/jefflinse/toasters/internal/agents"
+	"github.com/jefflinse/toasters/internal/claude"
 	"github.com/jefflinse/toasters/internal/config"
 	"github.com/jefflinse/toasters/internal/job"
 	"github.com/jefflinse/toasters/internal/llm"
@@ -494,88 +496,6 @@ func (g *Gateway) Kill(slotID int) error {
 	return nil
 }
 
-// --- Claude subprocess streaming (inlined from internal/tui/claude.go) ---
-
-// claudeInitEvent is the first line emitted by `claude --output-format stream-json`.
-type claudeInitEvent struct {
-	Type              string `json:"type"`
-	Subtype           string `json:"subtype"`
-	Model             string `json:"model"`
-	PermissionMode    string `json:"permissionMode"`
-	ClaudeCodeVersion string `json:"claude_code_version"`
-	SessionID         string `json:"session_id"`
-}
-
-// claudeInnerEvent is the inner event shape nested inside stream_event wrappers.
-type claudeInnerEvent struct {
-	Type  string `json:"type"`
-	Delta struct {
-		Type       string `json:"type"`
-		Text       string `json:"text"`
-		StopReason string `json:"stop_reason"`
-	} `json:"delta"`
-	Message struct {
-		Usage struct {
-			InputTokens  int `json:"input_tokens"`
-			OutputTokens int `json:"output_tokens"`
-		} `json:"usage"`
-	} `json:"message"`
-	ContentBlock struct {
-		Type string `json:"type"`
-		Name string `json:"name"`
-	} `json:"content_block"`
-	Usage struct {
-		OutputTokens int `json:"output_tokens"`
-	} `json:"usage"`
-}
-
-// claudeContentBlock is one element of an assistant message's content array.
-type claudeContentBlock struct {
-	Type     string `json:"type"`     // "text", "tool_use", or "thinking"
-	ID       string `json:"id"`       // tool use ID (for type="tool_use")
-	Text     string `json:"text"`     // for type="text"
-	Name     string `json:"name"`     // for type="tool_use"
-	Input    any    `json:"input"`    // for type="tool_use"
-	Thinking string `json:"thinking"` // for type="thinking"
-}
-
-// claudeAssistantMessage is the message field inside a top-level "assistant" event.
-type claudeAssistantMessage struct {
-	Content []claudeContentBlock `json:"content"`
-}
-
-// claudeToolResultBlock is one element of a user message's content array,
-// carrying the result of a tool call back to the model.
-type claudeToolResultBlock struct {
-	Type      string          `json:"type"`        // "tool_result"
-	ToolUseID string          `json:"tool_use_id"` // matches the tool_use block ID
-	Content   json.RawMessage `json:"content"`     // string or []content_block
-}
-
-// claudeUserMessage is the message field inside a top-level "user" event,
-// typically carrying tool results from subagent calls.
-type claudeUserMessage struct {
-	Role    string                  `json:"role"`
-	Content []claudeToolResultBlock `json:"content"`
-}
-
-// claudeOuterEvent is the top-level shape of a JSON line emitted by
-// `claude --output-format stream-json`.
-type claudeOuterEvent struct {
-	Type    string                 `json:"type"`
-	Event   claudeInnerEvent       `json:"event"`
-	Message claudeAssistantMessage `json:"message"` // for type="assistant"
-	Result  string                 `json:"result"`
-	IsError bool                   `json:"is_error"`
-}
-
-// claudeUserOuterEvent is the top-level shape for type="user" events, which
-// carry tool results back from subagent calls.
-type claudeUserOuterEvent struct {
-	Type    string            `json:"type"`
-	Message claudeUserMessage `json:"message"`
-}
-
 // spawnClaudeStream launches the claude CLI as a subprocess and returns a
 // channel that delivers streamed response chunks. The channel is closed when
 // the stream ends, either normally or due to an error.
@@ -606,7 +526,8 @@ func spawnClaudeStream(ctx context.Context, prompt string, claudeCfg config.Clau
 		} else if claudeCfg.PermissionMode != "" {
 			args = append(args, "--permission-mode", claudeCfg.PermissionMode)
 		} else {
-			args = append(args, "--dangerously-skip-permissions")
+			log.Printf("WARNING: claude.permission_mode not configured; defaulting to 'plan' (set claude.permission_mode in config to override)")
+			args = append(args, "--permission-mode", "plan")
 		}
 
 		// Always pass the prompt via stdin rather than as a positional argument.
@@ -639,7 +560,7 @@ func spawnClaudeStream(ctx context.Context, prompt string, claudeCfg config.Clau
 		stderrWg.Add(1)
 		go func() {
 			defer stderrWg.Done()
-			io.Copy(&stderrBuf, stderrPipe)
+			_, _ = io.Copy(&stderrBuf, stderrPipe)
 		}()
 
 		done := false
@@ -654,7 +575,7 @@ func spawnClaudeStream(ctx context.Context, prompt string, claudeCfg config.Clau
 			// The very first non-empty line is always the system/init event.
 			if firstLine {
 				firstLine = false
-				var init claudeInitEvent
+				var init claude.InitEvent
 				if err := json.Unmarshal([]byte(line), &init); err == nil &&
 					init.Type == "system" && init.Subtype == "init" {
 					ch <- llm.StreamResponse{Meta: &llm.ClaudeMeta{
@@ -668,7 +589,7 @@ func spawnClaudeStream(ctx context.Context, prompt string, claudeCfg config.Clau
 				// Not a system/init line — fall through to normal parsing below.
 			}
 
-			var event claudeOuterEvent
+			var event claude.OuterEvent
 			if err := json.Unmarshal([]byte(line), &event); err != nil {
 				// Malformed line — skip silently.
 				continue
@@ -739,7 +660,7 @@ func spawnClaudeStream(ctx context.Context, prompt string, claudeCfg config.Clau
 				}
 			case "user":
 				// User events carry tool results back from subagent calls.
-				var userEvent claudeUserOuterEvent
+				var userEvent claude.UserOuterEvent
 				if err := json.Unmarshal([]byte(line), &userEvent); err == nil {
 					for _, block := range userEvent.Message.Content {
 						if block.Type != "tool_result" {

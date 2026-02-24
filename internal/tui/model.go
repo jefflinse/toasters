@@ -438,7 +438,8 @@ type Model struct {
 	selectedTeam int
 	focused      focusedPanel
 
-	gateway *gateway.Gateway
+	gateway  *gateway.Gateway
+	toolExec *llm.ToolExecutor
 
 	teams        []agents.Team // available teams
 	teamsDir     string        // path to the configured teams directory
@@ -501,9 +502,8 @@ type Model struct {
 	confirmKill     bool // true when promptMode is a kill confirmation
 	pendingKillSlot int  // slot index awaiting kill confirmation
 
-	confirmTimeout     bool        // true when promptMode is a slot-timeout confirmation
-	pendingTimeoutSlot int         // slot index awaiting timeout confirmation
-	timeoutPromptTimer *time.Timer // nil when no prompt active (unused; timer is via tea.Tick)
+	confirmTimeout     bool // true when promptMode is a slot-timeout confirmation
+	pendingTimeoutSlot int  // slot index awaiting timeout confirmation
 
 	loading      bool // true while waiting for AppReadyMsg before initializing the conversation
 	loadingFrame int  // current animation frame index (0..numLoadingFrames-1)
@@ -555,7 +555,7 @@ type Model struct {
 }
 
 // NewModel returns an initialized root model.
-func NewModel(client llm.Provider, claudeCfg config.ClaudeConfig, workspaceDir string, gw *gateway.Gateway, repoRoot string, teamsDir string, teams []agents.Team, awareness string) Model {
+func NewModel(client llm.Provider, claudeCfg config.ClaudeConfig, workspaceDir string, gw *gateway.Gateway, repoRoot string, teamsDir string, teams []agents.Team, awareness string, toolExec *llm.ToolExecutor) Model {
 	ta := textarea.New()
 	ta.Placeholder = "Type your message here..."
 	ta.Prompt = ""
@@ -593,6 +593,7 @@ func NewModel(client llm.Provider, claudeCfg config.ClaudeConfig, workspaceDir s
 		claudeCfg:    claudeCfg,
 		chatViewport: vp,
 		input:        ta,
+		toolExec:     toolExec,
 		stats: SessionStats{
 			Endpoint:  client.BaseURL(),
 			Connected: false,
@@ -755,11 +756,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				} else {
 					// Right panel: navigate agents (coordinator first, then workers).
 					if len(m.teamsModal.teams) > 0 && m.teamsModal.teamIdx < len(m.teamsModal.teams) {
-						team := m.teamsModal.teams[m.teamsModal.teamIdx]
-						total := len(team.Workers)
-						if team.Coordinator != nil {
-							total++
-						}
 						if m.teamsModal.agentIdx > 0 {
 							m.teamsModal.agentIdx--
 						}
@@ -1461,8 +1457,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				selectedJob := dj[m.selectedJob]
 				if m.hasBlocker(selectedJob) {
 					m.blockerModal.show = true
-					m.blockerModal.jobID = selectedJob.Frontmatter.ID
-					m.blockerModal.blocker = m.blockers[selectedJob.Frontmatter.ID]
+					m.blockerModal.jobID = selectedJob.ID
+					m.blockerModal.blocker = m.blockers[selectedJob.ID]
 					m.blockerModal.questionIdx = 0
 					m.blockerModal.inputText = ""
 					return m, nil
@@ -1872,7 +1868,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.reasoning = append(m.reasoning, "")
 			m.claudeMeta = append(m.claudeMeta, "tool-call-indicator")
 
-			result, err := llm.ExecuteTool(call)
+			result, err := m.toolExec.ExecuteTool(call)
 			if err != nil {
 				result = fmt.Sprintf("error: %s", err.Error())
 			}
@@ -1973,7 +1969,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.pendingDispatch.Function.Arguments = string(newArgs)
 
 				// Execute the modified assign_team call.
-				result, err := llm.ExecuteTool(m.pendingDispatch)
+				result, err := m.toolExec.ExecuteTool(m.pendingDispatch)
 				if err != nil {
 					result = fmt.Sprintf("error: %v", err)
 				}
@@ -1990,7 +1986,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			switch msg.Result {
 			case "Yes, dispatch":
 				m.confirmDispatch = false
-				result, err := llm.ExecuteTool(m.pendingDispatch)
+				result, err := m.toolExec.ExecuteTool(m.pendingDispatch)
 				if err != nil {
 					result = fmt.Sprintf("error: %v", err)
 				}
@@ -2130,7 +2126,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.awareness = msg.Awareness
 		m.systemPrompt = agents.BuildOperatorPrompt(m.teams, m.awareness)
 		m.stats.SystemPromptTokens = estimateTokens(m.systemPrompt)
-		llm.SetTeams(m.teams)
+		m.toolExec.Teams = m.teams
 		if m.hasConversation() {
 			m.messages[0].Content = m.systemPrompt
 		} else {
@@ -2149,9 +2145,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		for _, j := range m.jobs {
-			if _, exists := m.blockers[j.Frontmatter.ID]; !exists {
+			if _, exists := m.blockers[j.ID]; !exists {
 				if b, err := job.ReadBlocker(j.Dir); err == nil && b != nil {
-					m.blockers[j.Frontmatter.ID] = b
+					m.blockers[j.ID] = b
 				}
 			}
 		}
@@ -2258,7 +2254,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					break
 				}
 			}
-			if _, _, err := m.gateway.SpawnTeam(teamName, j.Frontmatter.ID, spawnPrompt, matchedTeam); err != nil {
+			if _, _, err := m.gateway.SpawnTeam(teamName, j.ID, spawnPrompt, matchedTeam); err != nil {
 				log.Printf("failed to re-spawn team after blocker: %v", err)
 			} else {
 				return m, spinnerTick() // re-arm spinner for agent heartbeat
@@ -2327,12 +2323,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 					// Check for BLOCKER.md and mark first task done — always, not buffered.
 					for _, j := range m.jobs {
-						if j.Frontmatter.ID == snap.JobID {
+						if j.ID == snap.JobID {
 							if b, err := job.ReadBlocker(j.Dir); err == nil && b != nil {
-								if _, alreadyKnown := m.blockers[j.Frontmatter.ID]; !alreadyKnown {
-									cmds = append(cmds, m.addToast("⚠ Blocker on "+j.Frontmatter.ID, toastWarning))
+								if _, alreadyKnown := m.blockers[j.ID]; !alreadyKnown {
+									cmds = append(cmds, m.addToast("⚠ Blocker on "+j.ID, toastWarning))
 								}
-								m.blockers[j.Frontmatter.ID] = b
+								m.blockers[j.ID] = b
 							}
 							// Mark the first task done only on a clean completion.
 							if !snap.Killed && snap.ExitSummary != "" {
@@ -3492,7 +3488,7 @@ func (m *Model) updateViewportContent() {
 
 // hasBlocker reports whether the given job has an unanswered blocker recorded.
 func (m Model) hasBlocker(j job.Job) bool {
-	b, ok := m.blockers[j.Frontmatter.ID]
+	b, ok := m.blockers[j.ID]
 	return ok && b != nil && !b.Answered
 }
 
@@ -4567,9 +4563,10 @@ func (m *Model) startStream(msgs []llm.Message) tea.Cmd {
 	var temperature float64
 
 	client := m.llmClient
+	tools := m.toolExec.Tools
 	return tea.Batch(
 		func() tea.Msg {
-			ch := client.ChatCompletionStreamWithTools(ctx, msgs, llm.AvailableTools, temperature)
+			ch := client.ChatCompletionStreamWithTools(ctx, msgs, tools, temperature)
 			return streamStartedMsg{ch: ch}
 		},
 		spinnerTick(), // re-arm spinner animation for streaming cursor
@@ -5126,7 +5123,7 @@ func (m *Model) renderTeamsModal() string {
 // jobByID returns the job with the given ID, or false if not found.
 func (m *Model) jobByID(id string) (job.Job, bool) {
 	for _, j := range m.jobs {
-		if j.Frontmatter.ID == id {
+		if j.ID == id {
 			return j, true
 		}
 	}
@@ -5273,27 +5270,6 @@ func renderCompletionBlock(content string) string {
 		sb.WriteString(DimStyle.Render("  "+line) + "\n")
 	}
 	return sb.String()
-}
-
-// hasCollapsibleMessages reports whether there are any collapsible messages
-// (completion messages, tool-call indicators, or tool results) in the conversation.
-func (m *Model) hasCollapsibleMessages() bool {
-	if len(m.completionMsgIdx) > 0 {
-		return true
-	}
-	assistantIdx := 0
-	for _, msg := range m.messages {
-		if msg.Role == "tool" {
-			return true
-		}
-		if msg.Role == "assistant" {
-			if assistantIdx < len(m.claudeMeta) && m.claudeMeta[assistantIdx] == "tool-call-indicator" {
-				return true
-			}
-			assistantIdx++
-		}
-	}
-	return false
 }
 
 // isToolCallIndicatorIdx reports whether message at index i is a tool-call indicator.

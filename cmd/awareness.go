@@ -24,7 +24,7 @@ func generateTeamAwareness(ctx context.Context, client llm.Provider, teams []age
 	sb.WriteString("# Teams\n\n")
 
 	for _, team := range teams {
-		sb.WriteString(fmt.Sprintf("## %s\n\n", team.Name))
+		fmt.Fprintf(&sb, "## %s\n\n", team.Name)
 		sb.WriteString(summarizeTeam(ctx, client, team))
 		sb.WriteString("\n\n")
 	}

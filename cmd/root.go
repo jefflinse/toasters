@@ -54,7 +54,7 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 		logPath := filepath.Join(configDir, "toasters.log")
 		if f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644); err == nil {
 			log.SetOutput(f)
-			defer f.Close()
+			defer func() { _ = f.Close() }()
 		} else {
 			// Can't open log file — discard logs rather than corrupt the TUI.
 			log.SetOutput(io.Discard)
@@ -91,9 +91,7 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 	// Create the gateway with a no-op notify for now.
 	// The TUI will replace this with a real notify after the program starts.
 	gw := gateway.New(cfg.Claude, workspaceDir, func() {})
-	llm.SetGateway(gw)
-	llm.SetTeams(teams)
-	llm.SetJobsDir(workspaceDir)
+	toolExec := llm.NewToolExecutor(gw, teams, workspaceDir)
 
 	var client llm.Provider
 	switch cfg.Operator.Provider {
@@ -103,7 +101,7 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 		client = llm.NewClient(cfg.Operator.Endpoint, cfg.Operator.Model)
 	}
 
-	m := tui.NewModel(client, cfg.Claude, workspaceDir, gw, repoRoot, teamsDir, teams, "")
+	m := tui.NewModel(client, cfg.Claude, workspaceDir, gw, repoRoot, teamsDir, teams, "", toolExec)
 
 	p := tea.NewProgram(&m)
 
@@ -141,7 +139,7 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 			}
 			autoTeams := agents.AutoDetectTeams()
 			allTeams := append(newTeams, autoTeams...)
-			llm.SetTeams(allTeams)
+			toolExec.Teams = allTeams
 			newAwareness := generateTeamAwareness(context.Background(), client, allTeams, configDir)
 			p.Send(tui.TeamsReloadedMsg{Teams: allTeams, Awareness: newAwareness})
 		})

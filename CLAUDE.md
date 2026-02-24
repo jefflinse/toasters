@@ -8,7 +8,7 @@ Toasters is a Go-based TUI orchestration tool for agentic coding work. It coordi
 
 ```bash
 go build ./...          # Build
-go test ./...           # Test (only internal/agents has tests currently)
+go test ./...           # Test (agents, gateway, job, llm, tui packages)
 go run main.go          # Run the TUI
 ```
 
@@ -20,9 +20,11 @@ cmd/                        # Cobra CLI setup, launches TUI
 agents/                     # Built-in agent definition files (.md with YAML frontmatter)
 internal/
   agents/                   # Agent discovery, parsing, team management
+  anthropic/                # Anthropic API client + OAuth/Keychain
+  claude/                   # Shared Claude CLI stream-json types
   config/                   # Viper-based config from ~/.config/toasters/config.yaml
   gateway/                  # Claude subprocess slot management (4 concurrent slots)
-  llm/                      # LM Studio OpenAI-compatible client + tool definitions
+  llm/                      # LM Studio OpenAI-compatible client + tool execution
   tui/                      # Bubble Tea TUI (model, styles, commands, claude subprocess)
   job/                      # Job file persistence (OVERVIEW.md + TODO.md)
 ```
@@ -71,6 +73,7 @@ Key settings:
 - `claude.path` — claude binary (default: `"claude"`)
 - `claude.default_model` — model for Claude CLI
 - `claude.permission_mode` — permission mode for Claude CLI
+  - If `claude.permission_mode` is not set, defaults to `plan` with a warning log
 
 ## Key TUI Interactions
 
@@ -83,4 +86,4 @@ Key settings:
 
 ## Testing
 
-Tests exist only in `internal/agents/` currently. They use standard Go testing with `t.TempDir()` for file I/O and helper functions for assertions.
+Tests exist in `internal/agents/`, `internal/gateway/`, `internal/job/`, `internal/llm/`, and `internal/tui/`. They use standard Go testing with `t.TempDir()` for file I/O and helper functions for assertions. Overall coverage is 12.1%. Run `golangci-lint run` for linting — the codebase currently has 0 lint findings.
