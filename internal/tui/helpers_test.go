@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/jefflinse/toasters/internal/job"
+	"github.com/jefflinse/toasters/internal/llm"
 )
 
 func TestWrapText(t *testing.T) {
@@ -813,4 +814,245 @@ func TestJobByID(t *testing.T) {
 			t.Error("expected not to find job in empty list")
 		}
 	})
+}
+
+func TestHasConversation(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		entries []ChatEntry
+		want    bool
+	}{
+		{
+			name:    "no entries returns false",
+			entries: nil,
+			want:    false,
+		},
+		{
+			name:    "empty entries slice returns false",
+			entries: []ChatEntry{},
+			want:    false,
+		},
+		{
+			name: "system-only entries returns false",
+			entries: []ChatEntry{
+				{Message: llm.Message{Role: "system", Content: "You are a helpful assistant."}},
+			},
+			want: false,
+		},
+		{
+			name: "assistant-only entries returns false",
+			entries: []ChatEntry{
+				{Message: llm.Message{Role: "assistant", Content: "Hello! How can I help?"}},
+			},
+			want: false,
+		},
+		{
+			name: "system and assistant entries returns false",
+			entries: []ChatEntry{
+				{Message: llm.Message{Role: "system", Content: "You are a helpful assistant."}},
+				{Message: llm.Message{Role: "assistant", Content: "Hello!"}},
+			},
+			want: false,
+		},
+		{
+			name: "single user message returns true",
+			entries: []ChatEntry{
+				{Message: llm.Message{Role: "user", Content: "Hi there"}},
+			},
+			want: true,
+		},
+		{
+			name: "user message among other roles returns true",
+			entries: []ChatEntry{
+				{Message: llm.Message{Role: "system", Content: "You are a helpful assistant."}},
+				{Message: llm.Message{Role: "assistant", Content: "Hello!"}},
+				{Message: llm.Message{Role: "user", Content: "What is Go?"}},
+				{Message: llm.Message{Role: "assistant", Content: "Go is a programming language."}},
+			},
+			want: true,
+		},
+		{
+			name: "tool role entries without user returns false",
+			entries: []ChatEntry{
+				{Message: llm.Message{Role: "system", Content: "system prompt"}},
+				{Message: llm.Message{Role: "assistant", Content: "calling tool"}},
+				{Message: llm.Message{Role: "tool", Content: "tool result"}},
+			},
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			m := newMinimalModel(t)
+			m.entries = tt.entries
+
+			got := m.hasConversation()
+			if got != tt.want {
+				t.Errorf("hasConversation() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestMessagesFromEntries(t *testing.T) {
+	t.Parallel()
+
+	t.Run("empty entries returns empty slice", func(t *testing.T) {
+		t.Parallel()
+		m := newMinimalModel(t)
+		m.entries = nil
+
+		msgs := m.messagesFromEntries()
+		if len(msgs) != 0 {
+			t.Errorf("expected empty slice, got %d messages", len(msgs))
+		}
+	})
+
+	t.Run("single entry returns single message", func(t *testing.T) {
+		t.Parallel()
+		m := newMinimalModel(t)
+		m.entries = []ChatEntry{
+			{
+				Message:   llm.Message{Role: "user", Content: "hello"},
+				Timestamp: time.Now(),
+			},
+		}
+
+		msgs := m.messagesFromEntries()
+		if len(msgs) != 1 {
+			t.Fatalf("expected 1 message, got %d", len(msgs))
+		}
+		if msgs[0].Role != "user" {
+			t.Errorf("expected role 'user', got %q", msgs[0].Role)
+		}
+		if msgs[0].Content != "hello" {
+			t.Errorf("expected content 'hello', got %q", msgs[0].Content)
+		}
+	})
+
+	t.Run("multiple entries preserve order and content", func(t *testing.T) {
+		t.Parallel()
+		m := newMinimalModel(t)
+		m.entries = []ChatEntry{
+			{Message: llm.Message{Role: "system", Content: "system prompt"}},
+			{Message: llm.Message{Role: "user", Content: "question"}},
+			{Message: llm.Message{Role: "assistant", Content: "answer"}},
+		}
+
+		msgs := m.messagesFromEntries()
+		if len(msgs) != 3 {
+			t.Fatalf("expected 3 messages, got %d", len(msgs))
+		}
+
+		expectedRoles := []string{"system", "user", "assistant"}
+		expectedContents := []string{"system prompt", "question", "answer"}
+		for i, msg := range msgs {
+			if msg.Role != expectedRoles[i] {
+				t.Errorf("message %d: expected role %q, got %q", i, expectedRoles[i], msg.Role)
+			}
+			if msg.Content != expectedContents[i] {
+				t.Errorf("message %d: expected content %q, got %q", i, expectedContents[i], msg.Content)
+			}
+		}
+	})
+
+	t.Run("extra ChatEntry fields are not included in messages", func(t *testing.T) {
+		t.Parallel()
+		m := newMinimalModel(t)
+		m.entries = []ChatEntry{
+			{
+				Message:    llm.Message{Role: "assistant", Content: "response"},
+				Timestamp:  time.Now(),
+				Reasoning:  "I thought about it",
+				ClaudeMeta: "operator · model-name",
+			},
+		}
+
+		msgs := m.messagesFromEntries()
+		if len(msgs) != 1 {
+			t.Fatalf("expected 1 message, got %d", len(msgs))
+		}
+		// The returned message should be the llm.Message from the entry.
+		if msgs[0].Role != "assistant" {
+			t.Errorf("expected role 'assistant', got %q", msgs[0].Role)
+		}
+		if msgs[0].Content != "response" {
+			t.Errorf("expected content 'response', got %q", msgs[0].Content)
+		}
+	})
+
+	t.Run("tool call messages preserve tool call ID", func(t *testing.T) {
+		t.Parallel()
+		m := newMinimalModel(t)
+		m.entries = []ChatEntry{
+			{Message: llm.Message{Role: "tool", Content: "result", ToolCallID: "call_123"}},
+		}
+
+		msgs := m.messagesFromEntries()
+		if len(msgs) != 1 {
+			t.Fatalf("expected 1 message, got %d", len(msgs))
+		}
+		if msgs[0].ToolCallID != "call_123" {
+			t.Errorf("expected ToolCallID 'call_123', got %q", msgs[0].ToolCallID)
+		}
+	})
+}
+
+func TestIsToolCallIndicatorIdx(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		entries []ChatEntry
+		idx     int
+		want    bool
+	}{
+		{
+			name:    "negative index returns false",
+			entries: []ChatEntry{{Message: llm.Message{Role: "assistant"}, ClaudeMeta: "tool-call-indicator"}},
+			idx:     -1,
+			want:    false,
+		},
+		{
+			name:    "index out of bounds returns false",
+			entries: []ChatEntry{{Message: llm.Message{Role: "assistant"}, ClaudeMeta: "tool-call-indicator"}},
+			idx:     5,
+			want:    false,
+		},
+		{
+			name:    "valid index with tool-call-indicator returns true",
+			entries: []ChatEntry{{Message: llm.Message{Role: "assistant"}, ClaudeMeta: "tool-call-indicator"}},
+			idx:     0,
+			want:    true,
+		},
+		{
+			name:    "valid index without tool-call-indicator returns false",
+			entries: []ChatEntry{{Message: llm.Message{Role: "assistant"}, ClaudeMeta: "operator"}},
+			idx:     0,
+			want:    false,
+		},
+		{
+			name:    "empty entries with index 0 returns false",
+			entries: nil,
+			idx:     0,
+			want:    false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			m := newMinimalModel(t)
+			m.entries = tt.entries
+
+			got := m.isToolCallIndicatorIdx(tt.idx)
+			if got != tt.want {
+				t.Errorf("isToolCallIndicatorIdx(%d) = %v, want %v", tt.idx, got, tt.want)
+			}
+		})
+	}
 }

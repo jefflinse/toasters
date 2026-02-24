@@ -225,6 +225,108 @@ func TestGetFirstTaskTeam_ReturnsFirstTaskTeam(t *testing.T) {
 	}
 }
 
+// --- SetTaskStatus tests ---
+
+func TestSetTaskStatus_UpdatesStatusField(t *testing.T) {
+	dir := t.TempDir()
+
+	task, err := CreateTask(dir, "Status Task", "Needs status change")
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	if task.Status != StatusActive {
+		t.Errorf("Status before: got %q, want %q", task.Status, StatusActive)
+	}
+
+	if err := SetTaskStatus(task.Dir, StatusDone); err != nil {
+		t.Fatalf("SetTaskStatus: %v", err)
+	}
+
+	reloaded, err := LoadTask(task.Dir)
+	if err != nil {
+		t.Fatalf("LoadTask after SetTaskStatus: %v", err)
+	}
+	if reloaded.Status != StatusDone {
+		t.Errorf("Status after: got %q, want %q", reloaded.Status, StatusDone)
+	}
+}
+
+func TestSetTaskStatus_BumpsUpdated(t *testing.T) {
+	dir := t.TempDir()
+
+	task, err := CreateTask(dir, "Bump Task", "Check updated bump")
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+
+	origUpdated := task.Updated
+
+	// Sleep to ensure distinct timestamps.
+	time.Sleep(time.Second)
+
+	if err := SetTaskStatus(task.Dir, StatusPaused); err != nil {
+		t.Fatalf("SetTaskStatus: %v", err)
+	}
+
+	reloaded, err := LoadTask(task.Dir)
+	if err != nil {
+		t.Fatalf("LoadTask: %v", err)
+	}
+	if reloaded.Updated == origUpdated {
+		t.Error("Updated timestamp should have changed after SetTaskStatus")
+	}
+}
+
+func TestSetTaskStatus_MissingFile(t *testing.T) {
+	dir := t.TempDir()
+	err := SetTaskStatus(dir, StatusDone)
+	if err == nil {
+		t.Error("expected error for missing TASK.md, got nil")
+	}
+}
+
+func TestSetTaskTeam_MissingFile(t *testing.T) {
+	dir := t.TempDir()
+	err := SetTaskTeam(dir, "some-team")
+	if err == nil {
+		t.Error("expected error for missing TASK.md, got nil")
+	}
+}
+
+// --- ListTasks with malformed entries ---
+
+func TestListTasks_SkipsMalformedEntries(t *testing.T) {
+	dir := t.TempDir()
+
+	// Create a valid task.
+	task, err := CreateTask(dir, "Valid Task", "Valid")
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+
+	// Create a malformed task directory (no TASK.md).
+	badDir := filepath.Join(TasksDir(dir), "bad-task-id")
+	if err := os.MkdirAll(badDir, 0755); err != nil {
+		t.Fatalf("creating bad task dir: %v", err)
+	}
+
+	// Create a non-directory entry in tasks/ (should be skipped).
+	if err := os.WriteFile(filepath.Join(TasksDir(dir), "not-a-dir.txt"), []byte("hi"), 0644); err != nil {
+		t.Fatalf("writing non-dir file: %v", err)
+	}
+
+	tasks, err := ListTasks(dir)
+	if err != nil {
+		t.Fatalf("ListTasks: %v", err)
+	}
+	if len(tasks) != 1 {
+		t.Fatalf("expected 1 task (malformed and non-dir skipped), got %d", len(tasks))
+	}
+	if tasks[0].ID != task.ID {
+		t.Errorf("tasks[0].ID = %q, want %q", tasks[0].ID, task.ID)
+	}
+}
+
 func TestJobCreate_CreatesInitialTask(t *testing.T) {
 	configDir := t.TempDir()
 

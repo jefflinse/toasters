@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -256,4 +257,285 @@ func TestToastersStyle(t *testing.T) {
 		t.Errorf("expected CodeBlock background %q, got %q",
 			"#1e1e2e", *style.CodeBlock.Chroma.Background.BackgroundColor)
 	}
+}
+
+func TestRenderScrollableModal(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name          string
+		width, height int
+		title         string
+		content       string
+		scroll        int
+		checkOutput   func(t *testing.T, result string)
+		checkScroll   func(t *testing.T, clampedScroll int)
+	}{
+		{
+			name:    "basic modal contains title and content",
+			width:   120,
+			height:  40,
+			title:   "Test Modal",
+			content: "line one\nline two\nline three",
+			scroll:  0,
+			checkOutput: func(t *testing.T, result string) {
+				if !strings.Contains(result, "Test Modal") {
+					t.Error("expected modal to contain title")
+				}
+				if !strings.Contains(result, "line one") {
+					t.Error("expected modal to contain first content line")
+				}
+			},
+			checkScroll: func(t *testing.T, clampedScroll int) {
+				if clampedScroll != 0 {
+					t.Errorf("expected scroll 0, got %d", clampedScroll)
+				}
+			},
+		},
+		{
+			name:    "scroll clamped when exceeding max",
+			width:   120,
+			height:  40,
+			title:   "Clamped",
+			content: "short content",
+			scroll:  9999,
+			checkOutput: func(t *testing.T, result string) {
+				if !strings.Contains(result, "Clamped") {
+					t.Error("expected modal to contain title")
+				}
+			},
+			checkScroll: func(t *testing.T, clampedScroll int) {
+				// Content is 1 line, modal height is 30 (40*3/4), inner height is 30-4=26.
+				// maxScroll = max(0, 1 - 30 + 4) = 0. So scroll should be clamped to 0.
+				if clampedScroll != 0 {
+					t.Errorf("expected scroll clamped to 0, got %d", clampedScroll)
+				}
+			},
+		},
+		{
+			name:    "empty content renders without panic",
+			width:   120,
+			height:  40,
+			title:   "Empty",
+			content: "",
+			scroll:  0,
+			checkOutput: func(t *testing.T, result string) {
+				if !strings.Contains(result, "Empty") {
+					t.Error("expected modal to contain title")
+				}
+				// Should contain footer with scroll info.
+				if !strings.Contains(result, "scroll") {
+					t.Error("expected modal to contain scroll hint in footer")
+				}
+			},
+			checkScroll: func(t *testing.T, clampedScroll int) {
+				if clampedScroll != 0 {
+					t.Errorf("expected scroll 0, got %d", clampedScroll)
+				}
+			},
+		},
+		{
+			name:    "content shorter than modal height shows all lines",
+			width:   120,
+			height:  40,
+			title:   "Short",
+			content: "alpha\nbeta\ngamma",
+			scroll:  0,
+			checkOutput: func(t *testing.T, result string) {
+				if !strings.Contains(result, "alpha") {
+					t.Error("expected 'alpha' in output")
+				}
+				if !strings.Contains(result, "beta") {
+					t.Error("expected 'beta' in output")
+				}
+				if !strings.Contains(result, "gamma") {
+					t.Error("expected 'gamma' in output")
+				}
+			},
+			checkScroll: func(t *testing.T, clampedScroll int) {
+				if clampedScroll != 0 {
+					t.Errorf("expected scroll 0, got %d", clampedScroll)
+				}
+			},
+		},
+		{
+			name:   "long content with valid scroll offset",
+			width:  120,
+			height: 40,
+			title:  "Long",
+			// Generate 100 lines of content.
+			content: func() string {
+				var lines []string
+				for i := 0; i < 100; i++ {
+					lines = append(lines, fmt.Sprintf("line %d", i))
+				}
+				return strings.Join(lines, "\n")
+			}(),
+			scroll: 10,
+			checkOutput: func(t *testing.T, result string) {
+				if !strings.Contains(result, "Long") {
+					t.Error("expected modal to contain title")
+				}
+				// Line 10 should be visible (scroll offset = 10).
+				if !strings.Contains(result, "line 10") {
+					t.Error("expected 'line 10' to be visible at scroll offset 10")
+				}
+			},
+			checkScroll: func(t *testing.T, clampedScroll int) {
+				if clampedScroll != 10 {
+					t.Errorf("expected scroll 10, got %d", clampedScroll)
+				}
+			},
+		},
+		{
+			name:    "small terminal dimensions use minimum modal size",
+			width:   30,
+			height:  8,
+			title:   "Tiny",
+			content: "some content here",
+			scroll:  0,
+			checkOutput: func(t *testing.T, result string) {
+				if !strings.Contains(result, "Tiny") {
+					t.Error("expected modal to contain title")
+				}
+			},
+			checkScroll: func(t *testing.T, clampedScroll int) {
+				if clampedScroll != 0 {
+					t.Errorf("expected scroll 0, got %d", clampedScroll)
+				}
+			},
+		},
+		{
+			name:    "line truncation for very long lines",
+			width:   80,
+			height:  40,
+			title:   "Truncate",
+			content: strings.Repeat("X", 500),
+			scroll:  0,
+			checkOutput: func(t *testing.T, result string) {
+				if !strings.Contains(result, "Truncate") {
+					t.Error("expected modal to contain title")
+				}
+				// The line should be truncated to innerW = modalW - 4 = 60 - 4 = 56.
+				// (modalW = 80*3/4 = 60)
+				// Verify the full 500-char line is NOT present.
+				if strings.Contains(result, strings.Repeat("X", 500)) {
+					t.Error("expected long line to be truncated")
+				}
+			},
+			checkScroll: func(t *testing.T, clampedScroll int) {
+				if clampedScroll != 0 {
+					t.Errorf("expected scroll 0, got %d", clampedScroll)
+				}
+			},
+		},
+		{
+			name:    "scroll at zero with long content",
+			width:   120,
+			height:  40,
+			title:   "AtZero",
+			content: strings.Repeat("line\n", 200),
+			scroll:  0,
+			checkOutput: func(t *testing.T, result string) {
+				if !strings.Contains(result, "AtZero") {
+					t.Error("expected modal to contain title")
+				}
+				if !strings.Contains(result, "line 1/") {
+					t.Error("expected scroll info to show line 1")
+				}
+			},
+			checkScroll: func(t *testing.T, clampedScroll int) {
+				if clampedScroll != 0 {
+					t.Errorf("expected scroll 0, got %d", clampedScroll)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			m := newMinimalModel(t)
+			m.width = tt.width
+			m.height = tt.height
+
+			result, clampedScroll := m.renderScrollableModal(tt.title, tt.content, tt.scroll)
+			tt.checkOutput(t, result)
+			tt.checkScroll(t, clampedScroll)
+		})
+	}
+}
+
+func TestRenderMarkdown(t *testing.T) {
+	// Not parallel: ensureMarkdownRenderer calls toastersStyle() which mutates
+	// a shared glamour style config (DraculaStyleConfig). Running these subtests
+	// concurrently with each other or other tests triggers a data race.
+
+	t.Run("nil renderer returns raw content", func(t *testing.T) {
+		m := newMinimalModel(t)
+		// mdRender is nil by default in newMinimalModel.
+		content := "# Hello World\n\nSome **bold** text."
+		result := m.renderMarkdown(content)
+		if result != content {
+			t.Errorf("expected raw content returned when renderer is nil\ngot:  %q\nwant: %q", result, content)
+		}
+	})
+
+	t.Run("nil renderer with empty string", func(t *testing.T) {
+		m := newMinimalModel(t)
+		result := m.renderMarkdown("")
+		if result != "" {
+			t.Errorf("expected empty string, got %q", result)
+		}
+	})
+
+	t.Run("initialized renderer produces styled output", func(t *testing.T) {
+		m := newMinimalModel(t)
+		m.width = 120
+		m.height = 40
+		m.chatViewport.SetWidth(80)
+		m.chatViewport.SetHeight(30)
+		m.ensureMarkdownRenderer()
+
+		if m.mdRender == nil {
+			t.Fatal("ensureMarkdownRenderer did not create a renderer")
+		}
+
+		content := "# Hello World\n\nSome **bold** text."
+		result := m.renderMarkdown(content)
+
+		// The rendered output should differ from raw input (contains ANSI codes).
+		if result == content {
+			t.Error("expected rendered output to differ from raw input")
+		}
+		// Should contain the text content. Note: glamour may split words across
+		// ANSI escape sequences, so check for individual words rather than phrases.
+		if !strings.Contains(result, "Hello") {
+			t.Error("expected rendered output to contain 'Hello'")
+		}
+		if !strings.Contains(result, "World") {
+			t.Error("expected rendered output to contain 'World'")
+		}
+		if !strings.Contains(result, "bold") {
+			t.Error("expected rendered output to contain 'bold'")
+		}
+	})
+
+	t.Run("renderer trims trailing newlines", func(t *testing.T) {
+		m := newMinimalModel(t)
+		m.width = 120
+		m.height = 40
+		m.chatViewport.SetWidth(80)
+		m.chatViewport.SetHeight(30)
+		m.ensureMarkdownRenderer()
+
+		if m.mdRender == nil {
+			t.Fatal("ensureMarkdownRenderer did not create a renderer")
+		}
+
+		result := m.renderMarkdown("Hello")
+		if strings.HasSuffix(result, "\n") {
+			t.Error("expected trailing newlines to be trimmed")
+		}
+	})
 }
