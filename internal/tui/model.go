@@ -1236,15 +1236,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, nil
 			}
-			// Navigate collapsible messages (completions + tools) when chat is focused and not streaming.
-			if m.focused == focusChat && !m.streaming && m.hasCollapsibleMessages() {
-				if m.selectedMsgIdx > 0 {
-					m.selectedMsgIdx--
-				}
-				m.updateViewportContent()
-				return m, nil
-			}
-
 		case "down":
 			// Navigate jobs when that panel is focused.
 			if m.focused == focusJobs {
@@ -1268,16 +1259,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, nil
 			}
-			// Navigate collapsible messages (completions + tools) when chat is focused and not streaming.
-			if m.focused == focusChat && !m.streaming && m.hasCollapsibleMessages() {
-				if m.selectedMsgIdx < len(m.messages)-1 {
-					m.selectedMsgIdx++
-				}
-				m.updateViewportContent()
-				return m, nil
-			}
-
-		case "x":
+		case "ctrl+x":
 			// Toggle expand/collapse on the selected completion message when chat is focused.
 			if m.focused == focusChat && !m.streaming && m.selectedMsgIdx >= 0 && m.completionMsgIdx[m.selectedMsgIdx] {
 				m.expandedMsgs[m.selectedMsgIdx] = !m.expandedMsgs[m.selectedMsgIdx]
@@ -1296,7 +1278,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 
-		case "t":
+		case "ctrl+t":
 			// Toggle expand/collapse of the reasoning trace for the most recent assistant message
 			// that has a non-empty reasoning block.
 			if m.focused == focusChat && !m.streaming {
@@ -1318,7 +1300,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 
-		case "y":
+		case "ctrl+y":
 			// Copy the last assistant message to the clipboard when chat is focused.
 			if m.focused == focusChat && !m.streaming && !m.promptMode {
 				for i := len(m.messages) - 1; i >= 0; i-- {
@@ -3268,14 +3250,14 @@ func (m *Model) updateViewportContent() {
 				if m.expandedMsgs[i] {
 					hint := ""
 					if i == m.selectedMsgIdx {
-						hint = DimStyle.Render(" [x to collapse]")
+						hint = DimStyle.Render(" [ctrl+x to collapse]")
 					}
 					header := DimStyle.Render("▼ "+firstLine) + hint
 					sb.WriteString(header + "\n" + renderCompletionBlock(msg.Content) + "\n")
 				} else {
 					hint := ""
 					if i == m.selectedMsgIdx {
-						hint = DimStyle.Render(" [x to expand]")
+						hint = DimStyle.Render(" [ctrl+x to expand]")
 					}
 					sb.WriteString(DimStyle.Render("▶ "+firstLine) + hint + "\n\n")
 				}
@@ -3308,7 +3290,7 @@ func (m *Model) updateViewportContent() {
 					// Expanded: show full content.
 					hint := ""
 					if i == m.selectedMsgIdx {
-						hint = DimStyle.Render(" [x to collapse]")
+						hint = DimStyle.Render(" [ctrl+x to collapse]")
 					}
 					sb.WriteString(DimStyle.Render(msg.Content) + hint + "\n\n")
 				} else {
@@ -3316,7 +3298,7 @@ func (m *Model) updateViewportContent() {
 					toolName := extractToolName(msg.Content)
 					hint := ""
 					if i == m.selectedMsgIdx {
-						hint = DimStyle.Render(" [x to expand]")
+						hint = DimStyle.Render(" [ctrl+x to expand]")
 					}
 					sb.WriteString(DimStyle.Render("⚙ "+toolName+" ▶") + hint + "\n")
 				}
@@ -3338,7 +3320,7 @@ func (m *Model) updateViewportContent() {
 					sb.WriteString(renderReasoningBlock(m.reasoning[assistantIdx], contentWidth))
 					sb.WriteString("\n")
 				} else {
-					sb.WriteString(ReasoningStyle.Render("▶ thinking (press t to expand)") + "\n\n")
+					sb.WriteString(ReasoningStyle.Render("▶ thinking (press ctrl+t to expand)") + "\n\n")
 				}
 			}
 			sb.WriteString(m.renderMarkdown(msg.Content) + "\n\n")
@@ -3353,14 +3335,14 @@ func (m *Model) updateViewportContent() {
 				}
 				hint := ""
 				if i == m.selectedMsgIdx {
-					hint = DimStyle.Render(" [x to collapse]")
+					hint = DimStyle.Render(" [ctrl+x to collapse]")
 				}
 				sb.WriteString(DimStyle.Render("⚙ tool result: "+preview) + hint + "\n\n")
 			} else {
 				// Collapsed (default): show summary line.
 				hint := ""
 				if i == m.selectedMsgIdx {
-					hint = DimStyle.Render(" [x to expand]")
+					hint = DimStyle.Render(" [ctrl+x to expand]")
 				}
 				sb.WriteString(DimStyle.Render("⚙ tool result ▶") + hint + "\n")
 			}
