@@ -113,6 +113,8 @@ type StreamResponse struct {
 	ClearPendingTool bool        // true when content_block_stop fires (clears PendingTool)
 	ExitSummary      string      // final result text from a clean claude result event
 	StopReason       string      // stop reason from message_delta (e.g. "end_turn", "tool_use")
+	SubagentSpawned  bool        // true when a Task tool call was made
+	SubagentResult   string      // non-empty when a tool_result for a subagent arrived
 }
 
 // Client talks to an OpenAI-compatible API (e.g. LM Studio).
