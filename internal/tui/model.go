@@ -3775,7 +3775,7 @@ func (m Model) renderSidebar(sbWidth int) string {
 		agentsPaneStyle = FocusedPaneStyle
 	}
 	sb.WriteString("\n")
-	sb.WriteString(agentsPaneStyle.Width(contentWidth).Render(agentsSB.String()))
+	sb.WriteString(agentsPaneStyle.Width(agentsInnerW).Render(agentsSB.String()))
 
 	return SidebarStyle.
 		Width(sbWidth).
