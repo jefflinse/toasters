@@ -40,15 +40,15 @@ type Job struct {
 
 var validID = regexp.MustCompile(`^[a-z0-9-]+$`)
 
-// JobsDir returns the path to the jobs directory within configDir.
-func JobsDir(configDir string) string {
-	return filepath.Join(configDir, "jobs")
+// JobsDir returns the path to the jobs directory within workspaceDir.
+func JobsDir(workspaceDir string) string {
+	return filepath.Join(workspaceDir, "jobs")
 }
 
-// List returns all jobs in configDir, sorted by Created ascending.
+// List returns all jobs in workspaceDir, sorted by Created ascending.
 // It creates the jobs directory if it does not exist.
-func List(configDir string) ([]Job, error) {
-	dir := JobsDir(configDir)
+func List(workspaceDir string) ([]Job, error) {
+	dir := JobsDir(workspaceDir)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return nil, fmt.Errorf("creating jobs dir: %w", err)
 	}
@@ -94,7 +94,7 @@ func Load(dir string) (Job, error) {
 }
 
 // Create initialises a new job directory with OVERVIEW.md and TODO.md.
-func Create(configDir, id, name, description string) (Job, error) {
+func Create(workspaceDir, id, name, description string) (Job, error) {
 	if id == "" {
 		return Job{}, errors.New("id must not be empty")
 	}
@@ -102,7 +102,7 @@ func Create(configDir, id, name, description string) (Job, error) {
 		return Job{}, fmt.Errorf("id %q contains invalid characters (only [a-z0-9-] allowed)", id)
 	}
 
-	dir := filepath.Join(JobsDir(configDir), id)
+	dir := filepath.Join(JobsDir(workspaceDir), id)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return Job{}, fmt.Errorf("creating job dir: %w", err)
 	}

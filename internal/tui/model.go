@@ -403,7 +403,7 @@ type Model struct {
 }
 
 // NewModel returns an initialized root model.
-func NewModel(client *llm.Client, claudeCfg config.ClaudeConfig, configDir string, gw *gateway.Gateway, repoRoot string, teamsDir string, teams []agents.Team, awareness string) Model {
+func NewModel(client *llm.Client, claudeCfg config.ClaudeConfig, workspaceDir string, gw *gateway.Gateway, repoRoot string, teamsDir string, teams []agents.Team, awareness string) Model {
 	ta := textarea.New()
 	ta.Placeholder = "Type your message here..."
 	ta.Prompt = ""
@@ -447,7 +447,7 @@ func NewModel(client *llm.Client, claudeCfg config.ClaudeConfig, configDir strin
 		},
 	}
 
-	jobs, _ := job.List(configDir)
+	jobs, _ := job.List(workspaceDir)
 	m.jobs = jobs
 	m.blockers = make(map[string]*job.Blocker)
 	m.selectedJob = 0

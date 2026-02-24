@@ -14,7 +14,6 @@ import (
 	"golang.org/x/net/html"
 
 	"github.com/jefflinse/toasters/internal/agents"
-	"github.com/jefflinse/toasters/internal/config"
 	"github.com/jefflinse/toasters/internal/job"
 )
 
@@ -341,6 +340,15 @@ func SetAvailableTools(tools []Tool) {
 	AvailableTools = tools
 }
 
+// activeWorkspaceDir is the workspace directory, set at startup.
+// All job paths are rooted at job.JobsDir(activeWorkspaceDir).
+var activeWorkspaceDir string
+
+// SetJobsDir sets the workspace directory used by all job tool handlers.
+func SetJobsDir(dir string) {
+	activeWorkspaceDir = dir
+}
+
 // ExecuteTool dispatches a tool call to the appropriate handler and returns
 // the result as plain text.
 func ExecuteTool(call ToolCall) (string, error) {
@@ -362,11 +370,7 @@ func ExecuteTool(call ToolCall) (string, error) {
 		}
 		return listDirectory(args.Path)
 	case "job_list":
-		configDir, err := config.Dir()
-		if err != nil {
-			return "", fmt.Errorf("resolving config dir: %w", err)
-		}
-		jobs, err := job.List(configDir)
+		jobs, err := job.List(activeWorkspaceDir)
 		if err != nil {
 			return "", fmt.Errorf("listing jobs: %w", err)
 		}
@@ -392,11 +396,7 @@ func ExecuteTool(call ToolCall) (string, error) {
 		if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
 			return "", fmt.Errorf("parsing job_create args: %w", err)
 		}
-		configDir, err := config.Dir()
-		if err != nil {
-			return "", fmt.Errorf("resolving config dir: %w", err)
-		}
-		j, err := job.Create(configDir, args.ID, args.Name, args.Description)
+		j, err := job.Create(activeWorkspaceDir, args.ID, args.Name, args.Description)
 		if err != nil {
 			return "", fmt.Errorf("creating job: %w", err)
 		}
@@ -409,11 +409,7 @@ func ExecuteTool(call ToolCall) (string, error) {
 		if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
 			return "", fmt.Errorf("parsing job_read_overview args: %w", err)
 		}
-		configDir, err := config.Dir()
-		if err != nil {
-			return "", fmt.Errorf("resolving config dir: %w", err)
-		}
-		dir := filepath.Join(job.JobsDir(configDir), args.ID)
+		dir := filepath.Join(job.JobsDir(activeWorkspaceDir), args.ID)
 		return job.ReadOverview(dir)
 
 	case "job_read_todos":
@@ -423,11 +419,7 @@ func ExecuteTool(call ToolCall) (string, error) {
 		if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
 			return "", fmt.Errorf("parsing job_read_todos args: %w", err)
 		}
-		configDir, err := config.Dir()
-		if err != nil {
-			return "", fmt.Errorf("resolving config dir: %w", err)
-		}
-		dir := filepath.Join(job.JobsDir(configDir), args.ID)
+		dir := filepath.Join(job.JobsDir(activeWorkspaceDir), args.ID)
 		return job.ReadTodos(dir)
 
 	case "job_update_overview":
@@ -442,18 +434,15 @@ func ExecuteTool(call ToolCall) (string, error) {
 		if args.Mode != "overwrite" && args.Mode != "append" {
 			return "", fmt.Errorf("invalid mode %q: must be 'overwrite' or 'append'", args.Mode)
 		}
-		configDir, err := config.Dir()
-		if err != nil {
-			return "", fmt.Errorf("resolving config dir: %w", err)
-		}
-		dir := filepath.Join(job.JobsDir(configDir), args.ID)
+		dir := filepath.Join(job.JobsDir(activeWorkspaceDir), args.ID)
+		var overviewErr error
 		if args.Mode == "overwrite" {
-			err = job.WriteOverview(dir, args.Content)
+			overviewErr = job.WriteOverview(dir, args.Content)
 		} else {
-			err = job.AppendOverview(dir, args.Content)
+			overviewErr = job.AppendOverview(dir, args.Content)
 		}
-		if err != nil {
-			return "", err
+		if overviewErr != nil {
+			return "", overviewErr
 		}
 		return "ok", nil
 
@@ -465,11 +454,7 @@ func ExecuteTool(call ToolCall) (string, error) {
 		if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
 			return "", fmt.Errorf("parsing job_add_todo args: %w", err)
 		}
-		configDir, err := config.Dir()
-		if err != nil {
-			return "", fmt.Errorf("resolving config dir: %w", err)
-		}
-		dir := filepath.Join(job.JobsDir(configDir), args.ID)
+		dir := filepath.Join(job.JobsDir(activeWorkspaceDir), args.ID)
 		if err := job.AddTodo(dir, args.Task); err != nil {
 			return "", err
 		}
@@ -483,11 +468,7 @@ func ExecuteTool(call ToolCall) (string, error) {
 		if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
 			return "", fmt.Errorf("parsing job_complete_todo args: %w", err)
 		}
-		configDir, err := config.Dir()
-		if err != nil {
-			return "", fmt.Errorf("resolving config dir: %w", err)
-		}
-		dir := filepath.Join(job.JobsDir(configDir), args.ID)
+		dir := filepath.Join(job.JobsDir(activeWorkspaceDir), args.ID)
 		if err := job.CompleteTodo(dir, args.IndexOrText); err != nil {
 			return "", err
 		}
@@ -506,12 +487,9 @@ func ExecuteTool(call ToolCall) (string, error) {
 			return "", fmt.Errorf("parsing assign_team args: %w", err)
 		}
 		// Guard: verify the job exists before dispatching to a team.
-		configDir, cdErr := config.Dir()
-		if cdErr == nil {
-			jobDir := filepath.Join(job.JobsDir(configDir), args.JobID)
-			if _, loadErr := job.Load(jobDir); loadErr != nil {
-				return fmt.Sprintf("job %q does not exist; call job_create first", args.JobID), nil
-			}
+		jobDir := filepath.Join(job.JobsDir(activeWorkspaceDir), args.JobID)
+		if _, loadErr := job.Load(jobDir); loadErr != nil {
+			return fmt.Sprintf("job %q does not exist; call job_create first", args.JobID), nil
 		}
 		// Look up team by name.
 		var team agents.Team
@@ -527,11 +505,8 @@ func ExecuteTool(call ToolCall) (string, error) {
 			return "", fmt.Errorf("team %q not found", args.TeamName)
 		}
 		// Persist team assignment to the first task.
-		if cdErr == nil {
-			jobDir := filepath.Join(job.JobsDir(configDir), args.JobID)
-			if tasks, err := job.ListTasks(jobDir); err == nil && len(tasks) > 0 {
-				_ = job.SetTaskTeam(tasks[0].Dir, args.TeamName)
-			}
+		if tasks, err := job.ListTasks(jobDir); err == nil && len(tasks) > 0 {
+			_ = job.SetTaskTeam(tasks[0].Dir, args.TeamName)
 		}
 		slotID, alreadyRunning, err := activeGateway.SpawnTeam(args.TeamName, args.JobID, args.Task, team)
 		if err != nil {
@@ -601,11 +576,7 @@ func ExecuteTool(call ToolCall) (string, error) {
 		if !validStatuses[args.Status] {
 			return fmt.Sprintf("invalid status %q: must be one of active, done, paused", args.Status), nil
 		}
-		configDir, err := config.Dir()
-		if err != nil {
-			return "", fmt.Errorf("getting config dir: %w", err)
-		}
-		jobDir := filepath.Join(job.JobsDir(configDir), args.JobID)
+		jobDir := filepath.Join(job.JobsDir(activeWorkspaceDir), args.JobID)
 		tasks, err := job.ListTasks(jobDir)
 		if err != nil {
 			return "", fmt.Errorf("listing tasks: %w", err)
@@ -632,11 +603,7 @@ func ExecuteTool(call ToolCall) (string, error) {
 		if !validStatuses[args.Status] {
 			return fmt.Sprintf("invalid status %q: must be one of active, done, cancelled, paused", args.Status), nil
 		}
-		configDir, err := config.Dir()
-		if err != nil {
-			return "", fmt.Errorf("getting config dir: %w", err)
-		}
-		dir := filepath.Join(job.JobsDir(configDir), args.ID)
+		dir := filepath.Join(job.JobsDir(activeWorkspaceDir), args.ID)
 		updates := map[string]string{"status": args.Status}
 		if args.Status == "done" {
 			updates["completed"] = time.Now().UTC().Format(time.RFC3339)

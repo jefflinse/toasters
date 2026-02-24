@@ -4,7 +4,6 @@ import (
 	"context"
 	"log"
 	"os"
-	"path/filepath"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/spf13/cobra"
@@ -46,6 +45,11 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 
+	workspaceDir, err := config.WorkspaceDir(cfg)
+	if err != nil {
+		return err
+	}
+
 	// repoRoot is the directory containing the agents/ folder.
 	// For now, use the current working directory.
 	repoRoot, err := os.Getwd()
@@ -68,16 +72,14 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 
 	// Create the gateway with a no-op notify for now.
 	// The TUI will replace this with a real notify after the program starts.
-	gw := gateway.New(cfg.Claude, func() {})
+	gw := gateway.New(cfg.Claude, workspaceDir, func() {})
 	llm.SetGateway(gw)
 	llm.SetTeams(teams)
+	llm.SetJobsDir(workspaceDir)
 
 	client := llm.NewClient(cfg.Operator.Endpoint, cfg.Operator.Model)
-	if cfg.Operator.LogRequests {
-		client.SetRequestLogging(true, filepath.Join(configDir, "requests.log"))
-	}
 
-	m := tui.NewModel(client, cfg.Claude, configDir, gw, repoRoot, teamsDir, teams, "")
+	m := tui.NewModel(client, cfg.Claude, workspaceDir, gw, repoRoot, teamsDir, teams, "")
 
 	p := tea.NewProgram(&m)
 
@@ -125,9 +127,9 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 	}()
 
 	go func() {
-		jobsDir := job.JobsDir(configDir)
+		jobsDir := job.JobsDir(workspaceDir)
 		err := agents.WatchRecursive(watchCtx, jobsDir, func() {
-			jobs, err := job.List(configDir)
+			jobs, err := job.List(workspaceDir)
 			if err != nil {
 				log.Printf("jobs: reload error: %v", err)
 				return

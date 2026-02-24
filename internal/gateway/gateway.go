@@ -87,19 +87,21 @@ type Gateway struct {
 	mu             sync.Mutex
 	slots          [MaxSlots]*slot
 	claudeCfg      config.ClaudeConfig
+	workspaceDir   string               // root workspace directory; job dirs live under jobs/ within it
 	notify         func()               // called on every output update; wired to TUI re-render
 	send           func(SlotTimeoutMsg) // called when a slot's timeout fires
 	defaultTimeout time.Duration        // per-slot subprocess timeout
 }
 
 // New returns an initialized Gateway with all slots nil.
-func New(claudeCfg config.ClaudeConfig, notify func()) *Gateway {
+func New(claudeCfg config.ClaudeConfig, workspaceDir string, notify func()) *Gateway {
 	timeout := time.Duration(claudeCfg.SlotTimeoutMinutes) * time.Minute
 	if timeout <= 0 {
 		timeout = 15 * time.Minute
 	}
 	return &Gateway{
 		claudeCfg:      claudeCfg,
+		workspaceDir:   workspaceDir,
 		notify:         notify,
 		send:           func(SlotTimeoutMsg) {},
 		defaultTimeout: timeout,
@@ -168,14 +170,13 @@ func (g *Gateway) SpawnTeam(teamName, jobID, task string, team agents.Team) (slo
 	}
 
 	// Read job context outside the lock (I/O).
-	configDir, _ := config.Dir()
-	jobDir := filepath.Join(job.JobsDir(configDir), jobID)
+	jobDir := filepath.Join(job.JobsDir(g.workspaceDir), jobID)
 	overview, _ := job.ReadOverview(jobDir)
 	todos, _ := job.ReadTodos(jobDir)
 
 	// Assemble prompt.
 	var sb strings.Builder
-	sb.WriteString(agents.BuildTeamCoordinatorPrompt(team))
+	sb.WriteString(agents.BuildTeamCoordinatorPrompt(team, jobDir))
 	sb.WriteString("\n\n---\n\n## Job Context\n\n### OVERVIEW.md\n")
 	sb.WriteString(overview)
 	sb.WriteString("\n\n### TODO.md\n")
@@ -250,7 +251,7 @@ func (g *Gateway) SpawnTeam(teamName, jobID, task string, team agents.Team) (slo
 
 	// Start the subprocess goroutine.
 	go func() {
-		ch := spawnClaudeStream(ctx, prompt, g.claudeCfg, permissionArgs, agentsJSON)
+		ch := spawnClaudeStream(ctx, prompt, g.claudeCfg, permissionArgs, agentsJSON, jobDir)
 		for resp := range ch {
 			switch {
 			case resp.Meta != nil:
@@ -555,7 +556,7 @@ type claudeUserOuterEvent struct {
 // permissionArgs are per-agent Claude CLI permission flags (e.g.
 // ["--dangerously-skip-permissions"] or ["--allowedTools", "Read,Bash,..."]).
 // If non-empty they take precedence over claudeCfg.PermissionMode.
-func spawnClaudeStream(ctx context.Context, prompt string, claudeCfg config.ClaudeConfig, permissionArgs []string, agentsJSON string) <-chan llm.StreamResponse {
+func spawnClaudeStream(ctx context.Context, prompt string, claudeCfg config.ClaudeConfig, permissionArgs []string, agentsJSON string, jobDir string) <-chan llm.StreamResponse {
 	ch := make(chan llm.StreamResponse, 64)
 
 	go func() {
@@ -586,6 +587,7 @@ func spawnClaudeStream(ctx context.Context, prompt string, claudeCfg config.Clau
 		// names, so stdin is the only safe delivery mechanism regardless of which
 		// permission flags are in use.
 		cmd := exec.CommandContext(ctx, claudeCfg.Path, args...)
+		cmd.Dir = jobDir
 		cmd.Stdin = strings.NewReader(prompt)
 
 		stderrPipe, err := cmd.StderrPipe()

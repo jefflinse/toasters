@@ -61,7 +61,7 @@ func newGatewayWithDoneSlot(t *testing.T) (*gateway.Gateway, int) {
 	claudeCfg := config.ClaudeConfig{
 		Path: "/usr/bin/true", // exits immediately with no output
 	}
-	gw := gateway.New(claudeCfg, func() {})
+	gw := gateway.New(claudeCfg, t.TempDir(), func() {})
 
 	slotID, _, err := gw.SpawnTeam("test-team", "job-001", "do something", agents.Team{})
 	if err != nil {

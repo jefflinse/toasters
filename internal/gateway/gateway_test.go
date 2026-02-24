@@ -13,7 +13,7 @@ import (
 // zero ClaudeConfig. It is suitable for tests that manipulate slot state
 // directly without launching real subprocesses.
 func newTestGateway() *Gateway {
-	return New(config.ClaudeConfig{}, func() {})
+	return New(config.ClaudeConfig{}, "", func() {})
 }
 
 // injectRunningSlot places a slot in SlotRunning state at the given index and

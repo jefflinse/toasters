@@ -11,17 +11,17 @@ import (
 
 // Config holds all application configuration.
 type Config struct {
-	Operator OperatorConfig `mapstructure:"operator"`
-	Claude   ClaudeConfig   `mapstructure:"claude"`
+	WorkspaceDir string         `mapstructure:"workspace_dir"`
+	Operator     OperatorConfig `mapstructure:"operator"`
+	Claude       ClaudeConfig   `mapstructure:"claude"`
 }
 
 // OperatorConfig holds configuration for the operator LLM backend.
 type OperatorConfig struct {
-	Endpoint    string `mapstructure:"endpoint"`
-	APIKey      string `mapstructure:"api_key"`
-	Model       string `mapstructure:"model"`
-	TeamsDir    string `mapstructure:"teams_dir"`
-	LogRequests bool   `mapstructure:"log_requests"`
+	Endpoint string `mapstructure:"endpoint"`
+	APIKey   string `mapstructure:"api_key"`
+	Model    string `mapstructure:"model"`
+	TeamsDir string `mapstructure:"teams_dir"`
 }
 
 // ClaudeConfig holds configuration for the Claude CLI.
@@ -44,11 +44,11 @@ func Load() (*Config, error) {
 	viper.SetConfigType("yaml")
 	viper.AddConfigPath(home + "/.config/toasters")
 
+	viper.SetDefault("workspace_dir", filepath.Join(home, "toasters"))
 	viper.SetDefault("operator.endpoint", "http://localhost:1234")
 	viper.SetDefault("operator.api_key", "")
 	viper.SetDefault("operator.model", "")
 	viper.SetDefault("operator.teams_dir", filepath.Join(home, ".config", "toasters", "teams"))
-	viper.SetDefault("operator.log_requests", false)
 	viper.SetDefault("claude.path", "claude")
 	viper.SetDefault("claude.default_model", "")
 	viper.SetDefault("claude.permission_mode", "")
@@ -78,13 +78,33 @@ func Dir() (string, error) {
 	return home + "/.config/toasters", nil
 }
 
-// JobsDir returns the directory where jobs are stored.
-func JobsDir() (string, error) {
-	dir, err := Dir()
-	if err != nil {
-		return "", err
+// WorkspaceDir returns the resolved workspace directory from cfg.
+// A leading ~ is expanded to the user's home directory.
+// Absolute paths are returned unchanged.
+func WorkspaceDir(cfg *Config) (string, error) {
+	dir := cfg.WorkspaceDir
+	if dir == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", err
+		}
+		return filepath.Join(home, "toasters"), nil
 	}
-	return dir + "/jobs", nil
+	if dir == "~" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", err
+		}
+		return home, nil
+	}
+	if len(dir) >= 2 && dir[:2] == "~/" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", err
+		}
+		return filepath.Join(home, dir[2:]), nil
+	}
+	return dir, nil
 }
 
 // BindFlags binds relevant cobra pflags to their Viper configuration keys.

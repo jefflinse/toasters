@@ -7,12 +7,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
-	"os"
 	"sort"
 	"strings"
-	"time"
 )
 
 // Message represents a single chat message.
@@ -120,11 +117,9 @@ type StreamResponse struct {
 
 // Client talks to an OpenAI-compatible API (e.g. LM Studio).
 type Client struct {
-	baseURL     string
-	httpClient  *http.Client
-	model       string
-	logRequests bool
-	logFile     string
+	baseURL    string
+	httpClient *http.Client
+	model      string
 }
 
 // NewClient creates a Client pointing at the given base URL.
@@ -140,36 +135,6 @@ func NewClient(baseURL string, model string) *Client {
 // BaseURL returns the configured base URL.
 func (c *Client) BaseURL() string {
 	return c.baseURL
-}
-
-// SetRequestLogging enables or disables appending each outgoing request body
-// to logFile as pretty-printed JSON. When disabled, no file is opened or written.
-func (c *Client) SetRequestLogging(enabled bool, logFile string) {
-	c.logRequests = enabled
-	c.logFile = logFile
-}
-
-// logRequest pretty-prints body and appends it to c.logFile with a timestamp header.
-// Write errors are logged but do not fail the request.
-func (c *Client) logRequest(body []byte) {
-	var buf bytes.Buffer
-	if err := json.Indent(&buf, body, "", "  "); err != nil {
-		log.Printf("llm: logRequest: indent JSON: %v", err)
-		return
-	}
-
-	f, err := os.OpenFile(c.logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		log.Printf("llm: logRequest: open %s: %v", c.logFile, err)
-		return
-	}
-	defer f.Close()
-
-	separator := "================================================================================\n"
-	timestamp := "[" + time.Now().Format("2006-01-02 15:04:05") + "]\n"
-	if _, err := fmt.Fprintf(f, "%s%s%s\n", separator, timestamp, buf.String()); err != nil {
-		log.Printf("llm: logRequest: write %s: %v", c.logFile, err)
-	}
 }
 
 // ChatCompletionStream sends messages and returns a channel that delivers
@@ -340,10 +305,6 @@ func (c *Client) streamCompletionWithTools(ctx context.Context, messages []Messa
 	if err != nil {
 		ch <- StreamResponse{Error: fmt.Errorf("marshaling request: %w", err)}
 		return
-	}
-
-	if c.logRequests {
-		c.logRequest(body)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v1/chat/completions", bytes.NewReader(body))

@@ -480,7 +480,8 @@ func AutoDetectTeams() []Team {
 // BuildTeamCoordinatorPrompt returns the full system prompt for a team coordinator
 // Claude subprocess. If team.Coordinator is nil, only the instructions block is
 // returned (no coordinator body prepended).
-func BuildTeamCoordinatorPrompt(team Team) string {
+// jobDir is the absolute path to the job's workspace directory.
+func BuildTeamCoordinatorPrompt(team Team, jobDir string) string {
 	var sb strings.Builder
 
 	// Prepend coordinator body if present.
@@ -556,6 +557,16 @@ Do not ask for confirmation before starting work. Do not ask for approval of you
 		team.Name,
 		team.Name,
 	))
+
+	sb.WriteString(fmt.Sprintf(`
+
+### Job Directory
+Your job directory is: %s
+
+All work artifacts (code, cloned repositories, generated files, etc.) must be written under this directory.
+Clone repositories to: %s/repos/<owner>/<repo>/
+Write REPORT.md to: %s/REPORT.md
+Write BLOCKER.md to: %s/BLOCKER.md`, jobDir, jobDir, jobDir, jobDir))
 
 	return sb.String()
 }

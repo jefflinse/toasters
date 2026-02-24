@@ -44,8 +44,9 @@ func jobSetStatusCall(jobID, status string) ToolCall {
 	}
 }
 
-// redirectHome sets HOME to a temp directory so that config.Dir() resolves
-// to <tempDir>/.config/toasters, and returns that config dir path.
+// redirectHome sets HOME to a temp directory and wires SetJobsDir so that
+// ExecuteTool resolves job paths under <tempDir>/.config/toasters.
+// It returns the config dir path (which acts as the workspace dir in tests).
 func redirectHome(t *testing.T) string {
 	t.Helper()
 
@@ -56,6 +57,10 @@ func redirectHome(t *testing.T) string {
 	if err := os.MkdirAll(configDir, 0o755); err != nil {
 		t.Fatalf("creating config dir: %v", err)
 	}
+
+	// Wire the workspace dir so ExecuteTool finds jobs under configDir/jobs/.
+	SetJobsDir(configDir)
+	t.Cleanup(func() { SetJobsDir("") })
 
 	return configDir
 }
