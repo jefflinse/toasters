@@ -85,11 +85,23 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 		p.Send(msg)
 	})
 
-	// Generate team awareness in the background so the TUI appears immediately.
-	// Always send AppReadyMsg so the TUI exits its loading state even on error.
+	// Generate team awareness and pre-fetch the operator greeting in the background
+	// so the TUI appears immediately. Always send AppReadyMsg even on error.
 	go func() {
-		awareness := generateTeamAwareness(context.Background(), client, teams, configDir)
-		p.Send(tui.AppReadyMsg{Awareness: awareness})
+		ctx := context.Background()
+		awareness := generateTeamAwareness(ctx, client, teams, configDir)
+
+		// Pre-fetch greeting so it renders instantly when the loading screen clears.
+		systemPrompt := agents.BuildOperatorPrompt(teams, awareness)
+		greeting, err := client.ChatCompletion(ctx, []llm.Message{
+			{Role: "system", Content: systemPrompt},
+			{Role: "user", Content: "Greet the user briefly. One or two sentences max. Be direct and ready to work."},
+		})
+		if err != nil {
+			log.Printf("failed to pre-fetch greeting: %v", err)
+		}
+
+		p.Send(tui.AppReadyMsg{Awareness: awareness, Greeting: greeting})
 	}()
 
 	watchCtx, watchCancel := context.WithCancel(context.Background())

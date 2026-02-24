@@ -101,6 +101,7 @@ type JobsReloadedMsg struct {
 // AppReadyMsg is sent when the app has finished loading and is ready to start.
 type AppReadyMsg struct {
 	Awareness string
+	Greeting  string // pre-fetched operator greeting; injected immediately on render
 }
 
 // loadingTickMsg drives the loading screen animation.
@@ -1743,11 +1744,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.systemPrompt = agents.BuildOperatorPrompt(m.teams, m.awareness)
 		m.initMessages()
 		m.loading = false
-		// Kick off a greeting stream so the operator introduces itself on startup.
-		cmds = append(cmds, m.startStream(append(m.messages, llm.Message{
-			Role:    "user",
-			Content: "Greet the user briefly. One or two sentences max. Be direct and ready to work.",
-		})))
+		// Inject the pre-fetched greeting directly — no stream, no flash.
+		if msg.Greeting != "" {
+			m.messages = append(m.messages, llm.Message{Role: "assistant", Content: msg.Greeting})
+			m.reasoning = append(m.reasoning, "")
+			m.claudeMeta = append(m.claudeMeta, "")
+			m.updateViewportContent()
+		}
 		return m, tea.Batch(cmds...)
 
 	case gateway.SlotTimeoutMsg:
