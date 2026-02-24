@@ -731,6 +731,14 @@ Respond directly using available tools (`+"`job_list`"+`, `+"`job_read_overview`
 
 Use `+"`list_slots`"+` to see what's running. Use `+"`kill_slot`"+` to stop a running team (the TUI will confirm before killing).
 
+## On Team Completion
+
+When you receive a message that a team has completed work on a job:
+1. Review the exit summary and output.
+2. Call `+"`task_set_status`"+` to mark the completed task as done (use the task ID from `+"`job_read_overview`"+` if needed).
+3. If all tasks for the job are done, call `+"`job_set_status`"+` with status `+"`done`"+` to close the job.
+4. Summarize what was accomplished for the user.
+
 ## Available Teams
 %s`, teamsSection)
 }

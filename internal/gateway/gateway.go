@@ -39,6 +39,7 @@ type SlotSnapshot struct {
 	AgentName      string
 	JobID          string
 	Status         SlotStatus
+	Killed         bool // true if the slot was terminated via Kill()
 	StartTime      time.Time
 	EndTime        time.Time // zero if still running
 	Output         string    // accumulated text output
@@ -61,6 +62,7 @@ type slot struct {
 	agentName      string
 	jobID          string
 	status         SlotStatus
+	killed         bool // true if terminated via Kill()
 	startTime      time.Time
 	endTime        time.Time
 	output         strings.Builder
@@ -370,6 +372,7 @@ func (g *Gateway) Slots() [MaxSlots]SlotSnapshot {
 			AgentName:      s.agentName,
 			JobID:          s.jobID,
 			Status:         s.status,
+			Killed:         s.killed,
 			StartTime:      s.startTime,
 			EndTime:        s.endTime,
 			Output:         s.output.String(),
@@ -454,6 +457,7 @@ func (g *Gateway) Kill(slotID int) error {
 		return fmt.Errorf("slot %d is not running", slotID)
 	}
 	s.cancel()
+	s.killed = true
 	s.status = SlotDone
 	s.endTime = time.Now()
 	s.output.WriteString("\n[killed]")

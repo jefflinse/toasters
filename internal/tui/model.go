@@ -36,6 +36,12 @@ const (
 	minWidthForLeftPanel = 100
 )
 
+// pendingCompletion holds a buffered agent-completion notification that arrived
+// while the operator stream was active. It is drained after the stream ends.
+type pendingCompletion struct {
+	notification string // the pre-built notification message to inject
+}
+
 // focusedPanel identifies which panel currently holds keyboard focus.
 type focusedPanel int
 
@@ -382,6 +388,10 @@ type Model struct {
 	// AgentOutputMsg can detect Running→Done transitions and notify the operator.
 	prevSlotActive [gateway.MaxSlots]bool
 	prevSlotStatus [gateway.MaxSlots]gateway.SlotStatus
+
+	// pendingCompletions buffers agent-completion notifications that arrive while
+	// the operator stream is active. They are drained after the stream ends.
+	pendingCompletions []pendingCompletion
 
 	// Collapsible completion message state.
 	completionMsgIdx map[int]bool // indices of team-completion messages in m.messages
@@ -1390,7 +1400,18 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !m.userScrolled {
 			m.chatViewport.GotoBottom()
 		}
-		cmds = append(cmds, m.input.Focus())
+		// Drain any completion notifications that arrived while we were streaming.
+		// If there are pending completions, inject them and start a new stream instead
+		// of returning focus to the input.
+		if msgs, ok := m.drainPendingCompletions(); ok {
+			m.updateViewportContent()
+			if !m.userScrolled {
+				m.chatViewport.GotoBottom()
+			}
+			cmds = append(cmds, m.startStream(msgs))
+		} else {
+			cmds = append(cmds, m.input.Focus())
+		}
 
 	case ToolCallMsg:
 		// The LLM wants to call tools. Execute them synchronously, inject results,
@@ -1571,6 +1592,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !m.userScrolled {
 			m.chatViewport.GotoBottom()
 		}
+
+		// Drain any completion notifications that arrived while we were streaming,
+		// so the operator sees them in the next context window.
+		// Return values are discarded — drain mutates m.messages in place and
+		// startStream below picks up the updated slice directly.
+		m.drainPendingCompletions()
 
 		// Re-invoke the stream with the updated messages for the final answer.
 		return m, m.startStream(m.messages)
@@ -1934,42 +1961,63 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			for i, snap := range slots {
 				wasRunning := m.prevSlotActive[i] && m.prevSlotStatus[i] == gateway.SlotRunning
 				isDone := snap.Active && snap.Status == gateway.SlotDone
-				if wasRunning && isDone && !m.streaming {
+				if wasRunning && isDone {
 					// Build a concise completion notification for the operator.
 					outputTail := snap.Output
 					const maxTail = 2000
 					if len(outputTail) > maxTail {
 						outputTail = "…" + outputTail[len(outputTail)-maxTail:]
 					}
-					notification := fmt.Sprintf(
-						"Team '%s' in slot %d has completed (job: %s).\n\nOutput:\n%s",
-						snap.AgentName, i, snap.JobID, outputTail,
-					)
-					m.messages = append(m.messages, llm.Message{
-						Role:    "user",
-						Content: notification,
-					})
-					// Tag this message as a collapsible completion entry and auto-select it.
-					completionIdx := len(m.messages) - 1
-					m.completionMsgIdx[completionIdx] = true
-					m.selectedMsgIdx = completionIdx
-					m.updateViewportContent()
-					if !m.userScrolled {
-						m.chatViewport.GotoBottom()
+					var notification string
+					if snap.ExitSummary != "" {
+						notification = fmt.Sprintf(
+							"Team '%s' in slot %d has completed (job: %s).\n\nExit Summary:\n%s\n\nOutput (last 2000 chars):\n%s",
+							snap.AgentName, i, snap.JobID, snap.ExitSummary, outputTail,
+						)
+					} else {
+						notification = fmt.Sprintf(
+							"Team '%s' in slot %d has completed (job: %s).\n\nOutput (last 2000 chars):\n%s",
+							snap.AgentName, i, snap.JobID, outputTail,
+						)
 					}
-					cmds = append(cmds, m.startStream(m.messages))
 
-					// Check for BLOCKER.md and mark first task done.
+					if m.streaming {
+						// Buffer the notification — drain it after the current stream ends.
+						m.pendingCompletions = append(m.pendingCompletions, pendingCompletion{
+							notification: notification,
+						})
+					} else {
+						// Inject immediately and start a new stream.
+						m.messages = append(m.messages, llm.Message{
+							Role:    "user",
+							Content: notification,
+						})
+						// Tag this message as a collapsible completion entry and auto-select it.
+						completionIdx := len(m.messages) - 1
+						m.completionMsgIdx[completionIdx] = true
+						m.selectedMsgIdx = completionIdx
+						m.updateViewportContent()
+						if !m.userScrolled {
+							m.chatViewport.GotoBottom()
+						}
+						cmds = append(cmds, m.startStream(m.messages))
+					}
+
+					// Check for BLOCKER.md and mark first task done — always, not buffered.
 					for _, j := range m.jobs {
 						if j.Frontmatter.ID == snap.JobID {
 							if b, err := job.ReadBlocker(j.Dir); err == nil && b != nil {
 								m.blockers[j.Frontmatter.ID] = b
 							}
-							// Mark the first task done.
-							if tasks, err := job.ListTasks(j.Dir); err == nil && len(tasks) > 0 {
-								if err := job.SetTaskStatus(tasks[0].Dir, job.StatusDone); err != nil {
-									log.Printf("failed to mark task done: %v", err)
+							// Mark the first task done only on a clean completion.
+							if !snap.Killed && snap.ExitSummary != "" {
+								if tasks, err := job.ListTasks(j.Dir); err == nil && len(tasks) > 0 {
+									if err := job.SetTaskStatus(tasks[0].Dir, job.StatusDone); err != nil {
+										log.Printf("failed to mark task done: %v", err)
+									}
 								}
+							} else {
+								log.Printf("slot %d completed without clean exit (killed=%v, exitSummary=%q), skipping task auto-mark", i, snap.Killed, snap.ExitSummary)
 							}
 							break
 						}
@@ -3538,6 +3586,20 @@ func (m *Model) newSession() {
 	m.updateViewportContent()
 	m.chatViewport.GotoBottom()
 	m.input.Focus()
+}
+
+// drainPendingCompletions injects any buffered agent-completion notifications
+// into m.messages and clears the buffer. It returns the updated message slice
+// and true if any notifications were drained (indicating a new stream should start).
+func (m *Model) drainPendingCompletions() ([]llm.Message, bool) {
+	if len(m.pendingCompletions) == 0 {
+		return m.messages, false
+	}
+	for _, pc := range m.pendingCompletions {
+		m.messages = append(m.messages, llm.Message{Role: "user", Content: pc.notification})
+	}
+	m.pendingCompletions = nil
+	return m.messages, true
 }
 
 // startStream begins a new LLM stream with the current messages and available tools.

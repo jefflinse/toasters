@@ -637,7 +637,11 @@ func ExecuteTool(call ToolCall) (string, error) {
 			return "", fmt.Errorf("getting config dir: %w", err)
 		}
 		dir := filepath.Join(job.JobsDir(configDir), args.ID)
-		if err := job.UpdateFrontmatter(dir, map[string]string{"status": args.Status}); err != nil {
+		updates := map[string]string{"status": args.Status}
+		if args.Status == "done" {
+			updates["completed"] = time.Now().UTC().Format(time.RFC3339)
+		}
+		if err := job.UpdateFrontmatter(dir, updates); err != nil {
 			return "", fmt.Errorf("updating job status: %w", err)
 		}
 		return fmt.Sprintf("job %s status set to %s", args.ID, args.Status), nil
