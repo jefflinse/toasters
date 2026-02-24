@@ -2323,14 +2323,39 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !m.teamsModal.show && !m.blockerModal.show && !m.showGrid &&
 			!m.showKillModal && !m.showPromptModal && !m.showOutputModal && !m.loading {
 			showLeftPanel := m.width >= minWidthForLeftPanel && !m.leftPanelHidden
+			showSidebar := m.width >= minWidthForBar && !m.sidebarHidden
+			sidebarStartX := m.width - m.sbWidth
 			if showLeftPanel && msg.X < m.lpWidth {
-				// Clicked left panel — focus jobs pane.
-				if m.focused != focusJobs && m.focused != focusAgents {
-					m.focused = focusJobs
+				// Clicked left panel — determine if Teams (bottom) or Jobs (top) pane.
+				// Compute the Y row where the Teams pane begins.
+				paneFrameV := FocusedPaneStyle.GetVerticalBorderSize()
+				bottomContentH := 1 + len(m.teams)
+				if len(m.teams) == 0 {
+					bottomContentH = 2
+				}
+				teamsPaneH := bottomContentH + paneFrameV
+				teamsPaneY := m.height - teamsPaneH
+				if msg.Y >= teamsPaneY {
+					// Clicked Teams pane.
+					if m.focused != focusTeams {
+						m.focused = focusTeams
+						m.input.Blur()
+					}
+				} else {
+					// Clicked Jobs or Job Detail pane.
+					if m.focused != focusJobs {
+						m.focused = focusJobs
+						m.input.Blur()
+					}
+				}
+			} else if showSidebar && msg.X >= sidebarStartX {
+				// Clicked sidebar — focus agents pane.
+				if m.focused != focusAgents {
+					m.focused = focusAgents
 					m.input.Blur()
 				}
-			} else if msg.X >= m.lpWidth {
-				// Clicked chat area (or sidebar) — focus chat.
+			} else {
+				// Clicked chat area — focus chat.
 				if m.focused != focusChat {
 					m.focused = focusChat
 					cmds = append(cmds, m.input.Focus())
