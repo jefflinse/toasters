@@ -14,7 +14,7 @@
 | **Build / Vet** | ✅ Clean |
 | **Tests** | ✅ All pass (10 packages, 300+ tests) |
 | **Test coverage** | ✅ 42.9% overall (target 40% met) |
-| **Known vulnerabilities** | ❓ Unable to verify (govulncheck version mismatch) |
+| **Known vulnerabilities** | ✅ None found (govulncheck clean) |
 | **Lint findings** | **0** (was 26) |
 | **Outdated dependencies** | ✅ All addressed — Charm v2 updated to stable v2.0.0, all `x/` packages current |
 | **go mod tidy** | ✅ Clean |
@@ -27,7 +27,7 @@
 - Items #16 (modal dedup), #17 (Charm v2 stable), #19 (pointer capture fix), #20 (stream dedup), #21 (orchestration package), #22 (client tests) all resolved.
 - Item #18 (test coverage): raised from 12.1% to 42.9%, exceeding the 40% target. 300+ tests across 10 packages.
 
-The only remaining open item is #7 (govulncheck) which requires a compatible binary for Go 1.25.0.
+All findings are now resolved — the codebase has a clean bill of health.
 
 ---
 
@@ -81,7 +81,7 @@ The only remaining open item is #7 (govulncheck) which requires a compatible bin
 ### 7. Vulnerability scan gap
 - **Issue:** `govulncheck` could not run due to a Go version mismatch.
 - **Remediation:** Install a compatible govulncheck binary and run it.
-- **Status:** ⚠️ Open — requires compatible govulncheck binary for Go 1.25.0.
+- **Status:** ✅ Resolved (2026-02-24) — `govulncheck ./...` reports no vulnerabilities found.
 
 ---
 
@@ -197,7 +197,7 @@ The only remaining open item is #7 (govulncheck) which requires a compatible bin
 | **This week** | S | #1 | Add HTTP client timeout | ✅ Done |
 | **This week** | S | #2 | Fix `--dangerously-skip-permissions` default | ✅ Done |
 | **This week** | S | #3 | Update `x/crypto` and `x/net` | ✅ Done |
-| **This week** | S | #7 | Run govulncheck | ⚠️ Open |
+| **This week** | S | #7 | Run govulncheck | ✅ Done |
 | **This week** | M | #4 | Fix errcheck findings | ✅ Done |
 | **Next sprint** | M | #5 | Eliminate global state in tools.go | ✅ Done |
 | **Next sprint** | M | #6 | Extract shared Claude stream types | ✅ Done |
