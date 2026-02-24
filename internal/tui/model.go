@@ -1934,11 +1934,17 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 					cmds = append(cmds, m.startStream(m.messages))
 
-					// Check for BLOCKER.md in the completed job's directory.
+					// Check for BLOCKER.md and mark first task done.
 					for _, j := range m.jobs {
 						if j.Frontmatter.ID == snap.JobID {
 							if b, err := job.ReadBlocker(j.Dir); err == nil && b != nil {
 								m.blockers[j.Frontmatter.ID] = b
+							}
+							// Mark the first task done.
+							if tasks, err := job.ListTasks(j.Dir); err == nil && len(tasks) > 0 {
+								if err := job.SetTaskStatus(tasks[0].Dir, job.StatusDone); err != nil {
+									log.Printf("failed to mark task done: %v", err)
+								}
 							}
 							break
 						}
@@ -2812,10 +2818,22 @@ func (m Model) renderLeftPanel(panelWidth, panelHeight int) string {
 
 			// Child items: only show for active/paused jobs (not done).
 			if j.Status != job.StatusDone {
-				// Team sub-line (from first task).
-				if teamName, err := job.GetFirstTaskTeam(j.Dir); err == nil && teamName != "" {
-					teamLine := "  ◆ " + truncateStr(teamName, contentWidth-5)
-					topLines = append(topLines, DimStyle.Render(teamLine))
+				// Team + status sub-line (from first task).
+				if tasks, err := job.ListTasks(j.Dir); err == nil && len(tasks) > 0 {
+					t := tasks[0]
+					if t.Team != "" {
+						var prefix string
+						switch t.Status {
+						case job.StatusDone:
+							prefix = "  ✓ "
+						case job.StatusPaused:
+							prefix = "  ⏸ "
+						default:
+							prefix = "  ◆ "
+						}
+						teamLine := prefix + truncateStr(t.Team, contentWidth-5)
+						topLines = append(topLines, DimStyle.Render(teamLine))
+					}
 				}
 				// BLOCKED child (always first if present).
 				if m.hasBlocker(j) {

@@ -285,6 +285,32 @@ var staticTools = []Tool{
 	{
 		Type: "function",
 		Function: ToolFunction{
+			Name:        "task_set_status",
+			Description: "Update the status of a specific task within a job. Valid statuses: active, done, paused.",
+			Parameters: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"job_id": map[string]any{
+						"type":        "string",
+						"description": "The job ID.",
+					},
+					"task_id": map[string]any{
+						"type":        "string",
+						"description": "The task UUID.",
+					},
+					"status": map[string]any{
+						"type":        "string",
+						"description": "The new status: active, done, or paused.",
+						"enum":        []string{"active", "done", "paused"},
+					},
+				},
+				"required": []string{"job_id", "task_id", "status"},
+			},
+		},
+	},
+	{
+		Type: "function",
+		Function: ToolFunction{
 			Name:        "job_set_status",
 			Description: "Update the status of a job. Valid statuses: active, done, cancelled, paused.",
 			Parameters: map[string]any{
@@ -561,6 +587,38 @@ func ExecuteTool(call ToolCall) (string, error) {
 		// ask_user is normally intercepted by the TUI before ExecuteTool is called.
 		// This case is a safety fallback.
 		return "ask_user was handled by the TUI", nil
+
+	case "task_set_status":
+		var args struct {
+			JobID  string `json:"job_id"`
+			TaskID string `json:"task_id"`
+			Status string `json:"status"`
+		}
+		if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
+			return "", fmt.Errorf("parsing task_set_status args: %w", err)
+		}
+		validStatuses := map[string]bool{"active": true, "done": true, "paused": true}
+		if !validStatuses[args.Status] {
+			return fmt.Sprintf("invalid status %q: must be one of active, done, paused", args.Status), nil
+		}
+		configDir, err := config.Dir()
+		if err != nil {
+			return "", fmt.Errorf("getting config dir: %w", err)
+		}
+		jobDir := filepath.Join(job.JobsDir(configDir), args.JobID)
+		tasks, err := job.ListTasks(jobDir)
+		if err != nil {
+			return "", fmt.Errorf("listing tasks: %w", err)
+		}
+		for _, t := range tasks {
+			if t.ID == args.TaskID {
+				if err := job.SetTaskStatus(t.Dir, job.Status(args.Status)); err != nil {
+					return "", fmt.Errorf("setting task status: %w", err)
+				}
+				return fmt.Sprintf("task %s status set to %s", args.TaskID, args.Status), nil
+			}
+		}
+		return fmt.Sprintf("task %q not found in job %q", args.TaskID, args.JobID), nil
 
 	case "job_set_status":
 		var args struct {

@@ -218,6 +218,30 @@ func SetTaskTeam(taskDir, team string) error {
 	return nil
 }
 
+// SetTaskStatus reads TASK.md, updates the status field and updated timestamp,
+// and rewrites TASK.md.
+func SetTaskStatus(taskDir string, status Status) error {
+	taskPath := filepath.Join(taskDir, "TASK.md")
+	data, err := os.ReadFile(taskPath)
+	if err != nil {
+		return fmt.Errorf("reading TASK.md: %w", err)
+	}
+
+	fm, _, err := parseTaskFrontmatter(string(data))
+	if err != nil {
+		return fmt.Errorf("parsing frontmatter: %w", err)
+	}
+
+	fm.Status = status
+	fm.Updated = time.Now().UTC().Format(time.RFC3339)
+
+	content := serializeTaskFrontmatter(fm) + "\n"
+	if err := os.WriteFile(taskPath, []byte(content), 0644); err != nil {
+		return fmt.Errorf("writing TASK.md: %w", err)
+	}
+	return nil
+}
+
 // GetFirstTaskTeam returns the Team field of the first task in jobDir (sorted
 // by Created ascending). Returns "", nil if no tasks exist.
 func GetFirstTaskTeam(jobDir string) (string, error) {
