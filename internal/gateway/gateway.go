@@ -35,51 +35,57 @@ type SlotTimeoutMsg struct{ SlotID int }
 
 // SlotSnapshot is a lock-free copy of slot state for rendering.
 type SlotSnapshot struct {
-	Active         bool
-	AgentName      string
-	JobID          string
-	Status         SlotStatus
-	Killed         bool // true if the slot was terminated via Kill()
-	StartTime      time.Time
-	EndTime        time.Time // zero if still running
-	Output         string    // accumulated text output
-	Summary        string
-	Model          string
-	Prompt         string
-	InputTokens    int
-	OutputTokens   int
-	TurnCount      int
-	StopReason     string
-	PendingTool    string
-	ExitSummary    string
-	ThinkingOutput string
-	SubagentOutput string
-	SessionID      string
+	Active            bool
+	AgentName         string
+	JobID             string
+	Status            SlotStatus
+	Killed            bool // true if the slot was terminated via Kill()
+	StartTime         time.Time
+	EndTime           time.Time // zero if still running
+	Output            string    // accumulated text output
+	Summary           string
+	Model             string
+	Prompt            string
+	InputTokens       int
+	OutputTokens      int
+	TurnCount         int
+	StopReason        string
+	PendingTool       string
+	ExitSummary       string
+	ThinkingOutput    string
+	SubagentOutput    string
+	SessionID         string
+	SubagentsSpawned  int
+	SubagentsInFlight int
+	ClaudeVersion     string
 }
 
 // slot is the internal mutable state (mutex-protected via Gateway).
 type slot struct {
-	agentName      string
-	jobID          string
-	status         SlotStatus
-	killed         bool // true if terminated via Kill()
-	startTime      time.Time
-	endTime        time.Time
-	output         strings.Builder
-	cancel         context.CancelFunc
-	summary        string             // one-sentence description of what the agent was asked to do
-	model          string             // model name from the system/init event
-	sessionID      string             // session ID from the system/init event
-	prompt         string             // the full assembled prompt passed to claude
-	resetTimer     chan time.Duration // signals the timer goroutine to reset
-	inputTokens    int
-	outputTokens   int
-	turnCount      int
-	stopReason     string
-	pendingTool    string
-	exitSummary    string
-	thinkingOutput strings.Builder
-	subagentOutput strings.Builder
+	agentName         string
+	jobID             string
+	status            SlotStatus
+	killed            bool // true if terminated via Kill()
+	startTime         time.Time
+	endTime           time.Time
+	output            strings.Builder
+	cancel            context.CancelFunc
+	summary           string             // one-sentence description of what the agent was asked to do
+	model             string             // model name from the system/init event
+	sessionID         string             // session ID from the system/init event
+	claudeVersion     string             // Claude Code version from the system/init event
+	prompt            string             // the full assembled prompt passed to claude
+	resetTimer        chan time.Duration // signals the timer goroutine to reset
+	inputTokens       int
+	outputTokens      int
+	turnCount         int
+	stopReason        string
+	pendingTool       string
+	exitSummary       string
+	thinkingOutput    strings.Builder
+	subagentOutput    strings.Builder
+	subagentsSpawned  int // total Task tool calls made
+	subagentsInFlight int // Task calls without a result yet
 }
 
 // Gateway manages up to MaxSlots concurrent Claude subprocess slots.
@@ -253,11 +259,28 @@ func (g *Gateway) SpawnTeam(teamName, jobID, task string, team agents.Team) (slo
 	go func() {
 		ch := spawnClaudeStream(ctx, prompt, g.claudeCfg, permissionArgs, agentsJSON, jobDir)
 		for resp := range ch {
+			// Handle subagent tracking fields (may accompany Content).
+			if resp.SubagentSpawned {
+				g.mu.Lock()
+				s.subagentsSpawned++
+				s.subagentsInFlight++
+				g.mu.Unlock()
+			}
+			if resp.SubagentResult != "" {
+				g.mu.Lock()
+				s.subagentOutput.WriteString(resp.SubagentResult + "\n")
+				if s.subagentsInFlight > 0 {
+					s.subagentsInFlight--
+				}
+				g.mu.Unlock()
+			}
+
 			switch {
 			case resp.Meta != nil:
 				g.mu.Lock()
 				s.model = resp.Meta.Model
 				s.sessionID = resp.Meta.SessionID
+				s.claudeVersion = resp.Meta.Version
 				g.mu.Unlock()
 				g.notify()
 			case resp.Content != "":
@@ -369,26 +392,29 @@ func (g *Gateway) Slots() [MaxSlots]SlotSnapshot {
 			continue
 		}
 		snapshots[i] = SlotSnapshot{
-			Active:         true,
-			AgentName:      s.agentName,
-			JobID:          s.jobID,
-			Status:         s.status,
-			Killed:         s.killed,
-			StartTime:      s.startTime,
-			EndTime:        s.endTime,
-			Output:         s.output.String(),
-			Summary:        s.summary,
-			Model:          s.model,
-			Prompt:         s.prompt,
-			InputTokens:    s.inputTokens,
-			OutputTokens:   s.outputTokens,
-			TurnCount:      s.turnCount,
-			StopReason:     s.stopReason,
-			PendingTool:    s.pendingTool,
-			ExitSummary:    s.exitSummary,
-			ThinkingOutput: s.thinkingOutput.String(),
-			SubagentOutput: s.subagentOutput.String(),
-			SessionID:      s.sessionID,
+			Active:            true,
+			AgentName:         s.agentName,
+			JobID:             s.jobID,
+			Status:            s.status,
+			Killed:            s.killed,
+			StartTime:         s.startTime,
+			EndTime:           s.endTime,
+			Output:            s.output.String(),
+			Summary:           s.summary,
+			Model:             s.model,
+			Prompt:            s.prompt,
+			InputTokens:       s.inputTokens,
+			OutputTokens:      s.outputTokens,
+			TurnCount:         s.turnCount,
+			StopReason:        s.stopReason,
+			PendingTool:       s.pendingTool,
+			ExitSummary:       s.exitSummary,
+			ThinkingOutput:    s.thinkingOutput.String(),
+			SubagentOutput:    s.subagentOutput.String(),
+			SessionID:         s.sessionID,
+			SubagentsSpawned:  s.subagentsSpawned,
+			SubagentsInFlight: s.subagentsInFlight,
+			ClaudeVersion:     s.claudeVersion,
 		}
 	}
 	return snapshots
@@ -506,6 +532,7 @@ type claudeInnerEvent struct {
 // claudeContentBlock is one element of an assistant message's content array.
 type claudeContentBlock struct {
 	Type     string `json:"type"`     // "text", "tool_use", or "thinking"
+	ID       string `json:"id"`       // tool use ID (for type="tool_use")
 	Text     string `json:"text"`     // for type="text"
 	Name     string `json:"name"`     // for type="tool_use"
 	Input    any    `json:"input"`    // for type="tool_use"
@@ -699,7 +726,11 @@ func spawnClaudeStream(ctx context.Context, prompt string, claudeCfg config.Clau
 							ch <- llm.StreamResponse{Content: "\n\n"}
 						}
 					case "tool_use":
-						ch <- llm.StreamResponse{Content: "\n" + formatToolUse(block.Name, block.Input) + "\n"}
+						resp := llm.StreamResponse{Content: "\n" + formatToolUse(block.Name, block.Input) + "\n"}
+						if block.Name == "Task" {
+							resp.SubagentSpawned = true
+						}
+						ch <- resp
 					case "thinking":
 						if block.Thinking != "" {
 							ch <- llm.StreamResponse{Reasoning: block.Thinking}
@@ -733,7 +764,10 @@ func spawnClaudeStream(ctx context.Context, prompt string, claudeCfg config.Clau
 							}
 						}
 						if text != "" {
-							ch <- llm.StreamResponse{Content: "\n[subagent result]\n" + text + "\n"}
+							ch <- llm.StreamResponse{
+								Content:        "\n[subagent result]\n" + text + "\n",
+								SubagentResult: text,
+							}
 						}
 					}
 				}

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"strings"
 
 	"github.com/jefflinse/toasters/internal/config"
 	"github.com/jefflinse/toasters/internal/llm"
@@ -20,6 +21,7 @@ type claudeInitEvent struct {
 	Model             string `json:"model"`
 	PermissionMode    string `json:"permissionMode"`
 	ClaudeCodeVersion string `json:"claude_code_version"`
+	SessionID         string `json:"session_id"`
 }
 
 // claudeInnerEvent is the inner event shape nested inside stream_event wrappers.
@@ -29,11 +31,18 @@ type claudeInnerEvent struct {
 		Type string `json:"type"`
 		Text string `json:"text"`
 	} `json:"delta"`
+	ContentBlock struct {
+		Type string `json:"type"`
+		Name string `json:"name"`
+	} `json:"content_block"`
 }
 
 // claudeContentBlock is one element of an assistant message's content array.
 type claudeContentBlock struct {
 	Type     string `json:"type"`     // "text", "tool_use", or "thinking"
+	ID       string `json:"id"`       // tool use ID (for type="tool_use")
+	Name     string `json:"name"`     // for type="tool_use"
+	Input    any    `json:"input"`    // for type="tool_use"
 	Text     string `json:"text"`     // for type="text"
 	Thinking string `json:"thinking"` // for type="thinking"
 }
@@ -41,6 +50,28 @@ type claudeContentBlock struct {
 // claudeAssistantMessage is the message field inside a top-level "assistant" event.
 type claudeAssistantMessage struct {
 	Content []claudeContentBlock `json:"content"`
+}
+
+// claudeToolResultBlock is one element of a user message's content array,
+// carrying the result of a tool call back to the model.
+type claudeToolResultBlock struct {
+	Type      string          `json:"type"`        // "tool_result"
+	ToolUseID string          `json:"tool_use_id"` // matches the tool_use block ID
+	Content   json.RawMessage `json:"content"`     // string or []content_block
+}
+
+// claudeUserMessage is the message field inside a top-level "user" event,
+// typically carrying tool results from subagent calls.
+type claudeUserMessage struct {
+	Role    string                  `json:"role"`
+	Content []claudeToolResultBlock `json:"content"`
+}
+
+// claudeUserOuterEvent is the top-level shape for type="user" events, which
+// carry tool results back from subagent calls.
+type claudeUserOuterEvent struct {
+	Type    string            `json:"type"`
+	Message claudeUserMessage `json:"message"`
 }
 
 // claudeOuterEvent is the top-level shape of a JSON line emitted by
@@ -113,6 +144,7 @@ func streamClaudeResponse(ctx context.Context, prompt string, claudeCfg config.C
 						Model:          init.Model,
 						PermissionMode: init.PermissionMode,
 						Version:        init.ClaudeCodeVersion,
+						SessionID:      init.SessionID,
 					}}
 					continue
 				}
@@ -127,17 +159,64 @@ func streamClaudeResponse(ctx context.Context, prompt string, claudeCfg config.C
 
 			switch event.Type {
 			case "stream_event":
-				// Content deltas are wrapped: {"type":"stream_event","event":{"type":"content_block_delta",...}}
-				if event.Event.Type == "content_block_delta" &&
-					event.Event.Delta.Type == "text_delta" &&
-					event.Event.Delta.Text != "" {
-					ch <- llm.StreamResponse{Content: event.Event.Delta.Text}
+				switch event.Event.Type {
+				case "content_block_delta":
+					// Content deltas are wrapped: {"type":"stream_event","event":{"type":"content_block_delta",...}}
+					if event.Event.Delta.Type == "text_delta" && event.Event.Delta.Text != "" {
+						ch <- llm.StreamResponse{Content: event.Event.Delta.Text}
+					}
+				case "content_block_start":
+					if event.Event.ContentBlock.Type == "tool_use" {
+						ch <- llm.StreamResponse{PendingTool: event.Event.ContentBlock.Name}
+					}
+				case "content_block_stop":
+					ch <- llm.StreamResponse{ClearPendingTool: true}
 				}
 			case "assistant":
-				// Handle thinking blocks from extended thinking mode.
+				// Handle thinking and tool_use blocks.
 				for _, block := range event.Message.Content {
-					if block.Type == "thinking" && block.Thinking != "" {
-						ch <- llm.StreamResponse{Reasoning: block.Thinking}
+					switch block.Type {
+					case "thinking":
+						if block.Thinking != "" {
+							ch <- llm.StreamResponse{Reasoning: block.Thinking}
+						}
+					case "tool_use":
+						toolStr := fmt.Sprintf("[tool: %s]", block.Name)
+						ch <- llm.StreamResponse{Content: "\n" + toolStr + "\n"}
+					}
+				}
+			case "user":
+				// User events carry tool results back from subagent calls.
+				var userEvent claudeUserOuterEvent
+				if err := json.Unmarshal([]byte(line), &userEvent); err == nil {
+					for _, block := range userEvent.Message.Content {
+						if block.Type != "tool_result" {
+							continue
+						}
+						// Content can be a plain string or an array of content blocks.
+						var text string
+						if err := json.Unmarshal(block.Content, &text); err != nil {
+							// Try array of {type, text} blocks.
+							var blocks []struct {
+								Type string `json:"type"`
+								Text string `json:"text"`
+							}
+							if err := json.Unmarshal(block.Content, &blocks); err == nil {
+								var sb strings.Builder
+								for _, b := range blocks {
+									if b.Type == "text" && b.Text != "" {
+										sb.WriteString(b.Text)
+									}
+								}
+								text = sb.String()
+							}
+						}
+						if text != "" {
+							ch <- llm.StreamResponse{
+								Content:        "\n[subagent result]\n" + text + "\n",
+								SubagentResult: text,
+							}
+						}
 					}
 				}
 			case "result":

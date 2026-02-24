@@ -296,6 +296,7 @@ type claudeMetaMsg struct {
 	Model          string
 	PermissionMode string
 	Version        string
+	SessionID      string
 }
 
 // ToolCallMsg is emitted when the LLM requests one or more tool calls.
@@ -2322,14 +2323,39 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !m.teamsModal.show && !m.blockerModal.show && !m.showGrid &&
 			!m.showKillModal && !m.showPromptModal && !m.showOutputModal && !m.loading {
 			showLeftPanel := m.width >= minWidthForLeftPanel && !m.leftPanelHidden
+			showSidebar := m.width >= minWidthForBar && !m.sidebarHidden
+			sidebarStartX := m.width - m.sbWidth
 			if showLeftPanel && msg.X < m.lpWidth {
-				// Clicked left panel — focus jobs pane.
-				if m.focused != focusJobs && m.focused != focusAgents {
-					m.focused = focusJobs
+				// Clicked left panel — determine if Teams (bottom) or Jobs (top) pane.
+				// Compute the Y row where the Teams pane begins.
+				paneFrameV := FocusedPaneStyle.GetVerticalBorderSize()
+				bottomContentH := 1 + len(m.teams)
+				if len(m.teams) == 0 {
+					bottomContentH = 2
+				}
+				teamsPaneH := bottomContentH + paneFrameV
+				teamsPaneY := m.height - teamsPaneH
+				if msg.Y >= teamsPaneY {
+					// Clicked Teams pane.
+					if m.focused != focusTeams {
+						m.focused = focusTeams
+						m.input.Blur()
+					}
+				} else {
+					// Clicked Jobs or Job Detail pane.
+					if m.focused != focusJobs {
+						m.focused = focusJobs
+						m.input.Blur()
+					}
+				}
+			} else if showSidebar && msg.X >= sidebarStartX {
+				// Clicked sidebar — focus agents pane.
+				if m.focused != focusAgents {
+					m.focused = focusAgents
 					m.input.Blur()
 				}
-			} else if msg.X >= m.lpWidth {
-				// Clicked chat area (or sidebar) — focus chat.
+			} else {
+				// Clicked chat area — focus chat.
 				if m.focused != focusChat {
 					m.focused = focusChat
 					cmds = append(cmds, m.input.Focus())
@@ -3927,6 +3953,33 @@ func (m *Model) renderGrid() string {
 			))
 		}
 
+		// 3c. Version line (only if ClaudeVersion is known)
+		var versionLine string
+		if snap.ClaudeVersion != "" {
+			versionLine = DimStyle.Render(truncateStr("claude v"+snap.ClaudeVersion, innerW))
+		}
+
+		// 3d. Session line (only if SessionID is known; truncated to 8 chars)
+		var sessionLine string
+		if snap.SessionID != "" {
+			sid := snap.SessionID
+			if len(sid) > 8 {
+				sid = sid[:8]
+			}
+			sessionLine = DimStyle.Render(truncateStr("session: "+sid, innerW))
+		}
+
+		// 3e. Subagent line (only if any subagents have been spawned)
+		var subagentLine string
+		if snap.SubagentsSpawned > 0 {
+			subagentStr := fmt.Sprintf("subagents: %d spawned, %d in-flight", snap.SubagentsSpawned, snap.SubagentsInFlight)
+			if snap.SubagentsInFlight > 0 {
+				subagentLine = lipgloss.NewStyle().Foreground(lipgloss.Color("6")).Render(truncateStr(subagentStr, innerW))
+			} else {
+				subagentLine = DimStyle.Render(truncateStr(subagentStr, innerW))
+			}
+		}
+
 		// 4. Prompt preview: first 3 non-empty lines of the prompt
 		var promptLines []string
 		for _, l := range strings.Split(snap.Prompt, "\n") {
@@ -3957,15 +4010,23 @@ func (m *Model) renderGrid() string {
 		// 6. Output: tail of snap.Output to fill remaining height.
 		// Budget:
 		//   1 header + 1 summary + 1 model + (1 token if present) +
+		//   (1 version if present) + (1 session if present) + (1 subagent if present) +
 		//   3 prompt + 1 p-hint(focused) + 1 separator
-		// = 8 (unfocused, no token) / 9 (unfocused, token) /
-		//   9 (focused, no token) / 10 (focused, token)
 		metaLines := 7 // header + summary + model + 3 prompt + separator
 		if focused {
 			metaLines++ // p-hint line
 		}
 		if tokenLine != "" {
 			metaLines++ // token line
+		}
+		if versionLine != "" {
+			metaLines++ // version line
+		}
+		if sessionLine != "" {
+			metaLines++ // session line
+		}
+		if subagentLine != "" {
+			metaLines++ // subagent line
 		}
 		outputH := innerH - metaLines
 		if outputH < 0 {
@@ -3992,12 +4053,18 @@ func (m *Model) renderGrid() string {
 			outputBodyLines = append(outputBodyLines, thinkLine)
 		}
 
-		// SubagentOutput indicator
+		// SubagentOutput indicator — show the last non-empty line of subagent output.
 		if snap.SubagentOutput != "" {
-			subLine := DimStyle.Render(truncateStr(
-				fmt.Sprintf("[subagent: %s chars]", compactNum(len(snap.SubagentOutput))),
-				innerW,
-			))
+			lastSubLine := ""
+			for _, sl := range strings.Split(snap.SubagentOutput, "\n") {
+				if strings.TrimSpace(sl) != "" {
+					lastSubLine = sl
+				}
+			}
+			if lastSubLine == "" {
+				lastSubLine = snap.SubagentOutput
+			}
+			subLine := DimStyle.Render(truncateStr("↳ "+lastSubLine, innerW))
 			outputBodyLines = append(outputBodyLines, subLine)
 		}
 
@@ -4031,6 +4098,15 @@ func (m *Model) renderGrid() string {
 		}
 		if tokenLine != "" {
 			parts = append(parts, tokenLine)
+		}
+		if versionLine != "" {
+			parts = append(parts, versionLine)
+		}
+		if sessionLine != "" {
+			parts = append(parts, sessionLine)
+		}
+		if subagentLine != "" {
+			parts = append(parts, subagentLine)
 		}
 		parts = append(parts, promptPreview, separator, outputBody)
 
@@ -4405,6 +4481,7 @@ func waitForChunk(ch <-chan llm.StreamResponse) tea.Cmd {
 				Model:          resp.Meta.Model,
 				PermissionMode: resp.Meta.PermissionMode,
 				Version:        resp.Meta.Version,
+				SessionID:      resp.Meta.SessionID,
 			}
 		}
 		if len(resp.ToolCalls) > 0 {
@@ -4493,7 +4570,18 @@ func wrapText(s string, maxWidth int) string {
 
 // formatClaudeMeta returns a short byline string for a claudeMetaMsg.
 func formatClaudeMeta(msg claudeMetaMsg) string {
-	return msg.Model + " · " + msg.PermissionMode + " mode"
+	s := msg.Model + " · " + msg.PermissionMode + " mode"
+	if msg.Version != "" {
+		s += " · claude v" + msg.Version
+	}
+	if msg.SessionID != "" {
+		short := msg.SessionID
+		if len(short) > 8 {
+			short = short[:8]
+		}
+		s += " · session: " + short
+	}
+	return s
 }
 
 // truncateStr truncates s to maxLen, adding "..." if truncated.
