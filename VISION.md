@@ -1,37 +1,46 @@
 # Toasters — Vision
 
-Toasters is a TUI orchestrator for agentic coding work. It sits *above* tools like Claude Code, OpenCode, and similar assistants — it does not replace them. The user hands it a task, and it coordinates data sources and multiple `claude` CLI invocations to accomplish the work. It deliberately defers to the user's existing Claude Code configuration, agents, MCP servers, and authentication. Nothing is re-implemented that Claude already handles.
+Toasters is an agentic orchestration platform with a TUI interface. It coordinates multiple concurrent LLM-powered agents through a Bubble Tea interface, dispatching work via an operator LLM and managing the full lifecycle of jobs, tasks, and agent sessions.
 
-The core insight: LLMs are good at reasoning and writing code, but bad at maintaining state across long sessions. Toasters inverts this — Go owns the state, and the LLM is invoked fresh each time with accumulated context fed back in.
+The core insight: LLMs are good at reasoning and writing code, but bad at maintaining state across long sessions. Toasters inverts this — Go owns the state, and LLMs are invoked with accumulated context fed back in. The orchestrator is the memory, not the model.
+
+**Where we started:** A fun TUI project to play with a local LLM.
+
+**Where we're going:** A persistent agentic operations platform that coordinates multi-model agent teams, integrates with external services via MCP, maintains knowledge of engineering ecosystems, and gets smarter over time.
 
 ---
 
 ## Table of Contents
 
-- [What It Is Not](#what-it-is-not)
+- [What It Is](#what-it-is)
+- [What It Is Not (Yet)](#what-it-is-not-yet)
 - [Job Types](#job-types)
 - [Architecture](#architecture)
-  - [Local LLM (LM Studio)](#local-llm-lm-studio)
-  - [The `claude` CLI](#the-claude-cli)
-  - [Agent System](#agent-system)
-  - [MCP Servers](#mcp-servers)
+  - [Operator LLM](#operator-llm)
+  - [Agent Runtime](#agent-runtime)
+  - [MCP Integration](#mcp-integration)
   - [State Persistence](#state-persistence)
   - [Task DAG and Concurrency](#task-dag-and-concurrency)
-- [The `claude` CLI — Key Flags](#the-claude-cli--key-flags)
-- [stream-json Event Format](#stream-json-event-format)
 - [UI Layout](#ui-layout)
 - [Tech Stack](#tech-stack)
 - [Current State](#current-state)
 
 ---
 
-## What It Is Not
+## What It Is
 
-- Not a chat interface to Claude (that is a side effect of the prototype, not the goal)
-- Not another coding assistant TUI
-- Not a replacement for Claude Code, OpenCode, or any other agentic tool
-- Not an MCP server host
-- Not responsible for auth, agent definitions, or model configuration — those live in the user's existing Claude setup
+- A TUI-first orchestration platform for agentic coding work
+- A multi-agent coordinator: operator dispatches to teams of specialized agents
+- An MCP client: consumes tools from external MCP servers (GitHub, Jira, Linear, etc.)
+- An MCP server: exposes a progress-reporting API that agents use to report status back to the orchestrator
+- A persistent state manager: SQLite for operational data, markdown for human-readable artifacts
+- A multi-provider LLM client: talks directly to Anthropic, OpenAI, LM Studio, and other providers
+
+## What It Is Not (Yet)
+
+- Not a replacement for Claude Code or OpenCode — it orchestrates work at a higher level
+- Not a web application (TUI-first, server architecture comes later)
+- Not a multi-tenant platform (single-user for now)
 
 ---
 
@@ -50,115 +59,81 @@ Toasters automatically classifies incoming tasks into one of four types. The cla
 
 ## Architecture
 
-### Local LLM (LM Studio)
+### Operator LLM
 
-The local LLM (served via LM Studio at `localhost:1234`) acts as a cheap coordinator and classifier. It is explicitly **not** responsible for planning or executing actual work — that is `claude`'s job.
+The operator is the brain of the system. It receives user requests, classifies work, selects teams and workflows, dispatches jobs, and monitors progress. It can be backed by any provider — a local LM Studio model for cheap coordination, or a cloud model (Anthropic, OpenAI) for more capable reasoning.
 
 Responsibilities:
-- Classify incoming tasks into one of the four job types
-- Reach out to external data sources (Jira, Slack, GitHub, etc.) or instruct `claude` to do so and report back
-- Maintain overall job state as `.md` files that persist between sessions
-- Shift orchestration state management away from LLM context — Go's concurrency model owns this, not the LLM
+- Classify incoming tasks into job types
+- Select teams and workflows for jobs
+- Dispatch work to agent teams
+- Monitor agent progress via the Toasters MCP server
+- Reach out to external data sources via MCP tools
+- Maintain job state in SQLite
 
-The local LLM is intentionally low-capability and low-cost. It coordinates; it does not think.
+The operator has access to both static tools (job management, team dispatch) and dynamic tools from configured MCP servers.
 
-### The `claude` CLI
+### Agent Runtime
 
-`claude` is the actual worker. It plans work, writes code, investigates issues, and reports findings. It is always invoked non-interactively.
+Agents are LLM conversation loops running as goroutines. Each agent has:
+- A system prompt (from agent definition files or database)
+- A set of available tools (file I/O, shell, web fetch, MCP tools, subagent spawning)
+- A message history managed by the Go runtime
+- A context for cancellation
 
-Key invocation pattern:
-```
-claude --print --output-format stream-json --include-partial-messages <prompt>
-```
+The agent runtime replaces the previous `claude` CLI subprocess approach. Instead of shelling out to `claude` and parsing stream-json output, Toasters talks directly to LLM providers via their APIs. This gives full control over the request/response lifecycle, enables mixing models per agent, and eliminates subprocess fragility.
 
-Design principles:
-- Each invocation receives fresh context plus accumulated state `.md` files as input
-- Structured responses are enforced via `--json-schema` where machine-parseable output is needed
-- The Go orchestrator is the memory — not the LLM. Context compaction losing state is not a concern because state lives on disk
-- Multiple `claude` sessions can run in parallel; Go handles the concurrency
+**Core tool set** (what agents need to do real work):
+- File I/O: read, write, edit, glob, grep
+- Shell execution: run commands, capture output
+- Web fetch: HTTP GET for URLs
+- Subagent spawning: create child agent sessions (equivalent to Claude Code's `Task` tool)
+- MCP tools: any tools from configured MCP servers
+- Toasters MCP tools: report progress, update task status, flag blockers
 
-### Agent System
+### MCP Integration
 
-- By default, Toasters bundles a set of default agents for each job type
-- If the user already has agents defined in their Claude config directory, those are auto-detected and preferred
-- Specific agents can be configured per task type (e.g., "for debugging, always use agent X")
-- Each agent invocation uses a specific prompt envelope with a defined request schema and response schema
-- Response format: JSON for machine parsing; `.md` files for human-readable persistent state
+Toasters has a three-part MCP strategy:
 
-### MCP Servers
+**1. MCP Client — Consume external tools**
+The operator and agents connect to external MCP servers (GitHub, Jira, Linear, filesystem, git, etc.) and use their tools. Configuration is per-server with support for stdio, HTTP, and SSE transports. Tools are namespaced to prevent collisions.
 
-Toasters **consumes** existing MCP servers — it does not host one.
+**2. MCP Server — Agent progress reporting**
+Toasters runs its own MCP server that agents connect to. This creates a structured, bidirectional communication channel between the orchestrator and its agents. Agents report progress, flag blockers, update task status, and query job context — all through MCP tools rather than file-based detection.
 
-- Supported integrations: Jira, GitHub, Slack, DataDog, and any other MCP server the user has configured
-- If the user already has MCP servers configured in their Claude setup, Toasters simply prompts `claude` to use them — no additional configuration needed
-- Auth is handled entirely by Claude's existing config; Toasters does not touch credentials
+Key tools exposed by the Toasters MCP server:
+- `report_progress(job_id, task_id, status, message)` — agent reports what it's doing
+- `report_blocker(job_id, task_id, description)` — agent flags it's stuck
+- `update_task_status(job_id, task_id, status)` — agent marks a task done/failed
+- `request_review(job_id, task_id, artifact_path)` — agent asks for peer review
+- `query_job_context(job_id)` — agent asks about the broader job state
+
+**3. Ephemeral OpenAPI-to-MCP Bridges**
+Toasters can auto-generate MCP servers from OpenAPI specs. Point it at a spec URL + credentials, and it spins up a lightweight MCP server that translates tool calls into HTTP requests against the backend service. These are scoped to a job or ecosystem and cleaned up automatically.
 
 ### State Persistence
 
-Each job has a directory of associated `.md` files on disk:
-- Investigations and findings
-- Task lists and their statuses
-- Results and summaries
-- Any other structured output from `claude` invocations
+**SQLite** (operational state):
+- Jobs, tasks, status, assignments
+- Team and agent configurations
+- Slot history, cost tracking
+- Agent progress reports (from MCP server)
+- Ecosystem metadata
+- Operator memory
 
-Each new `claude` invocation receives the accumulated state files as part of its context. This sidesteps LLM context compaction — the Go process owns the state, not the LLM's context window.
+**Markdown on disk** (human-readable artifacts):
+- Job overviews and reports
+- Investigation findings
+- Code review results
+- Any artifact agents produce for human consumption
 
 ### Task DAG and Concurrency
 
-- `claude` plans the actual work and identifies what can be parallelized
-- Claude's plan is translated back into Toasters' internal data model: a directed acyclic graph (DAG) of tasks
+- The operator (or a planning agent) creates a task DAG for each job
 - Each task node carries: name, dependencies, status, assigned agent, last update
-- Go handles concurrency — multiple `claude` sessions can run simultaneously without coordination overhead in the LLM
-
----
-
-## The `claude` CLI — Key Flags
-
-These flags were discovered through experimentation and are central to how Toasters drives `claude`:
-
-| Flag | Purpose |
-|---|---|
-| `--print` | Non-interactive mode — exits after producing output |
-| `--output-format stream-json` | Emit real-time streaming JSON lines |
-| `--include-partial-messages` | Deliver content deltas as they arrive (required for streaming effect) |
-| `--json-schema <schema>` | Enforce a structured JSON response format |
-| `--input-format stream-json` | Stream large context/state files as input |
-| `--agents <json>` / `--agent <agent>` | Inline agent definitions or named agents |
-| `--mcp-config` | Inject MCP server configurations per invocation |
-| `--worktree` | Give parallel sessions their own git worktree (prevents branch conflicts) |
-| `--system-prompt` / `--append-system-prompt` | Inject or append system prompts |
-
----
-
-## stream-json Event Format
-
-The `--output-format stream-json` flag produces newline-delimited JSON. Two distinct shapes appear on stdout:
-
-**Content delta** (wrapped in a `stream_event` envelope):
-```json
-{
-  "type": "stream_event",
-  "event": {
-    "type": "content_block_delta",
-    "delta": {
-      "type": "text_delta",
-      "text": "..."
-    }
-  }
-}
-```
-
-**Terminal result** (unwrapped, arrives at the end):
-```json
-{
-  "type": "result",
-  "subtype": "success",
-  "result": "...",
-  "is_error": false
-}
-```
-
-Blank lines are skipped. Malformed lines are skipped silently. The stream is considered done when either a `result` event arrives or stdout closes.
+- Go manages concurrency — multiple agent sessions run simultaneously as goroutines
+- Agents report progress back via the Toasters MCP server, updating task status in SQLite
+- The TUI subscribes to database changes for real-time progress display
 
 ---
 
@@ -212,50 +187,58 @@ The TUI uses a two-column layout. The left column is the primary work management
 | Lipgloss | `charm.land/lipgloss/v2 v2.0.0-beta.3` |
 | Bubbles | `charm.land/bubbles/v2 v2.0.0-rc.1` |
 | Glamour | `github.com/charmbracelet/glamour v0.10.0` |
+| SQLite | `modernc.org/sqlite` (pure Go, no CGO) |
+| MCP | `github.com/mark3labs/mcp-go` (client + server) |
 | Local LLM | LM Studio at `localhost:1234` (OpenAI-compatible API) |
-| Worker | `claude` CLI (non-interactive, stream-json mode) |
-
-The Charmbracelet v2 ecosystem (`charm.land/` import paths) is used throughout. These are pre-release versions; import paths and APIs may shift before stable release.
+| Cloud LLMs | Anthropic, OpenAI, Google (direct API) |
 
 ---
 
 ## Current State
 
-What exists today is a functional TUI prototype that establishes the streaming infrastructure and the right-panel sidebar. The work management UI (left panel) has not been built yet.
+What exists today is a functional TUI prototype with operator chat, agent team dispatch, and Claude CLI subprocess integration. The system is transitioning from subprocess-based agent execution to in-process API-driven agents.
 
 ### Implemented
 
 **`internal/llm` — LM Studio client**
 - `Client` connects to any OpenAI-compatible API endpoint
 - `ChatCompletionStream` sends messages and returns a channel of streamed response chunks
-- `FetchModels` queries available models, preferring the LM Studio-specific `/api/v0/models` endpoint (richer metadata) with fallback to `/v1/models`
-- `ModelInfo` exposes model ID, load state, max context length, and loaded context length
-- Handles `stream_options.include_usage` correctly — reads past the `finish_reason: stop` chunk to capture the trailing usage-only chunk before `[DONE]`
+- `ChatCompletionStreamWithTools` supports function calling
+- `FetchModels` queries available models
+- Token usage tracking and context window monitoring
 
 **`internal/tui` — TUI application**
 - Two-column layout: main chat area (left) + stats sidebar (right)
-- Right sidebar fully implemented: model name, endpoint, connection status, message count, token counts (prompt/completion/reasoning), live token estimates during streaming, generation speed (t/s), context window usage bar with color-coded fill (green/yellow/red), last and average response times
-- Chat viewport with markdown rendering via Glamour, mouse wheel scroll support
-- Streaming response display with live cursor indicator and chain-of-thought reasoning block
-- Slash command system with autocomplete popup: `/help`, `/new`, `/exit`, `/quit`, `/claude`
-- `/claude <prompt>` command: invokes the `claude` CLI as a subprocess, parses `stream-json` output, and streams the response into the chat viewport using the same pipeline as the LM Studio client
-- `Esc` cancels an in-flight stream; `Ctrl+C` quits
-- `Shift+Enter` inserts a newline; `Enter` sends
+- Chat viewport with markdown rendering via Glamour
+- Streaming response display with reasoning blocks
+- Slash command system: `/help`, `/new`, `/exit`, `/quit`, `/claude`, `/kill`
+- Grid view (Ctrl+G) showing 2×2 agent slot status
+- Prompt mode for operator questions
 
-**`internal/tui/claude.go` — `claude` CLI subprocess integration**
-- Launches `claude --print --output-format stream-json --include-partial-messages`
-- Parses both event shapes: wrapped `stream_event` content deltas and unwrapped `result` terminal events
-- Context cancellation kills the subprocess automatically via `exec.CommandContext`
-- Reuses the `llm.StreamResponse` channel type so the TUI's streaming pipeline is shared
+**`internal/agents` — Agent system**
+- Agent discovery from `.md` files with YAML frontmatter
+- Team definitions with coordinator + worker roles
+- Hot-reload via fsnotify
+
+**`internal/gateway` — Claude subprocess management**
+- Up to 4 concurrent Claude CLI subprocess slots
+- Stream-json output parsing
+- Context cancellation and slot lifecycle management
+
+**`internal/job` — Job persistence**
+- OVERVIEW.md + TODO.md per job
+- YAML frontmatter + markdown format
 
 ### Not Yet Built
 
+- In-process agent runtime (direct API calls, replacing Claude CLI subprocesses)
+- SQLite persistence layer
+- MCP client integration (consuming external MCP servers)
+- MCP server (agent progress reporting)
+- Ephemeral OpenAPI-to-MCP bridges
+- Multi-provider LLM client (Anthropic, OpenAI direct)
 - Left panel: job list, task DAG visualization, streaming updates pane
-- Right panel bottom section: active task list
-- Job classification (local LLM integration beyond direct chat)
-- Task DAG data model and planner
-- State persistence (`.md` files on disk)
-- Agent configuration and selection
-- MCP server integration
-- Parallel `claude` session management
-- `--worktree`, `--json-schema`, `--agents`, `--mcp-config` flag usage
+- Team templates and workflows
+- Ecosystems (ephemeral and long-lived)
+- Operator memory
+- Server/client architecture split
