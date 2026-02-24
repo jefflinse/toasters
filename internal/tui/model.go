@@ -3216,30 +3216,12 @@ func (m *Model) updateViewportContent() {
 		sb.WriteString(welcome)
 	}
 
-	// Build a subtle horizontal separator line for between conversation exchanges.
-	separatorStyle := lipgloss.NewStyle().Foreground(ColorBorder)
-	sepWidth := contentWidth * 3 / 5
-	if sepWidth < 20 {
-		sepWidth = 20
-	}
-	if sepWidth > contentWidth {
-		sepWidth = contentWidth
-	}
-	separator := separatorStyle.Render(strings.Repeat("─", sepWidth))
-
 	assistantIdx := 0
-	prevRole := "" // tracks the previous rendered message role for separator logic
 	for i, msg := range m.messages {
 		// Timestamp helper — safe even if timestamps slice is short.
 		var ts string
 		if i < len(m.timestamps) && !m.timestamps[i].IsZero() {
 			ts = " · " + m.timestamps[i].Format("3:04 PM")
-		}
-
-		// Insert separator between conversation exchanges: before a user message
-		// that follows an assistant or tool message (i.e. start of a new exchange).
-		if msg.Role == "user" && !m.completionMsgIdx[i] && (prevRole == "assistant" || prevRole == "tool") {
-			sb.WriteString("\n" + separator + "\n")
 		}
 
 		switch msg.Role {
@@ -3261,27 +3243,24 @@ func (m *Model) updateViewportContent() {
 					}
 					sb.WriteString(DimStyle.Render("▶ "+firstLine) + hint + "\n\n")
 				}
-				prevRole = msg.Role
 				continue
 			}
-			// Render "you" label with timestamp.
-			label := UserMsgLabelStyle.Render("you")
-			if ts != "" {
-				label += DimStyle.Render(ts)
-			}
-			sb.WriteString(label + "\n")
+			// Render user message block with optional timestamp.
 			blockWidth := contentWidth - UserMsgBlockStyle.GetHorizontalFrameSize()
 			if blockWidth < 1 {
 				blockWidth = 1
 			}
-			block := UserMsgBlockStyle.Width(blockWidth).Render(wrapText(msg.Content, blockWidth))
+			content := wrapText(msg.Content, blockWidth)
+			if ts != "" {
+				content += "\n" + DimStyle.Render(ts[3:]) // strip leading " · "
+			}
+			block := UserMsgBlockStyle.Width(blockWidth).Render(content)
 			sb.WriteString(block + "\n\n")
 		case "assistant":
 			// ask-user-prompt and escalate-prompt messages render as a styled question header.
 			if assistantIdx < len(m.claudeMeta) && (m.claudeMeta[assistantIdx] == "ask-user-prompt" || m.claudeMeta[assistantIdx] == "escalate-prompt") {
 				sb.WriteString(HeaderStyle.Render("? "+msg.Content) + "\n\n")
 				assistantIdx++
-				prevRole = msg.Role
 				continue
 			}
 			// Tool-call indicator messages render as collapsible tool blocks.
@@ -3303,7 +3282,6 @@ func (m *Model) updateViewportContent() {
 					sb.WriteString(DimStyle.Render("⚙ "+toolName+" ▶") + hint + "\n")
 				}
 				assistantIdx++
-				prevRole = msg.Role
 				continue
 			}
 			// Render claude byline (if any) above the response, with timestamp.
@@ -3347,7 +3325,6 @@ func (m *Model) updateViewportContent() {
 				sb.WriteString(DimStyle.Render("⚙ tool result ▶") + hint + "\n")
 			}
 		}
-		prevRole = msg.Role
 	}
 
 	// Show streaming response in progress — re-render markdown incrementally.
