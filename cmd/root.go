@@ -82,10 +82,8 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 	switch cfg.Operator.Provider {
 	case "anthropic":
 		client = anthropic.NewClient(cfg.Operator.Model)
-		log.Printf("operator: using Anthropic API (model: %s)", client.BaseURL())
 	default:
 		client = llm.NewClient(cfg.Operator.Endpoint, cfg.Operator.Model)
-		log.Printf("operator: using local LLM at %s", client.BaseURL())
 	}
 
 	m := tui.NewModel(client, cfg.Claude, workspaceDir, gw, repoRoot, teamsDir, teams, "")

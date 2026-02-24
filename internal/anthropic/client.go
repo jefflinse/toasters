@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"os/exec"
 	"strings"
@@ -25,6 +24,26 @@ const (
 
 	keychainService = "Claude Code-credentials"
 )
+
+// formatAPIError extracts a human-readable error message from an Anthropic API
+// error response body. Falls back to a truncated raw body if parsing fails.
+func formatAPIError(statusCode int, body []byte) error {
+	var apiErr struct {
+		Error struct {
+			Type    string `json:"type"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(body, &apiErr); err == nil && apiErr.Error.Message != "" {
+		return fmt.Errorf("anthropic API error (%d): %s", statusCode, apiErr.Error.Message)
+	}
+	// Fallback: truncate raw body to avoid dumping huge JSON into the TUI.
+	s := string(body)
+	if len(s) > 200 {
+		s = s[:200] + "..."
+	}
+	return fmt.Errorf("anthropic API error (%d): %s", statusCode, s)
+}
 
 // Client is an Anthropic API client that satisfies llm.Provider.
 type Client struct {
@@ -74,9 +93,7 @@ func (c *Client) ChatCompletionStream(ctx context.Context, messages []llm.Messag
 // ChatCompletionStreamWithTools is like ChatCompletionStream but accepts tool definitions.
 // For the prototype, tools are ignored — the operator's tool calls go through LM Studio.
 func (c *Client) ChatCompletionStreamWithTools(ctx context.Context, messages []llm.Message, tools []llm.Tool, temperature float64) <-chan llm.StreamResponse {
-	if len(tools) > 0 {
-		log.Printf("[anthropic] ignoring %d tool definitions (not supported in Anthropic provider prototype)", len(tools))
-	}
+	// Tools are not yet supported in the Anthropic provider prototype; ignored.
 	return c.ChatCompletionStream(ctx, messages, temperature)
 }
 
@@ -125,7 +142,7 @@ func (c *Client) ChatCompletion(ctx context.Context, msgs []llm.Message) (string
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("anthropic API status %d: %s", resp.StatusCode, string(respBody))
+		return "", formatAPIError(resp.StatusCode, respBody)
 	}
 
 	var result anthropicResponse
@@ -236,7 +253,7 @@ func (c *Client) streamMessages(ctx context.Context, system string, messages []a
 
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
-		ch <- llm.StreamResponse{Error: fmt.Errorf("anthropic API status %d: %s", resp.StatusCode, string(respBody))}
+		ch <- llm.StreamResponse{Error: formatAPIError(resp.StatusCode, respBody)}
 		return
 	}
 
@@ -287,7 +304,7 @@ func streamMessage(ctx context.Context, model string, prompt string, ch chan<- l
 
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
-		ch <- llm.StreamResponse{Error: fmt.Errorf("anthropic API status %d: %s", resp.StatusCode, string(respBody))}
+		ch <- llm.StreamResponse{Error: formatAPIError(resp.StatusCode, respBody)}
 		return
 	}
 
@@ -557,8 +574,6 @@ func readKeychainCredentials() (*keychainCredentials, error) {
 		return nil, fmt.Errorf("OAuth token expired and no refresh token available")
 	}
 
-	log.Printf("[anthropic] access token expired, refreshing...")
-
 	tok, err := refreshAccessToken(oauth.RefreshToken)
 	if err != nil {
 		return nil, fmt.Errorf("refreshing expired token: %w", err)
@@ -572,13 +587,8 @@ func readKeychainCredentials() (*keychainCredentials, error) {
 	blob.ClaudeAiOauth.ExpiresAt = time.Now().UnixMilli() + tok.ExpiresIn*1000
 
 	// Write the updated credentials back to the Keychain.
-	if err := writeKeychainBlob(blob); err != nil {
-		// Log but don't fail — we still have a valid token for this request.
-		log.Printf("[anthropic] warning: failed to write refreshed token to keychain: %v", err)
-	} else {
-		log.Printf("[anthropic] token refreshed successfully, expires at %s",
-			time.UnixMilli(blob.ClaudeAiOauth.ExpiresAt).Format(time.RFC3339))
-	}
+	// Ignore write errors — we still have a valid token for this request.
+	_ = writeKeychainBlob(blob)
 
 	return &keychainCredentials{
 		AccessToken: tok.AccessToken,
