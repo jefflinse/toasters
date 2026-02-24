@@ -15,7 +15,7 @@ import (
 // generateTeamAwareness builds ~/.config/toasters/team-awareness.md
 // with one-sentence dispatch summaries for each team.
 // Returns the file content, or "" on error.
-func generateTeamAwareness(ctx context.Context, client *llm.Client, teams []agents.Team, configDir string) string {
+func generateTeamAwareness(ctx context.Context, client llm.Provider, teams []agents.Team, configDir string) string {
 	if len(teams) == 0 {
 		return ""
 	}
@@ -42,7 +42,7 @@ func generateTeamAwareness(ctx context.Context, client *llm.Client, teams []agen
 
 // summarizeTeam asks the LLM for a one-sentence "Use this team when..."
 // summary suitable for operator dispatch decisions.
-func summarizeTeam(ctx context.Context, client *llm.Client, team agents.Team) string {
+func summarizeTeam(ctx context.Context, client llm.Provider, team agents.Team) string {
 	var prompt string
 	if team.Coordinator != nil && strings.TrimSpace(team.Coordinator.Body) != "" {
 		prompt = fmt.Sprintf(

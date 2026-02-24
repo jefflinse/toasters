@@ -377,7 +377,7 @@ type Model struct {
 	width  int
 	height int
 
-	llmClient        *llm.Client
+	llmClient        llm.Provider
 	claudeCfg        config.ClaudeConfig
 	messages         []llm.Message
 	reasoning        []string // reasoning[i] is the thinking trace for messages[i] (assistant turns only)
@@ -522,7 +522,7 @@ type Model struct {
 }
 
 // NewModel returns an initialized root model.
-func NewModel(client *llm.Client, claudeCfg config.ClaudeConfig, workspaceDir string, gw *gateway.Gateway, repoRoot string, teamsDir string, teams []agents.Team, awareness string) Model {
+func NewModel(client llm.Provider, claudeCfg config.ClaudeConfig, workspaceDir string, gw *gateway.Gateway, repoRoot string, teamsDir string, teams []agents.Team, awareness string) Model {
 	ta := textarea.New()
 	ta.Placeholder = "Type your message here..."
 	ta.Prompt = ""

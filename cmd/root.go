@@ -9,6 +9,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/jefflinse/toasters/internal/agents"
+	"github.com/jefflinse/toasters/internal/anthropic"
 	"github.com/jefflinse/toasters/internal/config"
 	"github.com/jefflinse/toasters/internal/gateway"
 	"github.com/jefflinse/toasters/internal/job"
@@ -77,7 +78,15 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 	llm.SetTeams(teams)
 	llm.SetJobsDir(workspaceDir)
 
-	client := llm.NewClient(cfg.Operator.Endpoint, cfg.Operator.Model)
+	var client llm.Provider
+	switch cfg.Operator.Provider {
+	case "anthropic":
+		client = anthropic.NewClient(cfg.Operator.Model)
+		log.Printf("operator: using Anthropic API (model: %s)", client.BaseURL())
+	default:
+		client = llm.NewClient(cfg.Operator.Endpoint, cfg.Operator.Model)
+		log.Printf("operator: using local LLM at %s", client.BaseURL())
+	}
 
 	m := tui.NewModel(client, cfg.Claude, workspaceDir, gw, repoRoot, teamsDir, teams, "")
 

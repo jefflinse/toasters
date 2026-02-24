@@ -18,6 +18,7 @@ type Config struct {
 
 // OperatorConfig holds configuration for the operator LLM backend.
 type OperatorConfig struct {
+	Provider string `mapstructure:"provider"` // "local" (default) or "anthropic"
 	Endpoint string `mapstructure:"endpoint"`
 	APIKey   string `mapstructure:"api_key"`
 	Model    string `mapstructure:"model"`
@@ -45,6 +46,7 @@ func Load() (*Config, error) {
 	viper.AddConfigPath(home + "/.config/toasters")
 
 	viper.SetDefault("workspace_dir", filepath.Join(home, "toasters"))
+	viper.SetDefault("operator.provider", "local")
 	viper.SetDefault("operator.endpoint", "http://localhost:1234")
 	viper.SetDefault("operator.api_key", "")
 	viper.SetDefault("operator.model", "")
