@@ -1875,15 +1875,22 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		j, ok := m.jobByID(msg.jobID)
 		if ok && m.gateway != nil {
 			spawnPrompt := fmt.Sprintf("A blocker was encountered on job '%s' and the user has provided responses. See BLOCKER.md in the job directory for the full context and answers. Resume the job addressing the blocker.", msg.jobID)
+
+			// Prefer team from TASK.md; fall back to blocker.Team for backward compat.
+			teamName := msg.blocker.Team
+			if t, err := job.GetFirstTaskTeam(j.Dir); err == nil && t != "" {
+				teamName = t
+			}
+
 			// Find the team by name.
 			var matchedTeam agents.Team
 			for _, t := range m.teams {
-				if t.Name == msg.blocker.Team {
+				if t.Name == teamName {
 					matchedTeam = t
 					break
 				}
 			}
-			if _, _, err := m.gateway.SpawnTeam(msg.blocker.Team, j.Frontmatter.ID, spawnPrompt, matchedTeam); err != nil {
+			if _, _, err := m.gateway.SpawnTeam(teamName, j.Frontmatter.ID, spawnPrompt, matchedTeam); err != nil {
 				log.Printf("failed to re-spawn team after blocker: %v", err)
 			}
 		}
@@ -2805,6 +2812,11 @@ func (m Model) renderLeftPanel(panelWidth, panelHeight int) string {
 
 			// Child items: only show for active/paused jobs (not done).
 			if j.Status != job.StatusDone {
+				// Team sub-line (from first task).
+				if teamName, err := job.GetFirstTaskTeam(j.Dir); err == nil && teamName != "" {
+					teamLine := "  ◆ " + truncateStr(teamName, contentWidth-5)
+					topLines = append(topLines, DimStyle.Render(teamLine))
+				}
 				// BLOCKED child (always first if present).
 				if m.hasBlocker(j) {
 					blockerLine := "  ⚠ BLOCKED"

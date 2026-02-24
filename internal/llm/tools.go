@@ -480,7 +480,8 @@ func ExecuteTool(call ToolCall) (string, error) {
 			return "", fmt.Errorf("parsing assign_team args: %w", err)
 		}
 		// Guard: verify the job exists before dispatching to a team.
-		if configDir, err := config.Dir(); err == nil {
+		configDir, cdErr := config.Dir()
+		if cdErr == nil {
 			jobDir := filepath.Join(job.JobsDir(configDir), args.JobID)
 			if _, loadErr := job.Load(jobDir); loadErr != nil {
 				return fmt.Sprintf("job %q does not exist; call job_create first", args.JobID), nil
@@ -498,6 +499,13 @@ func ExecuteTool(call ToolCall) (string, error) {
 		}
 		if !found {
 			return "", fmt.Errorf("team %q not found", args.TeamName)
+		}
+		// Persist team assignment to the first task.
+		if cdErr == nil {
+			jobDir := filepath.Join(job.JobsDir(configDir), args.JobID)
+			if tasks, err := job.ListTasks(jobDir); err == nil && len(tasks) > 0 {
+				_ = job.SetTaskTeam(tasks[0].Dir, args.TeamName)
+			}
 		}
 		slotID, alreadyRunning, err := activeGateway.SpawnTeam(args.TeamName, args.JobID, args.Task, team)
 		if err != nil {

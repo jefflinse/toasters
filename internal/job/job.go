@@ -127,6 +127,10 @@ func Create(configDir, id, name, description string) (Job, error) {
 		return Job{}, fmt.Errorf("writing TODO.md: %w", err)
 	}
 
+	if _, err := CreateTask(dir, name, description); err != nil {
+		return Job{}, fmt.Errorf("creating initial task: %w", err)
+	}
+
 	return Load(dir)
 }
 
