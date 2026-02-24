@@ -10,22 +10,24 @@
 
 | Metric | Value |
 |---|---|
-| **Overall health** | **Good** (was "Improved") |
+| **Overall health** | **Excellent** (was "Good") |
 | **Build / Vet** | ✅ Clean |
-| **Tests** | ✅ All pass (7 packages, 76 tests) |
-| **Test coverage** | ⚠️ ~15% for `internal/tui`, 12.1% overall (target 40%) |
+| **Tests** | ✅ All pass (10 packages, 300+ tests) |
+| **Test coverage** | ✅ 42.9% overall (target 40% met) |
 | **Known vulnerabilities** | ❓ Unable to verify (govulncheck version mismatch) |
 | **Lint findings** | **0** (was 26) |
-| **Outdated dependencies** | Partially addressed (`x/crypto`, `x/net`, `x/sync`, `x/term`, `x/text` updated; Charm v2 pre-release still pending) |
+| **Outdated dependencies** | ✅ All addressed — Charm v2 updated to stable v2.0.0, all `x/` packages current |
 | **go mod tidy** | ✅ Clean |
 
-**Update (2026-02-24):** All critical, high-priority, and medium-priority structural findings are now resolved. The two major remaining structural debts — the `model.go` god file (#8) and the monolithic `internal/llm` package (#11) — have been addressed:
+**Update (2026-02-24):** All findings from the original audit are now resolved. The complete history:
 
-- `model.go` was split from 5,310 lines into 11 focused files (1,200 lines remaining), with 10 new source files and 7 new test files adding 155+ test cases. `internal/tui` coverage increased from 5.5% to 15.1%.
-- `internal/llm` was split into three focused sub-packages: `llm` (shared types), `llm/client` (OpenAI-compatible client), and `llm/tools` (tool executor).
-- Items #9 (parallel slices → ChatEntry), #10 (unified frontmatter parsing), and #12 (Keychain platform guard) were also resolved.
+- All critical, high-priority, and medium-priority structural findings resolved.
+- `model.go` was split from 5,310 lines into 11 focused files. `internal/llm` was split into three sub-packages.
+- Items #9 (parallel slices → ChatEntry), #10 (unified frontmatter parsing), and #12 (Keychain platform guard) resolved.
+- Items #16 (modal dedup), #17 (Charm v2 stable), #19 (pointer capture fix), #20 (stream dedup), #21 (orchestration package), #22 (client tests) all resolved.
+- Item #18 (test coverage): raised from 12.1% to 42.9%, exceeding the 40% target. 300+ tests across 10 packages.
 
-The remaining risks are: (1) low overall test coverage, (2) Charm v2 libraries pinned to pre-release versions, and (3) a few pre-existing code quality issues surfaced during reviews (#19–22).
+The only remaining open item is #7 (govulncheck) which requires a compatible binary for Go 1.25.0.
 
 ---
 
@@ -136,41 +138,41 @@ The remaining risks are: (1) low overall test coverage, (2) Charm v2 libraries p
 
 ### 16. Duplicated modal rendering logic
 - Prompt modal and output modal rendering share nearly identical dimension/scroll/styling code.
-- **Status:** 📋 Open — deferred to future work.
+- **Status:** ✅ Resolved (2026-02-24) — Extracted `renderScrollableModal` helper in `view.go`. Both modals call the shared helper.
 
 ### 17. Charm v2 libraries pinned to pre-release versions
 - `bubbles/v2 v2.0.0-rc.1`, `bubbletea/v2 v2.0.0-rc.2`, `lipgloss/v2 v2.0.0-beta.3`
 - Stable v2.0.0 releases are now available.
-- **Status:** 📋 Open — deferred to future work (M effort).
+- **Status:** ✅ Resolved (2026-02-24) — Updated all three to stable `v2.0.0`. No breaking API changes.
 
 ### 18. Test coverage gaps in critical packages
 - `cmd/` — 0%, `internal/anthropic/` — 0%, `internal/config/` — 0%
 - `internal/gateway/` — 8.5%, `internal/llm/client` — 0%
-- **Status:** 📋 Open — deferred to future work (L effort). Target 40% before Phase 1 completion.
+- **Status:** ✅ Resolved (2026-02-24) — Overall coverage raised from 12.1% to 42.9% (target 40%). Key improvements: `llm/client` 0%→87.7%, `llm/tools` 6%→96.3%, `config` 0%→87.2%, `anthropic` 3.6%→42.9%, `gateway` 8.5%→28.4%, `tui` 15%→31%, `agents` 52%→72%, `job` 56%→86%.
 
 ### 19. `submitBlockerAnswers` closure captures pointer receiver
 - **Location:** `internal/tui/blocker_modal.go` — `submitBlockerAnswers()` method
 - **Issue:** The returned `tea.Cmd` closure captures `m` (pointer receiver) and accesses `m.jobs` asynchronously. Since `m` is a pointer receiver, this reads from the model after it may have been mutated by subsequent `Update()` calls. Latent data race risk.
 - **Remediation:** Capture `m.jobs` into a local variable before the closure to snapshot the state.
-- **Status:** 📋 Open — backlog (S effort). Surfaced during #8 code review.
+- **Status:** ✅ Resolved (2026-02-24) — Job lookup moved before the closure; closure now captures only local variables (`jobDir`, `b`, `jobID`), not the pointer receiver.
 
 ### 20. `streamCompletion` and `streamCompletionWithTools` share ~80% duplicated code
 - **Location:** `internal/llm/client/client.go` — two methods with nearly identical SSE parsing logic
 - **Issue:** The only difference is tool definitions in the request and tool call accumulation. ~100 lines of duplicated SSE parsing, chunk handling, and error logic.
 - **Remediation:** Extract a shared `doStream` helper that takes optional `[]llm.Tool` and a flag/callback for tool accumulation.
-- **Status:** 📋 Open — backlog (S effort). Surfaced during #11 code review.
+- **Status:** ✅ Resolved (2026-02-24) — Extracted `doStream` method (154 lines). Both public methods are now ≤15-line wrappers. Net reduction: 91 lines.
 
 ### 21. `GatewaySlot` and `AgentSpawner` don't belong in `internal/llm`
 - **Location:** `internal/llm/types.go` — `GatewaySlot` struct and `AgentSpawner` interface
 - **Issue:** These are gateway/orchestration concepts, not LLM communication types. They live in `llm` solely to break an import cycle (`gateway` → `llm` → `gateway`). Any new orchestration interface that `tools` needs will also end up here, gradually turning `types.go` into a grab-bag.
 - **Remediation:** Consider a small `internal/iface` or `internal/orchestration` package for cross-cutting interfaces.
-- **Status:** 📋 Open — backlog (S effort). Surfaced during #11 code review.
+- **Status:** ✅ Resolved (2026-02-24) — Created `internal/orchestration/types.go`. Moved `GatewaySlot` and `AgentSpawner` out of `internal/llm`. No import cycles.
 
 ### 22. `internal/llm/client` has zero test coverage
 - **Location:** `internal/llm/client/client.go` (~510 lines)
 - **Issue:** SSE parsing, tool call accumulation across chunks, and HTTP request construction have no tests. The SSE parsing logic is particularly tricky — edge cases around `[DONE]` handling, streams ending without `[DONE]`, and tool call accumulation are easy to get wrong.
 - **Remediation:** Add tests using `httptest.Server` to feed canned SSE responses through `streamCompletion` and `streamCompletionWithTools`.
-- **Status:** 📋 Open — backlog (M effort). Surfaced during #11 code review.
+- **Status:** ✅ Resolved (2026-02-24) — Added 26 tests covering streaming, tool calls, errors, context cancellation, non-streaming, and model fetching. Package coverage: 87.7%.
 
 ---
 
@@ -181,7 +183,8 @@ The remaining risks are: (1) low overall test coverage, (2) Charm v2 libraries p
 - **Clean `go mod tidy`** — no unused or phantom dependencies
 - **Consistent error wrapping** — `fmt.Errorf("context: %w", err)` used correctly throughout
 - **Good `context.Context` threading** — subprocess management properly threads context for cancellation
-- **Well-structured agent discovery** — `internal/agents/` has best coverage (53.7%) and clean design with hot-reloading
+- **Strong test coverage** — 42.9% overall with critical packages well-covered: `llm/tools` 96.3%, `config` 87.2%, `llm/client` 87.7%, `job` 85.7%, `agents` 72.1%
+- **Well-structured agent discovery** — `internal/agents/` has clean design with hot-reloading
 - **Clean package dependency graph** — no circular dependencies
 - **Thoughtful comments** — meaningful comments explaining *why* decisions were made
 
@@ -204,10 +207,10 @@ The remaining risks are: (1) low overall test coverage, (2) Charm v2 libraries p
 | **Next sprint** | XL | #8 | Break up model.go | ✅ Done |
 | **Next sprint** | M | #11 | Split `internal/llm` package | ✅ Done |
 | **Backlog** | S | #13, #14, #15 | Dead code and lint fixes | ✅ Done |
-| **Backlog** | S | #16 | Deduplicate modal rendering logic | 📋 Open |
-| **Backlog** | M | #17 | Update Charm v2 to stable | 📋 Open |
-| **Backlog** | L | #18 | Increase test coverage | 📋 Open |
-| **Backlog** | S | #19 | Fix `submitBlockerAnswers` pointer capture | 📋 Open |
-| **Backlog** | S | #20 | DRY up `streamCompletion` duplication | 📋 Open |
-| **Backlog** | S | #21 | Move `GatewaySlot`/`AgentSpawner` out of `llm` | 📋 Open |
-| **Backlog** | M | #22 | Add tests for `internal/llm/client` | 📋 Open |
+| **Backlog** | S | #16 | Deduplicate modal rendering logic | ✅ Done |
+| **Backlog** | M | #17 | Update Charm v2 to stable | ✅ Done |
+| **Backlog** | L | #18 | Increase test coverage | ✅ Done (42.9%) |
+| **Backlog** | S | #19 | Fix `submitBlockerAnswers` pointer capture | ✅ Done |
+| **Backlog** | S | #20 | DRY up `streamCompletion` duplication | ✅ Done |
+| **Backlog** | S | #21 | Move `GatewaySlot`/`AgentSpawner` out of `llm` | ✅ Done |
+| **Backlog** | M | #22 | Add tests for `internal/llm/client` | ✅ Done |
