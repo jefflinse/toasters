@@ -1,4 +1,4 @@
-package llm
+package tools
 
 import (
 	"encoding/json"
@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/jefflinse/toasters/internal/job"
+	"github.com/jefflinse/toasters/internal/llm"
 )
 
 // makeJobDir creates a minimal job directory under configDir/jobs/<jobID> with
@@ -34,10 +35,10 @@ func makeJobDir(t *testing.T, configDir, jobID, status, completed string) string
 }
 
 // toolCall builds a ToolCall for job_set_status with the given job ID and status.
-func jobSetStatusCall(jobID, status string) ToolCall {
+func jobSetStatusCall(jobID, status string) llm.ToolCall {
 	args, _ := json.Marshal(map[string]string{"id": jobID, "status": status})
-	return ToolCall{
-		Function: ToolCallFunction{
+	return llm.ToolCall{
+		Function: llm.ToolCallFunction{
 			Name:      "job_set_status",
 			Arguments: string(args),
 		},

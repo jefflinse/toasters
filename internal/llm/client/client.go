@@ -1,4 +1,4 @@
-package llm
+package client
 
 import (
 	"bufio"
@@ -12,112 +12,12 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/jefflinse/toasters/internal/llm"
 )
 
-// Message represents a single chat message.
-type Message struct {
-	Role       string     `json:"role"` // "system", "user", or "assistant"
-	Content    string     `json:"content"`
-	ToolCallID string     `json:"tool_call_id,omitempty"`
-	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
-}
-
-// StreamOptions controls streaming behavior.
-type StreamOptions struct {
-	IncludeUsage bool `json:"include_usage"`
-}
-
-// ChatRequest is the request body for /v1/chat/completions.
-type ChatRequest struct {
-	Model         string         `json:"model"`
-	Messages      []Message      `json:"messages"`
-	Stream        bool           `json:"stream"`
-	StreamOptions *StreamOptions `json:"stream_options,omitempty"`
-	Tools         []Tool         `json:"tools,omitempty"`
-	Temperature   *float64       `json:"temperature,omitempty"`
-}
-
-// ChatCompletionChunk is a single SSE chunk from the streaming response.
-type ChatCompletionChunk struct {
-	ID      string   `json:"id"`
-	Choices []Choice `json:"choices"`
-	Model   string   `json:"model"`
-	Usage   *Usage   `json:"usage,omitempty"`
-}
-
-// Choice is one completion choice within a chunk.
-type Choice struct {
-	Delta        Delta  `json:"delta"`
-	FinishReason string `json:"finish_reason"`
-}
-
-// Delta holds the incremental content for a streaming choice.
-type Delta struct {
-	Content   string     `json:"content"`
-	Role      string     `json:"role,omitempty"`
-	Reasoning string     `json:"reasoning,omitempty"`
-	ToolCalls []ToolCall `json:"tool_calls,omitempty"`
-}
-
-// Usage holds token usage statistics.
-type Usage struct {
-	PromptTokens     int `json:"prompt_tokens"`
-	CompletionTokens int `json:"completion_tokens"`
-	TotalTokens      int `json:"total_tokens"`
-}
-
-// ToolFunction describes the function a tool exposes.
-type ToolFunction struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	Parameters  any    `json:"parameters"`
-}
-
-// Tool represents a tool available to the LLM.
-type Tool struct {
-	Type     string       `json:"type"` // always "function"
-	Function ToolFunction `json:"function"`
-}
-
-// ToolCallFunction holds the function name and accumulated arguments for a tool call.
-type ToolCallFunction struct {
-	Name      string `json:"name"`
-	Arguments string `json:"arguments"`
-}
-
-// ToolCall represents a single tool call requested by the LLM.
-type ToolCall struct {
-	Index    int              `json:"index"`
-	ID       string           `json:"id"`
-	Type     string           `json:"type"`
-	Function ToolCallFunction `json:"function"`
-}
-
-// ClaudeMeta carries metadata from the claude CLI system/init event.
-type ClaudeMeta struct {
-	Model          string
-	PermissionMode string
-	Version        string
-	SessionID      string
-}
-
-// StreamResponse carries a single update from the streaming API.
-type StreamResponse struct {
-	Content          string      // text chunk (may be empty for final message)
-	Reasoning        string      // reasoning/thinking chunk (chain-of-thought, if supported)
-	Done             bool        // true when stream is complete
-	Model            string      // model name from response
-	Usage            *Usage      // token usage (usually only on final chunk)
-	Error            error       // non-nil if something went wrong
-	Meta             *ClaudeMeta // non-nil only for the claude CLI system/init event
-	ToolCalls        []ToolCall  // non-nil when the LLM requested tool calls
-	PendingTool      string      // tool name when a tool_use content_block_start fires
-	ClearPendingTool bool        // true when content_block_stop fires (clears PendingTool)
-	ExitSummary      string      // final result text from a clean claude result event
-	StopReason       string      // stop reason from message_delta (e.g. "end_turn", "tool_use")
-	SubagentSpawned  bool        // true when a Task tool call was made
-	SubagentResult   string      // non-empty when a tool_result for a subagent arrived
-}
+// Compile-time check that Client satisfies llm.Provider.
+var _ llm.Provider = (*Client)(nil)
 
 // Client talks to an OpenAI-compatible API (e.g. LM Studio).
 type Client struct {
@@ -154,8 +54,8 @@ func (c *Client) BaseURL() string {
 // ChatCompletionStream sends messages and returns a channel that delivers
 // streamed response chunks. The channel is closed when the stream ends,
 // either normally or due to an error.
-func (c *Client) ChatCompletionStream(ctx context.Context, messages []Message, temperature float64) <-chan StreamResponse {
-	ch := make(chan StreamResponse, 1)
+func (c *Client) ChatCompletionStream(ctx context.Context, messages []llm.Message, temperature float64) <-chan llm.StreamResponse {
+	ch := make(chan llm.StreamResponse, 1)
 
 	go func() {
 		defer close(ch)
@@ -167,8 +67,8 @@ func (c *Client) ChatCompletionStream(ctx context.Context, messages []Message, t
 
 // ChatCompletionStreamWithTools is like ChatCompletionStream but sends tool definitions
 // to the LLM, enabling tool calling.
-func (c *Client) ChatCompletionStreamWithTools(ctx context.Context, messages []Message, tools []Tool, temperature float64) <-chan StreamResponse {
-	ch := make(chan StreamResponse, 1)
+func (c *Client) ChatCompletionStreamWithTools(ctx context.Context, messages []llm.Message, tools []llm.Tool, temperature float64) <-chan llm.StreamResponse {
+	ch := make(chan llm.StreamResponse, 1)
 	go func() {
 		defer close(ch)
 		c.streamCompletionWithTools(ctx, messages, tools, temperature, ch)
@@ -176,12 +76,12 @@ func (c *Client) ChatCompletionStreamWithTools(ctx context.Context, messages []M
 	return ch
 }
 
-func (c *Client) streamCompletion(ctx context.Context, messages []Message, temperature float64, ch chan<- StreamResponse) {
-	reqBody := ChatRequest{
+func (c *Client) streamCompletion(ctx context.Context, messages []llm.Message, temperature float64, ch chan<- llm.StreamResponse) {
+	reqBody := llm.ChatRequest{
 		Model:    c.model,
 		Messages: messages,
 		Stream:   true,
-		StreamOptions: &StreamOptions{
+		StreamOptions: &llm.StreamOptions{
 			IncludeUsage: true,
 		},
 	}
@@ -191,13 +91,13 @@ func (c *Client) streamCompletion(ctx context.Context, messages []Message, tempe
 
 	body, err := json.Marshal(reqBody)
 	if err != nil {
-		ch <- StreamResponse{Error: fmt.Errorf("marshaling request: %w", err)}
+		ch <- llm.StreamResponse{Error: fmt.Errorf("marshaling request: %w", err)}
 		return
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v1/chat/completions", bytes.NewReader(body))
 	if err != nil {
-		ch <- StreamResponse{Error: fmt.Errorf("creating request: %w", err)}
+		ch <- llm.StreamResponse{Error: fmt.Errorf("creating request: %w", err)}
 		return
 	}
 
@@ -206,24 +106,24 @@ func (c *Client) streamCompletion(ctx context.Context, messages []Message, tempe
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		ch <- StreamResponse{Error: fmt.Errorf("sending request: %w", err)}
+		ch <- llm.StreamResponse{Error: fmt.Errorf("sending request: %w", err)}
 		return
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		ch <- StreamResponse{Error: fmt.Errorf("unexpected status %d: %s", resp.StatusCode, resp.Status)}
+		ch <- llm.StreamResponse{Error: fmt.Errorf("unexpected status %d: %s", resp.StatusCode, resp.Status)}
 		return
 	}
 
-	var lastUsage *Usage
+	var lastUsage *llm.Usage
 	var lastModel string
 
 	scanner := bufio.NewScanner(resp.Body)
 	for scanner.Scan() {
 		// Check for context cancellation between lines.
 		if ctx.Err() != nil {
-			ch <- StreamResponse{Error: ctx.Err()}
+			ch <- llm.StreamResponse{Error: ctx.Err()}
 			return
 		}
 
@@ -244,13 +144,13 @@ func (c *Client) streamCompletion(ctx context.Context, messages []Message, tempe
 		data = strings.TrimSpace(data)
 
 		if data == "[DONE]" {
-			ch <- StreamResponse{Done: true, Model: lastModel, Usage: lastUsage}
+			ch <- llm.StreamResponse{Done: true, Model: lastModel, Usage: lastUsage}
 			return
 		}
 
-		var chunk ChatCompletionChunk
+		var chunk llm.ChatCompletionChunk
 		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
-			ch <- StreamResponse{Error: fmt.Errorf("parsing chunk: %w", err)}
+			ch <- llm.StreamResponse{Error: fmt.Errorf("parsing chunk: %w", err)}
 			return
 		}
 
@@ -265,14 +165,14 @@ func (c *Client) streamCompletion(ctx context.Context, messages []Message, tempe
 			choice := chunk.Choices[0]
 
 			if choice.Delta.Reasoning != "" {
-				ch <- StreamResponse{
+				ch <- llm.StreamResponse{
 					Reasoning: choice.Delta.Reasoning,
 					Model:     chunk.Model,
 				}
 			}
 
 			if choice.Delta.Content != "" {
-				ch <- StreamResponse{
+				ch <- llm.StreamResponse{
 					Content: choice.Delta.Content,
 					Model:   chunk.Model,
 				}
@@ -288,20 +188,20 @@ func (c *Client) streamCompletion(ctx context.Context, messages []Message, tempe
 	}
 
 	if err := scanner.Err(); err != nil {
-		ch <- StreamResponse{Error: fmt.Errorf("reading stream: %w", err)}
+		ch <- llm.StreamResponse{Error: fmt.Errorf("reading stream: %w", err)}
 		return
 	}
 
 	// Stream ended without [DONE] — treat as done.
-	ch <- StreamResponse{Done: true, Model: lastModel, Usage: lastUsage}
+	ch <- llm.StreamResponse{Done: true, Model: lastModel, Usage: lastUsage}
 }
 
-func (c *Client) streamCompletionWithTools(ctx context.Context, messages []Message, tools []Tool, temperature float64, ch chan<- StreamResponse) {
-	reqBody := ChatRequest{
+func (c *Client) streamCompletionWithTools(ctx context.Context, messages []llm.Message, tools []llm.Tool, temperature float64, ch chan<- llm.StreamResponse) {
+	reqBody := llm.ChatRequest{
 		Model:    c.model,
 		Messages: messages,
 		Stream:   true,
-		StreamOptions: &StreamOptions{
+		StreamOptions: &llm.StreamOptions{
 			IncludeUsage: true,
 		},
 		Tools: tools,
@@ -312,13 +212,13 @@ func (c *Client) streamCompletionWithTools(ctx context.Context, messages []Messa
 
 	body, err := json.Marshal(reqBody)
 	if err != nil {
-		ch <- StreamResponse{Error: fmt.Errorf("marshaling request: %w", err)}
+		ch <- llm.StreamResponse{Error: fmt.Errorf("marshaling request: %w", err)}
 		return
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v1/chat/completions", bytes.NewReader(body))
 	if err != nil {
-		ch <- StreamResponse{Error: fmt.Errorf("creating request: %w", err)}
+		ch <- llm.StreamResponse{Error: fmt.Errorf("creating request: %w", err)}
 		return
 	}
 
@@ -327,25 +227,25 @@ func (c *Client) streamCompletionWithTools(ctx context.Context, messages []Messa
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		ch <- StreamResponse{Error: fmt.Errorf("sending request: %w", err)}
+		ch <- llm.StreamResponse{Error: fmt.Errorf("sending request: %w", err)}
 		return
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		ch <- StreamResponse{Error: fmt.Errorf("unexpected status %d: %s", resp.StatusCode, resp.Status)}
+		ch <- llm.StreamResponse{Error: fmt.Errorf("unexpected status %d: %s", resp.StatusCode, resp.Status)}
 		return
 	}
 
-	var lastUsage *Usage
+	var lastUsage *llm.Usage
 	var lastModel string
-	accumulated := make(map[int]*ToolCall)
+	accumulated := make(map[int]*llm.ToolCall)
 
 	scanner := bufio.NewScanner(resp.Body)
 	for scanner.Scan() {
 		// Check for context cancellation between lines.
 		if ctx.Err() != nil {
-			ch <- StreamResponse{Error: ctx.Err()}
+			ch <- llm.StreamResponse{Error: ctx.Err()}
 			return
 		}
 
@@ -366,13 +266,13 @@ func (c *Client) streamCompletionWithTools(ctx context.Context, messages []Messa
 		data = strings.TrimSpace(data)
 
 		if data == "[DONE]" {
-			ch <- StreamResponse{Done: true, Model: lastModel, Usage: lastUsage}
+			ch <- llm.StreamResponse{Done: true, Model: lastModel, Usage: lastUsage}
 			return
 		}
 
-		var chunk ChatCompletionChunk
+		var chunk llm.ChatCompletionChunk
 		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
-			ch <- StreamResponse{Error: fmt.Errorf("parsing chunk: %w", err)}
+			ch <- llm.StreamResponse{Error: fmt.Errorf("parsing chunk: %w", err)}
 			return
 		}
 
@@ -390,11 +290,11 @@ func (c *Client) streamCompletionWithTools(ctx context.Context, messages []Messa
 			for _, partial := range choice.Delta.ToolCalls {
 				idx := partial.Index
 				if _, ok := accumulated[idx]; !ok {
-					accumulated[idx] = &ToolCall{
+					accumulated[idx] = &llm.ToolCall{
 						Index: idx,
 						ID:    partial.ID,
 						Type:  partial.Type,
-						Function: ToolCallFunction{
+						Function: llm.ToolCallFunction{
 							Name: partial.Function.Name,
 						},
 					}
@@ -410,14 +310,14 @@ func (c *Client) streamCompletionWithTools(ctx context.Context, messages []Messa
 			}
 
 			if choice.Delta.Reasoning != "" {
-				ch <- StreamResponse{
+				ch <- llm.StreamResponse{
 					Reasoning: choice.Delta.Reasoning,
 					Model:     chunk.Model,
 				}
 			}
 
 			if choice.Delta.Content != "" {
-				ch <- StreamResponse{
+				ch <- llm.StreamResponse{
 					Content: choice.Delta.Content,
 					Model:   chunk.Model,
 				}
@@ -430,11 +330,11 @@ func (c *Client) streamCompletionWithTools(ctx context.Context, messages []Messa
 					indices = append(indices, idx)
 				}
 				sort.Ints(indices)
-				calls := make([]ToolCall, 0, len(indices))
+				calls := make([]llm.ToolCall, 0, len(indices))
 				for _, idx := range indices {
 					calls = append(calls, *accumulated[idx])
 				}
-				ch <- StreamResponse{ToolCalls: calls, Done: true}
+				ch <- llm.StreamResponse{ToolCalls: calls, Done: true}
 				return
 			}
 
@@ -448,18 +348,18 @@ func (c *Client) streamCompletionWithTools(ctx context.Context, messages []Messa
 	}
 
 	if err := scanner.Err(); err != nil {
-		ch <- StreamResponse{Error: fmt.Errorf("reading stream: %w", err)}
+		ch <- llm.StreamResponse{Error: fmt.Errorf("reading stream: %w", err)}
 		return
 	}
 
 	// Stream ended without [DONE] — treat as done.
-	ch <- StreamResponse{Done: true, Model: lastModel, Usage: lastUsage}
+	ch <- llm.StreamResponse{Done: true, Model: lastModel, Usage: lastUsage}
 }
 
 // ChatCompletion sends a one-shot (non-streaming) chat completion request and
 // returns the trimmed text content of the first choice. Intended for quick
 // classification tasks where streaming is unnecessary.
-func (c *Client) ChatCompletion(ctx context.Context, msgs []Message) (string, error) {
+func (c *Client) ChatCompletion(ctx context.Context, msgs []llm.Message) (string, error) {
 	type chatCompletionResponse struct {
 		Choices []struct {
 			Message struct {
@@ -469,9 +369,9 @@ func (c *Client) ChatCompletion(ctx context.Context, msgs []Message) (string, er
 	}
 
 	reqBody := struct {
-		Model    string    `json:"model"`
-		Messages []Message `json:"messages"`
-		Stream   bool      `json:"stream"`
+		Model    string        `json:"model"`
+		Messages []llm.Message `json:"messages"`
+		Stream   bool          `json:"stream"`
 	}{
 		Model:    c.model,
 		Messages: msgs,
@@ -516,22 +416,6 @@ func (c *Client) ChatCompletion(ctx context.Context, msgs []Message) (string, er
 	return strings.TrimSpace(result.Choices[0].Message.Content), nil
 }
 
-// ModelInfo holds metadata about an available model.
-type ModelInfo struct {
-	ID                  string
-	State               string // "loaded", "not-loaded", etc.
-	MaxContextLength    int    // max context window the model supports (0 if unknown)
-	LoadedContextLength int    // actual context length configured for the loaded model (0 if unknown or not loaded)
-}
-
-// ContextLength returns the effective context length — loaded if available, otherwise max.
-func (m ModelInfo) ContextLength() int {
-	if m.LoadedContextLength > 0 {
-		return m.LoadedContextLength
-	}
-	return m.MaxContextLength
-}
-
 // lmStudioModelsResponse is the response from LM Studio's /api/v0/models.
 type lmStudioModelsResponse struct {
 	Data []struct {
@@ -552,7 +436,7 @@ type openAIModelsResponse struct {
 // FetchModels returns metadata about available models on the server.
 // Tries the LM Studio-specific endpoint first for richer metadata, then
 // falls back to the standard OpenAI endpoint.
-func (c *Client) FetchModels(ctx context.Context) ([]ModelInfo, error) {
+func (c *Client) FetchModels(ctx context.Context) ([]llm.ModelInfo, error) {
 	models, err := c.fetchLMStudioModels(ctx)
 	if err == nil {
 		return models, nil
@@ -562,7 +446,7 @@ func (c *Client) FetchModels(ctx context.Context) ([]ModelInfo, error) {
 	return c.fetchOpenAIModels(ctx)
 }
 
-func (c *Client) fetchLMStudioModels(ctx context.Context) ([]ModelInfo, error) {
+func (c *Client) fetchLMStudioModels(ctx context.Context) ([]llm.ModelInfo, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/api/v0/models", nil)
 	if err != nil {
 		return nil, fmt.Errorf("creating request: %w", err)
@@ -583,9 +467,9 @@ func (c *Client) fetchLMStudioModels(ctx context.Context) ([]ModelInfo, error) {
 		return nil, fmt.Errorf("decoding models response: %w", err)
 	}
 
-	models := make([]ModelInfo, 0, len(result.Data))
+	models := make([]llm.ModelInfo, 0, len(result.Data))
 	for _, m := range result.Data {
-		models = append(models, ModelInfo{
+		models = append(models, llm.ModelInfo{
 			ID:                  m.ID,
 			State:               m.State,
 			MaxContextLength:    m.MaxContextLength,
@@ -596,7 +480,7 @@ func (c *Client) fetchLMStudioModels(ctx context.Context) ([]ModelInfo, error) {
 	return models, nil
 }
 
-func (c *Client) fetchOpenAIModels(ctx context.Context) ([]ModelInfo, error) {
+func (c *Client) fetchOpenAIModels(ctx context.Context) ([]llm.ModelInfo, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/v1/models", nil)
 	if err != nil {
 		return nil, fmt.Errorf("creating request: %w", err)
@@ -617,9 +501,9 @@ func (c *Client) fetchOpenAIModels(ctx context.Context) ([]ModelInfo, error) {
 		return nil, fmt.Errorf("decoding models response: %w", err)
 	}
 
-	models := make([]ModelInfo, len(result.Data))
+	models := make([]llm.ModelInfo, len(result.Data))
 	for i, m := range result.Data {
-		models[i] = ModelInfo{ID: m.ID}
+		models[i] = llm.ModelInfo{ID: m.ID}
 	}
 
 	return models, nil

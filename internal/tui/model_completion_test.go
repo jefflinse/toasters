@@ -13,6 +13,7 @@ import (
 	"github.com/jefflinse/toasters/internal/gateway"
 	"github.com/jefflinse/toasters/internal/job"
 	"github.com/jefflinse/toasters/internal/llm"
+	llmtools "github.com/jefflinse/toasters/internal/llm/tools"
 )
 
 // newMinimalModel returns a Model with only the fields needed to exercise the
@@ -36,7 +37,7 @@ func newMinimalModel(t *testing.T) Model {
 		chatViewport:   vp,
 		agentViewport:  agentVP,
 		input:          ta,
-		toolExec:       llm.NewToolExecutor(nil, nil, ""),
+		toolExec:       llmtools.NewToolExecutor(nil, nil, ""),
 		attachedSlot:   -1,
 		selectedMsgIdx: -1,
 

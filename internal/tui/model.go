@@ -20,6 +20,7 @@ import (
 	"github.com/jefflinse/toasters/internal/gateway"
 	"github.com/jefflinse/toasters/internal/job"
 	"github.com/jefflinse/toasters/internal/llm"
+	"github.com/jefflinse/toasters/internal/llm/tools"
 )
 
 const (
@@ -65,7 +66,7 @@ type Model struct {
 	focused      focusedPanel
 
 	gateway  *gateway.Gateway
-	toolExec *llm.ToolExecutor
+	toolExec *tools.ToolExecutor
 
 	teams        []agents.Team // available teams
 	teamsDir     string        // path to the configured teams directory
@@ -178,7 +179,7 @@ type Model struct {
 }
 
 // NewModel returns an initialized root model.
-func NewModel(client llm.Provider, claudeCfg config.ClaudeConfig, workspaceDir string, gw *gateway.Gateway, repoRoot string, teamsDir string, teams []agents.Team, awareness string, toolExec *llm.ToolExecutor) Model {
+func NewModel(client llm.Provider, claudeCfg config.ClaudeConfig, workspaceDir string, gw *gateway.Gateway, repoRoot string, teamsDir string, teams []agents.Team, awareness string, toolExec *tools.ToolExecutor) Model {
 	ta := textarea.New()
 	ta.Placeholder = "Type your message here..."
 	ta.Prompt = ""

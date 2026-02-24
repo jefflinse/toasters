@@ -16,6 +16,8 @@ import (
 	"github.com/jefflinse/toasters/internal/gateway"
 	"github.com/jefflinse/toasters/internal/job"
 	"github.com/jefflinse/toasters/internal/llm"
+	llmclient "github.com/jefflinse/toasters/internal/llm/client"
+	llmtools "github.com/jefflinse/toasters/internal/llm/tools"
 	"github.com/jefflinse/toasters/internal/tui"
 )
 
@@ -91,14 +93,14 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 	// Create the gateway with a no-op notify for now.
 	// The TUI will replace this with a real notify after the program starts.
 	gw := gateway.New(cfg.Claude, workspaceDir, func() {})
-	toolExec := llm.NewToolExecutor(gw, teams, workspaceDir)
+	toolExec := llmtools.NewToolExecutor(gw, teams, workspaceDir)
 
 	var client llm.Provider
 	switch cfg.Operator.Provider {
 	case "anthropic":
 		client = anthropic.NewClient(cfg.Operator.Model)
 	default:
-		client = llm.NewClient(cfg.Operator.Endpoint, cfg.Operator.Model)
+		client = llmclient.NewClient(cfg.Operator.Endpoint, cfg.Operator.Model)
 	}
 
 	m := tui.NewModel(client, cfg.Claude, workspaceDir, gw, repoRoot, teamsDir, teams, "", toolExec)

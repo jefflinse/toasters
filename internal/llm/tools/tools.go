@@ -1,4 +1,4 @@
-package llm
+package tools
 
 import (
 	"encoding/json"
@@ -15,35 +15,19 @@ import (
 
 	"github.com/jefflinse/toasters/internal/agents"
 	"github.com/jefflinse/toasters/internal/job"
+	"github.com/jefflinse/toasters/internal/llm"
 )
-
-// GatewaySlot holds a summary of a single gateway slot for operator visibility.
-type GatewaySlot struct {
-	Index   int
-	Team    string
-	JobID   string
-	Status  string // "running", "done", "idle"
-	Elapsed string
-}
-
-// AgentSpawner is the interface satisfied by *gateway.Gateway.
-// Using an interface here avoids an import cycle (gateway imports llm).
-type AgentSpawner interface {
-	SpawnTeam(teamName, jobID, task string, team agents.Team) (slotID int, alreadyRunning bool, err error)
-	SlotSummaries() []GatewaySlot
-	Kill(slotID int) error
-}
 
 // ToolExecutor holds the dependencies needed to execute operator tool calls.
 type ToolExecutor struct {
-	Gateway      AgentSpawner
+	Gateway      llm.AgentSpawner
 	Teams        []agents.Team
 	WorkspaceDir string
-	Tools        []Tool
+	Tools        []llm.Tool
 }
 
 // NewToolExecutor creates a ToolExecutor with the default static tools.
-func NewToolExecutor(gateway AgentSpawner, teams []agents.Team, workspaceDir string) *ToolExecutor {
+func NewToolExecutor(gateway llm.AgentSpawner, teams []agents.Team, workspaceDir string) *ToolExecutor {
 	return &ToolExecutor{
 		Gateway:      gateway,
 		Teams:        teams,
@@ -53,10 +37,10 @@ func NewToolExecutor(gateway AgentSpawner, teams []agents.Team, workspaceDir str
 }
 
 // staticTools contains all tools available to the operator LLM.
-var staticTools = []Tool{
+var staticTools = []llm.Tool{
 	{
 		Type: "function",
-		Function: ToolFunction{
+		Function: llm.ToolFunction{
 			Name:        "assign_team",
 			Description: "Assign a task to a team to work on autonomously. The job_id must be the ID of an existing job — call job_create first if no job exists yet.",
 			Parameters: map[string]any{
@@ -81,7 +65,7 @@ var staticTools = []Tool{
 	},
 	{
 		Type: "function",
-		Function: ToolFunction{
+		Function: llm.ToolFunction{
 			Name:        "escalate_to_user",
 			Description: "Surface a blocker or question to the user that requires human input before work can continue.",
 			Parameters: map[string]any{
@@ -102,7 +86,7 @@ var staticTools = []Tool{
 	},
 	{
 		Type: "function",
-		Function: ToolFunction{
+		Function: llm.ToolFunction{
 			Name:        "fetch_webpage",
 			Description: "Fetches the content of a web page and returns it as plain text.",
 			Parameters: map[string]any{
@@ -119,7 +103,7 @@ var staticTools = []Tool{
 	},
 	{
 		Type: "function",
-		Function: ToolFunction{
+		Function: llm.ToolFunction{
 			Name:        "list_directory",
 			Description: "Lists the contents of a local directory.",
 			Parameters: map[string]any{
@@ -136,7 +120,7 @@ var staticTools = []Tool{
 	},
 	{
 		Type: "function",
-		Function: ToolFunction{
+		Function: llm.ToolFunction{
 			Name:        "job_list",
 			Description: "List all jobs.",
 			Parameters: map[string]any{
@@ -147,7 +131,7 @@ var staticTools = []Tool{
 	},
 	{
 		Type: "function",
-		Function: ToolFunction{
+		Function: llm.ToolFunction{
 			Name:        "job_create",
 			Description: "Create a new job.",
 			Parameters: map[string]any{
@@ -163,7 +147,7 @@ var staticTools = []Tool{
 	},
 	{
 		Type: "function",
-		Function: ToolFunction{
+		Function: llm.ToolFunction{
 			Name:        "job_read_overview",
 			Description: "Read the OVERVIEW.md file for a job.",
 			Parameters: map[string]any{
@@ -177,7 +161,7 @@ var staticTools = []Tool{
 	},
 	{
 		Type: "function",
-		Function: ToolFunction{
+		Function: llm.ToolFunction{
 			Name:        "job_read_todos",
 			Description: "Read the TODO.md file for a job.",
 			Parameters: map[string]any{
@@ -191,7 +175,7 @@ var staticTools = []Tool{
 	},
 	{
 		Type: "function",
-		Function: ToolFunction{
+		Function: llm.ToolFunction{
 			Name:        "job_update_overview",
 			Description: "Overwrite or append to the OVERVIEW.md body for a job. Does not touch frontmatter.",
 			Parameters: map[string]any{
@@ -207,7 +191,7 @@ var staticTools = []Tool{
 	},
 	{
 		Type: "function",
-		Function: ToolFunction{
+		Function: llm.ToolFunction{
 			Name:        "job_add_todo",
 			Description: "Append a new TODO item to the TODO.md file for a job.",
 			Parameters: map[string]any{
@@ -222,7 +206,7 @@ var staticTools = []Tool{
 	},
 	{
 		Type: "function",
-		Function: ToolFunction{
+		Function: llm.ToolFunction{
 			Name:        "job_complete_todo",
 			Description: "Mark a TODO item as done in the TODO.md file for a job.",
 			Parameters: map[string]any{
@@ -237,7 +221,7 @@ var staticTools = []Tool{
 	},
 	{
 		Type: "function",
-		Function: ToolFunction{
+		Function: llm.ToolFunction{
 			Name:        "ask_user",
 			Description: "Pause execution and ask the user a question with a set of options to choose from. Use this when you need the user to make a decision before proceeding. The user can select one of the provided options or type a custom response.",
 			Parameters: map[string]any{
@@ -259,7 +243,7 @@ var staticTools = []Tool{
 	},
 	{
 		Type: "function",
-		Function: ToolFunction{
+		Function: llm.ToolFunction{
 			Name:        "list_slots",
 			Description: "List all gateway slots with their current status, team, job, and elapsed time.",
 			Parameters:  map[string]any{"type": "object", "properties": map[string]any{}, "required": []string{}},
@@ -267,7 +251,7 @@ var staticTools = []Tool{
 	},
 	{
 		Type: "function",
-		Function: ToolFunction{
+		Function: llm.ToolFunction{
 			Name:        "kill_slot",
 			Description: "Kill a running agent slot by its slot index. Use list_slots to find the slot index.",
 			Parameters: map[string]any{
@@ -284,7 +268,7 @@ var staticTools = []Tool{
 	},
 	{
 		Type: "function",
-		Function: ToolFunction{
+		Function: llm.ToolFunction{
 			Name:        "task_set_status",
 			Description: "Update the status of a specific task within a job. Valid statuses: active, done, paused.",
 			Parameters: map[string]any{
@@ -310,7 +294,7 @@ var staticTools = []Tool{
 	},
 	{
 		Type: "function",
-		Function: ToolFunction{
+		Function: llm.ToolFunction{
 			Name:        "job_set_status",
 			Description: "Update the status of a job. Valid statuses: active, done, cancelled, paused.",
 			Parameters: map[string]any{
@@ -334,7 +318,7 @@ var staticTools = []Tool{
 
 // ExecuteTool dispatches a tool call to the appropriate handler and returns
 // the result as plain text.
-func (te *ToolExecutor) ExecuteTool(call ToolCall) (string, error) {
+func (te *ToolExecutor) ExecuteTool(call llm.ToolCall) (string, error) {
 	switch call.Function.Name {
 	case "fetch_webpage":
 		var args struct {
