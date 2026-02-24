@@ -403,6 +403,17 @@ func sidebarWidth(termWidth int) int {
 	return w
 }
 
+// ChatEntry consolidates the per-message data that was previously spread
+// across four parallel slices (messages, timestamps, reasoning, claudeMeta).
+// Reasoning and ClaudeMeta are only meaningful for assistant-role messages;
+// for other roles they are empty strings.
+type ChatEntry struct {
+	Message    llm.Message
+	Timestamp  time.Time
+	Reasoning  string
+	ClaudeMeta string
+}
+
 // Model is the root Bubble Tea model for the toasters TUI.
 type Model struct {
 	width  int
@@ -410,8 +421,7 @@ type Model struct {
 
 	llmClient        llm.Provider
 	claudeCfg        config.ClaudeConfig
-	messages         []llm.Message
-	reasoning        []string // reasoning[i] is the thinking trace for messages[i] (assistant turns only)
+	entries          []ChatEntry // consolidated chat history (messages, timestamps, reasoning, metadata)
 	chatViewport     viewport.Model
 	input            textarea.Model
 	streaming        bool
@@ -424,8 +434,7 @@ type Model struct {
 	mdRender         *glamour.TermRenderer
 
 	// Claude CLI metadata.
-	claudeActiveMeta string   // formatted byline for the in-progress claude stream; cleared when done
-	claudeMeta       []string // parallel to messages; byline per message (empty for non-claude turns)
+	claudeActiveMeta string // formatted byline for the in-progress claude stream; cleared when done
 
 	// Slash command autocomplete popup state.
 	showCmdPopup   bool
@@ -533,15 +542,12 @@ type Model struct {
 	pendingCompletions []pendingCompletion
 
 	// Collapsible completion message state.
-	completionMsgIdx map[int]bool // indices of team-completion messages in m.messages
+	completionMsgIdx map[int]bool // indices of team-completion messages in m.entries
 	expandedMsgs     map[int]bool // which completion messages are currently expanded
 	selectedMsgIdx   int          // currently selected message index (-1 = none)
 
 	// Collapsible reasoning (thinking) state.
-	expandedReasoning map[int]bool // which assistant message indices have reasoning expanded
-
-	// Message timestamps — parallel to m.messages.
-	timestamps []time.Time
+	expandedReasoning map[int]bool // which entry indices have reasoning expanded
 
 	// Collapsible tool call/result state — keyed by message index.
 	collapsedTools map[int]bool // true = expanded; absent/false = collapsed (default)
@@ -1298,8 +1304,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			// Toggle expand/collapse on tool-call indicator or tool result messages.
-			if m.focused == focusChat && !m.streaming && m.selectedMsgIdx >= 0 && m.selectedMsgIdx < len(m.messages) {
-				msg := m.messages[m.selectedMsgIdx]
+			if m.focused == focusChat && !m.streaming && m.selectedMsgIdx >= 0 && m.selectedMsgIdx < len(m.entries) {
+				msg := m.entries[m.selectedMsgIdx].Message
 				isToolIndicator := msg.Role == "assistant" && m.isToolCallIndicatorIdx(m.selectedMsgIdx)
 				isToolResult := msg.Role == "tool"
 				if isToolIndicator || isToolResult {
@@ -1313,15 +1319,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Toggle expand/collapse of the reasoning trace for the most recent assistant message
 			// that has a non-empty reasoning block.
 			if m.focused == focusChat && !m.streaming {
-				// Find the last assistant message index with reasoning.
-				assistantIdx := 0
+				// Find the last entry index with reasoning.
 				lastReasoningIdx := -1
-				for _, msg := range m.messages {
-					if msg.Role == "assistant" {
-						if assistantIdx < len(m.reasoning) && m.reasoning[assistantIdx] != "" {
-							lastReasoningIdx = assistantIdx
-						}
-						assistantIdx++
+				for i, entry := range m.entries {
+					if entry.Message.Role == "assistant" && entry.Reasoning != "" {
+						lastReasoningIdx = i
 					}
 				}
 				if lastReasoningIdx >= 0 {
@@ -1334,9 +1336,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "ctrl+y":
 			// Copy the last assistant message to the clipboard when chat is focused.
 			if m.focused == focusChat && !m.streaming && !m.promptMode {
-				for i := len(m.messages) - 1; i >= 0; i-- {
-					if m.messages[i].Role == "assistant" {
-						_ = clipboard.WriteAll(m.messages[i].Content)
+				for i := len(m.entries) - 1; i >= 0; i-- {
+					if m.entries[i].Message.Role == "assistant" {
+						_ = clipboard.WriteAll(m.entries[i].Message.Content)
 						m.flashText = "  ✓ copied to clipboard"
 						cmds = append(cmds, clearFlash())
 						cmds = append(cmds, m.addToast("🍞 Copied to clipboard!", toastInfo))
@@ -1420,13 +1422,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.cancelStream = nil
 				m.streamCh = nil
 				if m.currentResponse != "" {
-					m.messages = append(m.messages, llm.Message{
-						Role:    "assistant",
-						Content: m.currentResponse,
+					m.appendEntry(ChatEntry{
+						Message:    llm.Message{Role: "assistant", Content: m.currentResponse},
+						Timestamp:  time.Now(),
+						Reasoning:  m.currentReasoning,
+						ClaudeMeta: m.claudeActiveMeta,
 					})
-					m.timestamps = append(m.timestamps, time.Now())
-					m.reasoning = append(m.reasoning, m.currentReasoning)
-					m.claudeMeta = append(m.claudeMeta, m.claudeActiveMeta)
 					m.claudeActiveMeta = ""
 					m.currentResponse = ""
 					m.currentReasoning = ""
@@ -1533,10 +1534,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						}
 					}
 					if len(running) == 0 {
-						m.messages = append(m.messages, llm.Message{Role: "assistant", Content: "No running agents."})
-						m.timestamps = append(m.timestamps, time.Now())
-						m.reasoning = append(m.reasoning, "")
-						m.claudeMeta = append(m.claudeMeta, "")
+						m.appendEntry(ChatEntry{
+							Message:   llm.Message{Role: "assistant", Content: "No running agents."},
+							Timestamp: time.Now(),
+						})
 						m.updateViewportContent()
 						if !m.userScrolled {
 							m.chatViewport.GotoBottom()
@@ -1665,18 +1666,17 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.stats.TotalResponses++
 		}
 		if m.currentResponse != "" {
-			m.messages = append(m.messages, llm.Message{
-				Role:    "assistant",
-				Content: m.currentResponse,
-			})
-			m.timestamps = append(m.timestamps, time.Now())
-			m.reasoning = append(m.reasoning, m.currentReasoning)
 			// For LM Studio (operator) turns, claudeActiveMeta is empty — fill in the operator byline.
 			byline := m.claudeActiveMeta
 			if byline == "" && m.stats.ModelName != "" {
 				byline = "operator · " + m.stats.ModelName
 			}
-			m.claudeMeta = append(m.claudeMeta, byline)
+			m.appendEntry(ChatEntry{
+				Message:    llm.Message{Role: "assistant", Content: m.currentResponse},
+				Timestamp:  time.Now(),
+				Reasoning:  m.currentReasoning,
+				ClaudeMeta: byline,
+			})
 			m.claudeActiveMeta = ""
 		}
 		m.currentResponse = ""
@@ -1725,10 +1725,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 				}
 
-				m.messages = append(m.messages, llm.Message{Role: "assistant", Content: question})
-				m.timestamps = append(m.timestamps, time.Now())
-				m.reasoning = append(m.reasoning, "")
-				m.claudeMeta = append(m.claudeMeta, "kill-confirm")
+				m.appendEntry(ChatEntry{
+					Message:    llm.Message{Role: "assistant", Content: question},
+					Timestamp:  time.Now(),
+					ClaudeMeta: "kill-confirm",
+				})
 				m.streaming = false
 				m.promptMode = true
 				m.confirmKill = true
@@ -1754,10 +1755,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				_ = json.Unmarshal([]byte(call.Function.Arguments), &args)
 
 				question := fmt.Sprintf("Assign job '%s' to team '%s'?", args.JobID, args.TeamName)
-				m.messages = append(m.messages, llm.Message{Role: "assistant", Content: question})
-				m.timestamps = append(m.timestamps, time.Now())
-				m.reasoning = append(m.reasoning, "")
-				m.claudeMeta = append(m.claudeMeta, "dispatch-confirm")
+				m.appendEntry(ChatEntry{
+					Message:    llm.Message{Role: "assistant", Content: question},
+					Timestamp:  time.Now(),
+					ClaudeMeta: "dispatch-confirm",
+				})
 				m.streaming = false
 				m.promptMode = true
 				m.confirmDispatch = true
@@ -1788,13 +1790,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if args.Context != "" {
 					fullQuestion = args.Question + "\n\n" + args.Context
 				}
-				m.messages = append(m.messages, llm.Message{
-					Role:    "assistant",
-					Content: fullQuestion,
+				m.appendEntry(ChatEntry{
+					Message:    llm.Message{Role: "assistant", Content: fullQuestion},
+					Timestamp:  time.Now(),
+					ClaudeMeta: "escalate-prompt",
 				})
-				m.timestamps = append(m.timestamps, time.Now())
-				m.reasoning = append(m.reasoning, "")
-				m.claudeMeta = append(m.claudeMeta, "escalate-prompt")
 				m.streaming = false
 				m.promptMode = true
 				m.promptQuestion = fullQuestion
@@ -1820,13 +1820,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					args.Options = []string{}
 				}
 				// Render question into chat history as an assistant message.
-				m.messages = append(m.messages, llm.Message{
-					Role:    "assistant",
-					Content: args.Question,
+				m.appendEntry(ChatEntry{
+					Message:    llm.Message{Role: "assistant", Content: args.Question},
+					Timestamp:  time.Now(),
+					ClaudeMeta: "ask-user-prompt",
 				})
-				m.timestamps = append(m.timestamps, time.Now())
-				m.reasoning = append(m.reasoning, "")
-				m.claudeMeta = append(m.claudeMeta, "ask-user-prompt")
 				// Enter prompt mode.
 				m.streaming = false
 				m.promptMode = true
@@ -1851,36 +1849,30 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			Content:   "",
 			ToolCalls: msg.Calls,
 		}
-		m.messages = append(m.messages, assistantMsg)
-		m.timestamps = append(m.timestamps, time.Now())
-		m.reasoning = append(m.reasoning, "")
-		m.claudeMeta = append(m.claudeMeta, "")
+		m.appendEntry(ChatEntry{
+			Message:   assistantMsg,
+			Timestamp: time.Now(),
+		})
 
 		// Execute each tool call and append results.
 		for _, call := range msg.Calls {
 			// Show a visual indicator in the chat.
 			indicator := fmt.Sprintf("⚙ calling `%s`…", call.Function.Name)
-			m.messages = append(m.messages, llm.Message{
-				Role:    "assistant",
-				Content: indicator,
+			m.appendEntry(ChatEntry{
+				Message:    llm.Message{Role: "assistant", Content: indicator},
+				Timestamp:  time.Now(),
+				ClaudeMeta: "tool-call-indicator",
 			})
-			m.timestamps = append(m.timestamps, time.Now())
-			m.reasoning = append(m.reasoning, "")
-			m.claudeMeta = append(m.claudeMeta, "tool-call-indicator")
 
 			result, err := m.toolExec.ExecuteTool(call)
 			if err != nil {
 				result = fmt.Sprintf("error: %s", err.Error())
 			}
 
-			m.messages = append(m.messages, llm.Message{
-				Role:       "tool",
-				ToolCallID: call.ID,
-				Content:    result,
+			m.appendEntry(ChatEntry{
+				Message:   llm.Message{Role: "tool", ToolCallID: call.ID, Content: result},
+				Timestamp: time.Now(),
 			})
-			m.timestamps = append(m.timestamps, time.Now())
-			// tool messages don't need entries in reasoning/claudeMeta
-			// because updateViewportContent only increments assistantIdx for "assistant" role
 		}
 
 		// Update the viewport so the user sees the tool call indicators.
@@ -1891,12 +1883,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// Drain any completion notifications that arrived while we were streaming,
 		// so the operator sees them in the next context window.
-		// Return values are discarded — drain mutates m.messages in place and
-		// startStream below picks up the updated slice directly.
+		// Return values are discarded — drain appends to m.entries and
+		// messagesFromEntries() below builds the updated slice.
 		m.drainPendingCompletions()
 
 		// Re-invoke the stream with the updated messages for the final answer.
-		return m, m.startStream(m.messages)
+		return m, m.startStream(m.messagesFromEntries())
 
 	case AskUserResponseMsg:
 		// Handle slot-timeout confirmation flow.
@@ -1909,14 +1901,19 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			switch msg.Result {
 			case "Continue (+15m)":
 				_ = m.gateway.ExtendSlot(m.pendingTimeoutSlot)
-				m.messages = append(m.messages, llm.Message{Role: "assistant", Content: fmt.Sprintf("Slot %d extended by 15m.", m.pendingTimeoutSlot)})
+				m.appendEntry(ChatEntry{
+					Message:    llm.Message{Role: "assistant", Content: fmt.Sprintf("Slot %d extended by 15m.", m.pendingTimeoutSlot)},
+					Timestamp:  time.Now(),
+					ClaudeMeta: "tool-call-indicator",
+				})
 			default: // "Kill"
 				_ = m.gateway.Kill(m.pendingTimeoutSlot)
-				m.messages = append(m.messages, llm.Message{Role: "assistant", Content: fmt.Sprintf("Slot %d killed.", m.pendingTimeoutSlot)})
+				m.appendEntry(ChatEntry{
+					Message:    llm.Message{Role: "assistant", Content: fmt.Sprintf("Slot %d killed.", m.pendingTimeoutSlot)},
+					Timestamp:  time.Now(),
+					ClaudeMeta: "tool-call-indicator",
+				})
 			}
-			m.timestamps = append(m.timestamps, time.Now())
-			m.reasoning = append(m.reasoning, "")
-			m.claudeMeta = append(m.claudeMeta, "tool-call-indicator")
 			m.updateViewportContent()
 			if !m.userScrolled {
 				m.chatViewport.GotoBottom()
@@ -1939,14 +1936,17 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else {
 				result = "User cancelled the kill."
 			}
-			m.messages = append(m.messages, llm.Message{Role: "assistant", ToolCalls: []llm.ToolCall{m.promptPendingCall}})
-			m.timestamps = append(m.timestamps, time.Now())
-			m.reasoning = append(m.reasoning, "")
-			m.claudeMeta = append(m.claudeMeta, "tool-call-indicator")
-			m.messages = append(m.messages, llm.Message{Role: "tool", Content: result, ToolCallID: m.promptPendingCall.ID})
-			m.timestamps = append(m.timestamps, time.Now())
+			m.appendEntry(ChatEntry{
+				Message:    llm.Message{Role: "assistant", ToolCalls: []llm.ToolCall{m.promptPendingCall}},
+				Timestamp:  time.Now(),
+				ClaudeMeta: "tool-call-indicator",
+			})
+			m.appendEntry(ChatEntry{
+				Message:   llm.Message{Role: "tool", Content: result, ToolCallID: m.promptPendingCall.ID},
+				Timestamp: time.Now(),
+			})
 			m.updateViewportContent()
-			return m, m.startStream(m.messages)
+			return m, m.startStream(m.messagesFromEntries())
 		}
 
 		// Handle dispatch confirmation flow.
@@ -1973,14 +1973,17 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if err != nil {
 					result = fmt.Sprintf("error: %v", err)
 				}
-				m.messages = append(m.messages, llm.Message{Role: "assistant", ToolCalls: []llm.ToolCall{m.pendingDispatch}})
-				m.timestamps = append(m.timestamps, time.Now())
-				m.reasoning = append(m.reasoning, "")
-				m.claudeMeta = append(m.claudeMeta, "tool-call-indicator")
-				m.messages = append(m.messages, llm.Message{Role: "tool", Content: result, ToolCallID: m.pendingDispatch.ID})
-				m.timestamps = append(m.timestamps, time.Now())
+				m.appendEntry(ChatEntry{
+					Message:    llm.Message{Role: "assistant", ToolCalls: []llm.ToolCall{m.pendingDispatch}},
+					Timestamp:  time.Now(),
+					ClaudeMeta: "tool-call-indicator",
+				})
+				m.appendEntry(ChatEntry{
+					Message:   llm.Message{Role: "tool", Content: result, ToolCallID: m.pendingDispatch.ID},
+					Timestamp: time.Now(),
+				})
 				m.updateViewportContent()
-				return m, m.startStream(m.messages)
+				return m, m.startStream(m.messagesFromEntries())
 			}
 
 			switch msg.Result {
@@ -1990,14 +1993,17 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if err != nil {
 					result = fmt.Sprintf("error: %v", err)
 				}
-				m.messages = append(m.messages, llm.Message{Role: "assistant", ToolCalls: []llm.ToolCall{m.pendingDispatch}})
-				m.timestamps = append(m.timestamps, time.Now())
-				m.reasoning = append(m.reasoning, "")
-				m.claudeMeta = append(m.claudeMeta, "tool-call-indicator")
-				m.messages = append(m.messages, llm.Message{Role: "tool", Content: result, ToolCallID: m.pendingDispatch.ID})
-				m.timestamps = append(m.timestamps, time.Now())
+				m.appendEntry(ChatEntry{
+					Message:    llm.Message{Role: "assistant", ToolCalls: []llm.ToolCall{m.pendingDispatch}},
+					Timestamp:  time.Now(),
+					ClaudeMeta: "tool-call-indicator",
+				})
+				m.appendEntry(ChatEntry{
+					Message:   llm.Message{Role: "tool", Content: result, ToolCallID: m.pendingDispatch.ID},
+					Timestamp: time.Now(),
+				})
 				m.updateViewportContent()
-				return m, m.startStream(m.messages)
+				return m, m.startStream(m.messagesFromEntries())
 
 			case "Change team":
 				// Show second prompt with available team names.
@@ -2017,14 +2023,17 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			default: // "Cancel" or anything else
 				m.confirmDispatch = false
-				m.messages = append(m.messages, llm.Message{Role: "assistant", ToolCalls: []llm.ToolCall{m.pendingDispatch}})
-				m.timestamps = append(m.timestamps, time.Now())
-				m.reasoning = append(m.reasoning, "")
-				m.claudeMeta = append(m.claudeMeta, "tool-call-indicator")
-				m.messages = append(m.messages, llm.Message{Role: "tool", Content: "User cancelled the dispatch.", ToolCallID: m.pendingDispatch.ID})
-				m.timestamps = append(m.timestamps, time.Now())
+				m.appendEntry(ChatEntry{
+					Message:    llm.Message{Role: "assistant", ToolCalls: []llm.ToolCall{m.pendingDispatch}},
+					Timestamp:  time.Now(),
+					ClaudeMeta: "tool-call-indicator",
+				})
+				m.appendEntry(ChatEntry{
+					Message:   llm.Message{Role: "tool", Content: "User cancelled the dispatch.", ToolCallID: m.pendingDispatch.ID},
+					Timestamp: time.Now(),
+				})
 				m.updateViewportContent()
-				return m, m.startStream(m.messages)
+				return m, m.startStream(m.messagesFromEntries())
 			}
 		}
 
@@ -2038,26 +2047,22 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// Inject the tool call + result into message history.
 		// First: the assistant turn with the tool call.
-		m.messages = append(m.messages, llm.Message{
-			Role:      "assistant",
-			ToolCalls: []llm.ToolCall{msg.Call},
+		m.appendEntry(ChatEntry{
+			Message:    llm.Message{Role: "assistant", ToolCalls: []llm.ToolCall{msg.Call}},
+			Timestamp:  time.Now(),
+			ClaudeMeta: "tool-call-indicator",
 		})
-		m.timestamps = append(m.timestamps, time.Now())
-		m.reasoning = append(m.reasoning, "")
-		m.claudeMeta = append(m.claudeMeta, "tool-call-indicator")
 		// Then: the tool result.
-		m.messages = append(m.messages, llm.Message{
-			Role:       "tool",
-			Content:    msg.Result,
-			ToolCallID: msg.Call.ID,
+		m.appendEntry(ChatEntry{
+			Message:   llm.Message{Role: "tool", Content: msg.Result, ToolCallID: msg.Call.ID},
+			Timestamp: time.Now(),
 		})
-		m.timestamps = append(m.timestamps, time.Now())
 		m.updateViewportContent()
 		if !m.userScrolled {
 			m.chatViewport.GotoBottom()
 		}
 		// Resume the stream.
-		return m, m.startStream(m.messages)
+		return m, m.startStream(m.messagesFromEntries())
 
 	case StreamErrMsg:
 		m.streaming = false
@@ -2066,17 +2071,16 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.streamCh = nil
 		m.cancelStream = nil
 		if m.currentResponse != "" {
-			m.messages = append(m.messages, llm.Message{
-				Role:    "assistant",
-				Content: m.currentResponse,
-			})
-			m.timestamps = append(m.timestamps, time.Now())
-			m.reasoning = append(m.reasoning, m.currentReasoning)
 			byline := m.claudeActiveMeta
 			if byline == "" && m.stats.ModelName != "" {
 				byline = "operator · " + m.stats.ModelName
 			}
-			m.claudeMeta = append(m.claudeMeta, byline)
+			m.appendEntry(ChatEntry{
+				Message:    llm.Message{Role: "assistant", Content: m.currentResponse},
+				Timestamp:  time.Now(),
+				Reasoning:  m.currentReasoning,
+				ClaudeMeta: byline,
+			})
 			m.claudeActiveMeta = ""
 			m.currentResponse = ""
 			m.currentReasoning = ""
@@ -2128,7 +2132,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.stats.SystemPromptTokens = estimateTokens(m.systemPrompt)
 		m.toolExec.Teams = m.teams
 		if m.hasConversation() {
-			m.messages[0].Content = m.systemPrompt
+			m.entries[0].Message.Content = m.systemPrompt
 		} else {
 			m.initMessages()
 		}
@@ -2160,10 +2164,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.loading = false
 		// Inject the pre-fetched greeting directly — no stream, no flash.
 		if msg.Greeting != "" {
-			m.messages = append(m.messages, llm.Message{Role: "assistant", Content: msg.Greeting})
-			m.timestamps = append(m.timestamps, time.Now())
-			m.reasoning = append(m.reasoning, "")
-			m.claudeMeta = append(m.claudeMeta, "")
+			m.appendEntry(ChatEntry{
+				Message:   llm.Message{Role: "assistant", Content: msg.Greeting},
+				Timestamp: time.Now(),
+			})
 			m.updateViewportContent()
 		}
 		return m, tea.Batch(cmds...)
@@ -2178,10 +2182,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		promptText := fmt.Sprintf("⏱ %s has been running for 15m. Continue for another 15m, or kill it?\n\n(Auto-continuing in 1 minute...)", slotDesc)
 		// Append as an assistant message so it shows in the chat.
-		m.messages = append(m.messages, llm.Message{Role: "assistant", Content: promptText})
-		m.timestamps = append(m.timestamps, time.Now())
-		m.reasoning = append(m.reasoning, "")
-		m.claudeMeta = append(m.claudeMeta, "ask-user-prompt")
+		m.appendEntry(ChatEntry{
+			Message:    llm.Message{Role: "assistant", Content: promptText},
+			Timestamp:  time.Now(),
+			ClaudeMeta: "ask-user-prompt",
+		})
 		// Enter prompt mode.
 		m.promptMode = true
 		m.confirmTimeout = true
@@ -2209,10 +2214,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.promptSelected = 0
 		m.promptPendingCall = llm.ToolCall{}
 		_ = m.gateway.ExtendSlot(msg.SlotID)
-		m.messages = append(m.messages, llm.Message{Role: "assistant", Content: fmt.Sprintf("Slot %d auto-continued (no response within 1m).", msg.SlotID)})
-		m.timestamps = append(m.timestamps, time.Now())
-		m.reasoning = append(m.reasoning, "")
-		m.claudeMeta = append(m.claudeMeta, "tool-call-indicator")
+		m.appendEntry(ChatEntry{
+			Message:    llm.Message{Role: "assistant", Content: fmt.Sprintf("Slot %d auto-continued (no response within 1m).", msg.SlotID)},
+			Timestamp:  time.Now(),
+			ClaudeMeta: "tool-call-indicator",
+		})
 		m.updateViewportContent()
 		if !m.userScrolled {
 			m.chatViewport.GotoBottom()
@@ -2305,20 +2311,19 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						})
 					} else {
 						// Inject immediately and start a new stream.
-						m.messages = append(m.messages, llm.Message{
-							Role:    "user",
-							Content: notification,
+						m.appendEntry(ChatEntry{
+							Message:   llm.Message{Role: "user", Content: notification},
+							Timestamp: time.Now(),
 						})
-						m.timestamps = append(m.timestamps, time.Now())
 						// Tag this message as a collapsible completion entry and auto-select it.
-						completionIdx := len(m.messages) - 1
+						completionIdx := len(m.entries) - 1
 						m.completionMsgIdx[completionIdx] = true
 						m.selectedMsgIdx = completionIdx
 						m.updateViewportContent()
 						if !m.userScrolled {
 							m.chatViewport.GotoBottom()
 						}
-						cmds = append(cmds, m.startStream(m.messages))
+						cmds = append(cmds, m.startStream(m.messagesFromEntries()))
 					}
 
 					// Check for BLOCKER.md and mark first task done — always, not buffered.
@@ -3321,8 +3326,8 @@ func (m *Model) updateViewportContent() {
 		}
 		// Count how many assistant messages (e.g. greeting) will render below.
 		hasGreeting := false
-		for _, msg := range m.messages {
-			if msg.Role == "assistant" && msg.Content != "" {
+		for _, entry := range m.entries {
+			if entry.Message.Role == "assistant" && entry.Message.Content != "" {
 				hasGreeting = true
 				break
 			}
@@ -3346,12 +3351,12 @@ func (m *Model) updateViewportContent() {
 		}
 	}
 
-	assistantIdx := 0
-	for i, msg := range m.messages {
-		// Timestamp helper — safe even if timestamps slice is short.
+	for i, entry := range m.entries {
+		msg := entry.Message
+		// Timestamp helper.
 		var ts string
-		if i < len(m.timestamps) && !m.timestamps[i].IsZero() {
-			ts = " · " + m.timestamps[i].Format("3:04 PM")
+		if !entry.Timestamp.IsZero() {
+			ts = " · " + entry.Timestamp.Format("3:04 PM")
 		}
 
 		switch msg.Role {
@@ -3389,13 +3394,12 @@ func (m *Model) updateViewportContent() {
 		case "assistant":
 			aIndent := strings.Repeat(" ", AssistantMsgIndent)
 			// ask-user-prompt and escalate-prompt messages render as a styled question header.
-			if assistantIdx < len(m.claudeMeta) && (m.claudeMeta[assistantIdx] == "ask-user-prompt" || m.claudeMeta[assistantIdx] == "escalate-prompt") {
+			if entry.ClaudeMeta == "ask-user-prompt" || entry.ClaudeMeta == "escalate-prompt" {
 				sb.WriteString(aIndent + HeaderStyle.Render("? "+msg.Content) + "\n\n")
-				assistantIdx++
 				continue
 			}
 			// Tool-call indicator messages render as collapsible tool blocks.
-			if assistantIdx < len(m.claudeMeta) && m.claudeMeta[assistantIdx] == "tool-call-indicator" {
+			if entry.ClaudeMeta == "tool-call-indicator" {
 				if m.collapsedTools[i] {
 					// Expanded: show full content.
 					hint := ""
@@ -3412,29 +3416,27 @@ func (m *Model) updateViewportContent() {
 					}
 					sb.WriteString(aIndent + DimStyle.Render("⚙ "+toolName+" ▶") + hint + "\n")
 				}
-				assistantIdx++
 				continue
 			}
 			// Render claude byline (if any) above the response, with timestamp.
 			indent := strings.Repeat(" ", AssistantMsgIndent)
-			if assistantIdx < len(m.claudeMeta) && m.claudeMeta[assistantIdx] != "" {
-				byline := ClaudeBylineStyle.Render("⬡ " + m.claudeMeta[assistantIdx])
+			if entry.ClaudeMeta != "" {
+				byline := ClaudeBylineStyle.Render("⬡ " + entry.ClaudeMeta)
 				if ts != "" {
 					byline += DimStyle.Render(ts)
 				}
 				sb.WriteString(indent + byline + "\n")
 			}
 			// Render reasoning trace (if any) above the response — only when expanded.
-			if assistantIdx < len(m.reasoning) && m.reasoning[assistantIdx] != "" {
-				if m.expandedReasoning[assistantIdx] {
-					sb.WriteString(indentLines(renderReasoningBlock(m.reasoning[assistantIdx], contentWidth-AssistantMsgIndent), AssistantMsgIndent))
+			if entry.Reasoning != "" {
+				if m.expandedReasoning[i] {
+					sb.WriteString(indentLines(renderReasoningBlock(entry.Reasoning, contentWidth-AssistantMsgIndent), AssistantMsgIndent))
 					sb.WriteString("\n")
 				} else {
 					sb.WriteString(indent + ReasoningStyle.Render("▶ thinking (press ctrl+t to expand)") + "\n\n")
 				}
 			}
 			sb.WriteString(indentLines(m.renderMarkdown(msg.Content), AssistantMsgIndent) + "\n\n")
-			assistantIdx++
 		case "tool":
 			// Render tool result as a collapsible dimmed block.
 			if m.collapsedTools[i] {
@@ -4463,10 +4465,10 @@ func (m *Model) appendHelpMessage() {
 		"**Slash Command Autocomplete**\n" +
 		"Type `/` to open the command picker. Use ↑↓ to navigate, Tab or Enter to select, Esc to dismiss."
 
-	m.messages = append(m.messages, llm.Message{Role: "assistant", Content: helpText})
-	m.timestamps = append(m.timestamps, time.Now())
-	m.reasoning = append(m.reasoning, "")
-	m.claudeMeta = append(m.claudeMeta, "")
+	m.appendEntry(ChatEntry{
+		Message:   llm.Message{Role: "assistant", Content: helpText},
+		Timestamp: time.Now(),
+	})
 	m.stats.MessageCount++
 	m.updateViewportContent()
 	if !m.userScrolled {
@@ -4475,14 +4477,15 @@ func (m *Model) appendHelpMessage() {
 }
 
 // newSession resets the conversation and all session statistics.
-// initMessages resets m.messages and seeds it with the system prompt as message[0]
+// initMessages resets m.entries and seeds it with the system prompt as entries[0]
 // (if a system prompt is set). Call this at startup and on /new.
 func (m *Model) initMessages() {
-	m.messages = nil
-	m.timestamps = nil
+	m.entries = nil
 	if m.systemPrompt != "" {
-		m.messages = []llm.Message{{Role: "system", Content: m.systemPrompt}}
-		m.timestamps = append(m.timestamps, time.Now())
+		m.appendEntry(ChatEntry{
+			Message:   llm.Message{Role: "system", Content: m.systemPrompt},
+			Timestamp: time.Now(),
+		})
 		m.stats.SystemPromptTokens = estimateTokens(m.systemPrompt)
 	} else {
 		m.stats.SystemPromptTokens = 0
@@ -4501,12 +4504,26 @@ func (m *Model) initMessages() {
 	m.pendingTimeoutSlot = 0
 }
 
+// appendEntry adds a new chat entry to the conversation history.
+func (m *Model) appendEntry(e ChatEntry) {
+	m.entries = append(m.entries, e)
+}
+
+// messagesFromEntries extracts the llm.Message slice from entries for passing to the LLM client.
+func (m *Model) messagesFromEntries() []llm.Message {
+	msgs := make([]llm.Message, len(m.entries))
+	for i, e := range m.entries {
+		msgs[i] = e.Message
+	}
+	return msgs
+}
+
 // hasConversation reports whether the conversation contains at least one user
 // message (i.e. the welcome art should be hidden). Assistant-only messages
 // (e.g. the startup greeting) are shown alongside the art.
 func (m *Model) hasConversation() bool {
-	for _, msg := range m.messages {
-		if msg.Role == "user" {
+	for _, entry := range m.entries {
+		if entry.Message.Role == "user" {
 			return true
 		}
 	}
@@ -4516,8 +4533,7 @@ func (m *Model) hasConversation() bool {
 func (m *Model) newSession() {
 	m.systemPrompt = agents.BuildOperatorPrompt(m.teams, m.awareness)
 	m.initMessages()
-	m.reasoning = nil
-	m.claudeMeta = nil
+	// entries is already reset by initMessages.
 	m.claudeActiveMeta = ""
 	m.currentResponse = ""
 	m.currentReasoning = ""
@@ -4536,18 +4552,20 @@ func (m *Model) newSession() {
 }
 
 // drainPendingCompletions injects any buffered agent-completion notifications
-// into m.messages and clears the buffer. It returns the updated message slice
+// into the conversation and clears the buffer. It returns the updated message slice
 // and true if any notifications were drained (indicating a new stream should start).
 func (m *Model) drainPendingCompletions() ([]llm.Message, bool) {
 	if len(m.pendingCompletions) == 0 {
-		return m.messages, false
+		return m.messagesFromEntries(), false
 	}
 	for _, pc := range m.pendingCompletions {
-		m.messages = append(m.messages, llm.Message{Role: "user", Content: pc.notification})
-		m.timestamps = append(m.timestamps, time.Now())
+		m.appendEntry(ChatEntry{
+			Message:   llm.Message{Role: "user", Content: pc.notification},
+			Timestamp: time.Now(),
+		})
 	}
 	m.pendingCompletions = nil
-	return m.messages, true
+	return m.messagesFromEntries(), true
 }
 
 // startStream begins a new LLM stream with the current messages and available tools.
@@ -4586,11 +4604,10 @@ func (m *Model) sendMessage() tea.Cmd {
 	m.filteredCmds = nil
 	m.selectedCmdIdx = 0
 
-	m.messages = append(m.messages, llm.Message{
-		Role:    "user",
-		Content: text,
+	m.appendEntry(ChatEntry{
+		Message:   llm.Message{Role: "user", Content: text},
+		Timestamp: time.Now(),
 	})
-	m.timestamps = append(m.timestamps, time.Now())
 	m.stats.MessageCount++
 	m.err = nil
 	m.userScrolled = false
@@ -4599,7 +4616,7 @@ func (m *Model) sendMessage() tea.Cmd {
 	m.updateViewportContent()
 	m.chatViewport.GotoBottom()
 
-	return m.startStream(m.messages)
+	return m.startStream(m.messagesFromEntries())
 }
 
 // sendClaudeMessage appends the user prompt to history and starts a subprocess
@@ -4609,11 +4626,10 @@ func (m *Model) sendClaudeMessage(prompt string) tea.Cmd {
 	m.filteredCmds = nil
 	m.selectedCmdIdx = 0
 
-	m.messages = append(m.messages, llm.Message{
-		Role:    "user",
-		Content: "/claude " + prompt,
+	m.appendEntry(ChatEntry{
+		Message:   llm.Message{Role: "user", Content: "/claude " + prompt},
+		Timestamp: time.Now(),
 	})
-	m.timestamps = append(m.timestamps, time.Now())
 	m.stats.MessageCount++
 	m.streaming = true
 	m.currentResponse = ""
@@ -4645,11 +4661,10 @@ func (m *Model) sendAnthropicMessage(prompt string) tea.Cmd {
 	m.filteredCmds = nil
 	m.selectedCmdIdx = 0
 
-	m.messages = append(m.messages, llm.Message{
-		Role:    "user",
-		Content: "/anthropic " + prompt,
+	m.appendEntry(ChatEntry{
+		Message:   llm.Message{Role: "user", Content: "/anthropic " + prompt},
+		Timestamp: time.Now(),
 	})
-	m.timestamps = append(m.timestamps, time.Now())
 	m.stats.MessageCount++
 	m.streaming = true
 	m.currentResponse = ""
@@ -5272,17 +5287,12 @@ func renderCompletionBlock(content string) string {
 	return sb.String()
 }
 
-// isToolCallIndicatorIdx reports whether message at index i is a tool-call indicator.
-// It checks the claudeMeta parallel slice (indexed by assistant message count, not i).
-// For simplicity, we walk the messages to find the assistantIdx for message i.
+// isToolCallIndicatorIdx reports whether the entry at index i is a tool-call indicator.
 func (m *Model) isToolCallIndicatorIdx(i int) bool {
-	assistantIdx := 0
-	for j := 0; j < i; j++ {
-		if m.messages[j].Role == "assistant" {
-			assistantIdx++
-		}
+	if i < 0 || i >= len(m.entries) {
+		return false
 	}
-	return assistantIdx < len(m.claudeMeta) && m.claudeMeta[assistantIdx] == "tool-call-indicator"
+	return m.entries[i].ClaudeMeta == "tool-call-indicator"
 }
 
 // extractToolName extracts the tool/function name from a tool-call indicator

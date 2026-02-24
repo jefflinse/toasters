@@ -9,12 +9,16 @@ import (
 	"io"
 	"net/http"
 	"os/exec"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/jefflinse/toasters/internal/llm"
 )
+
+// goos is the runtime OS, overridable in tests.
+var goos = runtime.GOOS
 
 const DefaultModel = "claude-sonnet-4-20250514"
 
@@ -663,6 +667,10 @@ type keychainOauth struct {
 
 // readKeychainBlob reads and parses the full credential blob from the macOS Keychain.
 func readKeychainBlob() (*keychainBlob, error) {
+	if goos != "darwin" {
+		return nil, fmt.Errorf("keychain access is only supported on macOS; set ANTHROPIC_API_KEY environment variable instead")
+	}
+
 	cmd := exec.Command("security", "find-generic-password", "-s", keychainService, "-w")
 	out, err := cmd.Output()
 	if err != nil {
@@ -686,6 +694,10 @@ func readKeychainBlob() (*keychainBlob, error) {
 // writeKeychainBlob writes the credential blob back to the macOS Keychain,
 // replacing the existing entry.
 func writeKeychainBlob(blob *keychainBlob) error {
+	if goos != "darwin" {
+		return fmt.Errorf("keychain access is only supported on macOS; set ANTHROPIC_API_KEY environment variable instead")
+	}
+
 	data, err := json.Marshal(blob)
 	if err != nil {
 		return fmt.Errorf("marshaling keychain blob: %w", err)

@@ -86,7 +86,7 @@ func newGatewayWithDoneSlot(t *testing.T) (*gateway.Gateway, int) {
 // TestPendingCompletion_BufferedWhenStreaming verifies that when a Running→Done
 // slot transition is detected while m.streaming == true, the completion
 // notification is buffered in m.pendingCompletions rather than injected
-// immediately into m.messages.
+// immediately into m.entries.
 func TestPendingCompletion_BufferedWhenStreaming(t *testing.T) {
 	gw, slotID := newGatewayWithDoneSlot(t)
 
@@ -102,7 +102,7 @@ func TestPendingCompletion_BufferedWhenStreaming(t *testing.T) {
 	// Provide a notify channel so the handler can re-arm the poller.
 	m.agentNotifyCh = make(chan struct{}, 8)
 
-	initialMsgCount := len(m.messages)
+	initialMsgCount := len(m.entries)
 
 	updatedModel, _ := m.Update(AgentOutputMsg{})
 	got := updatedModel.(*Model)
@@ -112,10 +112,10 @@ func TestPendingCompletion_BufferedWhenStreaming(t *testing.T) {
 		t.Errorf("pendingCompletions: got %d entries, want 1", len(got.pendingCompletions))
 	}
 
-	// No new messages should have been appended while streaming.
-	if len(got.messages) != initialMsgCount {
-		t.Errorf("messages: got %d, want %d (no messages should be injected while streaming)",
-			len(got.messages), initialMsgCount)
+	// No new entries should have been appended while streaming.
+	if len(got.entries) != initialMsgCount {
+		t.Errorf("entries: got %d, want %d (no entries should be injected while streaming)",
+			len(got.entries), initialMsgCount)
 	}
 
 	// The buffered notification should reference the team and job.
@@ -137,7 +137,7 @@ func TestPendingCompletion_BufferedWhenStreaming(t *testing.T) {
 
 // TestPendingCompletion_InjectedAfterStreamDone verifies that when StreamDoneMsg
 // arrives and m.pendingCompletions is non-empty, the buffered notifications are
-// drained into m.messages, the buffer is cleared, and a new stream is started.
+// drained into m.entries, the buffer is cleared, and a new stream is started.
 func TestPendingCompletion_InjectedAfterStreamDone(t *testing.T) {
 	m := newMinimalModel(t)
 	m.streaming = true
@@ -148,7 +148,7 @@ func TestPendingCompletion_InjectedAfterStreamDone(t *testing.T) {
 		{notification: wantNotification},
 	}
 
-	initialMsgCount := len(m.messages)
+	initialMsgCount := len(m.entries)
 
 	updatedModel, cmd := m.Update(StreamDoneMsg{})
 	got := updatedModel.(*Model)
@@ -159,13 +159,13 @@ func TestPendingCompletion_InjectedAfterStreamDone(t *testing.T) {
 			len(got.pendingCompletions))
 	}
 
-	// The notification must have been injected as a user message.
-	if len(got.messages) != initialMsgCount+1 {
-		t.Errorf("messages: got %d, want %d (one notification should be injected)",
-			len(got.messages), initialMsgCount+1)
+	// The notification must have been injected as a user entry.
+	if len(got.entries) != initialMsgCount+1 {
+		t.Errorf("entries: got %d, want %d (one notification should be injected)",
+			len(got.entries), initialMsgCount+1)
 	}
-	if len(got.messages) > initialMsgCount {
-		injected := got.messages[len(got.messages)-1]
+	if len(got.entries) > initialMsgCount {
+		injected := got.entries[len(got.entries)-1].Message
 		if injected.Role != "user" {
 			t.Errorf("injected message role: got %q, want %q", injected.Role, "user")
 		}
@@ -189,7 +189,7 @@ func TestPendingCompletion_InjectedAfterStreamDone(t *testing.T) {
 
 // TestPendingCompletion_NotBufferedWhenNotStreaming verifies that when a
 // Running→Done slot transition is detected while m.streaming == false, the
-// completion notification is injected immediately into m.messages (not buffered).
+// completion notification is injected immediately into m.entries (not buffered).
 func TestPendingCompletion_NotBufferedWhenNotStreaming(t *testing.T) {
 	gw, slotID := newGatewayWithDoneSlot(t)
 
@@ -212,19 +212,19 @@ func TestPendingCompletion_NotBufferedWhenNotStreaming(t *testing.T) {
 			len(got.pendingCompletions))
 	}
 
-	// The notification must have been injected as a user message.
+	// The notification must have been injected as a user entry.
 	found := false
-	for _, msg := range got.messages {
-		if msg.Role == "user" &&
-			strings.Contains(msg.Content, "test-team") &&
-			strings.Contains(msg.Content, "job-001") {
+	for _, entry := range got.entries {
+		if entry.Message.Role == "user" &&
+			strings.Contains(entry.Message.Content, "test-team") &&
+			strings.Contains(entry.Message.Content, "job-001") {
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Errorf("expected a user message containing team/job notification in m.messages, got: %v",
-			got.messages)
+		t.Errorf("expected a user entry containing team/job notification in m.entries, got: %v",
+			got.entries)
 	}
 }
 
@@ -232,7 +232,9 @@ func TestPendingCompletion_NotBufferedWhenNotStreaming(t *testing.T) {
 // no-op when the buffer is empty, returning the unchanged message slice and false.
 func TestDrainPendingCompletions_Empty(t *testing.T) {
 	m := newMinimalModel(t)
-	m.messages = []llm.Message{{Role: "system", Content: "sys"}}
+	m.appendEntry(ChatEntry{
+		Message: llm.Message{Role: "system", Content: "sys"},
+	})
 
 	msgs, ok := m.drainPendingCompletions()
 
@@ -251,7 +253,9 @@ func TestDrainPendingCompletions_Empty(t *testing.T) {
 // are injected in order and the buffer is cleared.
 func TestDrainPendingCompletions_Multiple(t *testing.T) {
 	m := newMinimalModel(t)
-	m.messages = []llm.Message{{Role: "system", Content: "sys"}}
+	m.appendEntry(ChatEntry{
+		Message: llm.Message{Role: "system", Content: "sys"},
+	})
 	m.pendingCompletions = []pendingCompletion{
 		{notification: "first completion"},
 		{notification: "second completion"},

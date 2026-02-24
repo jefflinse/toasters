@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/fsnotify/fsnotify"
+	"github.com/jefflinse/toasters/internal/frontmatter"
 )
 
 // WrapperPrompt is the toasters-owned framing text appended to every coordinator
@@ -116,26 +117,13 @@ func ParseFile(path string) (Agent, error) {
 
 	content := string(data)
 
-	const fmDelim = "---"
-	if strings.HasPrefix(content, fmDelim+"\n") {
-		// Strip the opening "---\n"
-		rest := content[len(fmDelim)+1:]
-
-		// Find the closing "\n---" (may be followed by "\n" or EOF)
-		closingIdx := strings.Index(rest, "\n"+fmDelim)
-		if closingIdx >= 0 {
-			fmBlock := rest[:closingIdx]
-			// Advance past "\n---"; skip an optional trailing newline
-			afterClose := rest[closingIdx+1+len(fmDelim):]
-			afterClose = strings.TrimPrefix(afterClose, "\n")
-			agent.Body = strings.TrimSpace(afterClose)
-			parseFrontmatter(&agent, fmBlock)
-		} else {
-			// No closing delimiter — treat everything as body
-			agent.Body = strings.TrimSpace(content)
-		}
-	} else {
+	fmLines, body, err := frontmatter.Split(content)
+	if err != nil {
+		// No valid frontmatter — treat entire content as body.
 		agent.Body = strings.TrimSpace(content)
+	} else {
+		agent.Body = strings.TrimSpace(body)
+		parseFrontmatter(&agent, strings.Join(fmLines, "\n"))
 	}
 
 	return agent, nil

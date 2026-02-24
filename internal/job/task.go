@@ -2,13 +2,14 @@ package job
 
 import (
 	"crypto/rand"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/jefflinse/toasters/internal/frontmatter"
 )
 
 // TaskFrontmatter holds the structured metadata from a TASK.md file.
@@ -47,46 +48,9 @@ func newUUID() string {
 // that follows the closing "---" delimiter. Returns an error if the frontmatter
 // block is absent or malformed.
 func parseTaskFrontmatter(content string) (TaskFrontmatter, string, error) {
-	lines := strings.Split(content, "\n")
-
-	// Find opening "---".
-	start := -1
-	for i, l := range lines {
-		if l == "---" {
-			start = i
-			break
-		}
-	}
-	if start == -1 {
-		return TaskFrontmatter{}, "", errors.New("no frontmatter delimiter found")
-	}
-
-	// Find closing "---".
-	end := -1
-	for i := start + 1; i < len(lines); i++ {
-		if lines[i] == "---" {
-			end = i
-			break
-		}
-	}
-	if end == -1 {
-		return TaskFrontmatter{}, "", errors.New("frontmatter closing delimiter not found")
-	}
-
-	fmLines := lines[start+1 : end]
-	kv := make(map[string]string, len(fmLines))
-	for _, l := range fmLines {
-		if l == "" {
-			continue
-		}
-		parts := strings.SplitN(l, ": ", 2)
-		if len(parts) != 2 {
-			// Allow keys with empty values written as "key: " or just "key:"
-			key := strings.TrimSuffix(strings.TrimSpace(l), ":")
-			kv[key] = ""
-			continue
-		}
-		kv[strings.TrimSpace(parts[0])] = parts[1]
+	kv, body, err := frontmatter.Parse(content)
+	if err != nil {
+		return TaskFrontmatter{}, "", err
 	}
 
 	fm := TaskFrontmatter{
@@ -99,7 +63,6 @@ func parseTaskFrontmatter(content string) (TaskFrontmatter, string, error) {
 		Updated:     kv["updated"],
 	}
 
-	body := strings.Join(lines[end+1:], "\n")
 	return fm, body, nil
 }
 

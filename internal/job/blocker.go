@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/jefflinse/toasters/internal/frontmatter"
 )
 
 // BlockerQuestion is a single question posed by a blocked team, optionally
@@ -46,9 +48,9 @@ func ReadBlocker(jobDir string) (*Blocker, error) {
 	b := &Blocker{RawBody: raw}
 
 	// Split YAML frontmatter from body.
-	fmLines, body, ok := splitFrontmatter(raw)
-	if !ok {
-		// No frontmatter at all — not a valid blocker file.
+	fmLines, body, err := frontmatter.Split(raw)
+	if err != nil {
+		// No valid frontmatter — not a valid blocker file.
 		return nil, nil
 	}
 
@@ -107,39 +109,6 @@ func WriteBlockerAnswers(jobDir string, b *Blocker) error {
 		return fmt.Errorf("closing BLOCKER.md: %w", err)
 	}
 	return nil
-}
-
-// splitFrontmatter splits content into frontmatter lines and body text.
-// Returns (fmLines, body, true) on success, or ("", "", false) if no valid
-// frontmatter block is found.
-func splitFrontmatter(content string) ([]string, string, bool) {
-	lines := strings.Split(content, "\n")
-
-	start := -1
-	for i, l := range lines {
-		if l == "---" {
-			start = i
-			break
-		}
-	}
-	if start == -1 {
-		return nil, "", false
-	}
-
-	end := -1
-	for i := start + 1; i < len(lines); i++ {
-		if lines[i] == "---" {
-			end = i
-			break
-		}
-	}
-	if end == -1 {
-		return nil, "", false
-	}
-
-	fmLines := lines[start+1 : end]
-	body := strings.Join(lines[end+1:], "\n")
-	return fmLines, body, true
 }
 
 // splitSections parses a markdown body into a map of heading → content by
