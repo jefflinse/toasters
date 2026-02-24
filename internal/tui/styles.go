@@ -244,6 +244,28 @@ var (
 				Foreground(lipgloss.Color("196")).
 				Bold(true)
 
+	// Toast notification styles.
+	ToastBaseStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("255")).
+			Background(lipgloss.Color("235")).
+			Padding(0, 1).
+			MaxWidth(40)
+
+	ToastInfoStyle = ToastBaseStyle.
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(ColorPrimary).
+			BorderBackground(lipgloss.Color("235"))
+
+	ToastSuccessStyle = ToastBaseStyle.
+				Border(lipgloss.RoundedBorder()).
+				BorderForeground(ColorConnected).
+				BorderBackground(lipgloss.Color("235"))
+
+	ToastWarningStyle = ToastBaseStyle.
+				Border(lipgloss.RoundedBorder()).
+				BorderForeground(ColorStreaming).
+				BorderBackground(lipgloss.Color("235"))
+
 	// TaskPendingStyle styles a pending task subitem under a job.
 	TaskPendingStyle = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("245"))

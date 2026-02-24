@@ -19,6 +19,8 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/atotto/clipboard"
 	"github.com/charmbracelet/glamour"
+	"github.com/charmbracelet/glamour/ansi"
+	glamourstyles "github.com/charmbracelet/glamour/styles"
 
 	"github.com/jefflinse/toasters/internal/agents"
 	"github.com/jefflinse/toasters/internal/config"
@@ -35,6 +37,44 @@ const (
 	minLeftPanelWidth    = 22
 	minWidthForLeftPanel = 100
 )
+
+// Toast notification types.
+type toastLevel int
+
+const (
+	toastInfo toastLevel = iota
+	toastSuccess
+	toastWarning
+)
+
+type toast struct {
+	message   string
+	level     toastLevel
+	createdAt time.Time
+	id        int // unique ID for dismissal
+}
+
+// dismissToastMsg is sent after a delay to remove a specific toast.
+type dismissToastMsg struct{ id int }
+
+// dismissToast returns a tea.Cmd that fires dismissToastMsg after 3 seconds.
+func dismissToast(id int) tea.Cmd {
+	return tea.Tick(3*time.Second, func(time.Time) tea.Msg {
+		return dismissToastMsg{id: id}
+	})
+}
+
+// addToast appends a new toast notification and returns a command to auto-dismiss it.
+func (m *Model) addToast(message string, level toastLevel) tea.Cmd {
+	t := toast{message: message, level: level, createdAt: time.Now(), id: m.nextToastID}
+	m.nextToastID++
+	m.toasts = append(m.toasts, t)
+	// Limit to 5 visible toasts.
+	if len(m.toasts) > 5 {
+		m.toasts = m.toasts[len(m.toasts)-5:]
+	}
+	return dismissToast(t.id)
+}
 
 // pendingCompletion holds a buffered agent-completion notification that arrived
 // while the operator stream was active. It is drained after the stream ends.
@@ -121,6 +161,19 @@ func loadingTick() tea.Cmd {
 	})
 }
 
+// spinnerTickMsg drives the animated braille spinners (streaming cursor + agent heartbeat).
+type spinnerTickMsg struct{}
+
+// spinnerChars are the braille frames used for animated spinners.
+var spinnerChars = []rune("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏")
+
+// spinnerTick returns a command that fires spinnerTickMsg after 80ms.
+func spinnerTick() tea.Cmd {
+	return tea.Tick(80*time.Millisecond, func(time.Time) tea.Msg {
+		return spinnerTickMsg{}
+	})
+}
+
 // clearFlashMsg is sent after a delay to clear the transient flash status line.
 type clearFlashMsg struct{}
 
@@ -161,6 +214,35 @@ func fadeColor(r, g, b uint8, factor float64) color.Color {
 	fg := uint8(float64(g) * (1.0 - factor))
 	fb := uint8(float64(b) * (1.0 - factor))
 	return lipgloss.Color(fmt.Sprintf("#%02x%02x%02x", fr, fg, fb))
+}
+
+// gradientText applies character-by-character truecolor interpolation from
+// color `from` to color `to`, returning a styled string. Each visible
+// character gets its own foreground color and bold styling.
+func gradientText(text string, from, to [3]uint8) string {
+	runes := []rune(text)
+	if len(runes) == 0 {
+		return ""
+	}
+	if len(runes) == 1 {
+		return lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color(fmt.Sprintf("#%02x%02x%02x", from[0], from[1], from[2]))).
+			Render(string(runes[0]))
+	}
+	var sb strings.Builder
+	n := len(runes) - 1
+	for i, r := range runes {
+		t := float64(i) / float64(n)
+		cr := uint8(float64(from[0])*(1-t) + float64(to[0])*t)
+		cg := uint8(float64(from[1])*(1-t) + float64(to[1])*t)
+		cb := uint8(float64(from[2])*(1-t) + float64(to[2])*t)
+		sb.WriteString(lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color(fmt.Sprintf("#%02x%02x%02x", cr, cg, cb))).
+			Render(string(r)))
+	}
+	return sb.String()
 }
 
 // numLoadingFrames is the total number of animation frames (ping-pong across the bar).
@@ -261,6 +343,22 @@ func leftPanelWidth(termWidth int) int {
 		return minLeftPanelWidth
 	}
 	return w
+}
+
+// effectiveLeftPanelWidth returns the left panel width, respecting any user override.
+func (m *Model) effectiveLeftPanelWidth() int {
+	if m.leftPanelWidthOverride > 0 {
+		w := m.leftPanelWidthOverride
+		if w < minLeftPanelWidth {
+			w = minLeftPanelWidth
+		}
+		maxW := m.width / 2
+		if w > maxW {
+			w = maxW
+		}
+		return w
+	}
+	return leftPanelWidth(m.width)
 }
 
 // sidebarWidth returns the sidebar width using the same formula as leftPanelWidth.
@@ -382,7 +480,13 @@ type Model struct {
 	lpWidth int // cached left panel width for mouse hit-testing
 	sbWidth int // cached sidebar width for mouse hit-testing
 
-	userScrolled bool // true when user has manually scrolled up; suppresses auto-scroll
+	// Collapsible panel state.
+	leftPanelHidden        bool // true when user has toggled the left panel off via ctrl+l
+	sidebarHidden          bool // true when user has toggled the sidebar off via ctrl+b
+	leftPanelWidthOverride int  // 0 = use default computed width; >0 = user-resized width
+
+	userScrolled   bool // true when user has manually scrolled up; suppresses auto-scroll
+	hasNewMessages bool // true when new content arrived while user was scrolled up
 
 	// prevSlotActive/Status track the last-seen state of each gateway slot so
 	// AgentOutputMsg can detect Running→Done transitions and notify the operator.
@@ -400,6 +504,19 @@ type Model struct {
 
 	// Collapsible reasoning (thinking) state.
 	expandedReasoning map[int]bool // which assistant message indices have reasoning expanded
+
+	// Message timestamps — parallel to m.messages.
+	timestamps []time.Time
+
+	// Collapsible tool call/result state — keyed by message index.
+	collapsedTools map[int]bool // true = expanded; absent/false = collapsed (default)
+
+	// Shared spinner animation frame counter.
+	spinnerFrame int
+
+	// Toast notification state.
+	toasts      []toast
+	nextToastID int
 }
 
 // NewModel returns an initialized root model.
@@ -474,6 +591,7 @@ func NewModel(client *llm.Client, claudeCfg config.ClaudeConfig, workspaceDir st
 	m.expandedMsgs = make(map[int]bool)
 	m.selectedMsgIdx = -1
 	m.expandedReasoning = make(map[int]bool)
+	m.collapsedTools = make(map[int]bool)
 
 	agentVP := viewport.New()
 	agentVP.MouseWheelEnabled = true
@@ -498,6 +616,7 @@ func (m *Model) Init() tea.Cmd {
 		tea.RequestWindowSize,
 		m.fetchModels(),
 		loadingTick(), // drive the loading screen animation
+		spinnerTick(), // drive braille spinner animations
 	}
 	if m.agentNotifyCh != nil {
 		cmds = append(cmds, waitForAgentUpdate(m.agentNotifyCh))
@@ -1004,21 +1123,94 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case "tab":
 			// Cycle focus: chat → jobs → teams → agents → chat.
+			// Skip hidden panels.
 			// (Tab inside the slash command popup is handled above and returns early.)
-			switch m.focused {
-			case focusChat:
-				m.focused = focusJobs
-				m.input.Blur()
-				return m, nil
-			case focusJobs:
-				m.focused = focusTeams
-				return m, nil
-			case focusTeams:
-				m.focused = focusAgents
-				return m, nil
-			case focusAgents:
-				m.focused = focusChat
+			next := m.focused
+			for {
+				switch next {
+				case focusChat:
+					next = focusJobs
+				case focusJobs:
+					next = focusTeams
+				case focusTeams:
+					next = focusAgents
+				case focusAgents:
+					next = focusChat
+				}
+				// Skip left-panel targets when left panel is hidden.
+				if m.leftPanelHidden && (next == focusJobs || next == focusTeams) {
+					continue
+				}
+				// Skip sidebar target when sidebar is hidden.
+				if m.sidebarHidden && next == focusAgents {
+					continue
+				}
+				break
+			}
+			m.focused = next
+			if next == focusChat {
 				return m, m.input.Focus()
+			}
+			m.input.Blur()
+			return m, nil
+
+		case "pgup":
+			// Scroll chat viewport up by one page.
+			if m.focused == focusChat && !m.streaming {
+				m.chatViewport.PageUp()
+				m.userScrolled = true
+				return m, nil
+			}
+
+		case "pgdown":
+			// Scroll chat viewport down by one page.
+			if m.focused == focusChat && !m.streaming {
+				m.chatViewport.PageDown()
+				if m.chatViewport.AtBottom() {
+					m.userScrolled = false
+					m.hasNewMessages = false
+				} else {
+					m.userScrolled = true
+				}
+				return m, nil
+			}
+
+		case "home":
+			// Scroll chat viewport to top.
+			if m.focused == focusChat && !m.streaming {
+				m.chatViewport.GotoTop()
+				m.userScrolled = true
+				return m, nil
+			}
+
+		case "end":
+			// Scroll chat viewport to bottom.
+			if m.focused == focusChat && !m.streaming {
+				m.chatViewport.GotoBottom()
+				m.userScrolled = false
+				m.hasNewMessages = false
+				return m, nil
+			}
+
+		case "ctrl+u":
+			// Scroll chat viewport up half page.
+			if m.focused == focusChat && !m.streaming {
+				m.chatViewport.HalfPageUp()
+				m.userScrolled = true
+				return m, nil
+			}
+
+		case "ctrl+d":
+			// Scroll chat viewport down half page.
+			if m.focused == focusChat && !m.streaming {
+				m.chatViewport.HalfPageDown()
+				if m.chatViewport.AtBottom() {
+					m.userScrolled = false
+					m.hasNewMessages = false
+				} else {
+					m.userScrolled = true
+				}
+				return m, nil
 			}
 
 		case "up":
@@ -1044,8 +1236,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, nil
 			}
-			// Navigate completion messages when chat is focused and not streaming.
-			if m.focused == focusChat && !m.streaming && len(m.completionMsgIdx) > 0 {
+			// Navigate collapsible messages (completions + tools) when chat is focused and not streaming.
+			if m.focused == focusChat && !m.streaming && m.hasCollapsibleMessages() {
 				if m.selectedMsgIdx > 0 {
 					m.selectedMsgIdx--
 				}
@@ -1076,8 +1268,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, nil
 			}
-			// Navigate completion messages when chat is focused and not streaming.
-			if m.focused == focusChat && !m.streaming && len(m.completionMsgIdx) > 0 {
+			// Navigate collapsible messages (completions + tools) when chat is focused and not streaming.
+			if m.focused == focusChat && !m.streaming && m.hasCollapsibleMessages() {
 				if m.selectedMsgIdx < len(m.messages)-1 {
 					m.selectedMsgIdx++
 				}
@@ -1091,6 +1283,17 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.expandedMsgs[m.selectedMsgIdx] = !m.expandedMsgs[m.selectedMsgIdx]
 				m.updateViewportContent()
 				return m, nil
+			}
+			// Toggle expand/collapse on tool-call indicator or tool result messages.
+			if m.focused == focusChat && !m.streaming && m.selectedMsgIdx >= 0 && m.selectedMsgIdx < len(m.messages) {
+				msg := m.messages[m.selectedMsgIdx]
+				isToolIndicator := msg.Role == "assistant" && m.isToolCallIndicatorIdx(m.selectedMsgIdx)
+				isToolResult := msg.Role == "tool"
+				if isToolIndicator || isToolResult {
+					m.collapsedTools[m.selectedMsgIdx] = !m.collapsedTools[m.selectedMsgIdx]
+					m.updateViewportContent()
+					return m, nil
+				}
 			}
 
 		case "t":
@@ -1123,6 +1326,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						_ = clipboard.WriteAll(m.messages[i].Content)
 						m.flashText = "  ✓ copied to clipboard"
 						cmds = append(cmds, clearFlash())
+						cmds = append(cmds, m.addToast("🍞 Copied to clipboard!", toastInfo))
 						break
 					}
 				}
@@ -1130,6 +1334,59 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case "ctrl+g":
 			m.showGrid = !m.showGrid
+			return m, nil
+
+		case "ctrl+l":
+			// Toggle left panel visibility.
+			m.leftPanelHidden = !m.leftPanelHidden
+			// If hiding the panel while it's focused, switch to chat.
+			if m.leftPanelHidden && (m.focused == focusJobs || m.focused == focusTeams) {
+				m.focused = focusChat
+				cmds = append(cmds, m.input.Focus())
+			}
+			m.resizeComponents()
+			return m, tea.Batch(cmds...)
+
+		case "ctrl+b":
+			// Toggle sidebar visibility.
+			m.sidebarHidden = !m.sidebarHidden
+			// If hiding the sidebar while it's focused, switch to chat.
+			if m.sidebarHidden && m.focused == focusAgents {
+				m.focused = focusChat
+				cmds = append(cmds, m.input.Focus())
+			}
+			m.resizeComponents()
+			return m, tea.Batch(cmds...)
+
+		case "alt+[":
+			// Decrease left panel width.
+			showLeftPanel := m.width >= minWidthForLeftPanel && !m.leftPanelHidden
+			if showLeftPanel {
+				if m.leftPanelWidthOverride == 0 {
+					m.leftPanelWidthOverride = leftPanelWidth(m.width)
+				}
+				m.leftPanelWidthOverride -= 2
+				if m.leftPanelWidthOverride < minLeftPanelWidth {
+					m.leftPanelWidthOverride = minLeftPanelWidth
+				}
+				m.resizeComponents()
+			}
+			return m, nil
+
+		case "alt+]":
+			// Increase left panel width.
+			showLeftPanel := m.width >= minWidthForLeftPanel && !m.leftPanelHidden
+			if showLeftPanel {
+				if m.leftPanelWidthOverride == 0 {
+					m.leftPanelWidthOverride = leftPanelWidth(m.width)
+				}
+				m.leftPanelWidthOverride += 2
+				maxW := m.width / 2
+				if m.leftPanelWidthOverride > maxW {
+					m.leftPanelWidthOverride = maxW
+				}
+				m.resizeComponents()
+			}
 			return m, nil
 
 		case "esc":
@@ -1154,6 +1411,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						Role:    "assistant",
 						Content: m.currentResponse,
 					})
+					m.timestamps = append(m.timestamps, time.Now())
 					m.reasoning = append(m.reasoning, m.currentReasoning)
 					m.claudeMeta = append(m.claudeMeta, m.claudeActiveMeta)
 					m.claudeActiveMeta = ""
@@ -1263,6 +1521,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 					if len(running) == 0 {
 						m.messages = append(m.messages, llm.Message{Role: "assistant", Content: "No running agents."})
+						m.timestamps = append(m.timestamps, time.Now())
 						m.reasoning = append(m.reasoning, "")
 						m.claudeMeta = append(m.claudeMeta, "")
 						m.updateViewportContent()
@@ -1355,6 +1614,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.updateViewportContent()
 		if !m.userScrolled {
 			m.chatViewport.GotoBottom()
+		} else {
+			m.hasNewMessages = true
 		}
 		if m.streamCh != nil {
 			cmds = append(cmds, waitForChunk(m.streamCh))
@@ -1383,6 +1644,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				Role:    "assistant",
 				Content: m.currentResponse,
 			})
+			m.timestamps = append(m.timestamps, time.Now())
 			m.reasoning = append(m.reasoning, m.currentReasoning)
 			// For LM Studio (operator) turns, claudeActiveMeta is empty — fill in the operator byline.
 			byline := m.claudeActiveMeta
@@ -1399,6 +1661,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.updateViewportContent()
 		if !m.userScrolled {
 			m.chatViewport.GotoBottom()
+		} else {
+			m.hasNewMessages = true
 		}
 		// Drain any completion notifications that arrived while we were streaming.
 		// If there are pending completions, inject them and start a new stream instead
@@ -1437,6 +1701,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 
 				m.messages = append(m.messages, llm.Message{Role: "assistant", Content: question})
+				m.timestamps = append(m.timestamps, time.Now())
 				m.reasoning = append(m.reasoning, "")
 				m.claudeMeta = append(m.claudeMeta, "kill-confirm")
 				m.streaming = false
@@ -1465,6 +1730,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 				question := fmt.Sprintf("Assign job '%s' to team '%s'?", args.JobID, args.TeamName)
 				m.messages = append(m.messages, llm.Message{Role: "assistant", Content: question})
+				m.timestamps = append(m.timestamps, time.Now())
 				m.reasoning = append(m.reasoning, "")
 				m.claudeMeta = append(m.claudeMeta, "dispatch-confirm")
 				m.streaming = false
@@ -1501,6 +1767,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					Role:    "assistant",
 					Content: fullQuestion,
 				})
+				m.timestamps = append(m.timestamps, time.Now())
 				m.reasoning = append(m.reasoning, "")
 				m.claudeMeta = append(m.claudeMeta, "escalate-prompt")
 				m.streaming = false
@@ -1532,6 +1799,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					Role:    "assistant",
 					Content: args.Question,
 				})
+				m.timestamps = append(m.timestamps, time.Now())
 				m.reasoning = append(m.reasoning, "")
 				m.claudeMeta = append(m.claudeMeta, "ask-user-prompt")
 				// Enter prompt mode.
@@ -1559,6 +1827,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			ToolCalls: msg.Calls,
 		}
 		m.messages = append(m.messages, assistantMsg)
+		m.timestamps = append(m.timestamps, time.Now())
 		m.reasoning = append(m.reasoning, "")
 		m.claudeMeta = append(m.claudeMeta, "")
 
@@ -1570,6 +1839,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				Role:    "assistant",
 				Content: indicator,
 			})
+			m.timestamps = append(m.timestamps, time.Now())
 			m.reasoning = append(m.reasoning, "")
 			m.claudeMeta = append(m.claudeMeta, "tool-call-indicator")
 
@@ -1583,6 +1853,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				ToolCallID: call.ID,
 				Content:    result,
 			})
+			m.timestamps = append(m.timestamps, time.Now())
 			// tool messages don't need entries in reasoning/claudeMeta
 			// because updateViewportContent only increments assistantIdx for "assistant" role
 		}
@@ -1618,6 +1889,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				_ = m.gateway.Kill(m.pendingTimeoutSlot)
 				m.messages = append(m.messages, llm.Message{Role: "assistant", Content: fmt.Sprintf("Slot %d killed.", m.pendingTimeoutSlot)})
 			}
+			m.timestamps = append(m.timestamps, time.Now())
 			m.reasoning = append(m.reasoning, "")
 			m.claudeMeta = append(m.claudeMeta, "tool-call-indicator")
 			m.updateViewportContent()
@@ -1643,9 +1915,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				result = "User cancelled the kill."
 			}
 			m.messages = append(m.messages, llm.Message{Role: "assistant", ToolCalls: []llm.ToolCall{m.promptPendingCall}})
+			m.timestamps = append(m.timestamps, time.Now())
 			m.reasoning = append(m.reasoning, "")
 			m.claudeMeta = append(m.claudeMeta, "tool-call-indicator")
 			m.messages = append(m.messages, llm.Message{Role: "tool", Content: result, ToolCallID: m.promptPendingCall.ID})
+			m.timestamps = append(m.timestamps, time.Now())
 			m.updateViewportContent()
 			return m, m.startStream(m.messages)
 		}
@@ -1675,9 +1949,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					result = fmt.Sprintf("error: %v", err)
 				}
 				m.messages = append(m.messages, llm.Message{Role: "assistant", ToolCalls: []llm.ToolCall{m.pendingDispatch}})
+				m.timestamps = append(m.timestamps, time.Now())
 				m.reasoning = append(m.reasoning, "")
 				m.claudeMeta = append(m.claudeMeta, "tool-call-indicator")
 				m.messages = append(m.messages, llm.Message{Role: "tool", Content: result, ToolCallID: m.pendingDispatch.ID})
+				m.timestamps = append(m.timestamps, time.Now())
 				m.updateViewportContent()
 				return m, m.startStream(m.messages)
 			}
@@ -1690,9 +1966,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					result = fmt.Sprintf("error: %v", err)
 				}
 				m.messages = append(m.messages, llm.Message{Role: "assistant", ToolCalls: []llm.ToolCall{m.pendingDispatch}})
+				m.timestamps = append(m.timestamps, time.Now())
 				m.reasoning = append(m.reasoning, "")
 				m.claudeMeta = append(m.claudeMeta, "tool-call-indicator")
 				m.messages = append(m.messages, llm.Message{Role: "tool", Content: result, ToolCallID: m.pendingDispatch.ID})
+				m.timestamps = append(m.timestamps, time.Now())
 				m.updateViewportContent()
 				return m, m.startStream(m.messages)
 
@@ -1715,9 +1993,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			default: // "Cancel" or anything else
 				m.confirmDispatch = false
 				m.messages = append(m.messages, llm.Message{Role: "assistant", ToolCalls: []llm.ToolCall{m.pendingDispatch}})
+				m.timestamps = append(m.timestamps, time.Now())
 				m.reasoning = append(m.reasoning, "")
 				m.claudeMeta = append(m.claudeMeta, "tool-call-indicator")
 				m.messages = append(m.messages, llm.Message{Role: "tool", Content: "User cancelled the dispatch.", ToolCallID: m.pendingDispatch.ID})
+				m.timestamps = append(m.timestamps, time.Now())
 				m.updateViewportContent()
 				return m, m.startStream(m.messages)
 			}
@@ -1737,6 +2017,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			Role:      "assistant",
 			ToolCalls: []llm.ToolCall{msg.Call},
 		})
+		m.timestamps = append(m.timestamps, time.Now())
 		m.reasoning = append(m.reasoning, "")
 		m.claudeMeta = append(m.claudeMeta, "tool-call-indicator")
 		// Then: the tool result.
@@ -1745,6 +2026,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			Content:    msg.Result,
 			ToolCallID: msg.Call.ID,
 		})
+		m.timestamps = append(m.timestamps, time.Now())
 		m.updateViewportContent()
 		if !m.userScrolled {
 			m.chatViewport.GotoBottom()
@@ -1763,6 +2045,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				Role:    "assistant",
 				Content: m.currentResponse,
 			})
+			m.timestamps = append(m.timestamps, time.Now())
 			m.reasoning = append(m.reasoning, m.currentReasoning)
 			byline := m.claudeActiveMeta
 			if byline == "" && m.stats.ModelName != "" {
@@ -1852,6 +2135,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Inject the pre-fetched greeting directly — no stream, no flash.
 		if msg.Greeting != "" {
 			m.messages = append(m.messages, llm.Message{Role: "assistant", Content: msg.Greeting})
+			m.timestamps = append(m.timestamps, time.Now())
 			m.reasoning = append(m.reasoning, "")
 			m.claudeMeta = append(m.claudeMeta, "")
 			m.updateViewportContent()
@@ -1869,6 +2153,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		promptText := fmt.Sprintf("⏱ %s has been running for 15m. Continue for another 15m, or kill it?\n\n(Auto-continuing in 1 minute...)", slotDesc)
 		// Append as an assistant message so it shows in the chat.
 		m.messages = append(m.messages, llm.Message{Role: "assistant", Content: promptText})
+		m.timestamps = append(m.timestamps, time.Now())
 		m.reasoning = append(m.reasoning, "")
 		m.claudeMeta = append(m.claudeMeta, "ask-user-prompt")
 		// Enter prompt mode.
@@ -1899,6 +2184,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.promptPendingCall = llm.ToolCall{}
 		_ = m.gateway.ExtendSlot(msg.SlotID)
 		m.messages = append(m.messages, llm.Message{Role: "assistant", Content: fmt.Sprintf("Slot %d auto-continued (no response within 1m).", msg.SlotID)})
+		m.timestamps = append(m.timestamps, time.Now())
 		m.reasoning = append(m.reasoning, "")
 		m.claudeMeta = append(m.claudeMeta, "tool-call-indicator")
 		m.updateViewportContent()
@@ -1944,6 +2230,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if _, _, err := m.gateway.SpawnTeam(teamName, j.Frontmatter.ID, spawnPrompt, matchedTeam); err != nil {
 				log.Printf("failed to re-spawn team after blocker: %v", err)
+			} else {
+				return m, spinnerTick() // re-arm spinner for agent heartbeat
 			}
 		}
 		return m, nil
@@ -1981,6 +2269,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						)
 					}
 
+					// Toast: agent completed.
+					cmds = append(cmds, m.addToast("🍞 "+snap.AgentName+" is done. Extra crispy.", toastSuccess))
+
 					if m.streaming {
 						// Buffer the notification — drain it after the current stream ends.
 						m.pendingCompletions = append(m.pendingCompletions, pendingCompletion{
@@ -1992,6 +2283,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							Role:    "user",
 							Content: notification,
 						})
+						m.timestamps = append(m.timestamps, time.Now())
 						// Tag this message as a collapsible completion entry and auto-select it.
 						completionIdx := len(m.messages) - 1
 						m.completionMsgIdx[completionIdx] = true
@@ -2007,6 +2299,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					for _, j := range m.jobs {
 						if j.Frontmatter.ID == snap.JobID {
 							if b, err := job.ReadBlocker(j.Dir); err == nil && b != nil {
+								if _, alreadyKnown := m.blockers[j.Frontmatter.ID]; !alreadyKnown {
+									cmds = append(cmds, m.addToast("⚠ Blocker on "+j.Frontmatter.ID, toastWarning))
+								}
 								m.blockers[j.Frontmatter.ID] = b
 							}
 							// Mark the first task done only on a clean completion.
@@ -2044,7 +2339,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Don't steal clicks when any overlay is active.
 		if !m.teamsModal.show && !m.blockerModal.show && !m.showGrid &&
 			!m.showKillModal && !m.showPromptModal && !m.showOutputModal && !m.loading {
-			showLeftPanel := m.width >= minWidthForLeftPanel
+			showLeftPanel := m.width >= minWidthForLeftPanel && !m.leftPanelHidden
 			if showLeftPanel && msg.X < m.lpWidth {
 				// Clicked left panel — focus jobs pane.
 				if m.focused != focusJobs && m.focused != focusAgents {
@@ -2068,6 +2363,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Track whether user has scrolled away from the bottom.
 		if m.chatViewport.AtBottom() {
 			m.userScrolled = false
+			m.hasNewMessages = false
 		} else {
 			m.userScrolled = true
 		}
@@ -2079,12 +2375,197 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case spinnerTickMsg:
+		m.spinnerFrame++
+		// Re-arm only if something is animating: operator streaming or any agent running.
+		needTick := m.streaming
+		if !needTick && m.gateway != nil {
+			for _, snap := range m.gateway.Slots() {
+				if snap.Status == gateway.SlotRunning {
+					needTick = true
+					break
+				}
+			}
+		}
+		if needTick {
+			return m, spinnerTick()
+		}
+		return m, nil
+
 	case clearFlashMsg:
 		m.flashText = ""
+		return m, nil
+
+	case dismissToastMsg:
+		for i, t := range m.toasts {
+			if t.id == msg.id {
+				m.toasts = append(m.toasts[:i], m.toasts[i+1:]...)
+				break
+			}
+		}
 		return m, nil
 	}
 
 	return m, tea.Batch(cmds...)
+}
+
+// overlayScrollbar draws a scrollbar track on the right edge of the viewport content.
+// It replaces the last character of each line with a styled scrollbar character.
+// scrollPercent is 0.0 (top) to 1.0 (bottom).
+func overlayScrollbar(content string, viewportHeight int, totalLines int, scrollPercent float64) string {
+	if totalLines <= viewportHeight || viewportHeight <= 0 {
+		return content
+	}
+
+	lines := strings.Split(content, "\n")
+	// Pad or trim to viewport height.
+	for len(lines) < viewportHeight {
+		lines = append(lines, "")
+	}
+
+	// Calculate thumb size: proportional to visible/total, minimum 2 lines.
+	thumbSize := viewportHeight * viewportHeight / totalLines
+	if thumbSize < 2 {
+		thumbSize = 2
+	}
+	if thumbSize > viewportHeight {
+		thumbSize = viewportHeight
+	}
+
+	// Calculate thumb position.
+	trackSpace := viewportHeight - thumbSize
+	thumbStart := int(scrollPercent * float64(trackSpace))
+	if thumbStart < 0 {
+		thumbStart = 0
+	}
+	if thumbStart > trackSpace {
+		thumbStart = trackSpace
+	}
+	thumbEnd := thumbStart + thumbSize
+
+	thumbStyle := lipgloss.NewStyle().Foreground(ColorPrimary)
+	trackStyle := lipgloss.NewStyle().Foreground(ColorBorder)
+
+	for i := 0; i < viewportHeight && i < len(lines); i++ {
+		var indicator string
+		if i >= thumbStart && i < thumbEnd {
+			indicator = thumbStyle.Render("█")
+		} else {
+			indicator = trackStyle.Render("░")
+		}
+
+		line := lines[i]
+		// Strip trailing whitespace and replace last visible column with scrollbar.
+		runes := []rune(line)
+		if len(runes) > 0 {
+			lines[i] = string(runes[:len(runes)-1]) + indicator
+		} else {
+			lines[i] = indicator
+		}
+	}
+
+	return strings.Join(lines, "\n")
+}
+
+// renderToasts renders the toast notification stack as a single string block.
+// Newest toasts appear at the top.
+func (m *Model) renderToasts() string {
+	if len(m.toasts) == 0 {
+		return ""
+	}
+	var lines []string
+	// Render newest first (reverse order).
+	for i := len(m.toasts) - 1; i >= 0; i-- {
+		t := m.toasts[i]
+		msg := t.message
+		// Truncate message to fit within toast max width (inner ~36 chars after padding).
+		maxMsg := 36
+		if len([]rune(msg)) > maxMsg {
+			msg = string([]rune(msg)[:maxMsg-1]) + "…"
+		}
+		var rendered string
+		switch t.level {
+		case toastSuccess:
+			rendered = ToastSuccessStyle.Render(msg)
+		case toastWarning:
+			rendered = ToastWarningStyle.Render(msg)
+		default:
+			rendered = ToastInfoStyle.Render(msg)
+		}
+		lines = append(lines, rendered)
+	}
+	return strings.Join(lines, "\n")
+}
+
+// overlayToasts splices the toast block into the top-right corner of the screen.
+func overlayToasts(screen string, toastBlock string, screenWidth int) string {
+	if toastBlock == "" {
+		return screen
+	}
+	screenLines := strings.Split(screen, "\n")
+	toastLines := strings.Split(toastBlock, "\n")
+
+	for i, tl := range toastLines {
+		if i >= len(screenLines) {
+			break
+		}
+		toastW := lipgloss.Width(tl)
+		screenLineW := lipgloss.Width(screenLines[i])
+
+		if toastW >= screenWidth {
+			// Toast is wider than screen — just replace the line.
+			screenLines[i] = tl
+			continue
+		}
+
+		// Pad the screen line if it's shorter than the screen width.
+		if screenLineW < screenWidth {
+			screenLines[i] = screenLines[i] + strings.Repeat(" ", screenWidth-screenLineW)
+		}
+
+		// Right-align: place toast at the right edge.
+		// We need to work with the raw string, but ANSI codes make character
+		// counting tricky. Use a simpler approach: build the line as
+		// [left portion] + [toast].
+		leftWidth := screenWidth - toastW
+		if leftWidth < 0 {
+			leftWidth = 0
+		}
+
+		// Truncate the screen line to leftWidth visible characters.
+		// Walk runes and ANSI sequences to find the cut point.
+		sl := screenLines[i]
+		var result strings.Builder
+		visible := 0
+		inEsc := false
+		for _, r := range sl {
+			if r == '\x1b' {
+				inEsc = true
+				result.WriteRune(r)
+				continue
+			}
+			if inEsc {
+				result.WriteRune(r)
+				if (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') {
+					inEsc = false
+				}
+				continue
+			}
+			if visible >= leftWidth {
+				break
+			}
+			result.WriteRune(r)
+			visible++
+		}
+		// Pad if we didn't reach leftWidth.
+		for visible < leftWidth {
+			result.WriteRune(' ')
+			visible++
+		}
+		result.WriteString(tl)
+		screenLines[i] = result.String()
+	}
+	return strings.Join(screenLines, "\n")
 }
 
 func (m *Model) View() tea.View {
@@ -2252,11 +2733,11 @@ func (m *Model) View() tea.View {
 		return v
 	}
 
-	showSidebar := m.width >= minWidthForBar
-	showLeftPanel := m.width >= minWidthForLeftPanel
+	showSidebar := m.width >= minWidthForBar && !m.sidebarHidden
+	showLeftPanel := m.width >= minWidthForLeftPanel && !m.leftPanelHidden
 
 	sbWidth := sidebarWidth(m.width)
-	lpWidth := leftPanelWidth(m.width)
+	lpWidth := m.effectiveLeftPanelWidth()
 
 	var mainWidth int
 	if showSidebar && showLeftPanel {
@@ -2311,6 +2792,37 @@ func (m *Model) View() tea.View {
 		}
 	} else {
 		chatContent = m.chatViewport.View()
+
+		// Overlay scrollbar on the right edge when content overflows.
+		if m.chatViewport.TotalLineCount() > m.chatViewport.Height() {
+			chatContent = overlayScrollbar(
+				chatContent,
+				m.chatViewport.Height(),
+				m.chatViewport.TotalLineCount(),
+				m.chatViewport.ScrollPercent(),
+			)
+		}
+
+		// Overlay "new messages" indicator when scrolled up and new content arrived.
+		if m.hasNewMessages && m.userScrolled {
+			chatLines := strings.Split(chatContent, "\n")
+			if len(chatLines) > 0 {
+				indicator := "  ↓ New messages (End to jump)  "
+				styledIndicator := lipgloss.NewStyle().
+					Background(ColorStreaming).
+					Foreground(lipgloss.Color("0")).
+					Bold(true).
+					Render(indicator)
+				// Center the indicator within the chat width.
+				vpWidth := m.chatViewport.Width()
+				if vpWidth > 0 {
+					styledIndicator = lipgloss.PlaceHorizontal(vpWidth, lipgloss.Center, styledIndicator)
+				}
+				chatLines[len(chatLines)-1] = styledIndicator
+				chatContent = strings.Join(chatLines, "\n")
+			}
+		}
+
 		var inputArea string
 		if m.promptMode {
 			inputArea = m.renderPromptWidget(mainWidth, inputStyle)
@@ -2461,6 +2973,12 @@ func (m *Model) View() tea.View {
 		content = mainColumn
 	}
 
+	// Overlay toast notifications in the top-right corner.
+	if len(m.toasts) > 0 {
+		toastBlock := m.renderToasts()
+		content = overlayToasts(content, toastBlock, m.width)
+	}
+
 	v := tea.NewView(content)
 	v.AltScreen = true
 	v.MouseMode = tea.MouseModeCellMotion
@@ -2568,6 +3086,24 @@ func (m *Model) renderMarkdown(content string) string {
 	return strings.TrimRight(rendered, "\n")
 }
 
+// toastersStyle returns a Glamour style config based on Dracula with
+// code block colors adjusted to match the toasters dark palette.
+func toastersStyle() ansi.StyleConfig {
+	s := glamourstyles.DraculaStyleConfig
+
+	// Tighten document margin — the chat area already provides padding.
+	zero := uint(0)
+	s.Document.Margin = &zero
+
+	// Darken code block background to blend with the toasters dark chrome.
+	bg := "#1e1e2e"
+	s.CodeBlock.Chroma.Background = ansi.StylePrimitive{
+		BackgroundColor: &bg,
+	}
+
+	return s
+}
+
 // ensureMarkdownRenderer creates or recreates the glamour renderer for the current width.
 func (m *Model) ensureMarkdownRenderer() {
 	w := m.chatViewport.Width()
@@ -2575,7 +3111,7 @@ func (m *Model) ensureMarkdownRenderer() {
 		w = 80
 	}
 	r, err := glamour.NewTermRenderer(
-		glamour.WithStylePath("dark"),
+		glamour.WithStyles(toastersStyle()),
 		glamour.WithWordWrap(w),
 	)
 	if err == nil {
@@ -2585,11 +3121,11 @@ func (m *Model) ensureMarkdownRenderer() {
 
 // resizeComponents recalculates sizes for viewport and textarea after a resize.
 func (m *Model) resizeComponents() {
-	showSidebar := m.width >= minWidthForBar
-	showLeftPanel := m.width >= minWidthForLeftPanel
+	showSidebar := m.width >= minWidthForBar && !m.sidebarHidden
+	showLeftPanel := m.width >= minWidthForLeftPanel && !m.leftPanelHidden
 
 	sbWidth := sidebarWidth(m.width)
-	lpWidth := leftPanelWidth(m.width)
+	lpWidth := m.effectiveLeftPanelWidth()
 
 	// Cache for mouse hit-testing.
 	m.lpWidth = lpWidth
@@ -2718,8 +3254,25 @@ func (m *Model) updateViewportContent() {
 		sb.WriteString(welcome)
 	}
 
+	// Build a horizontal separator line for between conversation exchanges.
+	separatorStyle := lipgloss.NewStyle().Foreground(ColorBorder)
+	separator := separatorStyle.Render(strings.Repeat("─", contentWidth))
+
 	assistantIdx := 0
+	prevRole := "" // tracks the previous rendered message role for separator logic
 	for i, msg := range m.messages {
+		// Timestamp helper — safe even if timestamps slice is short.
+		var ts string
+		if i < len(m.timestamps) && !m.timestamps[i].IsZero() {
+			ts = " · " + m.timestamps[i].Format("3:04 PM")
+		}
+
+		// Insert separator between conversation exchanges: before a user message
+		// that follows an assistant or tool message (i.e. start of a new exchange).
+		if msg.Role == "user" && !m.completionMsgIdx[i] && (prevRole == "assistant" || prevRole == "tool") {
+			sb.WriteString("\n" + separator + "\n\n")
+		}
+
 		switch msg.Role {
 		case "user":
 			// Completion messages render as collapsible blocks.
@@ -2739,8 +3292,15 @@ func (m *Model) updateViewportContent() {
 					}
 					sb.WriteString(DimStyle.Render("▶ "+firstLine) + hint + "\n\n")
 				}
+				prevRole = msg.Role
 				continue
 			}
+			// Render "you" label with timestamp.
+			label := UserMsgLabelStyle.Render("you")
+			if ts != "" {
+				label += DimStyle.Render(ts)
+			}
+			sb.WriteString(label + "\n")
 			blockWidth := contentWidth - UserMsgBlockStyle.GetHorizontalFrameSize()
 			if blockWidth < 1 {
 				blockWidth = 1
@@ -2752,17 +3312,41 @@ func (m *Model) updateViewportContent() {
 			if assistantIdx < len(m.claudeMeta) && (m.claudeMeta[assistantIdx] == "ask-user-prompt" || m.claudeMeta[assistantIdx] == "escalate-prompt") {
 				sb.WriteString(HeaderStyle.Render("? "+msg.Content) + "\n\n")
 				assistantIdx++
+				prevRole = msg.Role
 				continue
 			}
-			// Tool-call indicator messages render as a dimmed line without byline/reasoning.
+			// Tool-call indicator messages render as collapsible tool blocks.
 			if assistantIdx < len(m.claudeMeta) && m.claudeMeta[assistantIdx] == "tool-call-indicator" {
-				sb.WriteString(DimStyle.Render(msg.Content) + "\n\n")
+				if m.collapsedTools[i] {
+					// Expanded: show full content.
+					hint := ""
+					if i == m.selectedMsgIdx {
+						hint = DimStyle.Render(" [x to collapse]")
+					}
+					sb.WriteString(DimStyle.Render(msg.Content) + hint + "\n\n")
+				} else {
+					// Collapsed (default): show summary line.
+					toolName := extractToolName(msg.Content)
+					hint := ""
+					if i == m.selectedMsgIdx {
+						hint = DimStyle.Render(" [x to expand]")
+					}
+					sb.WriteString(DimStyle.Render("⚙ "+toolName+" ▶") + hint + "\n")
+				}
 				assistantIdx++
+				prevRole = msg.Role
 				continue
 			}
-			// Render claude byline (if any) above the response.
+			// Render claude byline (if any) above the response, with timestamp.
 			if assistantIdx < len(m.claudeMeta) && m.claudeMeta[assistantIdx] != "" {
-				sb.WriteString(ClaudeBylineStyle.Render("⬡ "+m.claudeMeta[assistantIdx]) + "\n")
+				byline := ClaudeBylineStyle.Render("⬡ " + m.claudeMeta[assistantIdx])
+				if ts != "" {
+					byline += DimStyle.Render(ts)
+				}
+				sb.WriteString(byline + "\n")
+			} else if ts != "" {
+				// No byline but we have a timestamp — show it on its own line.
+				sb.WriteString(DimStyle.Render("assistant"+ts) + "\n")
 			}
 			// Render reasoning trace (if any) above the response — only when expanded.
 			if assistantIdx < len(m.reasoning) && m.reasoning[assistantIdx] != "" {
@@ -2776,13 +3360,28 @@ func (m *Model) updateViewportContent() {
 			sb.WriteString(m.renderMarkdown(msg.Content) + "\n\n")
 			assistantIdx++
 		case "tool":
-			// Render tool result as a dimmed block.
-			preview := msg.Content
-			if len(preview) > 300 {
-				preview = preview[:300] + "…"
+			// Render tool result as a collapsible dimmed block.
+			if m.collapsedTools[i] {
+				// Expanded: show full content.
+				preview := msg.Content
+				if len(preview) > 300 {
+					preview = preview[:300] + "…"
+				}
+				hint := ""
+				if i == m.selectedMsgIdx {
+					hint = DimStyle.Render(" [x to collapse]")
+				}
+				sb.WriteString(DimStyle.Render("⚙ tool result: "+preview) + hint + "\n\n")
+			} else {
+				// Collapsed (default): show summary line.
+				hint := ""
+				if i == m.selectedMsgIdx {
+					hint = DimStyle.Render(" [x to expand]")
+				}
+				sb.WriteString(DimStyle.Render("⚙ tool result ▶") + hint + "\n")
 			}
-			sb.WriteString(DimStyle.Render("⚙ tool result: "+preview) + "\n\n")
 		}
+		prevRole = msg.Role
 	}
 
 	// Show streaming response in progress — re-render markdown incrementally.
@@ -2797,7 +3396,8 @@ func (m *Model) updateViewportContent() {
 		// Live response content.
 		if m.currentResponse != "" {
 			sb.WriteString(m.renderMarkdown(m.currentResponse))
-			sb.WriteString(StreamingStyle.Render(" ▍"))
+			cursor := string(spinnerChars[m.spinnerFrame%len(spinnerChars)])
+			sb.WriteString(StreamingStyle.Render(" " + cursor))
 			sb.WriteString("\n\n")
 		}
 	}
@@ -2895,7 +3495,7 @@ func (m Model) renderLeftPanel(panelWidth, panelHeight int) string {
 
 	// --- Top pane: Jobs ---
 	var topLines []string
-	topLines = append(topLines, LeftPanelHeaderStyle.Render("Jobs"))
+	topLines = append(topLines, gradientText("Jobs", [3]uint8{0, 200, 200}, [3]uint8{175, 50, 200}))
 	if len(displayedJobs) == 0 {
 		topLines = append(topLines, PlaceholderPaneStyle.Render("No jobs"))
 	} else {
@@ -3040,7 +3640,7 @@ func (m Model) renderLeftPanel(panelWidth, panelHeight int) string {
 
 	// --- Bottom pane: Teams ---
 	var bottomLines []string
-	bottomLines = append(bottomLines, LeftPanelHeaderStyle.Render("Teams"))
+	bottomLines = append(bottomLines, gradientText("Teams", [3]uint8{255, 175, 0}, [3]uint8{0, 200, 200}))
 	if len(m.teams) == 0 {
 		bottomLines = append(bottomLines, PlaceholderPaneStyle.Render("No teams configured"))
 	} else {
@@ -3087,7 +3687,7 @@ func (m Model) renderSidebar(sbWidth int) string {
 	if !m.stats.Connected {
 		connStatus = ErrorStyle.Render("disconnected")
 	}
-	headerText := SidebarHeaderStyle.Render("operator")
+	headerText := gradientText("operator", [3]uint8{255, 175, 0}, [3]uint8{175, 50, 200})
 	gap := contentWidth - lipgloss.Width(headerText) - lipgloss.Width(connStatus)
 	if gap < 1 {
 		gap = 1
@@ -3110,7 +3710,7 @@ func (m Model) renderSidebar(sbWidth int) string {
 	sb.WriteString("\n")
 
 	sb.WriteString("\n")
-	sb.WriteString(SidebarHeaderStyle.Render("Session"))
+	sb.WriteString(gradientText("Session", [3]uint8{175, 50, 200}, [3]uint8{50, 130, 255}))
 	sb.WriteString("\n\n")
 
 	// While streaming, blend in live estimates for the current response.
@@ -3136,7 +3736,7 @@ func (m Model) renderSidebar(sbWidth int) string {
 	totalTokens := m.stats.PromptTokens + liveCompletionTokens + liveReasoningTokens
 	sb.WriteString(SidebarLabelStyle.Render("Context"))
 	sb.WriteString("\n")
-	sb.WriteString(renderContextBar(totalTokens, m.stats.ContextLength, contentWidth))
+	sb.WriteString(renderContextBar(totalTokens, m.stats.ContextLength, contentWidth, m.streaming, m.spinnerFrame))
 	sb.WriteString("\n")
 
 	lastResp := "-"
@@ -3153,7 +3753,7 @@ func (m Model) renderSidebar(sbWidth int) string {
 
 	// Agents section.
 	sb.WriteString("\n")
-	sb.WriteString(SidebarHeaderStyle.Render("Agents"))
+	sb.WriteString(gradientText("Agents", [3]uint8{50, 130, 255}, [3]uint8{0, 200, 200}))
 	sb.WriteString("\n\n")
 
 	if m.gateway != nil {
@@ -3167,7 +3767,7 @@ func (m Model) renderSidebar(sbWidth int) string {
 			label := snap.AgentName + " · " + snap.JobID
 			var statusIcon string
 			if snap.Status == gateway.SlotRunning {
-				statusIcon = "▶ "
+				statusIcon = string(spinnerChars[m.spinnerFrame%len(spinnerChars)]) + " "
 			} else {
 				statusIcon = "✓ "
 			}
@@ -3241,11 +3841,35 @@ func (m *Model) renderGrid() string {
 			innerW = 1
 		}
 
+		// Determine border color based on agent status.
 		var borderColor color.Color
-		if focused {
-			borderColor = ColorPrimary
-		} else {
-			borderColor = ColorBorder
+		switch {
+		case snap.Status == gateway.SlotRunning && snap.PendingTool != "":
+			if focused {
+				// Bright orange for focused + pending tool.
+				borderColor = lipgloss.Color("#ffaf00")
+			} else {
+				borderColor = ColorStreaming
+			}
+		case snap.Status == gateway.SlotRunning:
+			if focused {
+				// Bright green for focused + running.
+				borderColor = lipgloss.Color("#5fff5f")
+			} else {
+				borderColor = ColorConnected
+			}
+		case snap.Status == gateway.SlotDone && snap.Active:
+			if focused {
+				borderColor = ColorPrimary
+			} else {
+				borderColor = ColorDim
+			}
+		default:
+			if focused {
+				borderColor = ColorPrimary
+			} else {
+				borderColor = ColorBorder
+			}
 		}
 		var headerStyle lipgloss.Style
 		if focused {
@@ -3254,10 +3878,15 @@ func (m *Model) renderGrid() string {
 			headerStyle = SidebarHeaderStyle
 		}
 
+		borderType := lipgloss.RoundedBorder()
+		if focused {
+			borderType = lipgloss.ThickBorder()
+		}
+
 		cellStyle := lipgloss.NewStyle().
 			Width(cellW).
 			Height(cellH).
-			Border(lipgloss.RoundedBorder()).
+			Border(borderType).
 			BorderForeground(borderColor).
 			Padding(0, 1)
 
@@ -3281,6 +3910,13 @@ func (m *Model) renderGrid() string {
 			statusMark = "✓"
 		}
 		header := fmt.Sprintf("%s %s · %s · %s", statusMark, snap.AgentName, snap.JobID, elapsed)
+
+		// Append mini token usage bar if tokens are present.
+		totalTokens := snap.InputTokens + snap.OutputTokens
+		if totalTokens > 0 {
+			header += " " + miniTokenBar(totalTokens)
+		}
+
 		headerLine := headerStyle.Render(truncateStr(header, innerW))
 
 		// 2. Summary (prefer ExitSummary when done)
@@ -3446,9 +4082,9 @@ func (m *Model) renderGrid() string {
 }
 
 // renderContextBar renders a segmented progress bar showing context window usage.
-// It color-shifts green → yellow → red as usage increases, and prints a
-// summary line beneath it.
-func renderContextBar(used, total, width int) string {
+// Each filled cell gets a smooth gradient from green → yellow → red based on
+// its position. When streaming, filled cells pulse between █ and ▓.
+func renderContextBar(used, total, width int, streaming bool, spinnerFrame int) string {
 	if width < 4 {
 		width = 4
 	}
@@ -3465,30 +4101,109 @@ func renderContextBar(used, total, width int) string {
 		summary = fmt.Sprintf("%d / ?", used)
 	}
 
-	// Build the bar.
+	// Build the bar cell by cell with smooth gradient.
 	filled := int(pct * float64(width))
 	empty := width - filled
 
-	// Color: green (82) → yellow (226) → red (196) based on usage.
-	var barColor color.Color
-	switch {
-	case pct < 0.6:
-		barColor = lipgloss.Color("82") // green
-	case pct < 0.8:
-		barColor = lipgloss.Color("226") // yellow
-	default:
-		barColor = lipgloss.Color("196") // red
+	// Gradient anchors: green → yellow (midpoint) → red.
+	type rgb struct{ r, g, b uint8 }
+	green := rgb{82, 196, 26}
+	yellow := rgb{250, 173, 20}
+	red := rgb{245, 34, 45}
+
+	// lerpRGB interpolates between two colors by t in [0,1].
+	lerpRGB := func(a, b rgb, t float64) rgb {
+		return rgb{
+			r: uint8(float64(a.r)*(1-t) + float64(b.r)*t),
+			g: uint8(float64(a.g)*(1-t) + float64(b.g)*t),
+			b: uint8(float64(a.b)*(1-t) + float64(b.b)*t),
+		}
 	}
 
-	filledStyle := lipgloss.NewStyle().Foreground(barColor)
 	emptyStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("237"))
 
-	bar := filledStyle.Render(strings.Repeat("█", filled)) +
-		emptyStyle.Render(strings.Repeat("░", empty))
+	var bar strings.Builder
+	for i := range filled {
+		// t is position across the full bar width (not just filled portion).
+		var t float64
+		if width > 1 {
+			t = float64(i) / float64(width-1)
+		}
+		var c rgb
+		if t < 0.5 {
+			c = lerpRGB(green, yellow, t*2)
+		} else {
+			c = lerpRGB(yellow, red, (t-0.5)*2)
+		}
+		cellChar := "█"
+		if streaming && i%2 == spinnerFrame%2 {
+			cellChar = "▓"
+		}
+		bar.WriteString(lipgloss.NewStyle().
+			Foreground(lipgloss.Color(fmt.Sprintf("#%02x%02x%02x", c.r, c.g, c.b))).
+			Render(cellChar))
+	}
+	bar.WriteString(emptyStyle.Render(strings.Repeat("░", empty)))
 
 	summaryStr := DimStyle.Render(summary)
 
-	return bar + "\n" + summaryStr
+	return bar.String() + "\n" + summaryStr
+}
+
+// miniTokenBar returns a compact 8-char token usage bar with gradient coloring
+// and a compact token count suffix, e.g. "[████░░░░] 45k".
+// maxTokens is the reference ceiling (200k).
+func miniTokenBar(totalTokens int) string {
+	const barWidth = 8
+	const maxTokens = 200_000
+
+	pct := float64(totalTokens) / float64(maxTokens)
+	if pct > 1 {
+		pct = 1
+	}
+	filled := int(pct * barWidth)
+	if filled < 0 {
+		filled = 0
+	}
+	empty := barWidth - filled
+
+	// Gradient anchors: green → yellow (midpoint) → red.
+	type rgb struct{ r, g, b uint8 }
+	green := rgb{82, 196, 26}
+	yellow := rgb{250, 173, 20}
+	red := rgb{245, 34, 45}
+	lerpRGB := func(a, b rgb, t float64) rgb {
+		return rgb{
+			r: uint8(float64(a.r)*(1-t) + float64(b.r)*t),
+			g: uint8(float64(a.g)*(1-t) + float64(b.g)*t),
+			b: uint8(float64(a.b)*(1-t) + float64(b.b)*t),
+		}
+	}
+
+	emptyStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("237"))
+
+	var bar strings.Builder
+	bar.WriteString("[")
+	for i := range filled {
+		var t float64
+		if barWidth > 1 {
+			t = float64(i) / float64(barWidth-1)
+		}
+		var c rgb
+		if t < 0.5 {
+			c = lerpRGB(green, yellow, t*2)
+		} else {
+			c = lerpRGB(yellow, red, (t-0.5)*2)
+		}
+		bar.WriteString(lipgloss.NewStyle().
+			Foreground(lipgloss.Color(fmt.Sprintf("#%02x%02x%02x", c.r, c.g, c.b))).
+			Render("█"))
+	}
+	bar.WriteString(emptyStyle.Render(strings.Repeat("░", empty)))
+	bar.WriteString("] ")
+	bar.WriteString(compactNum(totalTokens))
+
+	return bar.String()
 }
 
 // renderReasoningBlock renders a chain-of-thought reasoning trace as a dimmed,
@@ -3524,6 +4239,7 @@ func (m *Model) appendHelpMessage() {
 		"Type `/` to open the command picker. Use ↑↓ to navigate, Tab or Enter to select, Esc to dismiss."
 
 	m.messages = append(m.messages, llm.Message{Role: "assistant", Content: helpText})
+	m.timestamps = append(m.timestamps, time.Now())
 	m.reasoning = append(m.reasoning, "")
 	m.claudeMeta = append(m.claudeMeta, "")
 	m.stats.MessageCount++
@@ -3538,13 +4254,16 @@ func (m *Model) appendHelpMessage() {
 // (if a system prompt is set). Call this at startup and on /new.
 func (m *Model) initMessages() {
 	m.messages = nil
+	m.timestamps = nil
 	if m.systemPrompt != "" {
 		m.messages = []llm.Message{{Role: "system", Content: m.systemPrompt}}
+		m.timestamps = append(m.timestamps, time.Now())
 	}
 	m.completionMsgIdx = make(map[int]bool)
 	m.expandedMsgs = make(map[int]bool)
 	m.selectedMsgIdx = -1
 	m.expandedReasoning = make(map[int]bool)
+	m.collapsedTools = make(map[int]bool)
 	m.confirmDispatch = false
 	m.changingTeam = false
 	m.pendingDispatch = llm.ToolCall{}
@@ -3597,6 +4316,7 @@ func (m *Model) drainPendingCompletions() ([]llm.Message, bool) {
 	}
 	for _, pc := range m.pendingCompletions {
 		m.messages = append(m.messages, llm.Message{Role: "user", Content: pc.notification})
+		m.timestamps = append(m.timestamps, time.Now())
 	}
 	m.pendingCompletions = nil
 	return m.messages, true
@@ -3615,10 +4335,13 @@ func (m *Model) startStream(msgs []llm.Message) tea.Cmd {
 	var temperature float64
 
 	client := m.llmClient
-	return func() tea.Msg {
-		ch := client.ChatCompletionStreamWithTools(ctx, msgs, llm.AvailableTools, temperature)
-		return streamStartedMsg{ch: ch}
-	}
+	return tea.Batch(
+		func() tea.Msg {
+			ch := client.ChatCompletionStreamWithTools(ctx, msgs, llm.AvailableTools, temperature)
+			return streamStartedMsg{ch: ch}
+		},
+		spinnerTick(), // re-arm spinner animation for streaming cursor
+	)
 }
 
 // sendMessage takes the current input, appends it to history, and starts streaming.
@@ -3638,9 +4361,11 @@ func (m *Model) sendMessage() tea.Cmd {
 		Role:    "user",
 		Content: text,
 	})
+	m.timestamps = append(m.timestamps, time.Now())
 	m.stats.MessageCount++
 	m.err = nil
 	m.userScrolled = false
+	m.hasNewMessages = false
 
 	m.updateViewportContent()
 	m.chatViewport.GotoBottom()
@@ -3659,12 +4384,14 @@ func (m *Model) sendClaudeMessage(prompt string) tea.Cmd {
 		Role:    "user",
 		Content: "/claude " + prompt,
 	})
+	m.timestamps = append(m.timestamps, time.Now())
 	m.stats.MessageCount++
 	m.streaming = true
 	m.currentResponse = ""
 	m.currentReasoning = ""
 	m.err = nil
 	m.userScrolled = false
+	m.hasNewMessages = false
 	m.stats.ResponseStart = time.Now()
 
 	m.updateViewportContent()
@@ -3674,9 +4401,12 @@ func (m *Model) sendClaudeMessage(prompt string) tea.Cmd {
 	m.cancelStream = cancel
 
 	ch := streamClaudeResponse(ctx, prompt, m.claudeCfg)
-	return func() tea.Msg {
-		return streamStartedMsg{ch: ch}
-	}
+	return tea.Batch(
+		func() tea.Msg {
+			return streamStartedMsg{ch: ch}
+		},
+		spinnerTick(), // re-arm spinner animation for streaming cursor
+	)
 }
 
 // streamStartedMsg carries the channel back to the model after the stream begins.
@@ -4263,4 +4993,52 @@ func renderCompletionBlock(content string) string {
 		sb.WriteString(DimStyle.Render("  "+line) + "\n")
 	}
 	return sb.String()
+}
+
+// hasCollapsibleMessages reports whether there are any collapsible messages
+// (completion messages, tool-call indicators, or tool results) in the conversation.
+func (m *Model) hasCollapsibleMessages() bool {
+	if len(m.completionMsgIdx) > 0 {
+		return true
+	}
+	assistantIdx := 0
+	for _, msg := range m.messages {
+		if msg.Role == "tool" {
+			return true
+		}
+		if msg.Role == "assistant" {
+			if assistantIdx < len(m.claudeMeta) && m.claudeMeta[assistantIdx] == "tool-call-indicator" {
+				return true
+			}
+			assistantIdx++
+		}
+	}
+	return false
+}
+
+// isToolCallIndicatorIdx reports whether message at index i is a tool-call indicator.
+// It checks the claudeMeta parallel slice (indexed by assistant message count, not i).
+// For simplicity, we walk the messages to find the assistantIdx for message i.
+func (m *Model) isToolCallIndicatorIdx(i int) bool {
+	assistantIdx := 0
+	for j := 0; j < i; j++ {
+		if m.messages[j].Role == "assistant" {
+			assistantIdx++
+		}
+	}
+	return assistantIdx < len(m.claudeMeta) && m.claudeMeta[assistantIdx] == "tool-call-indicator"
+}
+
+// extractToolName extracts the tool/function name from a tool-call indicator
+// message like "⚙ calling `function_name`…". Returns the name or a fallback.
+func extractToolName(content string) string {
+	// Look for backtick-delimited name.
+	start := strings.Index(content, "`")
+	if start >= 0 {
+		end := strings.Index(content[start+1:], "`")
+		if end >= 0 {
+			return content[start+1 : start+1+end]
+		}
+	}
+	return "tool call"
 }

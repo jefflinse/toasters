@@ -43,6 +43,7 @@ func newMinimalModel(t *testing.T) Model {
 		completionMsgIdx:  make(map[int]bool),
 		expandedMsgs:      make(map[int]bool),
 		expandedReasoning: make(map[int]bool),
+		collapsedTools:    make(map[int]bool),
 		blockers:          make(map[string]*job.Blocker),
 	}
 }
