@@ -2681,16 +2681,63 @@ func (m Model) renderLeftPanel(panelWidth, panelHeight int) string {
 		lipgloss.JoinVertical(lipgloss.Left, topLines...),
 	)
 
-	// --- Middle pane: DAG ---
-	selectedName := ""
-	if len(m.jobs) > 0 && m.selectedJob < len(m.jobs) {
-		selectedName = m.jobs[m.selectedJob].Name
+	// --- Middle pane: Job details ---
+	var middleLines []string
+	if len(m.jobs) == 0 || m.selectedJob >= len(m.jobs) {
+		middleLines = append(middleLines, LeftPanelHeaderStyle.Render("Job"))
+		middleLines = append(middleLines, PlaceholderPaneStyle.Render("—"))
+	} else {
+		selectedJob := m.jobs[m.selectedJob]
+		middleLines = append(middleLines, LeftPanelHeaderStyle.Render(truncateStr(selectedJob.Name, contentWidth)))
+
+		// Status badge
+		var statusStyle lipgloss.Style
+		switch selectedJob.Status {
+		case job.StatusActive:
+			statusStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("76"))
+		case job.StatusPaused:
+			statusStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("226"))
+		default:
+			statusStyle = DimStyle
+		}
+		statusWord := statusStyle.Render(string(selectedJob.Status))
+		badge := DimStyle.Render("[") + statusWord + DimStyle.Render("]")
+		middleLines = append(middleLines, badge)
+
+		// Description
+		if selectedJob.Description != "" {
+			middleLines = append(middleLines, DimStyle.Render(truncateStr(selectedJob.Description, contentWidth)))
+		}
+
+		// TODO summary
+		if todosContent, err := job.ReadTodos(selectedJob.Dir); err == nil {
+			lines := strings.Split(todosContent, "\n")
+			var pending []string
+			doneCount := 0
+			for _, l := range lines {
+				if strings.HasPrefix(l, "- [ ] ") {
+					pending = append(pending, strings.TrimPrefix(l, "- [ ] "))
+				} else if strings.HasPrefix(l, "- [x] ") {
+					doneCount++
+				}
+			}
+			total := len(pending) + doneCount
+			if total > 0 {
+				summary := fmt.Sprintf("Tasks: %d/%d done", doneCount, total)
+				middleLines = append(middleLines, DimStyle.Render(summary))
+				shown := 0
+				for _, task := range pending {
+					if shown >= 3 {
+						break
+					}
+					middleLines = append(middleLines, DimStyle.Render("· "+truncateStr(task, contentWidth-2)))
+					shown++
+				}
+			}
+		}
 	}
 	middlePane := lipgloss.NewStyle().Height(middleH).Render(
-		lipgloss.JoinVertical(lipgloss.Left,
-			LeftPanelHeaderStyle.Render(truncateStr(selectedName, contentWidth)),
-			PlaceholderPaneStyle.Render("—"),
-		),
+		lipgloss.JoinVertical(lipgloss.Left, middleLines...),
 	)
 
 	// --- Bottom pane: Teams ---
