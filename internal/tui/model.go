@@ -42,6 +42,7 @@ type focusedPanel int
 const (
 	focusChat   focusedPanel = iota
 	focusJobs   focusedPanel = iota
+	focusTeams  focusedPanel = iota
 	focusAgents focusedPanel = iota
 )
 
@@ -269,10 +270,11 @@ type Model struct {
 	filteredCmds   []SlashCommand
 	selectedCmdIdx int
 
-	jobs        []job.Job
-	blockers    map[string]*job.Blocker // keyed by job ID
-	selectedJob int
-	focused     focusedPanel
+	jobs         []job.Job
+	blockers     map[string]*job.Blocker // keyed by job ID
+	selectedJob  int
+	selectedTeam int
+	focused      focusedPanel
 
 	gateway *gateway.Gateway
 
@@ -966,7 +968,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 
 		case "tab":
-			// Cycle focus: chat → jobs → agents → chat.
+			// Cycle focus: chat → jobs → teams → agents → chat.
 			// (Tab inside the slash command popup is handled above and returns early.)
 			switch m.focused {
 			case focusChat:
@@ -974,6 +976,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.input.Blur()
 				return m, nil
 			case focusJobs:
+				m.focused = focusTeams
+				return m, nil
+			case focusTeams:
 				m.focused = focusAgents
 				return m, nil
 			case focusAgents:
@@ -983,9 +988,17 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case "up":
 			// Navigate jobs when that panel is focused.
-			if m.focused == focusJobs && len(m.jobs) > 0 {
-				if m.selectedJob > 0 {
+			if m.focused == focusJobs {
+				dj := m.displayJobs()
+				if len(dj) > 0 && m.selectedJob > 0 {
 					m.selectedJob--
+				}
+				return m, nil
+			}
+			// Navigate teams when teams pane is focused.
+			if m.focused == focusTeams {
+				if len(m.teams) > 0 && m.selectedTeam > 0 {
+					m.selectedTeam--
 				}
 				return m, nil
 			}
@@ -1007,9 +1020,17 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case "down":
 			// Navigate jobs when that panel is focused.
-			if m.focused == focusJobs && len(m.jobs) > 0 {
-				if m.selectedJob < len(m.jobs)-1 {
+			if m.focused == focusJobs {
+				dj := m.displayJobs()
+				if len(dj) > 0 && m.selectedJob < len(dj)-1 {
 					m.selectedJob++
+				}
+				return m, nil
+			}
+			// Navigate teams when teams pane is focused.
+			if m.focused == focusTeams {
+				if m.selectedTeam < len(m.teams)-1 {
+					m.selectedTeam++
 				}
 				return m, nil
 			}
@@ -1122,8 +1143,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case "enter":
 			// Open blocker modal when jobs pane is focused and selected job has a blocker.
-			if m.focused == focusJobs && len(m.jobs) > 0 && m.selectedJob < len(m.jobs) {
-				selectedJob := m.jobs[m.selectedJob]
+			if m.focused == focusJobs {
+				dj := m.displayJobs()
+				if len(dj) == 0 || m.selectedJob >= len(dj) {
+					return m, nil
+				}
+				selectedJob := dj[m.selectedJob]
 				if m.hasBlocker(selectedJob) {
 					m.blockerModal.show = true
 					m.blockerModal.jobID = selectedJob.Frontmatter.ID
@@ -1134,6 +1159,28 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				// Non-blocked job: no action on Enter for now.
 				return m, nil
+			}
+			// Open teams modal pre-selected when teams pane is focused.
+			if m.focused == focusTeams && len(m.teams) > 0 {
+				idx := m.selectedTeam
+				if idx >= len(m.teams) {
+					idx = 0
+				}
+				m.teamsModal = teamsModalState{
+					show:              true,
+					teamIdx:           idx,
+					autoDetectPending: make(map[string]bool),
+				}
+				m.reloadTeamsForModal()
+				// Clamp teamIdx after reload in case the team list changed.
+				if m.teamsModal.teamIdx >= len(m.teamsModal.teams) && len(m.teamsModal.teams) > 0 {
+					m.teamsModal.teamIdx = len(m.teamsModal.teams) - 1
+				}
+				var teamCmd tea.Cmd
+				if len(m.teamsModal.teams) > 0 {
+					teamCmd = m.maybeAutoDetectCoordinator(m.teamsModal.teams[m.teamsModal.teamIdx])
+				}
+				return m, teamCmd
 			}
 			// Attach to an agent slot when the agents pane is focused.
 			if m.focused == focusAgents && m.gateway != nil {
@@ -1711,6 +1758,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case TeamsReloadedMsg:
 		m.teams = msg.Teams
+		if m.selectedTeam >= len(m.teams) && len(m.teams) > 0 {
+			m.selectedTeam = len(m.teams) - 1
+		} else if len(m.teams) == 0 {
+			m.selectedTeam = 0
+		}
 		m.awareness = msg.Awareness
 		m.systemPrompt = agents.BuildOperatorPrompt(m.teams, m.awareness)
 		llm.SetTeams(m.teams)
@@ -1723,9 +1775,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case JobsReloadedMsg:
 		m.jobs = msg.Jobs
-		if m.selectedJob >= len(m.jobs) {
-			if len(m.jobs) > 0 {
-				m.selectedJob = len(m.jobs) - 1
+		dj := m.displayJobs()
+		if m.selectedJob >= len(dj) {
+			if len(dj) > 0 {
+				m.selectedJob = len(dj) - 1
 			} else {
 				m.selectedJob = 0
 			}
@@ -2641,6 +2694,40 @@ func (m Model) hasBlocker(j job.Job) bool {
 	return ok && b != nil && !b.Answered
 }
 
+// displayJobs returns the filtered and sorted list of jobs for display in the left panel.
+// Rules:
+//   - StatusDone jobs completed more than 24 hours ago are hidden.
+//   - Sort order: StatusActive first (by Created asc), then StatusPaused (by Created asc),
+//     then StatusDone (by Created asc).
+func (m Model) displayJobs() []job.Job {
+	now := time.Now()
+	cutoff := now.Add(-24 * time.Hour)
+
+	var active, paused, done []job.Job
+	for _, j := range m.jobs {
+		if j.Status == job.StatusDone {
+			if j.Completed != "" {
+				t, err := time.Parse(time.RFC3339, j.Completed)
+				if err == nil && t.Before(cutoff) {
+					continue // hide stale completed jobs
+				}
+			}
+			done = append(done, j)
+		} else if j.Status == job.StatusPaused {
+			paused = append(paused, j)
+		} else {
+			active = append(active, j)
+		}
+	}
+
+	// Each group is already in Created-ascending order (job.List sorts by Created).
+	result := make([]job.Job, 0, len(active)+len(paused)+len(done))
+	result = append(result, active...)
+	result = append(result, paused...)
+	result = append(result, done...)
+	return result
+}
+
 // renderLeftPanel builds the left panel with three vertically-stacked sub-panes:
 // Work Efforts (top 40%), DAG (middle 30%), and Chat (bottom 30%).
 func (m Model) renderLeftPanel(panelWidth, panelHeight int) string {
@@ -2656,24 +2743,58 @@ func (m Model) renderLeftPanel(panelWidth, panelHeight int) string {
 
 	divider := LeftPanelDividerStyle.Render(strings.Repeat("─", contentWidth))
 
+	displayedJobs := m.displayJobs()
+
 	// --- Top pane: Jobs ---
 	var topLines []string
 	topLines = append(topLines, LeftPanelHeaderStyle.Render("Jobs"))
-	if len(m.jobs) == 0 {
+	if len(displayedJobs) == 0 {
 		topLines = append(topLines, PlaceholderPaneStyle.Render("No jobs"))
 	} else {
-		for i, j := range m.jobs {
-			name := truncateStr(j.Name, contentWidth-4)
-			var prefix string
-			if m.hasBlocker(j) {
-				prefix = "⚠  " // warning + 2 spaces (⚠ is 1 col, pad to match 🍞 width)
-			} else {
-				prefix = "🍞 " // bread + 1 space = 3 visual cols
+		for i, j := range displayedJobs {
+			// Job name row with status prefix icon.
+			var statusPrefix string
+			switch j.Status {
+			case job.StatusActive:
+				statusPrefix = "▶ "
+			case job.StatusPaused:
+				statusPrefix = "⏸ "
+			case job.StatusDone:
+				statusPrefix = "✓ "
+			default:
+				statusPrefix = "· "
 			}
-			if i == m.selectedJob {
-				topLines = append(topLines, JobSelectedStyle.Render(prefix+name))
+			name := truncateStr(j.Name, contentWidth-len([]rune(statusPrefix))-1)
+			selected := i == m.selectedJob
+			if selected {
+				topLines = append(topLines, JobSelectedStyle.Render(statusPrefix+name))
 			} else {
-				topLines = append(topLines, JobItemStyle.Render(prefix+name))
+				topLines = append(topLines, JobItemStyle.Render(statusPrefix+name))
+			}
+
+			// Child items: only show for active/paused jobs (not done).
+			if j.Status != job.StatusDone {
+				// BLOCKED child (always first if present).
+				if m.hasBlocker(j) {
+					blockerLine := "  ⚠ BLOCKED"
+					topLines = append(topLines, TaskBlockedStyle.Render(blockerLine))
+				}
+
+				// Task subitems from TODO.md.
+				if todosContent, err := job.ReadTodos(j.Dir); err == nil {
+					lines := strings.Split(todosContent, "\n")
+					for _, l := range lines {
+						if strings.HasPrefix(l, "- [ ] ") {
+							task := strings.TrimPrefix(l, "- [ ] ")
+							taskLine := "  ○ " + truncateStr(task, contentWidth-5)
+							topLines = append(topLines, TaskPendingStyle.Render(taskLine))
+						} else if strings.HasPrefix(l, "- [x] ") {
+							task := strings.TrimPrefix(l, "- [x] ")
+							taskLine := "  ✓ " + truncateStr(task, contentWidth-5)
+							topLines = append(topLines, TaskDoneStyle.Render(taskLine))
+						}
+					}
+				}
 			}
 		}
 	}
@@ -2683,11 +2804,11 @@ func (m Model) renderLeftPanel(panelWidth, panelHeight int) string {
 
 	// --- Middle pane: Job details ---
 	var middleLines []string
-	if len(m.jobs) == 0 || m.selectedJob >= len(m.jobs) {
+	if len(displayedJobs) == 0 || m.selectedJob >= len(displayedJobs) {
 		middleLines = append(middleLines, LeftPanelHeaderStyle.Render("Job"))
 		middleLines = append(middleLines, PlaceholderPaneStyle.Render("—"))
 	} else {
-		selectedJob := m.jobs[m.selectedJob]
+		selectedJob := displayedJobs[m.selectedJob]
 		middleLines = append(middleLines, LeftPanelHeaderStyle.Render(truncateStr(selectedJob.Name, contentWidth)))
 
 		// Status badge
@@ -2704,9 +2825,12 @@ func (m Model) renderLeftPanel(panelWidth, panelHeight int) string {
 		badge := DimStyle.Render("[") + statusWord + DimStyle.Render("]")
 		middleLines = append(middleLines, badge)
 
-		// Description
+		// Description (word-wrapped)
 		if selectedJob.Description != "" {
-			middleLines = append(middleLines, DimStyle.Render(truncateStr(selectedJob.Description, contentWidth)))
+			wrapped := wrapText(selectedJob.Description, contentWidth)
+			for _, line := range strings.Split(wrapped, "\n") {
+				middleLines = append(middleLines, DimStyle.Render(line))
+			}
 		}
 
 		// TODO summary
@@ -2746,7 +2870,7 @@ func (m Model) renderLeftPanel(panelWidth, panelHeight int) string {
 	if len(m.teams) == 0 {
 		bottomLines = append(bottomLines, PlaceholderPaneStyle.Render("No teams configured"))
 	} else {
-		for _, t := range m.teams {
+		for i, t := range m.teams {
 			teamColor := lipgloss.Color("135")
 			if t.Coordinator != nil && t.Coordinator.Color != "" {
 				teamColor = lipgloss.Color(t.Coordinator.Color)
@@ -2754,8 +2878,16 @@ func (m Model) renderLeftPanel(panelWidth, panelHeight int) string {
 			prefix := lipgloss.NewStyle().Foreground(teamColor).Render("◆") + " "
 			workerCount := fmt.Sprintf("(%d workers)", len(t.Workers))
 			name := truncateStr(t.Name, contentWidth-2)
-			line := SidebarValueStyle.Bold(true).Render(prefix+name) + " " + DimStyle.Render(workerCount)
-			bottomLines = append(bottomLines, line)
+			if m.focused == focusTeams && i == m.selectedTeam {
+				line := JobSelectedStyle.Render(prefix + name + " " + workerCount)
+				bottomLines = append(bottomLines, line)
+			} else {
+				line := SidebarValueStyle.Bold(true).Render(prefix+name) + " " + DimStyle.Render(workerCount)
+				bottomLines = append(bottomLines, line)
+			}
+		}
+		if m.focused == focusTeams {
+			bottomLines = append(bottomLines, DimStyle.Render("Enter → view team details"))
 		}
 	}
 	bottomPane := lipgloss.NewStyle().Height(bottomH).Render(
@@ -2764,7 +2896,7 @@ func (m Model) renderLeftPanel(panelWidth, panelHeight int) string {
 
 	inner := lipgloss.JoinVertical(lipgloss.Left, topPane, divider, middlePane, divider, bottomPane)
 	panelStyle := LeftPanelStyle.Width(panelWidth).Height(panelHeight)
-	if m.focused == focusJobs || m.focused == focusAgents {
+	if m.focused == focusJobs || m.focused == focusTeams || m.focused == focusAgents {
 		panelStyle = panelStyle.BorderForeground(ColorPrimary)
 	} else {
 		panelStyle = panelStyle.BorderForeground(ColorBorder)

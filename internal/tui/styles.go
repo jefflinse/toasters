@@ -243,4 +243,17 @@ var (
 	TeamsWarningStyle = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("196")).
 				Bold(true)
+
+	// TaskPendingStyle styles a pending task subitem under a job.
+	TaskPendingStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("245"))
+
+	// TaskDoneStyle styles a completed task subitem under a job (dimmed).
+	TaskDoneStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("237"))
+
+	// TaskBlockedStyle styles the BLOCKED indicator under a job.
+	TaskBlockedStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("214")).
+				Bold(true)
 )
