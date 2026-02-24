@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"os/exec"
+	"sort"
 	"strings"
 	"time"
 
@@ -66,13 +67,39 @@ func (c *Client) BaseURL() string {
 	return apiBaseURL
 }
 
-// FetchModels returns a hardcoded list of available Anthropic models.
+// FetchModels returns a list of available Anthropic models with known context
+// window sizes. The configured model is marked as "loaded" so the TUI picks
+// it up. All current Claude models share a 200k token context window.
 func (c *Client) FetchModels(_ context.Context) ([]llm.ModelInfo, error) {
-	return []llm.ModelInfo{
-		{ID: "claude-sonnet-4-20250514", State: "available"},
-		{ID: "claude-haiku-4-20250414", State: "available"},
-		{ID: "claude-opus-4-20250514", State: "available"},
-	}, nil
+	const claudeContextWindow = 200_000
+
+	known := []llm.ModelInfo{
+		{ID: "claude-sonnet-4-20250514", MaxContextLength: claudeContextWindow},
+		{ID: "claude-haiku-4-20250414", MaxContextLength: claudeContextWindow},
+		{ID: "claude-haiku-4-5-20251001", MaxContextLength: claudeContextWindow},
+		{ID: "claude-opus-4-20250514", MaxContextLength: claudeContextWindow},
+	}
+
+	// Mark the configured model as loaded. If it's not in the known list
+	// (e.g. a new model version), add it.
+	found := false
+	for i := range known {
+		if known[i].ID == c.model {
+			known[i].State = "loaded"
+			found = true
+		} else {
+			known[i].State = "available"
+		}
+	}
+	if !found && c.model != "" {
+		known = append([]llm.ModelInfo{{
+			ID:               c.model,
+			State:            "loaded",
+			MaxContextLength: claudeContextWindow,
+		}}, known...)
+	}
+
+	return known, nil
 }
 
 // ChatCompletionStream sends messages to the Anthropic Messages API and returns
@@ -90,11 +117,20 @@ func (c *Client) ChatCompletionStream(ctx context.Context, messages []llm.Messag
 	return ch
 }
 
-// ChatCompletionStreamWithTools is like ChatCompletionStream but accepts tool definitions.
-// For the prototype, tools are ignored — the operator's tool calls go through LM Studio.
+// ChatCompletionStreamWithTools is like ChatCompletionStream but sends tool
+// definitions to the Anthropic API, enabling native tool calling.
 func (c *Client) ChatCompletionStreamWithTools(ctx context.Context, messages []llm.Message, tools []llm.Tool, temperature float64) <-chan llm.StreamResponse {
-	// Tools are not yet supported in the Anthropic provider prototype; ignored.
-	return c.ChatCompletionStream(ctx, messages, temperature)
+	ch := make(chan llm.StreamResponse, 1)
+
+	go func() {
+		defer close(ch)
+
+		system, msgs := convertMessages(messages)
+		aTools := convertTools(tools)
+		c.streamMessagesWithTools(ctx, system, msgs, aTools, ch)
+	}()
+
+	return ch
 }
 
 // ChatCompletion sends a non-streaming request to the Anthropic Messages API
@@ -181,34 +217,101 @@ func StreamMessage(ctx context.Context, model string, prompt string) <-chan llm.
 }
 
 // convertMessages splits llm.Message slices into an Anthropic system prompt
-// and a messages array. System messages are concatenated into the system field;
-// messages with role "tool" or empty content are skipped.
+// and a messages array. Handles system, user, assistant (with optional tool_use),
+// and tool (tool_result) messages.
 func convertMessages(msgs []llm.Message) (string, []anthropicMessage) {
 	var systemParts []string
 	var out []anthropicMessage
 
-	for _, m := range msgs {
-		switch {
-		case m.Role == "system":
+	for i, m := range msgs {
+		switch m.Role {
+		case "system":
 			if m.Content != "" {
 				systemParts = append(systemParts, m.Content)
 			}
-		case m.Role == "tool":
-			// Skip tool messages — Anthropic doesn't use this role.
-			continue
-		case m.Content == "":
-			// Skip empty content messages.
-			continue
-		default:
-			out = append(out, anthropicMessage{
-				Role:    m.Role,
-				Content: m.Content,
-			})
+
+		case "assistant":
+			if len(m.ToolCalls) > 0 {
+				// Assistant message with tool calls → content blocks.
+				var blocks []any
+				if m.Content != "" {
+					blocks = append(blocks, map[string]any{
+						"type": "text",
+						"text": m.Content,
+					})
+				}
+				for _, tc := range m.ToolCalls {
+					// Parse the arguments JSON string into a raw value.
+					var input any
+					if err := json.Unmarshal([]byte(tc.Function.Arguments), &input); err != nil {
+						input = map[string]any{} // fallback to empty object
+					}
+					blocks = append(blocks, map[string]any{
+						"type":  "tool_use",
+						"id":    tc.ID,
+						"name":  tc.Function.Name,
+						"input": input,
+					})
+				}
+				out = append(out, newBlockMessage("assistant", blocks))
+			} else if m.Content != "" {
+				// Skip display-only tool-call indicator messages (e.g. "⚙ calling job_list…")
+				// that the TUI inserts between the assistant tool-call message and the tool
+				// result. These would break the Anthropic API's strict message ordering.
+				if i+1 < len(msgs) && msgs[i+1].Role == "tool" {
+					continue
+				}
+				out = append(out, newTextMessage("assistant", m.Content))
+			}
+
+		case "tool":
+			// Tool result → Anthropic uses role "user" with tool_result content blocks.
+			// Batch all tool results that follow the same assistant tool_use message
+			// into a single user message. We detect this by checking if the last
+			// output message is already a user message (which would be a tool_result batch).
+			block := map[string]any{
+				"type":        "tool_result",
+				"tool_use_id": m.ToolCallID,
+				"content":     m.Content,
+			}
+			if len(out) > 0 && out[len(out)-1].Role == "user" {
+				// Check if the last output message contains tool_result blocks
+				// by attempting to parse it as an array.
+				var existing []any
+				if err := json.Unmarshal(out[len(out)-1].Content, &existing); err == nil && len(existing) > 0 {
+					// Verify the first element is a tool_result.
+					if first, ok := existing[0].(map[string]any); ok && first["type"] == "tool_result" {
+						existing = append(existing, block)
+						b, _ := json.Marshal(existing)
+						out[len(out)-1].Content = b
+						continue
+					}
+				}
+			}
+			out = append(out, newBlockMessage("user", []any{block}))
+
+		case "user":
+			if m.Content != "" {
+				out = append(out, newTextMessage("user", m.Content))
+			}
 		}
 	}
 
 	system := strings.Join(systemParts, "\n\n")
 	return system, out
+}
+
+// convertTools converts llm.Tool definitions to Anthropic's tool format.
+func convertTools(tools []llm.Tool) []anthropicTool {
+	out := make([]anthropicTool, 0, len(tools))
+	for _, t := range tools {
+		out = append(out, anthropicTool{
+			Name:        t.Function.Name,
+			Description: t.Function.Description,
+			InputSchema: t.Function.Parameters,
+		})
+	}
+	return out
 }
 
 // streamMessages is the core streaming implementation used by the Client methods.
@@ -260,6 +363,56 @@ func (c *Client) streamMessages(ctx context.Context, system string, messages []a
 	parseSSEStream(ctx, resp.Body, ch)
 }
 
+// streamMessagesWithTools is like streamMessages but includes tool definitions in the request.
+func (c *Client) streamMessagesWithTools(ctx context.Context, system string, messages []anthropicMessage, tools []anthropicTool, ch chan<- llm.StreamResponse) {
+	creds, err := readKeychainCredentials()
+	if err != nil {
+		ch <- llm.StreamResponse{Error: fmt.Errorf("anthropic auth: %w", err)}
+		return
+	}
+
+	reqBody := anthropicRequest{
+		Model:     c.model,
+		MaxTokens: 8192,
+		Stream:    true,
+		Messages:  messages,
+		System:    system,
+		Tools:     tools,
+	}
+
+	body, err := json.Marshal(reqBody)
+	if err != nil {
+		ch <- llm.StreamResponse{Error: fmt.Errorf("marshaling request: %w", err)}
+		return
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiBaseURL+"/v1/messages", bytes.NewReader(body))
+	if err != nil {
+		ch <- llm.StreamResponse{Error: fmt.Errorf("creating request: %w", err)}
+		return
+	}
+
+	req.Header.Set("Authorization", "Bearer "+creds.AccessToken)
+	req.Header.Set("anthropic-beta", "oauth-2025-04-20")
+	req.Header.Set("anthropic-version", "2023-06-01")
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		ch <- llm.StreamResponse{Error: fmt.Errorf("sending request: %w", err)}
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		ch <- llm.StreamResponse{Error: formatAPIError(resp.StatusCode, respBody)}
+		return
+	}
+
+	parseSSEStream(ctx, resp.Body, ch)
+}
+
 // streamMessage is the original standalone streaming implementation.
 // Kept for backward compatibility with StreamMessage().
 func streamMessage(ctx context.Context, model string, prompt string, ch chan<- llm.StreamResponse) {
@@ -274,7 +427,7 @@ func streamMessage(ctx context.Context, model string, prompt string, ch chan<- l
 		MaxTokens: 8192,
 		Stream:    true,
 		Messages: []anthropicMessage{
-			{Role: "user", Content: prompt},
+			newTextMessage("user", prompt),
 		},
 	}
 
@@ -311,13 +464,22 @@ func streamMessage(ctx context.Context, model string, prompt string, ch chan<- l
 	parseSSEStream(ctx, resp.Body, ch)
 }
 
+// toolAccumulator tracks a tool_use content block being streamed.
+type toolAccumulator struct {
+	id       string
+	name     string
+	inputBuf strings.Builder // accumulated input_json_delta fragments
+}
+
 // parseSSEStream reads Anthropic SSE events from r and sends StreamResponse
-// messages on ch. Shared by both the Client methods and the standalone function.
+// messages on ch. Handles text, tool_use, and tool result content blocks.
+// Shared by both the Client methods and the standalone function.
 func parseSSEStream(ctx context.Context, r io.Reader, ch chan<- llm.StreamResponse) {
 	var (
-		lastModel string
-		lastUsage *llm.Usage
-		eventType string
+		lastModel  string
+		lastUsage  *llm.Usage
+		eventType  string
+		toolBlocks map[int]*toolAccumulator // index → accumulator
 	)
 
 	scanner := bufio.NewScanner(r)
@@ -360,18 +522,44 @@ func parseSSEStream(ctx context.Context, r io.Reader, ch chan<- llm.StreamRespon
 				PromptTokens: ev.Message.Usage.InputTokens,
 			}
 
+		case "content_block_start":
+			var ev contentBlockStartEvent
+			if err := json.Unmarshal([]byte(data), &ev); err != nil {
+				ch <- llm.StreamResponse{Error: fmt.Errorf("parsing content_block_start: %w", err)}
+				return
+			}
+			if ev.ContentBlock.Type == "tool_use" {
+				if toolBlocks == nil {
+					toolBlocks = make(map[int]*toolAccumulator)
+				}
+				toolBlocks[ev.Index] = &toolAccumulator{
+					id:   ev.ContentBlock.ID,
+					name: ev.ContentBlock.Name,
+				}
+			}
+
 		case "content_block_delta":
 			var ev contentBlockDeltaEvent
 			if err := json.Unmarshal([]byte(data), &ev); err != nil {
 				ch <- llm.StreamResponse{Error: fmt.Errorf("parsing content_block_delta: %w", err)}
 				return
 			}
-			if ev.Delta.Text != "" {
-				ch <- llm.StreamResponse{
-					Content: ev.Delta.Text,
-					Model:   lastModel,
+			switch ev.Delta.Type {
+			case "text_delta":
+				if ev.Delta.Text != "" {
+					ch <- llm.StreamResponse{
+						Content: ev.Delta.Text,
+						Model:   lastModel,
+					}
+				}
+			case "input_json_delta":
+				if acc, ok := toolBlocks[ev.Index]; ok {
+					acc.inputBuf.WriteString(ev.Delta.PartialJSON)
 				}
 			}
+
+		case "content_block_stop":
+			// Nothing special needed — tool blocks are emitted on message_delta.
 
 		case "message_delta":
 			var ev messageDeltaEvent
@@ -384,6 +572,36 @@ func parseSSEStream(ctx context.Context, r io.Reader, ch chan<- llm.StreamRespon
 				CompletionTokens: ev.Usage.OutputTokens,
 				TotalTokens:      lastUsage.PromptTokens + ev.Usage.OutputTokens,
 			}
+
+			if ev.Delta.StopReason == "tool_use" && len(toolBlocks) > 0 {
+				// Collect accumulated tool calls sorted by index.
+				indices := make([]int, 0, len(toolBlocks))
+				for idx := range toolBlocks {
+					indices = append(indices, idx)
+				}
+				sort.Ints(indices)
+				calls := make([]llm.ToolCall, 0, len(indices))
+				for _, idx := range indices {
+					acc := toolBlocks[idx]
+					calls = append(calls, llm.ToolCall{
+						Index: idx,
+						ID:    acc.id,
+						Type:  "function",
+						Function: llm.ToolCallFunction{
+							Name:      acc.name,
+							Arguments: acc.inputBuf.String(),
+						},
+					})
+				}
+				ch <- llm.StreamResponse{
+					ToolCalls: calls,
+					Done:      true,
+					Model:     lastModel,
+					Usage:     lastUsage,
+				}
+				return
+			}
+
 			ch <- llm.StreamResponse{
 				Usage:      lastUsage,
 				StopReason: ev.Delta.StopReason,
@@ -406,8 +624,8 @@ func parseSSEStream(ctx context.Context, r io.Reader, ch chan<- llm.StreamRespon
 			ch <- llm.StreamResponse{Error: fmt.Errorf("anthropic API error: %s: %s", ev.Error.Type, ev.Error.Message)}
 			return
 
-		case "ping", "content_block_start", "content_block_stop":
-			// Ignored event types.
+		case "ping":
+			// Ignored.
 		}
 	}
 
@@ -605,11 +823,34 @@ type anthropicRequest struct {
 	Stream    bool               `json:"stream"`
 	Messages  []anthropicMessage `json:"messages"`
 	System    string             `json:"system,omitempty"`
+	Tools     []anthropicTool    `json:"tools,omitempty"`
 }
 
+// anthropicTool is a tool definition in Anthropic's format.
+type anthropicTool struct {
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	InputSchema any    `json:"input_schema"`
+}
+
+// anthropicMessage is a message in the Anthropic Messages API.
+// Content can be a plain string (for simple text) or an array of content blocks
+// (for tool_use / tool_result). We use json.RawMessage to handle both.
 type anthropicMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role    string          `json:"role"`
+	Content json.RawMessage `json:"content"`
+}
+
+// newTextMessage creates an anthropicMessage with a plain string content.
+func newTextMessage(role, text string) anthropicMessage {
+	b, _ := json.Marshal(text)
+	return anthropicMessage{Role: role, Content: b}
+}
+
+// newBlockMessage creates an anthropicMessage with an array of content blocks.
+func newBlockMessage(role string, blocks []any) anthropicMessage {
+	b, _ := json.Marshal(blocks)
+	return anthropicMessage{Role: role, Content: b}
 }
 
 // anthropicResponse is the non-streaming response from the Messages API.
@@ -621,8 +862,11 @@ type anthropicResponse struct {
 }
 
 type anthropicContentBlock struct {
-	Type string `json:"type"`
-	Text string `json:"text"`
+	Type  string `json:"type"`
+	Text  string `json:"text,omitempty"`
+	ID    string `json:"id,omitempty"`
+	Name  string `json:"name,omitempty"`
+	Input any    `json:"input,omitempty"`
 }
 
 // SSE event types from the Anthropic streaming API.
@@ -634,11 +878,23 @@ type messageStartEvent struct {
 	} `json:"message"`
 }
 
+type contentBlockStartEvent struct {
+	Type         string `json:"type"`
+	Index        int    `json:"index"`
+	ContentBlock struct {
+		Type string `json:"type"`
+		ID   string `json:"id,omitempty"`
+		Name string `json:"name,omitempty"`
+	} `json:"content_block"`
+}
+
 type contentBlockDeltaEvent struct {
 	Type  string `json:"type"`
+	Index int    `json:"index"`
 	Delta struct {
-		Type string `json:"type"`
-		Text string `json:"text"`
+		Type        string `json:"type"`
+		Text        string `json:"text,omitempty"`
+		PartialJSON string `json:"partial_json,omitempty"`
 	} `json:"delta"`
 }
 

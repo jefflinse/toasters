@@ -105,10 +105,20 @@ type SessionStats struct {
 	ReasoningTokens      int // accumulated reasoning tokens across all turns
 	CompletionTokensLive int // estimated completion tokens for the in-progress response
 	ReasoningTokensLive  int // estimated reasoning tokens for the in-progress response
+	SystemPromptTokens   int // estimated token count of the system prompt
 	LastResponseTime     time.Duration
 	ResponseStart        time.Time
 	TotalResponses       int           // number of completed responses (for avg calc)
 	TotalResponseTime    time.Duration // sum of all response times (for avg calc)
+}
+
+// estimateTokens returns a rough token count for a string (~4 chars per token).
+func estimateTokens(s string) int {
+	n := len(s)
+	if n == 0 {
+		return 0
+	}
+	return (n + 3) / 4 // ceiling division
 }
 
 // Message types for the Bubble Tea event loop.
@@ -183,6 +193,27 @@ func clearFlash() tea.Cmd {
 	return tea.Tick(1500*time.Millisecond, func(time.Time) tea.Msg {
 		return clearFlashMsg{}
 	})
+}
+
+// scrollbarHideMsg is sent after a delay to hide the scrollbar.
+type scrollbarHideMsg struct{}
+
+// scrollbarHideDuration is how long the scrollbar stays visible after scrolling.
+const scrollbarHideDuration = 1 * time.Second
+
+// scrollbarHide returns a command that fires scrollbarHideMsg after the hide duration.
+func scrollbarHide() tea.Cmd {
+	return tea.Tick(scrollbarHideDuration, func(time.Time) tea.Msg {
+		return scrollbarHideMsg{}
+	})
+}
+
+// showScrollbar marks the scrollbar as visible and returns a command to hide it
+// after the configured duration. Call this from every scroll-event handler.
+func (m *Model) showScrollbar() tea.Cmd {
+	m.scrollbarVisible = true
+	m.lastScrollTime = time.Now()
+	return scrollbarHide()
 }
 
 // loadingBarWidth is the number of cells in the bouncing bar track.
@@ -487,8 +518,10 @@ type Model struct {
 	sidebarHidden          bool // true when user has toggled the sidebar off via ctrl+b
 	leftPanelWidthOverride int  // 0 = use default computed width; >0 = user-resized width
 
-	userScrolled   bool // true when user has manually scrolled up; suppresses auto-scroll
-	hasNewMessages bool // true when new content arrived while user was scrolled up
+	userScrolled     bool      // true when user has manually scrolled up; suppresses auto-scroll
+	hasNewMessages   bool      // true when new content arrived while user was scrolled up
+	scrollbarVisible bool      // true when scrollbar should be rendered (auto-hides after inactivity)
+	lastScrollTime   time.Time // when the last scroll event occurred
 
 	// prevSlotActive/Status track the last-seen state of each gateway slot so
 	// AgentOutputMsg can detect Running→Done transitions and notify the operator.
@@ -1161,7 +1194,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.focused == focusChat && !m.streaming {
 				m.chatViewport.PageUp()
 				m.userScrolled = true
-				return m, nil
+				return m, m.showScrollbar()
 			}
 
 		case "pgdown":
@@ -1174,7 +1207,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				} else {
 					m.userScrolled = true
 				}
-				return m, nil
+				return m, m.showScrollbar()
 			}
 
 		case "home":
@@ -1182,7 +1215,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.focused == focusChat && !m.streaming {
 				m.chatViewport.GotoTop()
 				m.userScrolled = true
-				return m, nil
+				return m, m.showScrollbar()
 			}
 
 		case "end":
@@ -1191,7 +1224,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.chatViewport.GotoBottom()
 				m.userScrolled = false
 				m.hasNewMessages = false
-				return m, nil
+				return m, m.showScrollbar()
 			}
 
 		case "ctrl+u":
@@ -1199,7 +1232,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.focused == focusChat && !m.streaming {
 				m.chatViewport.HalfPageUp()
 				m.userScrolled = true
-				return m, nil
+				return m, m.showScrollbar()
 			}
 
 		case "ctrl+d":
@@ -1212,7 +1245,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				} else {
 					m.userScrolled = true
 				}
-				return m, nil
+				return m, m.showScrollbar()
 			}
 
 		case "up":
@@ -2096,6 +2129,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.awareness = msg.Awareness
 		m.systemPrompt = agents.BuildOperatorPrompt(m.teams, m.awareness)
+		m.stats.SystemPromptTokens = estimateTokens(m.systemPrompt)
 		llm.SetTeams(m.teams)
 		if m.hasConversation() {
 			m.messages[0].Content = m.systemPrompt
@@ -2381,12 +2415,19 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.chatViewport, cmd = m.chatViewport.Update(msg)
 		cmds = append(cmds, cmd)
+		cmds = append(cmds, m.showScrollbar())
 		// Track whether user has scrolled away from the bottom.
 		if m.chatViewport.AtBottom() {
 			m.userScrolled = false
 			m.hasNewMessages = false
 		} else {
 			m.userScrolled = true
+		}
+
+	case scrollbarHideMsg:
+		// Hide the scrollbar if enough time has passed since the last scroll event.
+		if time.Since(m.lastScrollTime) >= scrollbarHideDuration {
+			m.scrollbarVisible = false
 		}
 
 	case loadingTickMsg:
@@ -2740,16 +2781,15 @@ func (m *Model) View() tea.View {
 	sbWidth := sidebarWidth(m.width)
 	lpWidth := m.effectiveLeftPanelWidth()
 
+	const columnGap = 1 // consistent gap between adjacent columns
+
 	var mainWidth int
 	if showSidebar && showLeftPanel {
-		// Gap after left panel (1) + sidebar left border (1).
-		mainWidth = m.width - sbWidth - 1 - lpWidth - 1
+		mainWidth = m.width - lpWidth - sbWidth - 2*columnGap
 	} else if showSidebar {
-		// Sidebar border takes 1 char on the left side.
-		mainWidth = m.width - sbWidth - 1
+		mainWidth = m.width - sbWidth - columnGap
 	} else if showLeftPanel {
-		// Gap after left panel (1).
-		mainWidth = m.width - lpWidth - 1
+		mainWidth = m.width - lpWidth - columnGap
 	} else {
 		mainWidth = m.width
 	}
@@ -2794,14 +2834,26 @@ func (m *Model) View() tea.View {
 	} else {
 		chatContent = m.chatViewport.View()
 
-		// Render scrollbar as a separate column alongside the chat content when it overflows.
+		// Render scrollbar column alongside the chat content.
+		// Always reserve the column to prevent layout shifts, but only draw
+		// the thumb/track when the user has recently scrolled.
 		if m.chatViewport.TotalLineCount() > m.chatViewport.Height() {
-			scrollbar := renderScrollbar(
-				m.chatViewport.Height(),
-				m.chatViewport.TotalLineCount(),
-				m.chatViewport.ScrollPercent(),
-			)
-			chatContent = lipgloss.JoinHorizontal(lipgloss.Top, chatContent, scrollbar)
+			var scrollCol string
+			if m.scrollbarVisible {
+				scrollCol = renderScrollbar(
+					m.chatViewport.Height(),
+					m.chatViewport.TotalLineCount(),
+					m.chatViewport.ScrollPercent(),
+				)
+			} else {
+				// Empty column — one space per line to reserve the gutter.
+				lines := make([]string, m.chatViewport.Height())
+				for i := range lines {
+					lines[i] = " "
+				}
+				scrollCol = strings.Join(lines, "\n")
+			}
+			chatContent = lipgloss.JoinHorizontal(lipgloss.Top, chatContent, scrollCol)
 		}
 
 		// Overlay "new messages" indicator when scrolled up and new content arrived.
@@ -2960,16 +3012,24 @@ func (m *Model) View() tea.View {
 		leftPanelView = m.renderLeftPanel(lpWidth, m.height)
 	}
 
+	// Build a vertical gap spacer (1-column wide, full terminal height) for
+	// consistent spacing between adjacent columns. Each line must contain a
+	// space character so JoinHorizontal measures it as 1 column wide.
+	gapLines := make([]string, m.height)
+	for i := range gapLines {
+		gapLines[i] = " "
+	}
+	gap := strings.Join(gapLines, "\n")
+
 	var content string
 	if showLeftPanel && showSidebar {
 		sidebar := m.renderSidebar(sbWidth)
-		content = lipgloss.JoinHorizontal(lipgloss.Top, leftPanelView, mainColumn, sidebar)
+		content = lipgloss.JoinHorizontal(lipgloss.Top, leftPanelView, gap, mainColumn, gap, sidebar)
 	} else if showLeftPanel {
-		content = lipgloss.JoinHorizontal(lipgloss.Top, leftPanelView, mainColumn)
+		content = lipgloss.JoinHorizontal(lipgloss.Top, leftPanelView, gap, mainColumn)
 	} else if showSidebar {
-		// Build sidebar.
 		sidebar := m.renderSidebar(sbWidth)
-		content = lipgloss.JoinHorizontal(lipgloss.Top, mainColumn, sidebar)
+		content = lipgloss.JoinHorizontal(lipgloss.Top, mainColumn, gap, sidebar)
 	} else {
 		content = mainColumn
 	}
@@ -3074,6 +3134,18 @@ func (m *Model) renderLoading() tea.View {
 	return v
 }
 
+// indentLines prepends each line of s with n spaces.
+func indentLines(s string, n int) string {
+	pad := strings.Repeat(" ", n)
+	lines := strings.Split(s, "\n")
+	for i, l := range lines {
+		if l != "" {
+			lines[i] = pad + l
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
 // renderMarkdown renders markdown content to styled terminal output.
 func (m *Model) renderMarkdown(content string) string {
 	if m.mdRender == nil {
@@ -3107,7 +3179,7 @@ func toastersStyle() ansi.StyleConfig {
 
 // ensureMarkdownRenderer creates or recreates the glamour renderer for the current width.
 func (m *Model) ensureMarkdownRenderer() {
-	w := m.chatViewport.Width()
+	w := m.chatViewport.Width() - AssistantMsgIndent
 	if w < 1 {
 		w = 80
 	}
@@ -3132,15 +3204,15 @@ func (m *Model) resizeComponents() {
 	m.lpWidth = lpWidth
 	m.sbWidth = sbWidth
 
+	const columnGap = 1 // consistent gap between adjacent columns
+
 	var mainWidth int
 	if showSidebar && showLeftPanel {
-		// Gap after left panel (1) + sidebar left border (1).
-		mainWidth = m.width - sbWidth - 1 - lpWidth - 1
+		mainWidth = m.width - lpWidth - sbWidth - 2*columnGap
 	} else if showSidebar {
-		mainWidth = m.width - sbWidth - 1
+		mainWidth = m.width - sbWidth - columnGap
 	} else if showLeftPanel {
-		// Gap after left panel (1).
-		mainWidth = m.width - lpWidth - 1
+		mainWidth = m.width - lpWidth - columnGap
 	} else {
 		mainWidth = m.width
 	}
@@ -3251,8 +3323,31 @@ func (m *Model) updateViewportContent() {
 		if vpH < 1 {
 			vpH = 24
 		}
-		welcome := lipgloss.Place(contentWidth, vpH, lipgloss.Center, lipgloss.Center, block)
-		sb.WriteString(welcome)
+		// Count how many assistant messages (e.g. greeting) will render below.
+		hasGreeting := false
+		for _, msg := range m.messages {
+			if msg.Role == "assistant" && msg.Content != "" {
+				hasGreeting = true
+				break
+			}
+		}
+		if hasGreeting {
+			// When a greeting follows, center the art horizontally but only
+			// use the space it needs so the greeting is visible below.
+			blockLines := strings.Count(block, "\n") + 1
+			topPad := (vpH - blockLines) / 3 // bias toward upper third
+			if topPad < 1 {
+				topPad = 1
+			}
+			sb.WriteString(strings.Repeat("\n", topPad))
+			for _, line := range strings.Split(block, "\n") {
+				sb.WriteString(lipgloss.PlaceHorizontal(contentWidth, lipgloss.Center, line) + "\n")
+			}
+			sb.WriteString("\n")
+		} else {
+			welcome := lipgloss.Place(contentWidth, vpH, lipgloss.Center, lipgloss.Center, block)
+			sb.WriteString(welcome)
+		}
 	}
 
 	assistantIdx := 0
@@ -3296,9 +3391,10 @@ func (m *Model) updateViewportContent() {
 			block := UserMsgBlockStyle.Width(blockWidth).Render(content)
 			sb.WriteString(block + "\n\n")
 		case "assistant":
+			aIndent := strings.Repeat(" ", AssistantMsgIndent)
 			// ask-user-prompt and escalate-prompt messages render as a styled question header.
 			if assistantIdx < len(m.claudeMeta) && (m.claudeMeta[assistantIdx] == "ask-user-prompt" || m.claudeMeta[assistantIdx] == "escalate-prompt") {
-				sb.WriteString(HeaderStyle.Render("? "+msg.Content) + "\n\n")
+				sb.WriteString(aIndent + HeaderStyle.Render("? "+msg.Content) + "\n\n")
 				assistantIdx++
 				continue
 			}
@@ -3310,7 +3406,7 @@ func (m *Model) updateViewportContent() {
 					if i == m.selectedMsgIdx {
 						hint = DimStyle.Render(" [ctrl+x to collapse]")
 					}
-					sb.WriteString(DimStyle.Render(msg.Content) + hint + "\n\n")
+					sb.WriteString(aIndent + DimStyle.Render(msg.Content) + hint + "\n\n")
 				} else {
 					// Collapsed (default): show summary line.
 					toolName := extractToolName(msg.Content)
@@ -3318,29 +3414,30 @@ func (m *Model) updateViewportContent() {
 					if i == m.selectedMsgIdx {
 						hint = DimStyle.Render(" [ctrl+x to expand]")
 					}
-					sb.WriteString(DimStyle.Render("⚙ "+toolName+" ▶") + hint + "\n")
+					sb.WriteString(aIndent + DimStyle.Render("⚙ "+toolName+" ▶") + hint + "\n")
 				}
 				assistantIdx++
 				continue
 			}
 			// Render claude byline (if any) above the response, with timestamp.
+			indent := strings.Repeat(" ", AssistantMsgIndent)
 			if assistantIdx < len(m.claudeMeta) && m.claudeMeta[assistantIdx] != "" {
 				byline := ClaudeBylineStyle.Render("⬡ " + m.claudeMeta[assistantIdx])
 				if ts != "" {
 					byline += DimStyle.Render(ts)
 				}
-				sb.WriteString(byline + "\n")
+				sb.WriteString(indent + byline + "\n")
 			}
 			// Render reasoning trace (if any) above the response — only when expanded.
 			if assistantIdx < len(m.reasoning) && m.reasoning[assistantIdx] != "" {
 				if m.expandedReasoning[assistantIdx] {
-					sb.WriteString(renderReasoningBlock(m.reasoning[assistantIdx], contentWidth))
+					sb.WriteString(indentLines(renderReasoningBlock(m.reasoning[assistantIdx], contentWidth-AssistantMsgIndent), AssistantMsgIndent))
 					sb.WriteString("\n")
 				} else {
-					sb.WriteString(ReasoningStyle.Render("▶ thinking (press ctrl+t to expand)") + "\n\n")
+					sb.WriteString(indent + ReasoningStyle.Render("▶ thinking (press ctrl+t to expand)") + "\n\n")
 				}
 			}
-			sb.WriteString(m.renderMarkdown(msg.Content) + "\n\n")
+			sb.WriteString(indentLines(m.renderMarkdown(msg.Content), AssistantMsgIndent) + "\n\n")
 			assistantIdx++
 		case "tool":
 			// Render tool result as a collapsible dimmed block.
@@ -3368,16 +3465,17 @@ func (m *Model) updateViewportContent() {
 
 	// Show streaming response in progress — re-render markdown incrementally.
 	if m.streaming {
+		streamIndent := strings.Repeat(" ", AssistantMsgIndent)
 		// Live reasoning trace while thinking.
 		if m.currentReasoning != "" {
-			sb.WriteString(renderReasoningBlock(m.currentReasoning, contentWidth))
+			sb.WriteString(indentLines(renderReasoningBlock(m.currentReasoning, contentWidth-AssistantMsgIndent), AssistantMsgIndent))
 			sb.WriteString("\n")
 		} else {
-			sb.WriteString(ReasoningStyle.Render("Thinking...") + "\n\n")
+			sb.WriteString(streamIndent + ReasoningStyle.Render("Thinking...") + "\n\n")
 		}
 		// Live response content.
 		if m.currentResponse != "" {
-			sb.WriteString(m.renderMarkdown(m.currentResponse))
+			sb.WriteString(indentLines(m.renderMarkdown(m.currentResponse), AssistantMsgIndent))
 			cursor := string(spinnerChars[m.spinnerFrame%len(spinnerChars)])
 			sb.WriteString(StreamingStyle.Render(" " + cursor))
 			sb.WriteString("\n\n")
@@ -3672,13 +3770,19 @@ func (m Model) renderLeftPanel(panelWidth, panelHeight int) string {
 	return LeftPanelStyle.Width(panelWidth).Height(panelHeight).Render(inner)
 }
 
-// renderSidebar builds the right sidebar with stats.
+// renderSidebar builds the right sidebar as two independent bordered panes
+// stacked vertically: an operator/stats pane (top, fills remaining space)
+// and an agents pane (bottom, auto-sized to content).
 func (m Model) renderSidebar(sbWidth int) string {
-	contentWidth := sbWidth - SidebarStyle.GetHorizontalPadding()
+	paneFrameH := FocusedPaneStyle.GetHorizontalBorderSize() + FocusedPaneStyle.GetHorizontalPadding()
+	contentWidth := sbWidth - paneFrameH
+	if contentWidth < 1 {
+		contentWidth = 1
+	}
 
+	// --- Top pane: Operator stats ---
 	var sb strings.Builder
 
-	// Operator section: header and connected status on the same line.
 	connStatus := ConnectedStyle.Render("connected")
 	if !m.stats.Connected {
 		connStatus = ErrorStyle.Render("disconnected")
@@ -3706,8 +3810,6 @@ func (m Model) renderSidebar(sbWidth int) string {
 	sb.WriteString("\n")
 
 	sb.WriteString("\n")
-	sb.WriteString(gradientText("Session", [3]uint8{175, 50, 200}, [3]uint8{50, 130, 255}))
-	sb.WriteString("\n\n")
 
 	// While streaming, blend in live estimates for the current response.
 	liveCompletionTokens := m.stats.CompletionTokens + m.stats.CompletionTokensLive
@@ -3718,7 +3820,6 @@ func (m Model) renderSidebar(sbWidth int) string {
 	sb.WriteString(sidebarRow("Tokens out", fmt.Sprintf("%d", liveCompletionTokens)))
 	sb.WriteString(sidebarRow("Reasoning", fmt.Sprintf("%d", liveReasoningTokens)))
 
-	// Tokens/sec: completion tokens over total response time.
 	tokPerSec := "-"
 	if m.stats.TotalResponses > 0 && m.stats.TotalResponseTime > 0 {
 		tps := float64(m.stats.CompletionTokens) / m.stats.TotalResponseTime.Seconds()
@@ -3732,7 +3833,7 @@ func (m Model) renderSidebar(sbWidth int) string {
 	totalTokens := m.stats.PromptTokens + liveCompletionTokens + liveReasoningTokens
 	sb.WriteString(SidebarLabelStyle.Render("Context"))
 	sb.WriteString("\n")
-	sb.WriteString(renderContextBar(totalTokens, m.stats.ContextLength, contentWidth, m.streaming, m.spinnerFrame))
+	sb.WriteString(renderContextBar(totalTokens, m.stats.SystemPromptTokens, m.stats.ContextLength, contentWidth, m.streaming, m.spinnerFrame))
 	sb.WriteString("\n")
 
 	lastResp := "-"
@@ -3747,16 +3848,10 @@ func (m Model) renderSidebar(sbWidth int) string {
 	sb.WriteString(sidebarRow("Last resp", lastResp))
 	sb.WriteString(sidebarRow("Avg resp", avgResp))
 
-	// Agents section — built separately and wrapped in a focus-aware border.
+	// --- Bottom pane: Agents (auto-sized to content) ---
 	var agentsSB strings.Builder
-	agentsBorderFrame := FocusedPaneStyle.GetHorizontalBorderSize() + FocusedPaneStyle.GetHorizontalPadding()
-	agentsInnerW := contentWidth - agentsBorderFrame
-	if agentsInnerW < 1 {
-		agentsInnerW = 1
-	}
-
 	agentsSB.WriteString(gradientText("Agents", [3]uint8{50, 130, 255}, [3]uint8{0, 200, 200}))
-	agentsSB.WriteString("\n\n")
+	agentsSB.WriteString("\n")
 
 	if m.gateway != nil {
 		slots := m.gateway.Slots()
@@ -3773,21 +3868,20 @@ func (m Model) renderSidebar(sbWidth int) string {
 			} else {
 				statusIcon = "✓ "
 			}
-			line := statusIcon + truncateStr(label, agentsInnerW-2)
+			line := statusIcon + truncateStr(label, contentWidth-2)
 			if m.focused == focusAgents && i == m.selectedAgentSlot {
-				agentsSB.WriteString(JobSelectedStyle.Render("🍞 " + truncateStr(label, agentsInnerW-3)))
+				agentsSB.WriteString(JobSelectedStyle.Render("🍞 " + truncateStr(label, contentWidth-3)))
 			} else if snap.Status == gateway.SlotDone {
-				agentsSB.WriteString(DimStyle.Render(statusIcon + truncateStr(label, agentsInnerW-2)))
+				agentsSB.WriteString(DimStyle.Render(statusIcon + truncateStr(label, contentWidth-2)))
 			} else {
 				agentsSB.WriteString(SidebarValueStyle.Render(line))
 			}
 			agentsSB.WriteString("\n")
 		}
 		if !hasAny {
-			agentsSB.WriteString(TaskUpdatesPaneStyle.Render("No agents running"))
+			agentsSB.WriteString(DimStyle.Italic(true).Render("No agents running"))
 		}
 
-		// Aggregated agent token stats.
 		var totalAgentIn, totalAgentOut int
 		for _, snap := range slots {
 			totalAgentIn += snap.InputTokens
@@ -3800,26 +3894,42 @@ func (m Model) renderSidebar(sbWidth int) string {
 			for i, snap := range slots {
 				if snap.InputTokens > 0 || snap.OutputTokens > 0 {
 					perSlot := fmt.Sprintf("  s%d: ↑%s ↓%s", i, compactNum(snap.InputTokens), compactNum(snap.OutputTokens))
-					agentsSB.WriteString(DimStyle.Render(truncateStr(perSlot, agentsInnerW)))
+					agentsSB.WriteString(DimStyle.Render(truncateStr(perSlot, contentWidth)))
 					agentsSB.WriteString("\n")
 				}
 			}
 		}
 	} else {
-		agentsSB.WriteString(TaskUpdatesPaneStyle.Render("No agents running"))
+		agentsSB.WriteString(DimStyle.Italic(true).Render("No agents running"))
 	}
 
 	agentsPaneStyle := UnfocusedPaneStyle
 	if m.focused == focusAgents {
 		agentsPaneStyle = FocusedPaneStyle
 	}
-	sb.WriteString("\n")
-	sb.WriteString(agentsPaneStyle.Width(agentsInnerW).Render(agentsSB.String()))
 
-	return SidebarStyle.
-		Width(sbWidth).
-		Height(m.height).
-		Render(sb.String())
+	// Ensure the agents pane is at least as tall as the input area so their
+	// top borders align across the three columns.
+	minAgentsH := inputHeight + InputAreaStyle.GetVerticalFrameSize()
+	agentsPane := agentsPaneStyle.Width(sbWidth).Render(agentsSB.String())
+	agentsH := lipgloss.Height(agentsPane)
+	if agentsH < minAgentsH {
+		agentsPane = agentsPaneStyle.Width(sbWidth).Height(minAgentsH).Render(agentsSB.String())
+		agentsH = minAgentsH
+	}
+
+	// Calculate top pane height so the sidebar fills the terminal exactly.
+	// agentsH includes the agents pane's border. Style.Height() sets the
+	// outer height (including border/padding), so no extra subtraction needed.
+	topContentH := m.height - agentsH
+	if topContentH < 3 {
+		topContentH = 3
+	}
+
+	topPaneStyle := UnfocusedPaneStyle
+	topPane := topPaneStyle.Width(sbWidth).Height(topContentH).Render(sb.String())
+
+	return lipgloss.JoinVertical(lipgloss.Left, topPane, agentsPane)
 }
 
 // renderGrid renders the 2×2 agent grid screen (4 slots per page, 4 pages total).
@@ -4146,10 +4256,35 @@ func (m *Model) renderGrid() string {
 	return lipgloss.JoinVertical(lipgloss.Left, hotkeyBar, top, bottom)
 }
 
+// commaInt formats an integer with comma-separated thousands (e.g. 200000 → "200,000").
+func commaInt(n int) string {
+	s := strconv.Itoa(n)
+	if n < 0 {
+		return "-" + commaInt(-n)
+	}
+	if len(s) <= 3 {
+		return s
+	}
+	// Insert commas from the right.
+	var b strings.Builder
+	rem := len(s) % 3
+	if rem > 0 {
+		b.WriteString(s[:rem])
+	}
+	for i := rem; i < len(s); i += 3 {
+		if b.Len() > 0 {
+			b.WriteByte(',')
+		}
+		b.WriteString(s[i : i+3])
+	}
+	return b.String()
+}
+
 // renderContextBar renders a segmented progress bar showing context window usage.
-// Each filled cell gets a smooth gradient from green → yellow → red based on
-// its position. When streaming, filled cells pulse between █ and ▓.
-func renderContextBar(used, total, width int, streaming bool, spinnerFrame int) string {
+// The bar has two segments: system prompt tokens (dimmer) and conversation tokens
+// (gradient from green → yellow → red). When streaming, conversation cells pulse.
+// systemTokens is the estimated token count of the system prompt.
+func renderContextBar(used, systemTokens, total, width int, streaming bool, spinnerFrame int) string {
 	if width < 4 {
 		width = 4
 	}
@@ -4161,14 +4296,23 @@ func renderContextBar(used, total, width int, streaming bool, spinnerFrame int) 
 		if pct > 1 {
 			pct = 1
 		}
-		summary = fmt.Sprintf("%d / %d (%.0f%%)", used, total, pct*100)
+		summary = fmt.Sprintf("%s / %s (%.0f%%)", commaInt(used), commaInt(total), pct*100)
 	} else {
-		summary = fmt.Sprintf("%d / ?", used)
+		summary = fmt.Sprintf("%s / ?", commaInt(used))
 	}
 
-	// Build the bar cell by cell with smooth gradient.
-	filled := int(pct * float64(width))
-	empty := width - filled
+	// Calculate system vs conversation segments.
+	var sysPct float64
+	if total > 0 && systemTokens > 0 {
+		sysPct = float64(systemTokens) / float64(total)
+		if sysPct > pct {
+			sysPct = pct // system can't exceed total used
+		}
+	}
+	sysFilled := int(sysPct * float64(width))
+	totalFilled := int(pct * float64(width))
+	convFilled := totalFilled - sysFilled
+	empty := width - totalFilled
 
 	// Gradient anchors: green → yellow (midpoint) → red.
 	type rgb struct{ r, g, b uint8 }
@@ -4185,14 +4329,20 @@ func renderContextBar(used, total, width int, streaming bool, spinnerFrame int) 
 		}
 	}
 
+	sysStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
 	emptyStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("237"))
 
 	var bar strings.Builder
-	for i := range filled {
-		// t is position across the full bar width (not just filled portion).
+
+	// System prompt segment — dim solid fill.
+	bar.WriteString(sysStyle.Render(strings.Repeat("▓", sysFilled)))
+
+	// Conversation segment — gradient fill.
+	for i := range convFilled {
+		// t is position across the full bar width.
 		var t float64
 		if width > 1 {
-			t = float64(i) / float64(width-1)
+			t = float64(sysFilled+i) / float64(width-1)
 		}
 		var c rgb
 		if t < 0.5 {
@@ -4208,11 +4358,25 @@ func renderContextBar(used, total, width int, streaming bool, spinnerFrame int) 
 			Foreground(lipgloss.Color(fmt.Sprintf("#%02x%02x%02x", c.r, c.g, c.b))).
 			Render(cellChar))
 	}
+
+	// Empty segment.
 	bar.WriteString(emptyStyle.Render(strings.Repeat("░", empty)))
 
-	summaryStr := DimStyle.Render(summary)
+	// Summary line with system/conversation breakdown.
+	var detail string
+	if systemTokens > 0 {
+		convTokens := used - systemTokens
+		if convTokens < 0 {
+			convTokens = 0
+		}
+		detail = fmt.Sprintf("sys ~%s · conv ~%s", commaInt(systemTokens), commaInt(convTokens))
+	}
 
-	return bar.String() + "\n" + summaryStr
+	lines := bar.String() + "\n" + DimStyle.Render(summary)
+	if detail != "" {
+		lines += "\n" + DimStyle.Render(detail)
+	}
+	return lines
 }
 
 // miniTokenBar returns a compact 8-char token usage bar with gradient coloring
@@ -4323,6 +4487,9 @@ func (m *Model) initMessages() {
 	if m.systemPrompt != "" {
 		m.messages = []llm.Message{{Role: "system", Content: m.systemPrompt}}
 		m.timestamps = append(m.timestamps, time.Now())
+		m.stats.SystemPromptTokens = estimateTokens(m.systemPrompt)
+	} else {
+		m.stats.SystemPromptTokens = 0
 	}
 	m.completionMsgIdx = make(map[int]bool)
 	m.expandedMsgs = make(map[int]bool)

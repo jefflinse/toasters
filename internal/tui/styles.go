@@ -82,6 +82,11 @@ var (
 	AssistantMsgStyle = lipgloss.NewStyle().
 				Foreground(ColorAssistant)
 
+	// AssistantMsgIndent is the left padding (in columns) applied to assistant
+	// messages so their text aligns with user-message text inside the bordered
+	// block (border width + horizontal padding).
+	AssistantMsgIndent = 3
+
 	// StreamingStyle styles the streaming indicator.
 	StreamingStyle = lipgloss.NewStyle().
 			Foreground(ColorStreaming).
