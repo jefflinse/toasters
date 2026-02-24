@@ -1743,6 +1743,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.systemPrompt = agents.BuildOperatorPrompt(m.teams, m.awareness)
 		m.initMessages()
 		m.loading = false
+		// Kick off a greeting stream so the operator introduces itself on startup.
+		cmds = append(cmds, m.startStream(append(m.messages, llm.Message{
+			Role:    "user",
+			Content: "Greet the user briefly. One or two sentences max. Be direct and ready to work.",
+		})))
 		return m, tea.Batch(cmds...)
 
 	case gateway.SlotTimeoutMsg:
@@ -3195,11 +3200,12 @@ func (m *Model) initMessages() {
 	m.pendingTimeoutSlot = 0
 }
 
-// hasConversation reports whether the conversation contains at least one user or
-// assistant message (i.e. the welcome screen should be hidden).
+// hasConversation reports whether the conversation contains at least one user
+// message (i.e. the welcome art should be hidden). Assistant-only messages
+// (e.g. the startup greeting) are shown alongside the art.
 func (m *Model) hasConversation() bool {
 	for _, msg := range m.messages {
-		if msg.Role == "user" || msg.Role == "assistant" {
+		if msg.Role == "user" {
 			return true
 		}
 	}
