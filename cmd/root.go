@@ -2,8 +2,10 @@ package cmd
 
 import (
 	"context"
+	"io"
 	"log"
 	"os"
+	"path/filepath"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/spf13/cobra"
@@ -44,6 +46,21 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 	configDir, err := config.Dir()
 	if err != nil {
 		return err
+	}
+
+	// Redirect the default logger to a file so log.Printf calls don't
+	// corrupt the TUI's alt-screen. Logs go to ~/.config/toasters/toasters.log.
+	if err := os.MkdirAll(configDir, 0755); err == nil {
+		logPath := filepath.Join(configDir, "toasters.log")
+		if f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644); err == nil {
+			log.SetOutput(f)
+			defer f.Close()
+		} else {
+			// Can't open log file — discard logs rather than corrupt the TUI.
+			log.SetOutput(io.Discard)
+		}
+	} else {
+		log.SetOutput(io.Discard)
 	}
 
 	workspaceDir, err := config.WorkspaceDir(cfg)
