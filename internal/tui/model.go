@@ -110,7 +110,7 @@ type loadingTickMsg struct{}
 
 // loadingTick returns a command that fires loadingTickMsg after 150ms.
 func loadingTick() tea.Cmd {
-	return tea.Tick(150*time.Millisecond, func(time.Time) tea.Msg {
+	return tea.Tick(60*time.Millisecond, func(time.Time) tea.Msg {
 		return loadingTickMsg{}
 	})
 }
@@ -2410,24 +2410,54 @@ func (m *Model) renderLoading() tea.View {
 	// Pick blob color from the palette, cycling with the frame.
 	colorCode := loadingBarColors[m.loadingFrame%len(loadingBarColors)]
 
-	// Build the bar using only single-byte ASCII chars so lipgloss width
-	// measurement is exact. '-' for track, 'O' for blob.
-	var barRunes [loadingBarWidth]byte
-	for i := range barRunes {
-		barRunes[i] = '-'
+	// Determine direction: moving right when frame < loadingBarWidth-1, left otherwise.
+	movingRight := frame < loadingBarWidth-1
+
+	// Trail positions: 1, 2, 3 cells behind the blob (clamped to bar bounds).
+	// trailIntensity maps distance-behind to a dim color code.
+	trailColors := []string{"240", "237", "235"} // bright → dim
+	trailPos := [3]int{-1, -1, -1}
+	for d := 0; d < 3; d++ {
+		var p int
+		if movingRight {
+			p = blobPos - (d + 1)
+		} else {
+			p = blobPos + (d + 1)
+		}
+		if p >= 0 && p < loadingBarWidth {
+			trailPos[d] = p
+		}
 	}
-	barRunes[blobPos] = 'O'
 
-	left := string(barRunes[:blobPos])
-	blob := string(barRunes[blobPos : blobPos+1])
-	right := string(barRunes[blobPos+1:])
-
+	// Build the bar cell by cell so each position can be styled independently.
 	trackStyle := lipgloss.NewStyle().Foreground(ColorBorder)
 	blobStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colorCode)).Bold(true)
-	barStr := trackStyle.Render(left) + blobStyle.Render(blob) + trackStyle.Render(right)
 
-	// Cycle the status message every 5 frames (~750ms).
-	msgIdx := (m.loadingFrame / 5) % len(loadingMessages)
+	var barParts []string
+	for i := 0; i < loadingBarWidth; i++ {
+		ch := "-"
+		if i == blobPos {
+			barParts = append(barParts, blobStyle.Render("O"))
+			continue
+		}
+		isTrail := false
+		for d, tp := range trailPos {
+			if tp == i {
+				trailStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(trailColors[d]))
+				barParts = append(barParts, trailStyle.Render(ch))
+				isTrail = true
+				break
+			}
+		}
+		if !isTrail {
+			barParts = append(barParts, trackStyle.Render(ch))
+		}
+	}
+
+	barStr := strings.Join(barParts, "")
+
+	// Cycle the status message every 12 frames (~720ms at 60ms/frame).
+	msgIdx := (m.loadingFrame / 12) % len(loadingMessages)
 	statusMsg := msgStyle.Render(loadingMessages[msgIdx])
 
 	// Place each element independently at the center of the screen,
