@@ -2409,20 +2409,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
-// overlayScrollbar draws a scrollbar track on the right edge of the viewport content.
-// It replaces the last character of each line with a styled scrollbar character.
+// renderScrollbar returns a single-column string of scrollbar characters (one per line)
+// to be placed alongside the viewport content via lipgloss.JoinHorizontal.
 // scrollPercent is 0.0 (top) to 1.0 (bottom).
-func overlayScrollbar(content string, viewportHeight int, totalLines int, scrollPercent float64) string {
-	if totalLines <= viewportHeight || viewportHeight <= 0 {
-		return content
-	}
-
-	lines := strings.Split(content, "\n")
-	// Pad or trim to viewport height.
-	for len(lines) < viewportHeight {
-		lines = append(lines, "")
-	}
-
+func renderScrollbar(viewportHeight int, totalLines int, scrollPercent float64) string {
 	// Calculate thumb size: proportional to visible/total, minimum 2 lines.
 	thumbSize := viewportHeight * viewportHeight / totalLines
 	if thumbSize < 2 {
@@ -2446,24 +2436,14 @@ func overlayScrollbar(content string, viewportHeight int, totalLines int, scroll
 	thumbStyle := lipgloss.NewStyle().Foreground(ColorPrimary)
 	trackStyle := lipgloss.NewStyle().Foreground(ColorBorder)
 
-	for i := 0; i < viewportHeight && i < len(lines); i++ {
-		var indicator string
+	lines := make([]string, viewportHeight)
+	for i := 0; i < viewportHeight; i++ {
 		if i >= thumbStart && i < thumbEnd {
-			indicator = thumbStyle.Render("█")
+			lines[i] = thumbStyle.Render("█")
 		} else {
-			indicator = trackStyle.Render("░")
-		}
-
-		line := lines[i]
-		// Strip trailing whitespace and replace last visible column with scrollbar.
-		runes := []rune(line)
-		if len(runes) > 0 {
-			lines[i] = string(runes[:len(runes)-1]) + indicator
-		} else {
-			lines[i] = indicator
+			lines[i] = trackStyle.Render("░")
 		}
 	}
-
 	return strings.Join(lines, "\n")
 }
 
@@ -2793,14 +2773,14 @@ func (m *Model) View() tea.View {
 	} else {
 		chatContent = m.chatViewport.View()
 
-		// Overlay scrollbar on the right edge when content overflows.
+		// Render scrollbar as a separate column alongside the chat content when it overflows.
 		if m.chatViewport.TotalLineCount() > m.chatViewport.Height() {
-			chatContent = overlayScrollbar(
-				chatContent,
+			scrollbar := renderScrollbar(
 				m.chatViewport.Height(),
 				m.chatViewport.TotalLineCount(),
 				m.chatViewport.ScrollPercent(),
 			)
+			chatContent = lipgloss.JoinHorizontal(lipgloss.Top, chatContent, scrollbar)
 		}
 
 		// Overlay "new messages" indicator when scrolled up and new content arrived.
@@ -3154,7 +3134,7 @@ func (m *Model) resizeComponents() {
 		vpHeight = 1
 	}
 
-	vpWidth := mainWidth - ChatAreaStyle.GetHorizontalPadding()
+	vpWidth := mainWidth - ChatAreaStyle.GetHorizontalPadding() - 1 // -1 reserves space for scrollbar column
 	if vpWidth < 1 {
 		vpWidth = 1
 	}
@@ -3254,9 +3234,16 @@ func (m *Model) updateViewportContent() {
 		sb.WriteString(welcome)
 	}
 
-	// Build a horizontal separator line for between conversation exchanges.
+	// Build a subtle horizontal separator line for between conversation exchanges.
 	separatorStyle := lipgloss.NewStyle().Foreground(ColorBorder)
-	separator := separatorStyle.Render(strings.Repeat("─", contentWidth))
+	sepWidth := contentWidth * 3 / 5
+	if sepWidth < 20 {
+		sepWidth = 20
+	}
+	if sepWidth > contentWidth {
+		sepWidth = contentWidth
+	}
+	separator := separatorStyle.Render(strings.Repeat("─", sepWidth))
 
 	assistantIdx := 0
 	prevRole := "" // tracks the previous rendered message role for separator logic
@@ -3270,7 +3257,7 @@ func (m *Model) updateViewportContent() {
 		// Insert separator between conversation exchanges: before a user message
 		// that follows an assistant or tool message (i.e. start of a new exchange).
 		if msg.Role == "user" && !m.completionMsgIdx[i] && (prevRole == "assistant" || prevRole == "tool") {
-			sb.WriteString("\n" + separator + "\n\n")
+			sb.WriteString("\n" + separator + "\n")
 		}
 
 		switch msg.Role {
@@ -3344,9 +3331,6 @@ func (m *Model) updateViewportContent() {
 					byline += DimStyle.Render(ts)
 				}
 				sb.WriteString(byline + "\n")
-			} else if ts != "" {
-				// No byline but we have a timestamp — show it on its own line.
-				sb.WriteString(DimStyle.Render("assistant"+ts) + "\n")
 			}
 			// Render reasoning trace (if any) above the response — only when expanded.
 			if assistantIdx < len(m.reasoning) && m.reasoning[assistantIdx] != "" {
