@@ -1,0 +1,251 @@
+// Message types: Bubble Tea message definitions, tick/timer commands, toast notifications, and shared type declarations.
+package tui
+
+import (
+	"time"
+
+	tea "charm.land/bubbletea/v2"
+
+	"github.com/jefflinse/toasters/internal/agents"
+	"github.com/jefflinse/toasters/internal/job"
+	"github.com/jefflinse/toasters/internal/llm"
+)
+
+// Toast notification types.
+type toastLevel int
+
+const (
+	toastInfo toastLevel = iota
+	toastSuccess
+	toastWarning
+)
+
+type toast struct {
+	message   string
+	level     toastLevel
+	createdAt time.Time
+	id        int // unique ID for dismissal
+}
+
+// dismissToastMsg is sent after a delay to remove a specific toast.
+type dismissToastMsg struct{ id int }
+
+// dismissToast returns a tea.Cmd that fires dismissToastMsg after 3 seconds.
+func dismissToast(id int) tea.Cmd {
+	return tea.Tick(3*time.Second, func(time.Time) tea.Msg {
+		return dismissToastMsg{id: id}
+	})
+}
+
+// addToast appends a new toast notification and returns a command to auto-dismiss it.
+func (m *Model) addToast(message string, level toastLevel) tea.Cmd {
+	t := toast{message: message, level: level, createdAt: time.Now(), id: m.nextToastID}
+	m.nextToastID++
+	m.toasts = append(m.toasts, t)
+	// Limit to 5 visible toasts.
+	if len(m.toasts) > 5 {
+		m.toasts = m.toasts[len(m.toasts)-5:]
+	}
+	return dismissToast(t.id)
+}
+
+// pendingCompletion holds a buffered agent-completion notification that arrived
+// while the operator stream was active. It is drained after the stream ends.
+type pendingCompletion struct {
+	notification string // the pre-built notification message to inject
+}
+
+// focusedPanel identifies which panel currently holds keyboard focus.
+type focusedPanel int
+
+const (
+	focusChat   focusedPanel = iota
+	focusJobs   focusedPanel = iota
+	focusTeams  focusedPanel = iota
+	focusAgents focusedPanel = iota
+)
+
+// SessionStats tracks session-level statistics displayed in the sidebar.
+type SessionStats struct {
+	ModelName            string
+	Endpoint             string
+	Connected            bool
+	ContextLength        int // max context window in tokens (0 if unknown)
+	MessageCount         int
+	PromptTokens         int
+	CompletionTokens     int
+	ReasoningTokens      int // accumulated reasoning tokens across all turns
+	CompletionTokensLive int // estimated completion tokens for the in-progress response
+	ReasoningTokensLive  int // estimated reasoning tokens for the in-progress response
+	SystemPromptTokens   int // estimated token count of the system prompt
+	LastResponseTime     time.Duration
+	ResponseStart        time.Time
+	TotalResponses       int           // number of completed responses (for avg calc)
+	TotalResponseTime    time.Duration // sum of all response times (for avg calc)
+}
+
+// estimateTokens returns a rough token count for a string (~4 chars per token).
+func estimateTokens(s string) int {
+	n := len(s)
+	if n == 0 {
+		return 0
+	}
+	return (n + 3) / 4 // ceiling division
+}
+
+// Message types for the Bubble Tea event loop.
+
+type StreamChunkMsg struct {
+	Content   string
+	Reasoning string
+}
+
+type StreamDoneMsg struct {
+	Model string
+	Usage *llm.Usage
+}
+
+type StreamErrMsg struct {
+	Err error
+}
+
+type ModelsMsg struct {
+	Models []llm.ModelInfo
+	Err    error
+}
+
+// AgentOutputMsg is sent by the gateway notify callback when any slot output changes.
+type AgentOutputMsg struct{}
+
+// TeamsReloadedMsg is sent by the hot-reload watcher when the teams directory changes.
+type TeamsReloadedMsg struct {
+	Teams     []agents.Team
+	Awareness string
+}
+
+// JobsReloadedMsg is sent when the jobs directory changes on disk.
+type JobsReloadedMsg struct {
+	Jobs []job.Job
+}
+
+// AppReadyMsg is sent when the app has finished loading and is ready to start.
+type AppReadyMsg struct {
+	Awareness string
+	Greeting  string // pre-fetched operator greeting; injected immediately on render
+}
+
+// loadingTickMsg drives the loading screen animation.
+type loadingTickMsg struct{}
+
+// loadingTick returns a command that fires loadingTickMsg after 150ms.
+func loadingTick() tea.Cmd {
+	return tea.Tick(30*time.Millisecond, func(time.Time) tea.Msg {
+		return loadingTickMsg{}
+	})
+}
+
+// spinnerTickMsg drives the animated braille spinners (streaming cursor + agent heartbeat).
+type spinnerTickMsg struct{}
+
+// spinnerChars are the braille frames used for animated spinners.
+var spinnerChars = []rune("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏")
+
+// spinnerTick returns a command that fires spinnerTickMsg after 80ms.
+func spinnerTick() tea.Cmd {
+	return tea.Tick(80*time.Millisecond, func(time.Time) tea.Msg {
+		return spinnerTickMsg{}
+	})
+}
+
+// clearFlashMsg is sent after a delay to clear the transient flash status line.
+type clearFlashMsg struct{}
+
+// clearFlash returns a command that fires clearFlashMsg once after 1500ms.
+func clearFlash() tea.Cmd {
+	return tea.Tick(1500*time.Millisecond, func(time.Time) tea.Msg {
+		return clearFlashMsg{}
+	})
+}
+
+// scrollbarHideMsg is sent after a delay to hide the scrollbar.
+type scrollbarHideMsg struct{}
+
+// scrollbarHideDuration is how long the scrollbar stays visible after scrolling.
+const scrollbarHideDuration = 1 * time.Second
+
+// scrollbarHide returns a command that fires scrollbarHideMsg after the hide duration.
+func scrollbarHide() tea.Cmd {
+	return tea.Tick(scrollbarHideDuration, func(time.Time) tea.Msg {
+		return scrollbarHideMsg{}
+	})
+}
+
+// showScrollbar marks the scrollbar as visible and returns a command to hide it
+// after the configured duration. Call this from every scroll-event handler.
+func (m *Model) showScrollbar() tea.Cmd {
+	m.scrollbarVisible = true
+	m.lastScrollTime = time.Now()
+	return scrollbarHide()
+}
+
+// SlotTimeoutPromptExpiredMsg fires when the 1-minute user-response window elapses.
+type SlotTimeoutPromptExpiredMsg struct{ SlotID int }
+
+// claudeMetaMsg carries model/mode info parsed from the claude CLI system/init event.
+type claudeMetaMsg struct {
+	Model          string
+	PermissionMode string
+	Version        string
+	SessionID      string
+}
+
+// ToolCallMsg is emitted when the LLM requests one or more tool calls.
+type ToolCallMsg struct {
+	Calls []llm.ToolCall
+}
+
+// AskUserResponseMsg is dispatched when the user submits a response in prompt mode.
+type AskUserResponseMsg struct {
+	Call   llm.ToolCall
+	Result string
+}
+
+// TeamsAutoDetectDoneMsg is sent when the LLM coordinator auto-detection finishes.
+type TeamsAutoDetectDoneMsg struct {
+	teamDir   string // team.Dir, used to match back
+	agentName string // matched agent name; empty if no match or error
+	err       error
+}
+
+// blockerAnswersSubmittedMsg is sent when the user has submitted answers for a blocker.
+type blockerAnswersSubmittedMsg struct {
+	jobID   string
+	blocker *job.Blocker
+}
+
+// ChatEntry consolidates the per-message data that was previously spread
+// across four parallel slices (messages, timestamps, reasoning, claudeMeta).
+// Reasoning and ClaudeMeta are only meaningful for assistant-role messages;
+// for other roles they are empty strings.
+type ChatEntry struct {
+	Message    llm.Message
+	Timestamp  time.Time
+	Reasoning  string
+	ClaudeMeta string
+}
+
+// waitForAgentUpdate blocks until the gateway signals an output update.
+func waitForAgentUpdate(ch <-chan struct{}) tea.Cmd {
+	return func() tea.Msg {
+		<-ch
+		return AgentOutputMsg{}
+	}
+}
+
+// slotTimeoutPromptCmd fires SlotTimeoutPromptExpiredMsg after 1 minute,
+// giving the user a window to respond before auto-continuing.
+func slotTimeoutPromptCmd(slotID int) tea.Cmd {
+	return tea.Tick(time.Minute, func(time.Time) tea.Msg {
+		return SlotTimeoutPromptExpiredMsg{SlotID: slotID}
+	})
+}
