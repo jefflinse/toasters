@@ -14,6 +14,7 @@ var allCommands = []SlashCommand{
 	{Name: "/quit", Description: "Exit the application"},
 	{Name: "/help", Description: "Show help information"},
 	{Name: "/claude", Description: "Ask Claude (via claude CLI)"},
+	{Name: "/anthropic", Description: "Ask Claude (via Anthropic API)"},
 	{Name: "/new", Description: "Start a new session"},
 	{Name: "/kill", Description: "Kill a running background agent"},
 	{Name: "/teams", Description: "Browse and manage agent teams"},

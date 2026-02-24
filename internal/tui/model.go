@@ -23,6 +23,7 @@ import (
 	glamourstyles "github.com/charmbracelet/glamour/styles"
 
 	"github.com/jefflinse/toasters/internal/agents"
+	"github.com/jefflinse/toasters/internal/anthropic"
 	"github.com/jefflinse/toasters/internal/config"
 	"github.com/jefflinse/toasters/internal/gateway"
 	"github.com/jefflinse/toasters/internal/job"
@@ -1551,6 +1552,18 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.showCmdPopup = false
 					m.input.Reset()
 					return m, m.sendClaudeMessage(prompt)
+				}
+				// /anthropic <prompt> — stream via the Anthropic API directly.
+				if strings.HasPrefix(text, "/anthropic ") {
+					prompt := strings.TrimSpace(strings.TrimPrefix(text, "/anthropic "))
+					if prompt == "" {
+						m.input.Reset()
+						m.showCmdPopup = false
+						return m, nil
+					}
+					m.showCmdPopup = false
+					m.input.Reset()
+					return m, m.sendAnthropicMessage(prompt)
 				}
 				// Not a recognized slash command — send to LLM.
 				m.showCmdPopup = false
@@ -4458,6 +4471,42 @@ func (m *Model) sendClaudeMessage(prompt string) tea.Cmd {
 			return streamStartedMsg{ch: ch}
 		},
 		spinnerTick(), // re-arm spinner animation for streaming cursor
+	)
+}
+
+// sendAnthropicMessage appends the user prompt to history and starts a direct
+// Anthropic API stream using OAuth credentials from the macOS Keychain.
+func (m *Model) sendAnthropicMessage(prompt string) tea.Cmd {
+	m.input.Blur()
+	m.filteredCmds = nil
+	m.selectedCmdIdx = 0
+
+	m.messages = append(m.messages, llm.Message{
+		Role:    "user",
+		Content: "/anthropic " + prompt,
+	})
+	m.timestamps = append(m.timestamps, time.Now())
+	m.stats.MessageCount++
+	m.streaming = true
+	m.currentResponse = ""
+	m.currentReasoning = ""
+	m.err = nil
+	m.userScrolled = false
+	m.hasNewMessages = false
+	m.stats.ResponseStart = time.Now()
+
+	m.updateViewportContent()
+	m.chatViewport.GotoBottom()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	m.cancelStream = cancel
+
+	ch := anthropic.StreamMessage(ctx, anthropic.DefaultModel, prompt)
+	return tea.Batch(
+		func() tea.Msg {
+			return streamStartedMsg{ch: ch}
+		},
+		spinnerTick(),
 	)
 }
 
