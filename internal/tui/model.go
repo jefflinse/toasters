@@ -3813,6 +3813,13 @@ func (m *Model) renderGrid() string {
 		// Determine border color based on agent status.
 		var borderColor color.Color
 		switch {
+		case !snap.Active:
+			// Empty/inactive slot — always dim.
+			if focused {
+				borderColor = ColorPrimary
+			} else {
+				borderColor = ColorBorder
+			}
 		case snap.Status == gateway.SlotRunning && snap.PendingTool != "":
 			if focused {
 				// Bright orange for focused + pending tool.
@@ -3827,7 +3834,7 @@ func (m *Model) renderGrid() string {
 			} else {
 				borderColor = ColorConnected
 			}
-		case snap.Status == gateway.SlotDone && snap.Active:
+		case snap.Status == gateway.SlotDone:
 			if focused {
 				borderColor = ColorPrimary
 			} else {
