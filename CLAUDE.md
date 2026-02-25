@@ -49,7 +49,7 @@ internal/
 
 ## Tech Stack
 
-- **Go 1.25.0**
+- **Go 1.26.0**
 - **TUI**: Charmbracelet v2 (bubbletea, bubbles, lipgloss) — all stable v2.0.0
 - **CLI**: Cobra + Viper
 - **Markdown rendering**: Glamour
@@ -105,3 +105,52 @@ Key settings:
 Tests exist across 12 test packages. They use standard Go testing with `t.TempDir()` for file I/O and helper functions for assertions. Run `golangci-lint run` for linting — the codebase currently has 0 lint findings.
 
 Key coverage numbers: `frontmatter` 100%, `llm/tools` 88.3%, `llm/client` 87.7%, `runtime` 87.0%, `job` 85.7%, `provider` 84.9%, `db` 83.6%, `agents` 72.1%, `config` 65.7%.
+
+## Tech Debt Execution Plan (Pre-Phase 2)
+
+Identified via comprehensive codebase health audit (code-reviewer, security-auditor, concurrency-reviewer, refactorer). Findings are organized into three waves by risk and dependency order.
+
+### Wave 1 — Safety Fixes (data races + security)
+
+These are correctness issues. Fix before any feature work.
+
+- [ ] **CONC-B1**: Add mutex protection to `Session.FinalText()` and `InitialMessage()` — they read `s.messages` without holding `s.mu`, concurrent with `Run()` appending to it (`runtime/session.go`)
+- [ ] **CONC-B2**: Add `sync.RWMutex` to `ToolExecutor` for `Teams` field — written from file watcher goroutine, read from tool execution goroutine without synchronization (`llm/tools/tools.go`, `cmd/root.go`)
+- [ ] **CONC-B3**: Fix Gateway `SpawnTeam` TOCTOU race — finds free slot under lock, releases lock, does I/O, re-acquires lock to assign; another goroutine can claim the same slot in between. Use slot reservation pattern (`gateway/gateway.go`)
+- [ ] **CONC-B4**: Read `g.notify`/`g.send` function pointers under lock via helper method — currently read without lock in subprocess goroutines, written via `SetNotify`/`SetSend` under lock (`gateway/gateway.go`)
+- [ ] **SEC-C1/C2**: Add HTTP client with timeouts to `anthropic.Client` and `provider.AnthropicProvider` — both use `http.DefaultClient` (no timeout), risking goroutine leaks on slow/unresponsive API servers (`anthropic/client.go`, `provider/anthropic.go`)
+- [ ] **SEC-C3**: Add SSRF protection to operator-level `fetch_webpage` — unlike the agent-level `web_fetch` which blocks private IPs, the operator tool has no protection (`llm/tools/tools.go`)
+- [ ] **SEC-C4**: Add path restriction to operator-level `list_directory` — currently accepts any path from the LLM with no validation (`llm/tools/tools.go`)
+- [ ] **SEC-H1**: Add `io.LimitReader` to all unbounded `io.ReadAll` response body reads (`anthropic/client.go`, `provider/anthropic.go`)
+- [ ] **SEC-H2**: Fix OAuth refresh token form body to use `url.Values` encoding instead of `fmt.Sprintf` (`anthropic/client.go`)
+
+### Wave 2 — Quick Wins (low-risk cleanup)
+
+Small, mechanical improvements. Each is independent.
+
+- [ ] **ARCH-H3**: Merge `streamMessages`/`streamMessagesWithTools` — 95% identical, differ only by `Tools` field in request body (`anthropic/client.go`)
+- [ ] **ARCH-H4**: Delete standalone `StreamMessage`/`streamMessage` — dead weight third copy of same logic (`anthropic/client.go`)
+- [ ] **DUP-M1**: Extract `expandTilde(path, fallback)` helper — tilde expansion duplicated 3x in `WorkspaceDir`, `DatabasePath`, and `Dir` (`config/config.go`)
+- [ ] **MOD-M1**: `sort.Slice` → `slices.SortFunc`, `sort.Ints` → `slices.Sort`, `sort.Strings` → `slices.Sort` (9 call sites across multiple packages)
+- [ ] **MOD-M2**: Range-over-int where applicable — `for i := 0; i < N; i++` → `for i := range N` (`tui/helpers.go`, `tui/grid.go`, `tui/view.go`)
+- [ ] **MOD-M3**: `copy(dst, src)` → `slices.Clone` (`agents/agents.go`)
+- [ ] **MOD-M4**: `for k := range m { delete(m, k) }` → `clear(m)` (`provider/openai.go`)
+- [ ] **MOD-M5**: `errors.Join` for multi-error aggregation in migration error handling (`db/sqlite.go`)
+- [ ] **MOD-M6**: `context.AfterFunc` for context merging — eliminates goroutine in `Session.Run()` (`runtime/session.go`)
+- [ ] **MOD-M7**: Struct conversion instead of field-by-field copy (staticcheck S1016) (`provider/openai.go`)
+- [ ] **LINT**: Fix all 6 existing lint findings — 5 errcheck (unchecked `Close`/`Fprint`) + 1 staticcheck (`runtime/tools.go`, `runtime/tools_test.go`, `provider/openai.go`)
+- [ ] **CONC-H1**: Add session cleanup to `Runtime` — completed sessions never removed from `sessions` map, unbounded memory growth (`runtime/runtime.go`)
+- [ ] **CONC-H2**: Fix late `Subscribe()` — returns never-closed channel if called after session completion, causing goroutine leak (`runtime/session.go`)
+- [ ] **CONC-H3**: Add debouncing to file watcher — file saves generate multiple events, each triggering `DiscoverTeams()` + awareness regeneration (`agents/agents.go`)
+- [ ] **CONC-M1**: Move regex compilation to package level — `regexp.MustCompile` called inside `fetchWebpage` on every invocation (`llm/tools/tools.go`)
+- [ ] **SEC-H3**: Fix `http.Post` without context in `refreshAccessToken` — use `http.NewRequestWithContext` (`anthropic/client.go`)
+
+### Wave 3 — Structural Improvements (architecture)
+
+Larger refactorings. Each is independent and can be done incrementally.
+
+- [ ] **ARCH-H1**: Consolidate Anthropic SSE parsing — 3 separate implementations with duplicated event types across `anthropic/`, `provider/`, `llm/client/`. Extract shared `internal/sse` package (~400 lines of duplication eliminated)
+- [ ] **ARCH-H2**: Converge on single Provider interface — `llm.Provider` vs `provider.Provider` with bridge adapter and 261-line `convert.go`. Migrate to `provider.Provider` as canonical interface, eliminate adapter layer. *Highest-impact refactoring in the codebase.*
+- [ ] **DESIGN-H1**: Decompose TUI Model — 60+ field god object with 1068-line Update. Extract sub-models: `teamsModal`, `blockerModal`, `PromptModel`, `gridScreen`, `ChatState`. Introduce `ModelConfig` struct for 11-parameter constructor.
+- [ ] **DESIGN-M1**: Tool registry pattern for `ExecuteTool` — replace 360-line switch with `map[string]toolHandler` dispatch, each handler individually testable (`llm/tools/tools.go`)
+- [ ] **MOD-M8**: `log.Printf` → `slog` structured logging — 29 call sites with inconsistent prefixes. Migrate to `slog.Warn`/`slog.Info` with structured fields.
