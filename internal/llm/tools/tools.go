@@ -1,9 +1,11 @@
 package tools
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -29,6 +31,12 @@ type ToolExecutor struct {
 	Tools        []llm.Tool
 	Store        db.Store         // may be nil
 	Runtime      *runtime.Runtime // may be nil
+
+	// Runtime agent configuration — set after construction.
+	DefaultProvider  string                      // default provider name for runtime agents
+	DefaultModel     string                      // default model for runtime agents
+	RepoRoot         string                      // repo root for agent working directory
+	OnSessionStarted func(sess *runtime.Session) // callback when a runtime session starts
 }
 
 // NewToolExecutor creates a ToolExecutor with the default static tools.
@@ -374,6 +382,19 @@ func (te *ToolExecutor) ExecuteTool(call llm.ToolCall) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("creating job: %w", err)
 		}
+		// Dual-write to SQLite if available.
+		if te.Store != nil {
+			ctx := context.Background()
+			dbJob := &db.Job{
+				ID:     j.ID,
+				Title:  args.Name,
+				Type:   "general",
+				Status: db.JobStatusPending,
+			}
+			if err := te.Store.CreateJob(ctx, dbJob); err != nil {
+				log.Printf("warning: failed to persist job %s to SQLite: %v", j.ID, err)
+			}
+		}
 		return "created: " + j.ID, nil
 
 	case "job_read_overview":
@@ -482,6 +503,30 @@ func (te *ToolExecutor) ExecuteTool(call llm.ToolCall) (string, error) {
 		if tasks, err := job.ListTasks(jobDir); err == nil && len(tasks) > 0 {
 			_ = job.SetTaskTeam(tasks[0].Dir, args.TeamName)
 		}
+		// Try runtime path first if available and configured.
+		if te.Runtime != nil && te.DefaultProvider != "" {
+			prompt := agents.BuildTeamCoordinatorPrompt(team, jobDir)
+			opts := runtime.SpawnOpts{
+				AgentID:        team.Name,
+				ProviderName:   te.DefaultProvider,
+				Model:          te.DefaultModel,
+				SystemPrompt:   prompt,
+				JobID:          args.JobID,
+				InitialMessage: args.Task,
+				WorkDir:        te.RepoRoot,
+			}
+			sess, err := te.Runtime.SpawnAgent(context.Background(), opts)
+			if err != nil {
+				log.Printf("runtime spawn failed, falling back to gateway: %v", err)
+				// Fall through to gateway path below.
+			} else {
+				if te.OnSessionStarted != nil {
+					te.OnSessionStarted(sess)
+				}
+				return fmt.Sprintf("started runtime session %s for team %s", sess.ID(), team.Name), nil
+			}
+		}
+		// Fall through to gateway path.
 		slotID, alreadyRunning, err := te.Gateway.SpawnTeam(args.TeamName, args.JobID, args.Task, team)
 		if err != nil {
 			return "", fmt.Errorf("spawning team: %w", err)
@@ -585,6 +630,14 @@ func (te *ToolExecutor) ExecuteTool(call llm.ToolCall) (string, error) {
 		if err := job.UpdateFrontmatter(dir, updates); err != nil {
 			return "", fmt.Errorf("updating job status: %w", err)
 		}
+		// Dual-write to SQLite if available.
+		if te.Store != nil {
+			ctx := context.Background()
+			dbStatus := mapJobStatus(args.Status)
+			if err := te.Store.UpdateJobStatus(ctx, args.ID, dbStatus); err != nil {
+				log.Printf("warning: failed to update job %s status in SQLite: %v", args.ID, err)
+			}
+		}
 		return fmt.Sprintf("job %s status set to %s", args.ID, args.Status), nil
 
 	default:
@@ -680,4 +733,20 @@ func listDirectory(path string) (string, error) {
 	}
 
 	return strings.Join(lines, "\n"), nil
+}
+
+// mapJobStatus maps markdown job status strings to db.JobStatus constants.
+func mapJobStatus(status string) db.JobStatus {
+	switch status {
+	case "active":
+		return db.JobStatusActive
+	case "done":
+		return db.JobStatusCompleted
+	case "cancelled":
+		return db.JobStatusCancelled
+	case "paused":
+		return db.JobStatusPending // closest match
+	default:
+		return db.JobStatusPending
+	}
 }

@@ -133,6 +133,9 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 	// The TUI will replace this with a real notify after the program starts.
 	gw := gateway.New(cfg.Claude, workspaceDir, func() {})
 	toolExec := llmtools.NewToolExecutor(gw, teams, workspaceDir, store, rt)
+	toolExec.DefaultProvider = cfg.Agents.DefaultProvider
+	toolExec.DefaultModel = cfg.Agents.DefaultModel
+	toolExec.RepoRoot = repoRoot
 
 	var client llm.Provider
 	switch cfg.Operator.Provider {
@@ -149,6 +152,33 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 	gw.SetSend(func(msg gateway.SlotTimeoutMsg) {
 		p.Send(msg)
 	})
+
+	// Wire up runtime session event forwarding to the TUI.
+	toolExec.OnSessionStarted = func(sess *runtime.Session) {
+		snap := sess.Snapshot()
+		p.Send(tui.RuntimeSessionStartedMsg{
+			SessionID: snap.ID,
+			AgentName: snap.AgentID,
+			JobID:     snap.JobID,
+		})
+
+		// Forward events in a goroutine.
+		go func() {
+			events := sess.Subscribe()
+			for ev := range events {
+				p.Send(tui.RuntimeSessionEventMsg{Event: ev})
+			}
+			// Session done — send completion message.
+			finalSnap := sess.Snapshot()
+			p.Send(tui.RuntimeSessionDoneMsg{
+				SessionID: finalSnap.ID,
+				AgentName: finalSnap.AgentID,
+				JobID:     finalSnap.JobID,
+				FinalText: sess.FinalText(),
+				Status:    finalSnap.Status,
+			})
+		}()
+	}
 
 	// Generate team awareness and pre-fetch the operator greeting in the background
 	// so the TUI appears immediately. Always send AppReadyMsg even on error.

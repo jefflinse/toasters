@@ -9,6 +9,7 @@ import (
 	"github.com/jefflinse/toasters/internal/agents"
 	"github.com/jefflinse/toasters/internal/job"
 	"github.com/jefflinse/toasters/internal/llm"
+	"github.com/jefflinse/toasters/internal/runtime"
 )
 
 // Toast notification types.
@@ -116,6 +117,27 @@ type ModelsMsg struct {
 
 // AgentOutputMsg is sent by the gateway notify callback when any slot output changes.
 type AgentOutputMsg struct{}
+
+// RuntimeSessionStartedMsg is sent when a new runtime session begins.
+type RuntimeSessionStartedMsg struct {
+	SessionID string
+	AgentName string
+	JobID     string
+}
+
+// RuntimeSessionEventMsg carries a runtime session event to the TUI.
+type RuntimeSessionEventMsg struct {
+	Event runtime.SessionEvent
+}
+
+// RuntimeSessionDoneMsg is sent when a runtime session completes.
+type RuntimeSessionDoneMsg struct {
+	SessionID string
+	AgentName string
+	JobID     string
+	FinalText string
+	Status    string // "completed", "failed", "cancelled"
+}
 
 // TeamsReloadedMsg is sent by the hot-reload watcher when the teams directory changes.
 type TeamsReloadedMsg struct {
