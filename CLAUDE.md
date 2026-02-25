@@ -8,7 +8,7 @@ Toasters is a Go-based TUI orchestration tool for agentic coding work. It coordi
 
 ```bash
 go build ./...          # Build
-go test ./...           # Test (15 test packages)
+go test ./...           # Test (16 test packages)
 go run main.go          # Run the TUI
 ```
 
@@ -111,13 +111,13 @@ Key settings:
 
 ## Testing
 
-Tests exist across 15 test packages. They use standard Go testing with `t.TempDir()` for file I/O and helper functions for assertions. Run `golangci-lint run` for linting — the codebase currently has 0 lint findings.
+Tests exist across 16 test packages. They use standard Go testing with `t.TempDir()` for file I/O and helper functions for assertions. Run `golangci-lint run` for linting — the codebase currently has 0 lint findings.
 
 Key coverage numbers: `frontmatter` 100%, `llm/tools` 88.3%, `llm/client` 87.7%, `runtime` 87.0%, `job` 85.7%, `provider` 84.9%, `db` 83.6%, `mcp` 83%, `agents` 72.1%, `config` 65.7%.
 
 ## Tech Debt Execution Plan (Pre-Phase 3)
 
-Identified via comprehensive codebase health audit (code-reviewer, security-auditor, concurrency-reviewer, refactorer). Findings are organized into three waves by risk and dependency order. Waves 1 and 2 were completed pre-Phase 2. Wave 3 is being completed pre-Phase 3.
+Identified via comprehensive codebase health audit (code-reviewer, security-auditor, concurrency-reviewer, refactorer). Findings are organized into three waves by risk and dependency order. Waves 1 and 2 were completed pre-Phase 2. Wave 3 was completed pre-Phase 3. All tech debt is resolved.
 
 ### Wave 1 — Safety Fixes ✅
 
