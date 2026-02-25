@@ -329,23 +329,34 @@ func (m *Model) appendEntry(e ChatEntry) {
 	m.entries = append(m.entries, e)
 }
 
-// displayOnlyMetas is the set of ClaudeMeta values that mark entries as
-// UI-only display chrome. These entries must never be sent to the LLM API
-// because they break the tool_use → tool_result pairing requirement.
-var displayOnlyMetas = map[string]bool{
-	"tool-call-indicator": true,
-	"ask-user-prompt":     true,
-	"dispatch-confirm":    true,
-	"kill-confirm":        true,
-	"escalate-prompt":     true,
+// isDisplayOnly reports whether an entry is UI-only chrome that must never be
+// sent to the LLM API. Two categories:
+//
+//  1. Pure confirmation/prompt assistant messages (dispatch-confirm, kill-confirm,
+//     ask-user-prompt, escalate-prompt) — these are text-only assistant messages
+//     injected for the user's benefit; they have no ToolCalls and no matching
+//     tool_result, so sending them would confuse the API.
+//
+//  2. Visual tool-call indicator messages — entries with ClaudeMeta "tool-call-indicator"
+//     that have no ToolCalls set (i.e. the "⚙ calling foo…" text lines). Entries
+//     with ToolCalls set ARE real tool_use records and must be kept.
+func isDisplayOnly(e ChatEntry) bool {
+	switch e.ClaudeMeta {
+	case "ask-user-prompt", "dispatch-confirm", "kill-confirm", "escalate-prompt":
+		return true
+	case "tool-call-indicator":
+		// Keep entries that carry actual tool calls; drop text-only indicators.
+		return len(e.Message.ToolCalls) == 0
+	}
+	return false
 }
 
 // messagesFromEntries extracts the llm.Message slice from entries for passing to the LLM client.
-// Display-only entries (tool-call indicators, confirmation prompts) are filtered out.
+// Display-only entries (visual indicators, confirmation prompts) are filtered out.
 func (m *Model) messagesFromEntries() []llm.Message {
 	msgs := make([]llm.Message, 0, len(m.entries))
 	for _, e := range m.entries {
-		if displayOnlyMetas[e.ClaudeMeta] {
+		if isDisplayOnly(e) {
 			continue
 		}
 		msgs = append(msgs, e.Message)
