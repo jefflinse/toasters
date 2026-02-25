@@ -1768,12 +1768,11 @@ func TestAssignTeam_UsesRuntimeWhenProviderConfigured(t *testing.T) {
 	te.Runtime = rt
 	te.DefaultProvider = "test-provider"
 	te.DefaultModel = "test-model"
-	te.RepoRoot = t.TempDir()
 
-	// Track session starts.
+	// Track session starts via the runtime callback (the canonical notification path).
 	var sessionStarted bool
 	var mu sync.Mutex
-	te.OnSessionStarted = func(sess *runtime.Session) {
+	rt.OnSessionStarted = func(sess *runtime.Session) {
 		mu.Lock()
 		sessionStarted = true
 		mu.Unlock()
@@ -2000,4 +1999,107 @@ func TestCancelSession_BadJSON(t *testing.T) {
 	if !strings.Contains(err.Error(), "parsing cancel_session args") {
 		t.Errorf("expected error about parsing args, got: %v", err)
 	}
+}
+
+// ============================================================================
+// Regression test: assign_team passes WorkDir == jobDir on runtime path
+// ============================================================================
+
+// TestAssignTeam_RuntimePath_WorkDirIsJobDir is a regression test for the bug
+// where assign_team used te.RepoRoot (os.Getwd()) as WorkDir when spawning a
+// coordinator session via the runtime path instead of the job's dedicated
+// directory. The fix sets WorkDir: jobDir.
+//
+// We verify this by capturing the spawned session via OnSessionStarted and
+// asserting that its SystemPrompt contains the expected jobDir path. The
+// system prompt is built with agents.BuildTeamCoordinatorPrompt(team, jobDir),
+// which embeds jobDir in the "Job Directory" section. If the bug were present,
+// the prompt would contain os.Getwd() instead of jobDir.
+func TestAssignTeam_RuntimePath_WorkDirIsJobDir(t *testing.T) {
+	te, configDir := newTestExecutor(t)
+
+	// Register a mock provider so SpawnAgent succeeds.
+	mock := &mockProvider{name: "test-provider"}
+	registry := provider.NewRegistry()
+	registry.Register("test-provider", mock)
+
+	rt := runtime.New(nil, registry)
+	te.Runtime = rt
+	te.DefaultProvider = "test-provider"
+	te.DefaultModel = "test-model"
+
+	// Capture the session spawned by assign_team.
+	var capturedSession *runtime.Session
+	var sessionMu sync.Mutex
+	rt.OnSessionStarted = func(sess *runtime.Session) {
+		sessionMu.Lock()
+		capturedSession = sess
+		sessionMu.Unlock()
+	}
+
+	// Gateway must be non-nil (assign_team checks te.Gateway == nil first),
+	// but it should NOT be called when the runtime path succeeds.
+	gatewayCalled := false
+	te.Gateway = &mockSpawner{
+		spawnTeamFn: func(_, _, _ string, _ agents.Team) (int, bool, error) {
+			gatewayCalled = true
+			return 0, false, nil
+		},
+	}
+	te.SetTeams([]agents.Team{{Name: "coding"}})
+
+	// Create the job directory. The expected WorkDir is the job's directory
+	// under the workspace: <configDir>/jobs/<jobID>.
+	const jobID = "workdir-regression-job"
+	makeJobDir(t, configDir, jobID, "active", "")
+	expectedJobDir := filepath.Join(job.JobsDir(configDir), jobID)
+
+	call := makeToolCall("assign_team", map[string]string{
+		"team_name": "coding",
+		"job_id":    jobID,
+		"task":      "Verify WorkDir is set to jobDir",
+	})
+
+	result, err := te.ExecuteTool(context.Background(), call)
+	if err != nil {
+		t.Fatalf("ExecuteTool returned error: %v", err)
+	}
+
+	// Confirm the runtime path was taken (not the gateway fallback).
+	if !strings.Contains(result, "started runtime session") {
+		t.Errorf("expected runtime path result, got %q", result)
+	}
+	if gatewayCalled {
+		t.Error("gateway should not be called when runtime path succeeds")
+	}
+
+	// Retrieve the captured session.
+	sessionMu.Lock()
+	sess := capturedSession
+	sessionMu.Unlock()
+	if sess == nil {
+		t.Fatal("OnSessionStarted was not called — no session was captured")
+	}
+
+	// The system prompt is built with agents.BuildTeamCoordinatorPrompt(team, jobDir).
+	// It contains the literal string "Your job directory is: <jobDir>".
+	// If WorkDir was incorrectly set to os.Getwd() instead of jobDir, the
+	// prompt would contain the wrong path and this assertion would fail.
+	prompt := sess.SystemPrompt()
+	if !strings.Contains(prompt, expectedJobDir) {
+		t.Errorf("session SystemPrompt does not contain expected jobDir %q\n"+
+			"This indicates assign_team passed the wrong WorkDir to SpawnAgent.\n"+
+			"Prompt excerpt: %q",
+			expectedJobDir,
+			truncateForError(prompt, 200),
+		)
+	}
+}
+
+// truncateForError returns up to maxLen characters of s for use in error messages.
+func truncateForError(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
 }

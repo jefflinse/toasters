@@ -46,7 +46,6 @@ type ToolExecutor struct {
 	// Runtime agent configuration — set after construction.
 	DefaultProvider  string                      // default provider name for runtime agents
 	DefaultModel     string                      // default model for runtime agents
-	RepoRoot         string                      // repo root for agent working directory
 	OnSessionStarted func(sess *runtime.Session) // callback when a runtime session starts
 }
 
@@ -565,16 +564,13 @@ func (te *ToolExecutor) ExecuteTool(ctx context.Context, call llm.ToolCall) (str
 				SystemPrompt:   prompt,
 				JobID:          args.JobID,
 				InitialMessage: args.Task,
-				WorkDir:        te.RepoRoot,
+				WorkDir:        jobDir,
 			}
 			sess, err := te.Runtime.SpawnAgent(context.Background(), opts)
 			if err != nil {
 				log.Printf("runtime spawn failed, falling back to gateway: %v", err)
 				// Fall through to gateway path below.
 			} else {
-				if te.OnSessionStarted != nil {
-					te.OnSessionStarted(sess)
-				}
 				return fmt.Sprintf("started runtime session %s for team %s", sess.ID(), team.Name), nil
 			}
 		}

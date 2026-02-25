@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"fmt"
+	"log"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -28,6 +29,7 @@ type Session struct {
 
 	// State — tokensIn/tokensOut use atomic for lock-free reads.
 	status    string // "active", "completed", "failed", "cancelled"
+	termErr   error  // terminal error from Run(), set under mu before return
 	tokensIn  atomic.Int64
 	tokensOut atomic.Int64
 	startTime time.Time
@@ -92,7 +94,14 @@ func newSession(id string, p provider.Provider, opts SpawnOpts, toolExec ToolExe
 
 // Run executes the conversation loop. It blocks until the conversation
 // completes, fails, is cancelled, or exceeds max turns.
-func (s *Session) Run(ctx context.Context) error {
+func (s *Session) Run(ctx context.Context) (retErr error) {
+	defer func() {
+		if retErr != nil {
+			s.mu.Lock()
+			s.termErr = retErr
+			s.mu.Unlock()
+		}
+	}()
 	defer close(s.done)
 	defer s.closeSubscribers()
 
@@ -160,6 +169,7 @@ func (s *Session) Run(ctx context.Context) error {
 
 			resultEvent := &ToolResultEvent{CallID: tc.ID, Name: tc.Name, Result: result}
 			if execErr != nil {
+				log.Printf("warning: tool %q execution error: %v", tc.Name, execErr)
 				resultEvent.Error = execErr.Error()
 				result = fmt.Sprintf("error: %s", execErr.Error())
 			}
@@ -272,6 +282,13 @@ func (s *Session) FinalText() string {
 		}
 	}
 	return ""
+}
+
+// TermErr returns the terminal error from Run(), if any. Safe for concurrent use.
+func (s *Session) TermErr() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.termErr
 }
 
 // Cancel cancels the session's context.

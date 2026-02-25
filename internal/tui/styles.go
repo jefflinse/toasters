@@ -288,4 +288,12 @@ var (
 	TaskBlockedStyle = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("214")).
 				Bold(true)
+
+	// DB task status indicator styles (for SQLite-backed progress display).
+	dbTaskPendingStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+	dbTaskInProgressStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("14")) // cyan
+	dbTaskCompletedStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("10")) // green
+	dbTaskFailedStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))  // red
+	dbTaskBlockedStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("11")) // yellow
+	dbTaskCancelledStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
 )

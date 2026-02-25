@@ -74,13 +74,6 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 
-	// repoRoot is the directory containing the agents/ folder.
-	// For now, use the current working directory.
-	repoRoot, err := os.Getwd()
-	if err != nil {
-		return err
-	}
-
 	// Discover teams from the configured teams directory.
 	teamsDir := cfg.Operator.TeamsDir
 	teams, err := agents.DiscoverTeams(teamsDir)
@@ -153,7 +146,6 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 	toolExec := llmtools.NewToolExecutor(gw, teams, workspaceDir, store, rt)
 	toolExec.DefaultProvider = cfg.Agents.DefaultProvider
 	toolExec.DefaultModel = cfg.Agents.DefaultModel
-	toolExec.RepoRoot = repoRoot
 
 	// Wire MCP tools into operator tool set.
 	toolExec.MCPManager = mcpManager
@@ -167,7 +159,7 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 		client = llmclient.NewClient(cfg.Operator.Endpoint, cfg.Operator.Model)
 	}
 
-	m := tui.NewModel(client, cfg.Claude, workspaceDir, gw, repoRoot, teamsDir, teams, "", toolExec, store, rt)
+	m := tui.NewModel(client, cfg.Claude, workspaceDir, gw, teamsDir, teams, "", toolExec, store, rt)
 
 	p := tea.NewProgram(&m)
 
@@ -175,8 +167,10 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 		p.Send(msg)
 	})
 
-	// Wire up runtime session event forwarding to the TUI.
-	toolExec.OnSessionStarted = func(sess *runtime.Session) {
+	// notifySessionStarted wires a runtime session into the TUI event loop.
+	// It is used for all sessions — both coordinator sessions (spawned by assign_team)
+	// and child sessions (spawned by spawn_agent) — via rt.OnSessionStarted.
+	notifySessionStarted := func(sess *runtime.Session) {
 		snap := sess.Snapshot()
 		p.Send(tui.RuntimeSessionStartedMsg{
 			SessionID:      snap.ID,
@@ -203,6 +197,10 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 			})
 		}()
 	}
+
+	// Wire the callback on the runtime so all sessions (coordinator + children)
+	// are forwarded to the TUI through a single path.
+	rt.OnSessionStarted = notifySessionStarted
 
 	// Generate team awareness and pre-fetch the operator greeting in the background
 	// so the TUI appears immediately. Always send AppReadyMsg even on error.

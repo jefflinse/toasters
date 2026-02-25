@@ -76,7 +76,6 @@ type Model struct {
 	teamsDir     string        // path to the configured teams directory
 	awareness    string        // team-awareness content used to build the operator prompt
 	systemPrompt string        // assembled at startup; prepended to every LLM call
-	repoRoot     string        // path to repo root (for /claude slash command path)
 
 	// Teams modal state.
 	teamsModal teamsModalState
@@ -186,6 +185,13 @@ type Model struct {
 	store           db.Store                // may be nil — graceful degradation
 	runtime         *runtime.Runtime        // may be nil
 	runtimeSessions map[string]*runtimeSlot // keyed by session ID
+
+	// Progress polling state (populated every 500ms from SQLite and the runtime).
+	progressJobs            []*db.Job
+	progressTasks           map[string][]*db.Task
+	progressReports         map[string][]*db.ProgressReport
+	activeSessions          []*db.AgentSession
+	runtimeSessionSnapshots []runtime.SessionSnapshot // live snapshots with real token counts
 }
 
 // runtimeSlot tracks a runtime agent session for TUI display.
@@ -201,7 +207,7 @@ type runtimeSlot struct {
 }
 
 // NewModel returns an initialized root model.
-func NewModel(client llm.Provider, claudeCfg config.ClaudeConfig, workspaceDir string, gw *gateway.Gateway, repoRoot string, teamsDir string, teams []agents.Team, awareness string, toolExec *tools.ToolExecutor, store db.Store, rt *runtime.Runtime) Model {
+func NewModel(client llm.Provider, claudeCfg config.ClaudeConfig, workspaceDir string, gw *gateway.Gateway, teamsDir string, teams []agents.Team, awareness string, toolExec *tools.ToolExecutor, store db.Store, rt *runtime.Runtime) Model {
 	ta := textarea.New()
 	ta.Placeholder = "Type your message here..."
 	ta.Prompt = ""
@@ -255,7 +261,6 @@ func NewModel(client llm.Provider, claudeCfg config.ClaudeConfig, workspaceDir s
 	m.focused = focusChat
 	m.gateway = gw
 
-	m.repoRoot = repoRoot
 	m.teamsDir = teamsDir
 	m.teams = teams
 	m.awareness = awareness
@@ -305,6 +310,9 @@ func (m *Model) Init() tea.Cmd {
 	}
 	if m.agentNotifyCh != nil {
 		cmds = append(cmds, waitForAgentUpdate(m.agentNotifyCh))
+	}
+	if m.store != nil {
+		cmds = append(cmds, scheduleProgressPoll())
 	}
 	return tea.Batch(cmds...)
 }
@@ -1374,6 +1382,20 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		return m, nil
+
+	case progressPollTickMsg:
+		if m.store != nil {
+			return m, progressPollCmd(m.store, m.runtime)
+		}
+		return m, nil
+
+	case progressPollMsg:
+		m.progressJobs = msg.Jobs
+		m.progressTasks = msg.Tasks
+		m.progressReports = msg.Progress
+		m.activeSessions = msg.Sessions
+		m.runtimeSessionSnapshots = msg.RuntimeSessions
+		return m, scheduleProgressPoll()
 	}
 
 	return m, tea.Batch(cmds...)

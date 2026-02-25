@@ -39,16 +39,18 @@ type AgentSpawner interface {
 
 // CoreTools implements the standard agent tool set.
 type CoreTools struct {
-	workDir    string
-	allowShell bool
-	spawner    AgentSpawner // for spawn_agent; may be nil
-	depth      int          // current spawn depth
-	maxDepth   int          // max spawn depth
-	httpClient *http.Client // for web_fetch; nil uses webFetchClient
-	store      db.Store     // may be nil; for progress tools
-	sessionID  string
-	agentID    string
-	jobID      string
+	workDir      string
+	allowShell   bool
+	spawner      AgentSpawner // for spawn_agent; may be nil
+	depth        int          // current spawn depth
+	maxDepth     int          // max spawn depth
+	httpClient   *http.Client // for web_fetch; nil uses webFetchClient
+	store        db.Store     // may be nil; for progress tools
+	sessionID    string
+	agentID      string
+	jobID        string
+	providerName string
+	model        string
 }
 
 // CoreToolsOption configures a CoreTools instance.
@@ -79,6 +81,14 @@ func WithSessionContext(sessionID, agentID, jobID string) CoreToolsOption {
 		ct.sessionID = sessionID
 		ct.agentID = agentID
 		ct.jobID = jobID
+	}
+}
+
+// WithProvider sets the provider name and model for child agent spawns.
+func WithProvider(providerName, model string) CoreToolsOption {
+	return func(ct *CoreTools) {
+		ct.providerName = providerName
+		ct.model = model
 	}
 }
 
@@ -825,6 +835,10 @@ func (ct *CoreTools) spawnAgent(ctx context.Context, args json.RawMessage) (stri
 		WorkDir:        ct.workDir,
 		MaxDepth:       ct.maxDepth,
 		Depth:          ct.depth,
+		ProviderName:   ct.providerName,
+		Model:          ct.model,
+		AgentID:        ct.agentID,
+		JobID:          ct.jobID,
 	})
 	if err != nil {
 		return "", fmt.Errorf("spawning agent: %w", err)
