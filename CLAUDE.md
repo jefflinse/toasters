@@ -27,15 +27,16 @@ internal/
   db/                       # SQLite persistence (Store interface, migrations, CRUD)
   frontmatter/              # Shared YAML frontmatter parsing (Split + Parse)
   gateway/                  # Claude subprocess slot management (4 concurrent slots)
-  llm/                      # Shared LLM types and Provider interface
+  llm/                      # Legacy LLM types (OpenAI wire format, used by llm/client)
     client/                 # OpenAI-compatible streaming client
-    tools/                  # Tool executor with dependency injection
+    tools/                  # Tool executor with registry-based dispatch (18 handlers in 5 files)
   mcp/                      # MCP client manager, tool conversion, namespacing, result truncation/slimming, server status tracking
   orchestration/            # Cross-cutting orchestration types (GatewaySlot, AgentSpawner)
   progress/                 # Progress tool handlers, MCP server (report_progress, etc.)
   provider/                 # Multi-provider LLM client (OpenAI, Anthropic, registry)
   runtime/                  # In-process agent runtime (sessions, core tools, spawn)
     composite_tools.go      # CompositeTools wrapper combining CoreTools + MCP tools
+  sse/                      # Shared SSE parsing (reader, Anthropic event types, OpenAI chunk types)
   tui/                      # Bubble Tea TUI (model, views, grid, modals, streaming, MCP modal)
     progress_poll.go        # SQLite polling loop for real-time progress display
   job/                      # Job file persistence (OVERVIEW.md + TODO.md)
@@ -71,7 +72,7 @@ internal/
 - **Constants**: SCREAMING_SNAKE or PascalCase for exported (`MaxSlots`, `InputHeight`)
 - **Error handling**: Always `if err != nil` with `fmt.Errorf("context: %w", err)` wrapping. Return errors, don't log and swallow.
 - **Concurrency**: `sync.Mutex` for shared state, channels for TUI messages, `context.Context` for cancellation
-- **Logging**: Minimal — `log.Printf()` for warnings. Optional request logging to `~/.config/toasters/requests.log`
+- **Logging**: Structured via `log/slog` — `slog.Warn`/`slog.Info`/`slog.Error` with key-value fields. Optional request logging to `~/.config/toasters/requests.log`
 
 ## Commit Message Style
 
@@ -130,12 +131,12 @@ All data race and security fixes completed: CONC-B1–B4 (mutex/lock fixes), SEC
 
 All 16 items completed: ARCH-H3/H4 (Anthropic client consolidation), DUP-M1 (tilde helper), MOD-M1–M7 (modern Go idioms), LINT (15 findings), CONC-H1–H3/M1 (session cleanup, subscribe fix, debounce, regex), SEC-H3 (HTTP context).
 
-### Wave 3 — Structural Improvements (pre-Phase 3)
+### Wave 3 — Structural Improvements ✅
 
-Larger refactorings. Each is independent and can be done incrementally. Must be completed before Phase 3 feature work begins.
+**Status: Complete (2026-02-25, pre-Phase 3)**
 
-- [ ] **ARCH-H1**: Consolidate Anthropic SSE parsing — 3 separate implementations with duplicated event types across `anthropic/`, `provider/`, `llm/client/`. Extract shared `internal/sse` package (~400 lines of duplication eliminated)
-- [ ] **ARCH-H2**: Converge on single Provider interface — `llm.Provider` vs `provider.Provider` with bridge adapter and 261-line `convert.go`. Migrate to `provider.Provider` as canonical interface, eliminate adapter layer. *Highest-impact refactoring in the codebase.*
-- [ ] **DESIGN-H1**: Decompose TUI Model — 60+ field god object with 1068-line Update. Extract sub-models: `teamsModal`, `blockerModal`, `PromptModel`, `gridScreen`, `ChatState`. Introduce `ModelConfig` struct for 11-parameter constructor.
-- [ ] **DESIGN-M1**: Tool registry pattern for `ExecuteTool` — replace 360-line switch with `map[string]toolHandler` dispatch, each handler individually testable (`llm/tools/tools.go`)
-- [ ] **MOD-M8**: `log.Printf` → `slog` structured logging — 29 call sites with inconsistent prefixes. Migrate to `slog.Warn`/`slog.Info` with structured fields.
+- [x] **ARCH-H1**: Consolidated Anthropic SSE parsing — extracted shared `internal/sse` package with SSE reader, Anthropic event types, and OpenAI chunk types. ~400 lines of duplication eliminated across `anthropic/`, `provider/`, `llm/client/`.
+- [x] **ARCH-H2**: Converged on single `provider.Provider` interface — migrated TUI, cmd, tools, gateway from `llm.*` types to `provider.*` types. Deleted 261-line adapter layer (`convert.go`) and 638-line adapter tests. Net -1,041 lines.
+- [x] **DESIGN-H1**: Decomposed TUI Model — extracted `chatState`, `streamingState`, `gridState`, `promptState`, `progressState`, `modalState` sub-models. Introduced `ModelConfig` struct replacing 11-parameter constructor.
+- [x] **DESIGN-M1**: Tool registry pattern for `ExecuteTool` — replaced 365-line switch with `map[string]toolHandler` dispatch. 18 handlers extracted into 5 focused files (`handler_web.go`, `handler_jobs.go`, `handler_gateway.go`, `handler_sessions.go`, `handler_interactive.go`).
+- [x] **MOD-M8**: Migrated 43 `log.Printf` calls across 14 files to `slog.Warn`/`slog.Info`/`slog.Error` structured logging with key-value fields.

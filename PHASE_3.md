@@ -11,17 +11,17 @@ Build a complete teams and agents management system — dynamic agent generation
 
 ---
 
-## Pre-Phase 3: Wave 3 Tech Debt
+## Pre-Phase 3: Wave 3 Tech Debt ✅
 
-All Wave 3 items must be completed before Phase 3 feature work begins. Each is independent.
+All Wave 3 items completed (2026-02-25).
 
 | Item | Description | Status |
 |------|-------------|--------|
-| ARCH-H1 | Consolidate Anthropic SSE parsing → shared `internal/sse` package | ⬜ |
-| ARCH-H2 | Converge on single Provider interface (eliminate `llm.Provider` / `provider.Provider` duality) | ⬜ |
-| DESIGN-H1 | Decompose TUI Model (60+ field god object → sub-models) | ⬜ |
-| DESIGN-M1 | Tool registry pattern for `ExecuteTool` (360-line switch → map dispatch) | ⬜ |
-| MOD-M8 | `log.Printf` → `slog` structured logging (29 call sites) | ⬜ |
+| ARCH-H1 | Consolidated Anthropic SSE parsing → shared `internal/sse` package (~400 lines dedup) | ✅ |
+| ARCH-H2 | Converged on single `provider.Provider` interface (net -1,041 lines) | ✅ |
+| DESIGN-H1 | Decomposed TUI Model → 6 sub-models + `ModelConfig` struct | ✅ |
+| DESIGN-M1 | Tool registry pattern for `ExecuteTool` (18 handlers in 5 files) | ✅ |
+| MOD-M8 | Migrated 43 `log.Printf` calls to `slog` structured logging | ✅ |
 
 ---
 
