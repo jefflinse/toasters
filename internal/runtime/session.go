@@ -240,11 +240,25 @@ func (s *Session) collectResponse(ctx context.Context, eventCh <-chan provider.S
 
 // Subscribe returns a channel that receives events for this session.
 // Buffer size 64. Non-blocking sends — slow subscribers miss events.
+// If the session has already completed, the returned channel is closed
+// immediately so callers do not block forever.
 func (s *Session) Subscribe() <-chan SessionEvent {
 	ch := make(chan SessionEvent, subscriberBufSize)
 	s.mu.Lock()
+	defer s.mu.Unlock()
+	// Check under mu whether the session is already done. closeSubscribers()
+	// runs before close(s.done) (LIFO defer order), so once s.done is closed
+	// all subscribers have already been closed and s.subscribers is nil.
+	// A non-blocking select on s.done is sufficient to detect this case.
+	select {
+	case <-s.done:
+		// Session already finished — close immediately so the caller's range
+		// loop exits rather than blocking forever.
+		close(ch)
+		return ch
+	default:
+	}
 	s.subscribers = append(s.subscribers, ch)
-	s.mu.Unlock()
 	return ch
 }
 

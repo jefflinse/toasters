@@ -11,6 +11,8 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/fsnotify/fsnotify"
 	"github.com/jefflinse/toasters/internal/frontmatter"
@@ -269,6 +271,9 @@ func BuildRegistry(discovered []Agent, coordinatorName string) Registry {
 // Watch monitors dir for Markdown file changes and calls onChange each time a
 // change is detected. It blocks until ctx is cancelled. If dir does not exist
 // the watcher is started anyway so it picks up the directory once created.
+//
+// onChange is debounced with a 200ms window to coalesce the multiple fsnotify
+// events that editors typically emit per save (write + chmod + rename).
 func Watch(ctx context.Context, dir string, onChange func()) error {
 	w, err := fsnotify.NewWatcher()
 	if err != nil {
@@ -279,16 +284,31 @@ func Watch(ctx context.Context, dir string, onChange func()) error {
 	// Best-effort: ignore error if dir doesn't exist yet.
 	_ = w.Add(dir)
 
+	var (
+		debounceTimer *time.Timer
+		debounceMu    sync.Mutex
+	)
+
 	for {
 		select {
 		case <-ctx.Done():
+			debounceMu.Lock()
+			if debounceTimer != nil {
+				debounceTimer.Stop()
+			}
+			debounceMu.Unlock()
 			return nil
 		case event, ok := <-w.Events:
 			if !ok {
 				return nil
 			}
 			if strings.HasSuffix(event.Name, ".md") {
-				onChange()
+				debounceMu.Lock()
+				if debounceTimer != nil {
+					debounceTimer.Stop()
+				}
+				debounceTimer = time.AfterFunc(200*time.Millisecond, onChange)
+				debounceMu.Unlock()
 			}
 		case err, ok := <-w.Errors:
 			if !ok {
@@ -302,6 +322,9 @@ func Watch(ctx context.Context, dir string, onChange func()) error {
 // WatchRecursive watches dir and all immediate subdirectories for .md file
 // changes, calling onChange on any event. New subdirectories are added to the
 // watch automatically. Blocks until ctx is cancelled.
+//
+// onChange is debounced with a 200ms window to coalesce the multiple fsnotify
+// events that editors typically emit per save (write + chmod + rename).
 func WatchRecursive(ctx context.Context, dir string, onChange func()) error {
 	w, err := fsnotify.NewWatcher()
 	if err != nil {
@@ -320,9 +343,19 @@ func WatchRecursive(ctx context.Context, dir string, onChange func()) error {
 		}
 	}
 
+	var (
+		debounceTimer *time.Timer
+		debounceMu    sync.Mutex
+	)
+
 	for {
 		select {
 		case <-ctx.Done():
+			debounceMu.Lock()
+			if debounceTimer != nil {
+				debounceTimer.Stop()
+			}
+			debounceMu.Unlock()
 			return nil
 		case event, ok := <-w.Events:
 			if !ok {
@@ -335,9 +368,14 @@ func WatchRecursive(ctx context.Context, dir string, onChange func()) error {
 					_ = w.Add(event.Name)
 				}
 			}
-			// Fire onChange for any .md file event.
+			// Debounce onChange for any .md file event.
 			if strings.HasSuffix(event.Name, ".md") {
-				onChange()
+				debounceMu.Lock()
+				if debounceTimer != nil {
+					debounceTimer.Stop()
+				}
+				debounceTimer = time.AfterFunc(200*time.Millisecond, onChange)
+				debounceMu.Unlock()
 			}
 		case err, ok := <-w.Errors:
 			if !ok {

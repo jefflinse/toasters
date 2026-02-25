@@ -140,6 +140,14 @@ func (r *Runtime) SpawnAgent(ctx context.Context, opts SpawnOpts) (*Session, err
 		if err != nil && err != context.Canceled {
 			log.Printf("session %s ended with error: %v", id, err)
 		}
+
+		// Remove the completed session from the map to prevent unbounded growth.
+		// Immediate removal is safe: all callers that need the session hold a
+		// direct *Session pointer (SpawnAndWait, OnSessionStarted callback).
+		// GetSession is only used during active session lifetime.
+		r.mu.Lock()
+		delete(r.sessions, id)
+		r.mu.Unlock()
 	}()
 
 	return sess, nil
