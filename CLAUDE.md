@@ -8,7 +8,7 @@ Toasters is a Go-based TUI orchestration tool for agentic coding work. It coordi
 
 ```bash
 go build ./...          # Build
-go test ./...           # Test (14 test packages)
+go test ./...           # Test (15 test packages)
 go run main.go          # Run the TUI
 ```
 
@@ -30,13 +30,13 @@ internal/
   llm/                      # Shared LLM types and Provider interface
     client/                 # OpenAI-compatible streaming client
     tools/                  # Tool executor with dependency injection
-  mcp/                      # MCP client manager, tool conversion, namespacing
+  mcp/                      # MCP client manager, tool conversion, namespacing, result truncation/slimming, server status tracking
   orchestration/            # Cross-cutting orchestration types (GatewaySlot, AgentSpawner)
   progress/                 # Progress tool handlers, MCP server (report_progress, etc.)
   provider/                 # Multi-provider LLM client (OpenAI, Anthropic, registry)
   runtime/                  # In-process agent runtime (sessions, core tools, spawn)
     composite_tools.go      # CompositeTools wrapper combining CoreTools + MCP tools
-  tui/                      # Bubble Tea TUI (model, views, grid, modals, streaming)
+  tui/                      # Bubble Tea TUI (model, views, grid, modals, streaming, MCP modal)
     progress_poll.go        # SQLite polling loop for real-time progress display
   job/                      # Job file persistence (OVERVIEW.md + TODO.md)
 ```
@@ -46,7 +46,7 @@ internal/
 - **Operator**: LLM that coordinates work. Receives user messages, decides which team to assign work to, and manages jobs. Can be backed by any configured provider (LM Studio, Anthropic, OpenAI).
 - **Teams**: Groups of agents defined in `~/.config/toasters/teams/` (or configured via `operator.teams_dir`). Each team has one coordinator and multiple workers.
 - **Agent Runtime**: In-process agent sessions running as goroutines. Each session is a conversation loop: send messages to the LLM → receive response → execute tool calls → loop. Core tools include file I/O, shell, glob, grep, web fetch, subagent spawning, and progress reporting (`report_progress`, `update_task_status`, `report_blocker`, `request_review`, `query_job_context`, `log_artifact`). Sessions are tracked in SQLite and observable via the TUI. `spawn_agent` enforces a max depth of 1 (coordinators may spawn workers; workers may not spawn further agents) and propagates tool filtering via `filteredToolExecutor`.
-- **MCP Client**: `internal/mcp` package manages connections to external MCP servers (GitHub, Jira, Linear, etc.). Tools are namespaced as `{server_name}__{tool_name}` and merged into both the operator and agent tool sets. Failed servers are skipped with a warning.
+- **MCP Client**: `internal/mcp` package manages connections to external MCP servers (GitHub, Jira, Linear, etc.). Tools are namespaced as `{server_name}__{tool_name}` and merged into both the operator and agent tool sets. Failed servers are skipped with a warning. Server connection status is tracked and exposed via `Servers()` accessor. MCP tool results are automatically slimmed (strips nulls, `*_url` fields, API URLs, `node_id`, opaque blobs) and truncated (JSON-aware array shrinking with UTF-8 safe byte fallback, 16KB default) to prevent context window exhaustion.
 - **Toasters MCP Server**: `internal/progress` package exposes progress tools via an MCP server (`toasters mcp-server` subcommand). Claude CLI subprocesses use this to report progress back to SQLite. In-process agents call the same handlers directly without the MCP protocol.
 - **Gateway**: Manages up to 4 concurrent Claude CLI subprocesses (`MaxSlots = 4`). Each slot runs a Claude agent with a specific prompt and job context. Retained as a fallback alongside the in-process runtime.
 - **Provider Registry**: Multi-provider LLM abstraction supporting OpenAI-compatible APIs (LM Studio, Ollama, OpenAI) and Anthropic's Messages API. Providers are configured in YAML and looked up by name. Anthropic supports both API key and Keychain/OAuth authentication.
@@ -97,6 +97,7 @@ Key settings:
 - `claude.default_model` — model for Claude CLI
 - `claude.permission_mode` — permission mode for Claude CLI
   - If `claude.permission_mode` is not set, defaults to `plan` with a warning log
+- `mcp.servers` — list of MCP server configs (name, transport, command, args, env, url, headers, enabled, enabled_tools)
 
 ## Key TUI Interactions
 
@@ -104,14 +105,14 @@ Key settings:
 - **Shift+Enter**: Newline in input
 - **Ctrl+G**: Toggle grid screen (2×2 agent slot view)
 - **Ctrl+C**: Quit
-- **Slash commands**: `/help`, `/new`, `/exit`, `/quit`, `/claude <prompt>`, `/kill`
+- **Slash commands**: `/help`, `/new`, `/exit`, `/quit`, `/claude <prompt>`, `/kill`, `/mcp`, `/teams`, `/anthropic`, `/job`
 - **Prompt mode**: Numbered options when operator asks user a question
 
 ## Testing
 
-Tests exist across 14 test packages. They use standard Go testing with `t.TempDir()` for file I/O and helper functions for assertions. Run `golangci-lint run` for linting — the codebase currently has 0 lint findings.
+Tests exist across 15 test packages. They use standard Go testing with `t.TempDir()` for file I/O and helper functions for assertions. Run `golangci-lint run` for linting — the codebase currently has 0 lint findings.
 
-Key coverage numbers: `frontmatter` 100%, `llm/tools` 88.3%, `llm/client` 87.7%, `runtime` 87.0%, `job` 85.7%, `provider` 84.9%, `db` 83.6%, `agents` 72.1%, `config` 65.7%.
+Key coverage numbers: `frontmatter` 100%, `llm/tools` 88.3%, `llm/client` 87.7%, `runtime` 87.0%, `job` 85.7%, `provider` 84.9%, `db` 83.6%, `mcp` 83%, `agents` 72.1%, `config` 65.7%.
 
 ## Tech Debt Execution Plan (Pre-Phase 2)
 

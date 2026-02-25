@@ -532,7 +532,7 @@ Week 3 (buffer / polish):
 | 2.2 — Toasters MCP Server | `internal/progress` package with 6 progress tool handlers, MCP server, `toasters mcp-server` subcommand | ✅ Done |
 | 2.3 — Real-Time TUI Progress | SQLite polling loop, task status rendering, blocker alerts, token usage display | ✅ Done |
 
-**Post-delivery fixes:** 6 bug fixes applied after PRs merged — subagent TUI notifications, message history filtering, provider/model propagation to child agents, workspace-centric coordinator spawning, max spawn depth enforcement, and spawn_agent tool filter enforcement. See `PHASE_2.md` for details.
+**Post-delivery fixes:** 6 bug fixes applied after PRs merged — subagent TUI notifications, message history filtering, provider/model propagation to child agents, workspace-centric coordinator spawning, max spawn depth enforcement, and spawn_agent tool filter enforcement. Additionally, MCP TUI visibility enhancements added: `/mcp` modal, sidebar status, toast notifications, tool call annotations, smart result truncation/slimming (16KB default), and context bar fixes. See `PHASE_2.md` for details.
 
 **Estimated total effort:** 1.5–2 weeks
 

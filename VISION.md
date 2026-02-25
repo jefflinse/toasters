@@ -182,7 +182,7 @@ The TUI uses a two-column layout. The left column is the primary work management
 
 | Component | Version / Details |
 |---|---|
-| Go | 1.25 |
+| Go | 1.26 |
 | Bubble Tea | `charm.land/bubbletea/v2 v2.0.0` |
 | Lipgloss | `charm.land/lipgloss/v2 v2.0.0` |
 | Bubbles | `charm.land/bubbles/v2 v2.0.0` |
@@ -196,7 +196,7 @@ The TUI uses a two-column layout. The left column is the primary work management
 
 ## Current State
 
-What exists today is a functional agentic orchestration TUI with operator chat, agent team dispatch, in-process agent runtime, SQLite persistence, and multi-provider LLM support. The codebase has been through a comprehensive health audit (see `HEALTH_REPORT.md`) — all findings resolved, 0 lint issues, 0 vulnerabilities. Phase 1 (The Foundation) is complete: agents run as in-process goroutines talking directly to LLM providers, with Claude CLI subprocess retained as a fallback. 12 test packages, key packages at 83–100% coverage.
+What exists today is a functional agentic orchestration TUI with operator chat, agent team dispatch, in-process agent runtime, SQLite persistence, multi-provider LLM support, and full MCP integration. The codebase has been through a comprehensive health audit (see `HEALTH_REPORT.md`) — all findings resolved, 0 lint issues, 0 vulnerabilities. Phase 1 (The Foundation) and Phase 2 (Connect to the World) are complete: agents run as in-process goroutines talking directly to LLM providers, consume external MCP tools, report progress via structured tools, and the TUI shows real-time progress. Claude CLI subprocess retained as a fallback. 15 test packages, key packages at 83–100% coverage.
 
 ### Implemented
 
@@ -288,10 +288,31 @@ What exists today is a functional agentic orchestration TUI with operator chat, 
 - Escape cancels in-flight tool calls
 - Visual "calling tool..." indicators
 
-### Not Yet Built (Phase 2+)
+**`internal/mcp` — MCP Client Manager (Phase 2)**
+- Manages connections to external MCP servers (GitHub, Jira, Linear, etc.)
+- Tool discovery, namespacing (`{server_name}__{tool_name}`), and dispatch
+- Server status tracking with `Servers()` accessor for TUI visibility
+- Smart result truncation: JSON-aware array shrinking with UTF-8 safe byte fallback (16KB default)
+- JSON slimming: strips nulls, `*_url` fields, API URLs, `node_id`, opaque blobs from responses
+- `TruncatingCaller` decorator wraps MCP manager for runtime integration
+- Failed servers skipped with warning; graceful shutdown via `Close()`
 
-- MCP client integration (consuming external MCP servers)
-- MCP server (agent progress reporting)
+**`internal/progress` — Progress Tool Handlers + MCP Server (Phase 2)**
+- Protocol-agnostic handlers for 6 progress tools: `report_progress`, `report_blocker`, `update_task_status`, `request_review`, `query_job_context`, `log_artifact`
+- MCP server via `toasters mcp-server` subcommand for Claude CLI subprocess integration
+- In-process agents call handlers directly without MCP protocol overhead
+
+**TUI Enhancements (Phase 2 + MCP Visibility)**
+- Real-time progress display via SQLite polling (500ms)
+- Task status indicators, blocker alerts, token usage per session
+- `/mcp` slash command with full-screen modal (server list, details panel, scrollable tool list)
+- MCP summary section in sidebar with ✓/✗ status icons and tool counts
+- Startup toast notifications for connected/failed MCP servers
+- MCP tool calls annotated as `tool_name (via server)` in chat view
+- Context bar fix: prompt tokens use assignment (not accumulation), "Prompt ctx" label
+
+### Not Yet Built (Phase 3+)
+
 - Ephemeral OpenAPI-to-MCP bridges
 - Left panel: job list, task DAG visualization, streaming updates pane
 - Team templates and workflows

@@ -19,7 +19,7 @@
 | **Outdated dependencies** | ✅ All addressed — Charm v2 updated to stable v2.0.0, all `x/` packages current |
 | **go mod tidy** | ✅ Clean |
 
-**Wave 2 tech debt (2026-02-25):** All 15 Wave 2 items completed. Key improvements: merged Anthropic streaming methods (ARCH-H3/H4), extracted `expandTilde` helper (DUP-M1), modernized sort/slices/range patterns (MOD-M1–M7), fixed all lint findings — 15 total across 4 files, not 6 as originally estimated (LINT), added session cleanup and debounced file watcher (CONC-H1–H3). Codebase maintains 0 lint findings. Two new packages added: `internal/mcp` (MCP client manager) and `internal/progress` (progress tool handlers + MCP server). Total test packages increased from 12 to 14.
+**Wave 2 tech debt (2026-02-25):** All 15 Wave 2 items completed. Key improvements: merged Anthropic streaming methods (ARCH-H3/H4), extracted `expandTilde` helper (DUP-M1), modernized sort/slices/range patterns (MOD-M1–M7), fixed all lint findings — 15 total across 4 files, not 6 as originally estimated (LINT), added session cleanup and debounced file watcher (CONC-H1–H3). Codebase maintains 0 lint findings. Two new packages added: `internal/mcp` (MCP client manager with result truncation/slimming and server status tracking) and `internal/progress` (progress tool handlers + MCP server). Total test packages increased from 12 to 15.
 
 **Update (2026-02-24):** All findings from the original audit are now resolved. The complete history:
 
@@ -189,7 +189,7 @@ All findings are now resolved — the codebase has a clean bill of health.
 - **Clean `go mod tidy`** — no unused or phantom dependencies
 - **Consistent error wrapping** — `fmt.Errorf("context: %w", err)` used correctly throughout
 - **Good `context.Context` threading** — subprocess management properly threads context for cancellation
-- **Strong test coverage** — 14 test packages with critical packages well-covered: `frontmatter` 100%, `llm/tools` 88.3%, `llm/client` 87.7%, `runtime` 87.0%, `job` 85.7%, `provider` 84.9%, `db` 83.6%, `agents` 72.1%, `config` 65.7%
+- **Strong test coverage** — 15 test packages with critical packages well-covered: `frontmatter` 100%, `llm/tools` 88.3%, `llm/client` 87.7%, `runtime` 87.0%, `job` 85.7%, `provider` 84.9%, `db` 83.6%, `mcp` 83%, `agents` 72.1%, `config` 65.7%
 - **Well-structured agent discovery** — `internal/agents/` has clean design with hot-reloading and debounced file watching
 - **Clean package dependency graph** — no circular dependencies; `internal/mcp` and `internal/progress` integrate cleanly via interface boundaries
 - **Thoughtful comments** — meaningful comments explaining *why* decisions were made

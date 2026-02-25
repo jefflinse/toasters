@@ -1,6 +1,6 @@
 # MCP Integration Plan
 
-**Status:** Draft (revised 2026-02-24)  
+**Status:** Parts A & B complete (2026-02-25). Part C deferred to Phase 3.  
 **Date:** 2026-02-23 (original), 2026-02-24 (revised)  
 **Scope:** Three-part MCP strategy: (1) consume external MCP servers, (2) host a Toasters MCP server for agent progress reporting, (3) auto-generate ephemeral MCP servers from OpenAPI specs.
 
@@ -130,6 +130,7 @@ type Manager struct {
 func (m *Manager) Connect(ctx context.Context, servers []config.MCPServerConfig) []llm.Tool
 func (m *Manager) Call(ctx context.Context, toolName, argsJSON string) (string, error)
 func (m *Manager) Tools() []llm.Tool
+func (m *Manager) Servers() []ServerStatus  // added: server status tracking for TUI
 func (m *Manager) Close() error
 ```
 
@@ -387,17 +388,17 @@ If the server crashes, agents lose the ability to report progress but continue w
 
 ## 9. Phase Summary
 
-| Phase | Description | Effort | Depends On |
-|-------|-------------|--------|------------|
-| A1 | Config schema for MCP servers | 1–2 hours | — |
-| A2 | MCP client package (connect, discover, dispatch) | 1–2 days | A1 |
-| A3 | Async tool execution + registration at startup | 1–2 days | A2 |
-| B1 | Toasters MCP server tool definitions + handlers | 1 day | SQLite layer |
-| B2 | MCP server for external agents (stdio/HTTP) | 1–2 days | B1 |
-| B3 | Wire progress into TUI | 1 day | B2 |
-| C1 | OpenAPI spec parser | 1 day | — |
-| C2 | Operation-to-MCP tool converter | 1 day | C1 |
-| C3 | Ephemeral MCP server + lifecycle management | 1–2 days | C2, A2 |
+| Phase | Description | Effort | Depends On | Status |
+|-------|-------------|--------|------------|--------|
+| A1 | Config schema for MCP servers | 1–2 hours | — | ✅ Done |
+| A2 | MCP client package (connect, discover, dispatch) | 1–2 days | A1 | ✅ Done |
+| A3 | Async tool execution + registration at startup | 1–2 days | A2 | ✅ Done |
+| B1 | Toasters MCP server tool definitions + handlers | 1 day | SQLite layer | ✅ Done |
+| B2 | MCP server for external agents (stdio/HTTP) | 1–2 days | B1 | ✅ Done |
+| B3 | Wire progress into TUI | 1 day | B2 | ✅ Done |
+| C1 | OpenAPI spec parser | 1 day | — | Phase 3 |
+| C2 | Operation-to-MCP tool converter | 1 day | C1 | Phase 3 |
+| C3 | Ephemeral MCP server + lifecycle management | 1–2 days | C2, A2 | Phase 3 |
 
 **Recommended order:** A1 → A2 → A3 (gets MCP client working) → B1 → B2 → B3 (gets progress reporting working) → C1 → C2 → C3 (gets OpenAPI bridges working).
 
