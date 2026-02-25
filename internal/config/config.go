@@ -12,6 +12,7 @@ import (
 // Config holds all application configuration.
 type Config struct {
 	WorkspaceDir string         `mapstructure:"workspace_dir"`
+	DatabasePath string         `mapstructure:"database_path"`
 	Operator     OperatorConfig `mapstructure:"operator"`
 	Claude       ClaudeConfig   `mapstructure:"claude"`
 }
@@ -46,6 +47,7 @@ func Load() (*Config, error) {
 	viper.AddConfigPath(home + "/.config/toasters")
 
 	viper.SetDefault("workspace_dir", filepath.Join(home, "toasters"))
+	viper.SetDefault("database_path", filepath.Join(home, ".config", "toasters", "toasters.db"))
 	viper.SetDefault("operator.provider", "local")
 	viper.SetDefault("operator.endpoint", "http://localhost:1234")
 	viper.SetDefault("operator.api_key", "")
@@ -107,6 +109,34 @@ func WorkspaceDir(cfg *Config) (string, error) {
 		return filepath.Join(home, dir[2:]), nil
 	}
 	return dir, nil
+}
+
+// DatabasePath returns the resolved database file path from cfg.
+// A leading ~ is expanded to the user's home directory.
+func DatabasePath(cfg *Config) (string, error) {
+	p := cfg.DatabasePath
+	if p == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", err
+		}
+		return filepath.Join(home, ".config", "toasters", "toasters.db"), nil
+	}
+	if len(p) >= 2 && p[:2] == "~/" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", err
+		}
+		return filepath.Join(home, p[2:]), nil
+	}
+	if p == "~" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", err
+		}
+		return home, nil
+	}
+	return p, nil
 }
 
 // BindFlags binds relevant cobra pflags to their Viper configuration keys.
