@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"testing"
@@ -255,6 +256,9 @@ func TestGetJob_NotFound(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for nonexistent job, got nil")
 	}
+	if !errors.Is(err, ErrNotFound) {
+		t.Errorf("expected ErrNotFound, got: %v", err)
+	}
 }
 
 func TestUpdateJobStatus_NotFound(t *testing.T) {
@@ -264,6 +268,9 @@ func TestUpdateJobStatus_NotFound(t *testing.T) {
 	err := store.UpdateJobStatus(ctx, "nonexistent", JobStatusActive)
 	if err == nil {
 		t.Fatal("expected error for nonexistent job, got nil")
+	}
+	if !errors.Is(err, ErrNotFound) {
+		t.Errorf("expected ErrNotFound, got: %v", err)
 	}
 }
 
@@ -390,6 +397,9 @@ func TestGetTask_NotFound(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for nonexistent task, got nil")
 	}
+	if !errors.Is(err, ErrNotFound) {
+		t.Errorf("expected ErrNotFound, got: %v", err)
+	}
 }
 
 func TestUpdateTaskStatus_NotFound(t *testing.T) {
@@ -399,6 +409,9 @@ func TestUpdateTaskStatus_NotFound(t *testing.T) {
 	err := store.UpdateTaskStatus(ctx, "nonexistent", TaskStatusCompleted, "done")
 	if err == nil {
 		t.Fatal("expected error for nonexistent task, got nil")
+	}
+	if !errors.Is(err, ErrNotFound) {
+		t.Errorf("expected ErrNotFound, got: %v", err)
 	}
 }
 
@@ -688,6 +701,9 @@ func TestGetAgent_NotFound(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for nonexistent agent, got nil")
 	}
+	if !errors.Is(err, ErrNotFound) {
+		t.Errorf("expected ErrNotFound, got: %v", err)
+	}
 }
 
 func TestAgents_NilTemperature(t *testing.T) {
@@ -792,6 +808,9 @@ func TestGetTeam_NotFound(t *testing.T) {
 	_, err := store.GetTeam(ctx, "nonexistent")
 	if err == nil {
 		t.Fatal("expected error for nonexistent team, got nil")
+	}
+	if !errors.Is(err, ErrNotFound) {
+		t.Errorf("expected ErrNotFound, got: %v", err)
 	}
 }
 
@@ -901,6 +920,9 @@ func TestUpdateSession_NotFound(t *testing.T) {
 	err := store.UpdateSession(ctx, "nonexistent", SessionUpdate{Status: &status})
 	if err == nil {
 		t.Fatal("expected error for nonexistent session, got nil")
+	}
+	if !errors.Is(err, ErrNotFound) {
+		t.Errorf("expected ErrNotFound, got: %v", err)
 	}
 }
 

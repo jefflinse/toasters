@@ -2,8 +2,12 @@ package db
 
 import (
 	"encoding/json"
+	"errors"
 	"time"
 )
+
+// ErrNotFound is returned when a requested entity does not exist.
+var ErrNotFound = errors.New("not found")
 
 // JobStatus represents the lifecycle state of a job.
 type JobStatus string

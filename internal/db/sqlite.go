@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -33,6 +34,11 @@ func Open(path string) (*SQLiteStore, error) {
 	if err != nil {
 		return nil, fmt.Errorf("opening database: %w", err)
 	}
+
+	// SQLite is single-writer; pin to one connection so PRAGMAs apply consistently.
+	// Without this, database/sql's connection pool may open new connections that
+	// don't inherit per-connection PRAGMAs like foreign_keys=ON.
+	db.SetMaxOpenConns(1)
 
 	// Set PRAGMAs for performance and correctness.
 	pragmas := []string{
@@ -96,8 +102,8 @@ func (s *SQLiteStore) GetJob(ctx context.Context, id string) (*Job, error) {
 
 	if err := row.Scan(&j.ID, &j.Title, &j.Type, &status,
 		&createdAt, &updatedAt, &metadata); err != nil {
-		if err == sql.ErrNoRows {
-			return nil, fmt.Errorf("job %q not found", id)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, fmt.Errorf("job %q: %w", id, ErrNotFound)
 		}
 		return nil, fmt.Errorf("scanning job: %w", err)
 	}
@@ -396,8 +402,8 @@ func (s *SQLiteStore) GetAgent(ctx context.Context, id string) (*Agent, error) {
 	if err := row.Scan(&a.ID, &a.Name, &a.Description, &a.Mode,
 		&a.Model, &a.Provider, &temperature,
 		&a.SystemPrompt, &tools, &createdAt, &updatedAt, &a.Source); err != nil {
-		if err == sql.ErrNoRows {
-			return nil, fmt.Errorf("agent %q not found", id)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, fmt.Errorf("agent %q: %w", id, ErrNotFound)
 		}
 		return nil, fmt.Errorf("scanning agent: %w", err)
 	}
@@ -480,8 +486,8 @@ func (s *SQLiteStore) GetTeam(ctx context.Context, id string) (*Team, error) {
 
 	if err := row.Scan(&t.ID, &t.Name, &t.Description, &t.Coordinator,
 		&createdAt, &metadata); err != nil {
-		if err == sql.ErrNoRows {
-			return nil, fmt.Errorf("team %q not found", id)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, fmt.Errorf("team %q: %w", id, ErrNotFound)
 		}
 		return nil, fmt.Errorf("scanning team: %w", err)
 	}
@@ -691,8 +697,8 @@ func scanTask(s scanner) (*Task, error) {
 	if err := s.Scan(&t.ID, &t.JobID, &t.Title, &status,
 		&t.AgentID, &t.ParentID, &t.SortOrder,
 		&createdAt, &updatedAt, &t.Summary, &metadata); err != nil {
-		if err == sql.ErrNoRows {
-			return nil, fmt.Errorf("task not found")
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrNotFound
 		}
 		return nil, fmt.Errorf("scanning task: %w", err)
 	}
@@ -717,8 +723,8 @@ func scanSession(s scanner) (*AgentSession, error) {
 		&status, &sess.Model, &sess.Provider,
 		&sess.TokensIn, &sess.TokensOut,
 		&startedAt, &endedAt, &costUSD); err != nil {
-		if err == sql.ErrNoRows {
-			return nil, fmt.Errorf("session not found")
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrNotFound
 		}
 		return nil, fmt.Errorf("scanning session: %w", err)
 	}
@@ -761,7 +767,7 @@ func checkRowsAffected(result sql.Result, entity, id string) error {
 		return fmt.Errorf("checking rows affected: %w", err)
 	}
 	if n == 0 {
-		return fmt.Errorf("%s %q not found", entity, id)
+		return fmt.Errorf("%s %q: %w", entity, id, ErrNotFound)
 	}
 	return nil
 }
