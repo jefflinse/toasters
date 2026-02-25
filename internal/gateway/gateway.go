@@ -100,6 +100,7 @@ type Gateway struct {
 	notify         func()               // called on every output update; wired to TUI re-render
 	send           func(SlotTimeoutMsg) // called when a slot's timeout fires
 	defaultTimeout time.Duration        // per-slot subprocess timeout
+	dbPath         string               // path to SQLite database for MCP server injection
 }
 
 // New returns an initialized Gateway with all slots nil.
@@ -224,10 +225,11 @@ func (g *Gateway) SpawnTeam(teamName, jobID, task string, team agents.Team) (slo
 		summary = summary[:80]
 	}
 
-	// Update the slot with I/O-dependent fields.
+	// Update the slot with I/O-dependent fields; also capture dbPath for MCP injection.
 	g.mu.Lock()
 	s.summary = summary
 	s.prompt = prompt
+	dbPath := g.dbPath
 	g.mu.Unlock()
 
 	// Start the timer goroutine that fires SlotTimeoutMsg after defaultTimeout.
@@ -259,7 +261,7 @@ func (g *Gateway) SpawnTeam(teamName, jobID, task string, team agents.Team) (slo
 
 	// Start the subprocess goroutine.
 	go func() {
-		ch := spawnClaudeStream(ctx, prompt, g.claudeCfg, permissionArgs, agentsJSON, jobDir)
+		ch := spawnClaudeStream(ctx, prompt, g.claudeCfg, permissionArgs, agentsJSON, jobDir, dbPath)
 		for resp := range ch {
 			// Handle subagent tracking fields (may accompany Content).
 			if resp.SubagentSpawned {
@@ -379,6 +381,14 @@ func (g *Gateway) SetNotify(fn func()) {
 func (g *Gateway) SetSend(fn func(SlotTimeoutMsg)) {
 	g.mu.Lock()
 	g.send = fn
+	g.mu.Unlock()
+}
+
+// SetDBPath sets the SQLite database path used for MCP server injection into
+// Claude CLI subprocesses. Must be called before SpawnTeam.
+func (g *Gateway) SetDBPath(path string) {
+	g.mu.Lock()
+	g.dbPath = path
 	g.mu.Unlock()
 }
 
@@ -523,7 +533,12 @@ func (g *Gateway) Kill(slotID int) error {
 // permissionArgs are per-agent Claude CLI permission flags (e.g.
 // ["--dangerously-skip-permissions"] or ["--allowedTools", "Read,Bash,..."]).
 // If non-empty they take precedence over claudeCfg.PermissionMode.
-func spawnClaudeStream(ctx context.Context, prompt string, claudeCfg config.ClaudeConfig, permissionArgs []string, agentsJSON string, jobDir string) <-chan llm.StreamResponse {
+//
+// dbPath, if non-empty, causes a temporary MCP config file to be written and
+// passed to Claude CLI via --mcp-config so the subprocess can report progress
+// back to the Toasters database. If dbPath is empty or the binary path cannot
+// be determined, MCP injection is silently skipped.
+func spawnClaudeStream(ctx context.Context, prompt string, claudeCfg config.ClaudeConfig, permissionArgs []string, agentsJSON string, jobDir string, dbPath string) <-chan llm.StreamResponse {
 	ch := make(chan llm.StreamResponse, 64)
 
 	go func() {
@@ -548,6 +563,48 @@ func spawnClaudeStream(ctx context.Context, prompt string, claudeCfg config.Clau
 		} else {
 			log.Printf("WARNING: claude.permission_mode not configured; defaulting to 'plan' (set claude.permission_mode in config to override)")
 			args = append(args, "--permission-mode", "plan")
+		}
+
+		// Inject MCP config if a database path is available.
+		// This allows Claude CLI subprocesses to report progress back to Toasters.
+		var mcpConfigPath string
+		if dbPath != "" {
+			if binPath, err := os.Executable(); err != nil {
+				log.Printf("warning: mcp-config injection skipped: could not determine binary path: %v", err)
+			} else {
+				mcpCfg := map[string]any{
+					"mcpServers": map[string]any{
+						"toasters": map[string]any{
+							"command": binPath,
+							"args":    []string{"mcp-server", "--db", dbPath},
+							"env":     map[string]string{},
+						},
+					},
+				}
+				data, err := json.Marshal(mcpCfg)
+				if err != nil {
+					log.Printf("warning: mcp-config injection skipped: could not marshal config: %v", err)
+				} else {
+					f, err := os.CreateTemp("", "toasters-mcp-*.json")
+					if err != nil {
+						log.Printf("warning: mcp-config injection skipped: could not create temp file: %v", err)
+					} else {
+						if _, err := f.Write(data); err != nil {
+							log.Printf("warning: mcp-config injection skipped: could not write temp file: %v", err)
+							_ = f.Close()
+							_ = os.Remove(f.Name())
+						} else {
+							_ = f.Close()
+							mcpConfigPath = f.Name()
+							args = append(args, "--mcp-config", mcpConfigPath)
+						}
+					}
+				}
+			}
+		}
+		// Clean up the temp MCP config file when the subprocess exits.
+		if mcpConfigPath != "" {
+			defer func() { _ = os.Remove(mcpConfigPath) }()
 		}
 
 		// Always pass the prompt via stdin rather than as a positional argument.

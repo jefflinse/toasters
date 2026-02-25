@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/jefflinse/toasters/internal/db"
+	"github.com/jefflinse/toasters/internal/progress"
 )
 
 // ErrUnknownTool is returned by Execute when the tool name is not recognized.
@@ -113,6 +114,69 @@ func (ct *CoreTools) Execute(ctx context.Context, name string, args json.RawMess
 		return ct.webFetch(ctx, args)
 	case "spawn_agent":
 		return ct.spawnAgent(ctx, args)
+	case "report_progress":
+		if ct.store == nil {
+			return "progress reporting not available (no store)", nil
+		}
+		var params progress.ReportProgressParams
+		if err := json.Unmarshal(args, &params); err != nil {
+			return "", fmt.Errorf("parsing report_progress args: %w", err)
+		}
+		if params.AgentID == "" {
+			params.AgentID = ct.agentID
+		}
+		return progress.ReportProgress(ctx, ct.store, params)
+	case "report_blocker":
+		if ct.store == nil {
+			return "progress reporting not available (no store)", nil
+		}
+		var params progress.ReportBlockerParams
+		if err := json.Unmarshal(args, &params); err != nil {
+			return "", fmt.Errorf("parsing report_blocker args: %w", err)
+		}
+		if params.AgentID == "" {
+			params.AgentID = ct.agentID
+		}
+		return progress.ReportBlocker(ctx, ct.store, params)
+	case "update_task_status":
+		if ct.store == nil {
+			return "progress reporting not available (no store)", nil
+		}
+		var params progress.UpdateTaskStatusParams
+		if err := json.Unmarshal(args, &params); err != nil {
+			return "", fmt.Errorf("parsing update_task_status args: %w", err)
+		}
+		return progress.UpdateTaskStatus(ctx, ct.store, params)
+	case "request_review":
+		if ct.store == nil {
+			return "progress reporting not available (no store)", nil
+		}
+		var params progress.RequestReviewParams
+		if err := json.Unmarshal(args, &params); err != nil {
+			return "", fmt.Errorf("parsing request_review args: %w", err)
+		}
+		if params.AgentID == "" {
+			params.AgentID = ct.agentID
+		}
+		return progress.RequestReview(ctx, ct.store, params)
+	case "query_job_context":
+		if ct.store == nil {
+			return "progress reporting not available (no store)", nil
+		}
+		var params progress.QueryJobContextParams
+		if err := json.Unmarshal(args, &params); err != nil {
+			return "", fmt.Errorf("parsing query_job_context args: %w", err)
+		}
+		return progress.QueryJobContext(ctx, ct.store, params)
+	case "log_artifact":
+		if ct.store == nil {
+			return "progress reporting not available (no store)", nil
+		}
+		var params progress.LogArtifactParams
+		if err := json.Unmarshal(args, &params); err != nil {
+			return "", fmt.Errorf("parsing log_artifact args: %w", err)
+		}
+		return progress.LogArtifact(ctx, ct.store, params)
 	default:
 		return "", fmt.Errorf("%w: %s", ErrUnknownTool, name)
 	}
@@ -223,6 +287,17 @@ func (ct *CoreTools) Definitions() []ToolDef {
 				"required": ["system_prompt", "message"]
 			}`),
 		})
+	}
+
+	// Include progress tools if a store is available.
+	if ct.store != nil {
+		for _, pd := range progress.ProgressToolDefs() {
+			defs = append(defs, ToolDef{
+				Name:        pd.Name,
+				Description: pd.Description,
+				Parameters:  pd.Parameters,
+			})
+		}
 	}
 
 	return defs
