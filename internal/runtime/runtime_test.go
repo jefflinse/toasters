@@ -281,3 +281,72 @@ func TestRuntimeImplementsAgentSpawner(t *testing.T) {
 	// Compile-time check that Runtime implements AgentSpawner.
 	var _ AgentSpawner = (*Runtime)(nil)
 }
+
+// TestFilteredToolExecutor is a unit test for the filteredToolExecutor type
+// introduced in runtime.go. It verifies that:
+//   - Definitions() returns only the allowed subset, not the full inner set.
+//   - Execute() delegates to the inner executor and returns its result.
+func TestFilteredToolExecutor(t *testing.T) {
+	inner := &mockToolExecutor{
+		results: map[string]string{
+			"read_file": "file contents",
+			"shell":     "command output",
+			"web_fetch": "page body",
+		},
+		defs: []ToolDef{
+			{Name: "read_file", Description: "Read a file"},
+			{Name: "shell", Description: "Run a shell command"},
+			{Name: "web_fetch", Description: "Fetch a URL"},
+		},
+	}
+
+	allowed := []ToolDef{
+		{Name: "read_file", Description: "Read a file"},
+		{Name: "shell", Description: "Run a shell command"},
+	}
+
+	f := &filteredToolExecutor{inner: inner, allowed: allowed}
+
+	t.Run("Definitions returns only allowed subset", func(t *testing.T) {
+		defs := f.Definitions()
+		if len(defs) != 2 {
+			t.Fatalf("want 2 definitions, got %d", len(defs))
+		}
+		names := make(map[string]bool, len(defs))
+		for _, d := range defs {
+			names[d.Name] = true
+		}
+		if !names["read_file"] {
+			t.Error("expected read_file in filtered definitions")
+		}
+		if !names["shell"] {
+			t.Error("expected shell in filtered definitions")
+		}
+		if names["web_fetch"] {
+			t.Error("web_fetch should NOT appear in filtered definitions")
+		}
+	})
+
+	t.Run("Execute delegates to inner executor", func(t *testing.T) {
+		result, err := f.Execute(context.Background(), "read_file", []byte(`{}`))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result != "file contents" {
+			t.Errorf("want %q, got %q", "file contents", result)
+		}
+	})
+
+	t.Run("Execute rejects tools not in allowed list", func(t *testing.T) {
+		// filteredToolExecutor enforces the allowlist at call time; tools not in
+		// the allowed set are rejected with ErrUnknownTool even if the inner
+		// executor knows how to handle them.
+		_, err := f.Execute(context.Background(), "web_fetch", []byte(`{}`))
+		if err == nil {
+			t.Fatal("expected error for tool not in allowed list, got nil")
+		}
+		if !errors.Is(err, ErrUnknownTool) {
+			t.Errorf("want ErrUnknownTool, got %v", err)
+		}
+	})
+}

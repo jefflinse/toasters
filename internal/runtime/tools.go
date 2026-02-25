@@ -829,6 +829,23 @@ func (ct *CoreTools) spawnAgent(ctx context.Context, args json.RawMessage) (stri
 		return "", fmt.Errorf("parsing arguments: %w", err)
 	}
 
+	// Resolve requested tool names to full ToolDef values using the parent's
+	// available tool set. Unknown names are silently skipped — the LLM may
+	// request tools that are conditionally available (e.g. shell, spawn_agent).
+	var toolDefs []ToolDef
+	if len(params.Tools) > 0 {
+		defs := ct.Definitions()
+		available := make(map[string]ToolDef, len(defs))
+		for _, td := range defs {
+			available[td.Name] = td
+		}
+		for _, name := range params.Tools {
+			if td, ok := available[name]; ok {
+				toolDefs = append(toolDefs, td)
+			}
+		}
+	}
+
 	result, err := ct.spawner.SpawnAndWait(ctx, SpawnOpts{
 		SystemPrompt:   params.SystemPrompt,
 		InitialMessage: params.Message,
@@ -839,6 +856,7 @@ func (ct *CoreTools) spawnAgent(ctx context.Context, args json.RawMessage) (stri
 		Model:          ct.model,
 		AgentID:        ct.agentID,
 		JobID:          ct.jobID,
+		Tools:          toolDefs,
 	})
 	if err != nil {
 		return "", fmt.Errorf("spawning agent: %w", err)

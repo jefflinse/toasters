@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"sync"
@@ -72,6 +73,14 @@ func (r *Runtime) SpawnAgent(ctx context.Context, opts SpawnOpts) (*Session, err
 		tools = NewCompositeTools(coreTools, r.mcpCaller, r.mcpDefs)
 	} else {
 		tools = coreTools
+	}
+
+	// If the caller requested a specific tool subset, wrap the executor so that
+	// Definitions() returns only those tools. Execute() still dispatches all
+	// calls, but the LLM will only know about — and therefore only call — the
+	// filtered set.
+	if len(opts.Tools) > 0 {
+		tools = &filteredToolExecutor{inner: tools, allowed: opts.Tools}
 	}
 
 	sess := newSession(id, p, opts, tools)
@@ -161,6 +170,28 @@ func (r *Runtime) SpawnAndWait(ctx context.Context, opts SpawnOpts) (string, err
 	}
 
 	return sess.FinalText(), nil
+}
+
+// filteredToolExecutor wraps a ToolExecutor and enforces a tool allowlist.
+// Definitions() returns only the permitted subset so the LLM is never told
+// about disallowed tools. Execute() enforces the same allowlist at call time,
+// returning ErrUnknownTool for any tool not in the permitted set.
+type filteredToolExecutor struct {
+	inner   ToolExecutor
+	allowed []ToolDef
+}
+
+func (f *filteredToolExecutor) Definitions() []ToolDef {
+	return f.allowed
+}
+
+func (f *filteredToolExecutor) Execute(ctx context.Context, name string, args json.RawMessage) (string, error) {
+	for _, td := range f.allowed {
+		if td.Name == name {
+			return f.inner.Execute(ctx, name, args)
+		}
+	}
+	return "", fmt.Errorf("%w: %s", ErrUnknownTool, name)
 }
 
 // GetSession returns a session by ID.

@@ -612,6 +612,164 @@ func TestSpawnAgentPropagatesProviderAndContext(t *testing.T) {
 	assertEqual(t, "job-1", got.JobID)
 }
 
+// TestSpawnAgentForwardsToolFilter is a regression test for the bug where
+// spawn_agent never forwarded params.Tools to SpawnOpts.Tools, so the child
+// always received a nil tool set regardless of what the caller requested.
+//
+// The fix resolves each requested tool name against the parent's Definitions()
+// and passes the resulting []ToolDef as SpawnOpts.Tools. This test will FAIL
+// if `Tools: toolDefs` is removed from the SpawnOpts literal in spawnAgent.
+func TestSpawnAgentForwardsToolFilter(t *testing.T) {
+	dir := t.TempDir()
+
+	capturing := &capturingSpawner{result: "ok"}
+	ct := NewCoreTools(dir,
+		WithSpawner(capturing, 0, 3),
+		WithProvider("test-provider", "test-model"),
+		WithSessionContext("sess-1", "agent-1", "job-1"),
+	)
+
+	_, err := ct.Execute(context.Background(), "spawn_agent", mustJSON(t, map[string]any{
+		"system_prompt": "you are a helper",
+		"message":       "do the thing",
+		"tools":         []string{"read_file", "shell"},
+	}))
+	assertNoError(t, err)
+
+	if capturing.received == nil {
+		t.Fatal("SpawnAndWait was never called")
+	}
+
+	got := capturing.received.Tools
+	if len(got) != 2 {
+		t.Fatalf("want 2 tool defs in SpawnOpts.Tools, got %d (regression: was nil before fix)", len(got))
+	}
+
+	names := make(map[string]bool, len(got))
+	for _, td := range got {
+		names[td.Name] = true
+	}
+	if !names["read_file"] {
+		t.Error("expected read_file in SpawnOpts.Tools")
+	}
+	if !names["shell"] {
+		t.Error("expected shell in SpawnOpts.Tools")
+	}
+}
+
+// TestSpawnAgentEmptyToolsPassesNil verifies that when spawn_agent is called
+// with an empty (or omitted) tools list, SpawnOpts.Tools is nil so the child
+// receives the full tool set rather than an empty one.
+func TestSpawnAgentEmptyToolsPassesNil(t *testing.T) {
+	dir := t.TempDir()
+
+	t.Run("empty tools array", func(t *testing.T) {
+		capturing := &capturingSpawner{result: "ok"}
+		ct := NewCoreTools(dir,
+			WithSpawner(capturing, 0, 3),
+			WithProvider("test-provider", "test-model"),
+		)
+
+		_, err := ct.Execute(context.Background(), "spawn_agent", mustJSON(t, map[string]any{
+			"system_prompt": "you are a helper",
+			"message":       "do the thing",
+			"tools":         []string{},
+		}))
+		assertNoError(t, err)
+
+		if capturing.received == nil {
+			t.Fatal("SpawnAndWait was never called")
+		}
+		if capturing.received.Tools != nil {
+			t.Fatalf("want nil SpawnOpts.Tools for empty tools list, got %v", capturing.received.Tools)
+		}
+	})
+
+	t.Run("omitted tools field", func(t *testing.T) {
+		capturing := &capturingSpawner{result: "ok"}
+		ct := NewCoreTools(dir,
+			WithSpawner(capturing, 0, 3),
+			WithProvider("test-provider", "test-model"),
+		)
+
+		_, err := ct.Execute(context.Background(), "spawn_agent", mustJSON(t, map[string]any{
+			"system_prompt": "you are a helper",
+			"message":       "do the thing",
+			// no "tools" key
+		}))
+		assertNoError(t, err)
+
+		if capturing.received == nil {
+			t.Fatal("SpawnAndWait was never called")
+		}
+		if capturing.received.Tools != nil {
+			t.Fatalf("want nil SpawnOpts.Tools when tools field is omitted, got %v", capturing.received.Tools)
+		}
+	})
+}
+
+// TestSpawnAgentUnknownToolsSkipped verifies that tool names not present in the
+// parent's Definitions() are silently skipped rather than causing an error.
+// Only known tool names should appear in SpawnOpts.Tools.
+//
+// This test will FAIL if `Tools: toolDefs` is removed from the SpawnOpts
+// literal in spawnAgent (because then Tools would be nil instead of containing
+// just "read_file").
+func TestSpawnAgentUnknownToolsSkipped(t *testing.T) {
+	dir := t.TempDir()
+
+	capturing := &capturingSpawner{result: "ok"}
+	ct := NewCoreTools(dir,
+		WithSpawner(capturing, 0, 3),
+		WithProvider("test-provider", "test-model"),
+	)
+
+	_, err := ct.Execute(context.Background(), "spawn_agent", mustJSON(t, map[string]any{
+		"system_prompt": "you are a helper",
+		"message":       "do the thing",
+		"tools":         []string{"read_file", "nonexistent_tool"},
+	}))
+	assertNoError(t, err)
+
+	if capturing.received == nil {
+		t.Fatal("SpawnAndWait was never called")
+	}
+
+	got := capturing.received.Tools
+	if len(got) != 1 {
+		t.Fatalf("want 1 tool def (only read_file), got %d: %v", len(got), got)
+	}
+	if got[0].Name != "read_file" {
+		t.Errorf("want tool name %q, got %q", "read_file", got[0].Name)
+	}
+}
+
+// TestSpawnAgentAllUnknownToolsPassesNil verifies that when every requested
+// tool name is unknown, toolDefs stays nil, so SpawnOpts.Tools is nil and the
+// child gets the full default tool set. Unknown names are silently skipped;
+// this is intentional.
+func TestSpawnAgentAllUnknownToolsPassesNil(t *testing.T) {
+	capturing := &capturingSpawner{result: "ok"}
+	ct := NewCoreTools(t.TempDir(),
+		WithSpawner(capturing, 0, 3),
+		WithProvider("test-provider", "test-model"),
+	)
+
+	_, err := ct.Execute(context.Background(), "spawn_agent", mustJSON(t, map[string]any{
+		"system_prompt": "you are a helper",
+		"message":       "do the thing",
+		"tools":         []string{"nonexistent_a", "nonexistent_b"},
+	}))
+	assertNoError(t, err)
+
+	if capturing.received == nil {
+		t.Fatal("SpawnAndWait was never called")
+	}
+	if capturing.received.Tools != nil {
+		t.Fatalf("want nil SpawnOpts.Tools when all tool names are unknown, got %v", capturing.received.Tools)
+	}
+}
+
 // --- Test helpers ---
 
 type mockSpawner struct {
