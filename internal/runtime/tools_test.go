@@ -576,6 +576,42 @@ func TestSpawnAgent(t *testing.T) {
 	})
 }
 
+// TestSpawnAgentPropagatesProviderAndContext is a regression test for the bug
+// where spawn_agent never passed ProviderName or Model to child SpawnOpts,
+// causing every child spawn to fail with `provider "" not found`.
+//
+// The fix added providerName/model fields to CoreTools and wired them through
+// spawnAgent. This test verifies that all four fields (ProviderName, Model,
+// AgentID, JobID) are propagated from the parent CoreTools to the child
+// SpawnOpts. It will FAIL if ProviderName or Model are removed from the
+// SpawnOpts literal in spawnAgent.
+func TestSpawnAgentPropagatesProviderAndContext(t *testing.T) {
+	dir := t.TempDir()
+
+	capturing := &capturingSpawner{result: "ok"}
+	ct := NewCoreTools(dir,
+		WithSpawner(capturing, 0, 3),
+		WithProvider("test-provider", "test-model"),
+		WithSessionContext("sess-1", "agent-1", "job-1"),
+	)
+
+	_, err := ct.Execute(context.Background(), "spawn_agent", mustJSON(t, map[string]any{
+		"system_prompt": "you are a helper",
+		"message":       "do the thing",
+	}))
+	assertNoError(t, err)
+
+	if capturing.received == nil {
+		t.Fatal("SpawnAndWait was never called")
+	}
+
+	got := *capturing.received
+	assertEqual(t, "test-provider", got.ProviderName)
+	assertEqual(t, "test-model", got.Model)
+	assertEqual(t, "agent-1", got.AgentID)
+	assertEqual(t, "job-1", got.JobID)
+}
+
 // --- Test helpers ---
 
 type mockSpawner struct {
@@ -585,6 +621,18 @@ type mockSpawner struct {
 
 func (m *mockSpawner) SpawnAndWait(_ context.Context, _ SpawnOpts) (string, error) {
 	return m.result, m.err
+}
+
+// capturingSpawner records the SpawnOpts it receives so tests can assert on them.
+type capturingSpawner struct {
+	result   string
+	err      error
+	received *SpawnOpts
+}
+
+func (c *capturingSpawner) SpawnAndWait(_ context.Context, opts SpawnOpts) (string, error) {
+	c.received = &opts
+	return c.result, c.err
 }
 
 func writeTestFile(t *testing.T, dir, name, content string) {

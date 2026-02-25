@@ -65,6 +65,7 @@ func (r *Runtime) SpawnAgent(ctx context.Context, opts SpawnOpts) (*Session, err
 		WithSpawner(r, depth+1, maxDepth),
 		WithStore(r.store),
 		WithSessionContext(id, opts.AgentID, opts.JobID),
+		WithProvider(opts.ProviderName, opts.Model),
 	)
 	var tools ToolExecutor
 	if r.mcpCaller != nil {
@@ -153,6 +154,9 @@ func (r *Runtime) SpawnAndWait(ctx context.Context, opts SpawnOpts) (string, err
 
 	snap := sess.Snapshot()
 	if snap.Status == "failed" {
+		if termErr := sess.TermErr(); termErr != nil {
+			return "", fmt.Errorf("child session failed: %w", termErr)
+		}
 		return "", fmt.Errorf("child session failed")
 	}
 
