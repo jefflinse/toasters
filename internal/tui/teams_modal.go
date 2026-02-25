@@ -4,7 +4,7 @@ package tui
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -49,7 +49,7 @@ func (m *Model) updateTeamsModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			valid := name != "" && !strings.ContainsAny(name, `/\.`)
 			if valid {
 				if err := os.MkdirAll(filepath.Join(m.teamsDir, name), 0755); err != nil {
-					log.Printf("teams: failed to create directory %s: %v", name, err)
+					slog.Error("failed to create team directory", "name", name, "error", err)
 				}
 				m.reloadTeamsForModal()
 				for i, t := range m.teamsModal.teams {

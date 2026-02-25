@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -561,7 +561,7 @@ func spawnClaudeStream(ctx context.Context, prompt string, claudeCfg config.Clau
 		} else if claudeCfg.PermissionMode != "" {
 			args = append(args, "--permission-mode", claudeCfg.PermissionMode)
 		} else {
-			log.Printf("WARNING: claude.permission_mode not configured; defaulting to 'plan' (set claude.permission_mode in config to override)")
+			slog.Warn("claude.permission_mode not configured, defaulting to plan")
 			args = append(args, "--permission-mode", "plan")
 		}
 
@@ -570,7 +570,7 @@ func spawnClaudeStream(ctx context.Context, prompt string, claudeCfg config.Clau
 		var mcpConfigPath string
 		if dbPath != "" {
 			if binPath, err := os.Executable(); err != nil {
-				log.Printf("warning: mcp-config injection skipped: could not determine binary path: %v", err)
+				slog.Warn("mcp-config injection skipped: could not determine binary path", "error", err)
 			} else {
 				mcpCfg := map[string]any{
 					"mcpServers": map[string]any{
@@ -583,14 +583,14 @@ func spawnClaudeStream(ctx context.Context, prompt string, claudeCfg config.Clau
 				}
 				data, err := json.Marshal(mcpCfg)
 				if err != nil {
-					log.Printf("warning: mcp-config injection skipped: could not marshal config: %v", err)
+					slog.Warn("mcp-config injection skipped: could not marshal config", "error", err)
 				} else {
 					f, err := os.CreateTemp("", "toasters-mcp-*.json")
 					if err != nil {
-						log.Printf("warning: mcp-config injection skipped: could not create temp file: %v", err)
+						slog.Warn("mcp-config injection skipped: could not create temp file", "error", err)
 					} else {
 						if _, err := f.Write(data); err != nil {
-							log.Printf("warning: mcp-config injection skipped: could not write temp file: %v", err)
+							slog.Warn("mcp-config injection skipped: could not write temp file", "error", err)
 							_ = f.Close()
 							_ = os.Remove(f.Name())
 						} else {

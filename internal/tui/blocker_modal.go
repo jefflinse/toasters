@@ -3,7 +3,7 @@ package tui
 
 import (
 	"fmt"
-	"log"
+	"log/slog"
 	"strconv"
 	"strings"
 
@@ -108,7 +108,7 @@ func (m *Model) submitBlockerAnswers() tea.Cmd {
 	jobDir := j.Dir
 	return func() tea.Msg {
 		if err := job.WriteBlockerAnswers(jobDir, b); err != nil {
-			log.Printf("failed to write blocker answers: %v", err)
+			slog.Error("failed to write blocker answers", "job", jobID, "error", err)
 		}
 		return blockerAnswersSubmittedMsg{jobID: jobID, blocker: b}
 	}

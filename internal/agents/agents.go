@@ -5,7 +5,7 @@ package agents
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"slices"
@@ -210,7 +210,7 @@ func Discover(dir string) ([]Agent, error) {
 	for _, path := range matches {
 		a, err := ParseFile(path)
 		if err != nil {
-			log.Printf("warning: skipping agent file %s: %v", path, err)
+			slog.Warn("skipping agent file", "path", path, "error", err)
 			continue
 		}
 		agents = append(agents, a)
@@ -306,7 +306,7 @@ func Watch(ctx context.Context, dir string, onChange func()) error {
 			if !ok {
 				return nil
 			}
-			log.Printf("agents watcher error: %v", err)
+			slog.Error("agents watcher error", "error", err)
 		}
 	}
 }
@@ -366,7 +366,7 @@ func WatchRecursive(ctx context.Context, dir string, onChange func()) error {
 			if !ok {
 				return nil
 			}
-			log.Printf("jobs watcher error: %v", err)
+			slog.Error("jobs watcher error", "error", err)
 		}
 	}
 }
@@ -432,7 +432,7 @@ func DiscoverTeams(teamsDir string) ([]Team, error) {
 		subdir := filepath.Join(teamsDir, entry.Name())
 		discovered, err := Discover(filepath.Join(subdir, "agents"))
 		if err != nil {
-			log.Printf("warning: skipping team directory %s: %v", subdir, err)
+			slog.Warn("skipping team directory", "path", subdir, "error", err)
 			continue
 		}
 

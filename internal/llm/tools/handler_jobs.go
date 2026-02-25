@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"path/filepath"
 	"time"
 
@@ -55,7 +55,7 @@ func handleJobCreate(_ context.Context, te *ToolExecutor, call provider.ToolCall
 			Status: db.JobStatusPending,
 		}
 		if dbErr := te.Store.CreateJob(ctx, dbJob); dbErr != nil {
-			log.Printf("warning: failed to persist job %s to SQLite: %v", j.ID, dbErr)
+			slog.Warn("failed to persist job to SQLite", "job", j.ID, "error", dbErr)
 		}
 	}
 	return "created: " + j.ID, nil
@@ -192,7 +192,7 @@ func handleJobSetStatus(_ context.Context, te *ToolExecutor, call provider.ToolC
 		ctx := context.Background()
 		dbStatus := mapJobStatus(args.Status)
 		if dbErr := te.Store.UpdateJobStatus(ctx, args.ID, dbStatus); dbErr != nil {
-			log.Printf("warning: failed to update job %s status in SQLite: %v", args.ID, dbErr)
+			slog.Warn("failed to update job status in SQLite", "job", args.ID, "error", dbErr)
 		}
 	}
 	return fmt.Sprintf("job %s status set to %s", args.ID, args.Status), nil

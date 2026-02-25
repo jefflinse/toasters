@@ -3,7 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -34,7 +34,7 @@ func generateTeamAwareness(ctx context.Context, client provider.Provider, teams 
 	// Write to disk so it's inspectable.
 	outPath := filepath.Join(configDir, "team-awareness.md")
 	if err := os.WriteFile(outPath, []byte(content), 0644); err != nil {
-		log.Printf("warning: failed to write team-awareness.md: %v", err)
+		slog.Warn("failed to write team-awareness.md", "error", err)
 	}
 
 	return content
@@ -76,7 +76,7 @@ Write exactly one sentence starting with "Use this team when" that describes wha
 	msgs := []provider.Message{{Role: "user", Content: prompt}}
 	resp, err := provider.ChatCompletion(ctx, client, msgs)
 	if err != nil {
-		log.Printf("warning: team awareness inference failed for %q: %v", team.Name, err)
+		slog.Warn("team awareness inference failed", "team", team.Name, "error", err)
 		// Fallback: generic sentence
 		return fmt.Sprintf("Use this team when you need help from the %s team.", team.Name)
 	}

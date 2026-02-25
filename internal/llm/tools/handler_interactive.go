@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"path/filepath"
 
 	"github.com/jefflinse/toasters/internal/agents"
@@ -62,7 +62,7 @@ func handleAssignTeam(_ context.Context, te *ToolExecutor, call provider.ToolCal
 		}
 		sess, err := te.Runtime.SpawnAgent(context.Background(), opts)
 		if err != nil {
-			log.Printf("runtime spawn failed, falling back to gateway: %v", err)
+			slog.Warn("runtime spawn failed, falling back to gateway", "error", err)
 			// Fall through to gateway path below.
 		} else {
 			return fmt.Sprintf("started runtime session %s for team %s", sess.ID(), team.Name), nil

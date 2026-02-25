@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"strings"
 	"sync"
 
@@ -87,17 +87,17 @@ func (m *Manager) Connect(ctx context.Context, servers []config.MCPServerConfig)
 
 	for _, cfg := range servers {
 		if cfg.Name == "" {
-			log.Printf("mcp: skipping server with empty name")
+			slog.Warn("skipping MCP server with empty name")
 			continue
 		}
 		if strings.Contains(cfg.Name, "__") {
-			log.Printf("mcp: skipping server %q: name must not contain '__'", cfg.Name)
+			slog.Warn("skipping MCP server: name must not contain '__'", "server", cfg.Name)
 			continue
 		}
 
 		c, err := createClient(cfg)
 		if err != nil {
-			log.Printf("mcp: failed to create client for server %q: %v", cfg.Name, err)
+			slog.Warn("failed to create MCP client", "server", cfg.Name, "error", err)
 			newStatuses = append(newStatuses, ServerStatus{
 				Name:      cfg.Name,
 				Transport: cfg.Transport,
@@ -110,7 +110,7 @@ func (m *Manager) Connect(ctx context.Context, servers []config.MCPServerConfig)
 
 		// Start the transport (for SSE/HTTP clients that need explicit start).
 		if err := c.Start(ctx); err != nil {
-			log.Printf("mcp: failed to start client for server %q: %v", cfg.Name, err)
+			slog.Warn("failed to start MCP client", "server", cfg.Name, "error", err)
 			_ = c.Close()
 			newStatuses = append(newStatuses, ServerStatus{
 				Name:      cfg.Name,
@@ -133,7 +133,7 @@ func (m *Manager) Connect(ctx context.Context, servers []config.MCPServerConfig)
 			},
 		})
 		if err != nil {
-			log.Printf("mcp: failed to initialize server %q: %v", cfg.Name, err)
+			slog.Warn("failed to initialize MCP server", "server", cfg.Name, "error", err)
 			_ = c.Close()
 			newStatuses = append(newStatuses, ServerStatus{
 				Name:      cfg.Name,
@@ -148,7 +148,7 @@ func (m *Manager) Connect(ctx context.Context, servers []config.MCPServerConfig)
 		// Discover tools.
 		toolsResult, err := c.ListTools(ctx, mcptypes.ListToolsRequest{})
 		if err != nil {
-			log.Printf("mcp: failed to list tools for server %q: %v", cfg.Name, err)
+			slog.Warn("failed to list MCP tools", "server", cfg.Name, "error", err)
 			_ = c.Close()
 			newStatuses = append(newStatuses, ServerStatus{
 				Name:      cfg.Name,
@@ -170,7 +170,7 @@ func (m *Manager) Connect(ctx context.Context, servers []config.MCPServerConfig)
 		for _, t := range toolsResult.Tools {
 			// Reject tool names containing "__" to preserve namespace integrity.
 			if strings.Contains(t.Name, "__") {
-				log.Printf("mcp: skipping tool %q on server %q: tool name must not contain '__'", t.Name, cfg.Name)
+				slog.Warn("skipping MCP tool: name must not contain '__'", "tool", t.Name, "server", cfg.Name)
 				continue
 			}
 
@@ -182,7 +182,7 @@ func (m *Manager) Connect(ctx context.Context, servers []config.MCPServerConfig)
 			// Marshal the input schema to JSON.
 			schemaBytes, err := json.Marshal(t.InputSchema)
 			if err != nil {
-				log.Printf("mcp: failed to marshal schema for tool %q on server %q: %v", t.Name, cfg.Name, err)
+				slog.Warn("failed to marshal MCP tool schema", "tool", t.Name, "server", cfg.Name, "error", err)
 				schemaBytes = json.RawMessage(`{"type":"object","properties":{}}`)
 			}
 
@@ -219,7 +219,7 @@ func (m *Manager) Connect(ctx context.Context, servers []config.MCPServerConfig)
 			Config:    cfg,
 		})
 
-		log.Printf("mcp: connected to server %q, discovered %d tools", cfg.Name, len(tools))
+		slog.Info("MCP server connected", "server", cfg.Name, "tools", len(tools))
 	}
 
 	m.mu.Lock()

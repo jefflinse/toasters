@@ -3,7 +3,7 @@ package runtime
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -170,7 +170,7 @@ func (s *Session) Run(ctx context.Context) (retErr error) {
 
 			resultEvent := &ToolResultEvent{CallID: tc.ID, Name: tc.Name, Result: result}
 			if execErr != nil {
-				log.Printf("warning: tool %q execution error: %v", tc.Name, execErr)
+				slog.Warn("tool execution error", "tool", tc.Name, "error", execErr)
 				resultEvent.Error = execErr.Error()
 				result = fmt.Sprintf("error: %s", execErr.Error())
 			}

@@ -3,7 +3,7 @@ package cmd
 import (
 	"context"
 	"io"
-	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
 
@@ -51,19 +51,19 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 
-	// Redirect the default logger to a file so log.Printf calls don't
+	// Redirect slog output to a file so structured log messages don't
 	// corrupt the TUI's alt-screen. Logs go to ~/.config/toasters/toasters.log.
 	if err := os.MkdirAll(configDir, 0755); err == nil {
 		logPath := filepath.Join(configDir, "toasters.log")
 		if f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644); err == nil {
-			log.SetOutput(f)
+			slog.SetDefault(slog.New(slog.NewTextHandler(f, nil)))
 			defer func() { _ = f.Close() }()
 		} else {
 			// Can't open log file — discard logs rather than corrupt the TUI.
-			log.SetOutput(io.Discard)
+			slog.SetDefault(slog.New(slog.NewTextHandler(io.Discard, nil)))
 		}
 	} else {
-		log.SetOutput(io.Discard)
+		slog.SetDefault(slog.New(slog.NewTextHandler(io.Discard, nil)))
 	}
 
 	workspaceDir, err := config.WorkspaceDir(cfg)
@@ -76,7 +76,7 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 	teams, err := agents.DiscoverTeams(teamsDir)
 	if err != nil {
 		// Non-fatal: log a warning and proceed with no teams.
-		log.Printf("warning: failed to discover teams in %s: %v", teamsDir, err)
+		slog.Warn("failed to discover teams", "path", teamsDir, "error", err)
 		teams = []agents.Team{}
 	}
 
@@ -88,11 +88,11 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 	var store db.Store
 	dbPath, err := config.DatabasePath(cfg)
 	if err != nil {
-		log.Printf("warning: failed to resolve database path: %v", err)
+		slog.Warn("failed to resolve database path", "error", err)
 	} else {
 		sqliteStore, dbErr := db.Open(dbPath)
 		if dbErr != nil {
-			log.Printf("warning: failed to open database at %s: %v", dbPath, dbErr)
+			slog.Warn("failed to open database", "path", dbPath, "error", dbErr)
 		} else {
 			store = sqliteStore
 			defer func() { _ = sqliteStore.Close() }()
@@ -111,7 +111,7 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 		}
 		p, provErr := provider.NewFromConfig(provCfg)
 		if provErr != nil {
-			log.Printf("warning: failed to create provider %q: %v", pc.Name, provErr)
+			slog.Warn("failed to create provider", "provider", pc.Name, "error", provErr)
 			continue
 		}
 		registry.Register(pc.Name, p)
@@ -124,7 +124,7 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 	mcpManager := mcp.NewManager()
 	if len(cfg.MCP.Servers) > 0 {
 		if err := mcpManager.Connect(context.Background(), cfg.MCP.Servers); err != nil {
-			log.Printf("warning: MCP connect error: %v", err)
+			slog.Warn("MCP connect error", "error", err)
 		}
 	}
 	defer func() { _ = mcpManager.Close() }()
@@ -225,7 +225,7 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 			{Role: "user", Content: "Greet the user briefly. One or two sentences max. Be direct and ready to work."},
 		})
 		if err != nil {
-			log.Printf("failed to pre-fetch greeting: %v", err)
+			slog.Warn("failed to pre-fetch greeting", "error", err)
 		}
 
 		p.Send(tui.AppReadyMsg{Awareness: awareness, Greeting: greeting})
@@ -237,7 +237,7 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 		err := agents.Watch(watchCtx, teamsDir, func() {
 			newTeams, err := agents.DiscoverTeams(teamsDir)
 			if err != nil {
-				log.Printf("teams: reload error: %v", err)
+				slog.Error("teams reload failed", "error", err)
 				return
 			}
 			autoTeams := agents.AutoDetectTeams()
@@ -247,7 +247,7 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 			p.Send(tui.TeamsReloadedMsg{Teams: allTeams, Awareness: newAwareness})
 		})
 		if err != nil && watchCtx.Err() == nil {
-			log.Printf("teams watcher error: %v", err)
+			slog.Error("teams watcher error", "error", err)
 		}
 	}()
 
@@ -256,13 +256,13 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 		err := agents.WatchRecursive(watchCtx, jobsDir, func() {
 			jobs, err := job.List(workspaceDir)
 			if err != nil {
-				log.Printf("jobs: reload error: %v", err)
+				slog.Error("jobs reload failed", "error", err)
 				return
 			}
 			p.Send(tui.JobsReloadedMsg{Jobs: jobs})
 		})
 		if err != nil {
-			log.Printf("jobs watcher error: %v", err)
+			slog.Error("jobs watcher error", "error", err)
 		}
 	}()
 

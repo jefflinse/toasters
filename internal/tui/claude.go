@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"os/exec"
 	"strings"
 
@@ -36,7 +36,7 @@ func streamClaudeResponse(ctx context.Context, prompt string, claudeCfg config.C
 		if claudeCfg.PermissionMode != "" {
 			args = append(args, "--permission-mode", claudeCfg.PermissionMode)
 		} else {
-			log.Printf("WARNING: claude.permission_mode not configured; defaulting to 'plan' (set claude.permission_mode in config to override)")
+			slog.Warn("claude.permission_mode not configured, defaulting to plan")
 			args = append(args, "--permission-mode", "plan")
 		}
 		args = append(args, prompt)

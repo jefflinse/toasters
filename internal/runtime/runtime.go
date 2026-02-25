@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -103,7 +103,7 @@ func (r *Runtime) SpawnAgent(ctx context.Context, opts SpawnOpts) (*Session, err
 			StartedAt: sess.startTime,
 		}
 		if err := r.store.CreateSession(ctx, dbSession); err != nil {
-			log.Printf("warning: failed to persist session %s: %v", id, err)
+			slog.Warn("failed to persist session", "session", id, "error", err)
 		}
 	}
 
@@ -133,12 +133,12 @@ func (r *Runtime) SpawnAgent(ctx context.Context, opts SpawnOpts) (*Session, err
 				EndedAt:   &now,
 			}
 			if updateErr := r.store.UpdateSession(context.Background(), id, update); updateErr != nil {
-				log.Printf("warning: failed to update session %s: %v", id, updateErr)
+				slog.Warn("failed to update session", "session", id, "error", updateErr)
 			}
 		}
 
 		if err != nil && err != context.Canceled {
-			log.Printf("session %s ended with error: %v", id, err)
+			slog.Error("session ended with error", "session", id, "error", err)
 		}
 
 		// Remove the completed session from the map to prevent unbounded growth.

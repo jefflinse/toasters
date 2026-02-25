@@ -3,7 +3,7 @@ package tui
 
 import (
 	"fmt"
-	"log"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -295,11 +295,11 @@ func (m *Model) handleAgentOutput(msg AgentOutputMsg) (tea.Model, tea.Cmd) {
 						if !snap.Killed && snap.ExitSummary != "" {
 							if tasks, err := job.ListTasks(j.Dir); err == nil && len(tasks) > 0 {
 								if err := job.SetTaskStatus(tasks[0].Dir, job.StatusDone); err != nil {
-									log.Printf("failed to mark task done: %v", err)
+									slog.Error("failed to mark task done", "error", err)
 								}
 							}
 						} else {
-							log.Printf("slot %d completed without clean exit (killed=%v, exitSummary=%q), skipping task auto-mark", i, snap.Killed, snap.ExitSummary)
+							slog.Info("slot completed without clean exit, skipping task auto-mark", "slot", i, "killed", snap.Killed, "exitSummary", snap.ExitSummary)
 						}
 						break
 					}

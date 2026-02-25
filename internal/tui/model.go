@@ -3,7 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -1259,7 +1259,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 			if _, _, err := m.gateway.SpawnTeam(teamName, j.ID, spawnPrompt, matchedTeam); err != nil {
-				log.Printf("failed to re-spawn team after blocker: %v", err)
+				slog.Error("failed to re-spawn team after blocker", "team", teamName, "job", j.ID, "error", err)
 			} else {
 				return m, spinnerTick() // re-arm spinner for agent heartbeat
 			}
