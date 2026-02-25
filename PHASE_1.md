@@ -356,3 +356,27 @@ The full flow was verified working: user prompt → operator creates job → dis
 - MCP integration (Phase 2)
 - Provider selection per-agent in TUI
 - Database migration from markdown jobs to SQLite
+
+---
+
+## Post-Phase 1: Wave 1 Safety Fixes
+
+**Branch:** `phase-1`
+**Commit:** `634cc83`
+
+All concurrency and security issues identified in the pre-Phase 2 tech debt audit (Wave 1) were resolved before starting Phase 2.
+
+| Fix | Description | Files |
+|-----|-------------|-------|
+| CONC-B1 | Mutex protection for `Session.FinalText()`/`InitialMessage()` | `runtime/session.go` |
+| CONC-B2 | `sync.RWMutex` for `ToolExecutor.Teams` field | `llm/tools/tools.go`, `cmd/root.go`, `tui/model.go` |
+| CONC-B3 | Gateway `SpawnTeam` TOCTOU race -- slot reservation pattern | `gateway/gateway.go` |
+| CONC-B4 | Read `notify`/`send` function pointers under lock via helpers | `gateway/gateway.go` |
+| SEC-C1/C2 | HTTP clients with timeouts replacing `http.DefaultClient` | `anthropic/client.go`, `provider/anthropic.go` |
+| SEC-C3 | SSRF protection for operator-level `fetch_webpage` | `llm/tools/tools.go` |
+| SEC-C4 | Workspace path restriction for operator-level `list_directory` | `llm/tools/tools.go` |
+| SEC-H1 | `io.LimitReader` on all unbounded response body reads | `anthropic/client.go`, `provider/anthropic.go` |
+| SEC-H2 | `url.Values` encoding for OAuth refresh token form body | `anthropic/client.go` |
+| SEC-H3 | `http.NewRequestWithContext` for token refresh requests | `anthropic/client.go` |
+
+New tests added: SSRF blocking, path traversal rejection, workspace restriction validation.

@@ -70,6 +70,8 @@ All pre-Phase 1 tech debt is resolved. See `HEALTH_REPORT.md` for the full audit
 | Week 3 Integration | Dual-write jobs, assign_team runtime bridge, session event forwarding, operator tools, Keychain auth | ✅ Done |
 | Post-merge fixes | Deadlock fix, runtime session UI (agents panel, grid, output/prompt modals, auto-tail) | ✅ Done |
 
+**Post-delivery cleanup:** All Wave 1 safety fixes from the pre-Phase 2 tech debt audit completed. See `CLAUDE.md` for the full execution plan.
+
 **Estimated total effort:** 2–3 weeks
 
 ---

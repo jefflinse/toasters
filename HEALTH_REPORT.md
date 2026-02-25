@@ -2,7 +2,7 @@
 
 **Date:** 2026-02-24
 **Scope:** Full codebase health audit
-**Go version:** 1.25.0
+**Go version:** 1.26.0
 
 ---
 
@@ -30,6 +30,8 @@
 All findings are now resolved — the codebase has a clean bill of health.
 
 **Phase 1 update (2026-02-24):** Three new packages added (`internal/db`, `internal/provider`, `internal/runtime`) all maintain high test coverage: `db` 83.6%, `provider` 84.9%, `runtime` 87.0%. Total test packages increased from 10 to 12. Existing package coverage unchanged or improved.
+
+**Wave 1 safety fixes (2026-02-24):** All concurrency and security issues from the pre-Phase 2 tech debt audit resolved. Fixed data races in Session, ToolExecutor, and Gateway (CONC-B1--B4). Added HTTP client timeouts, SSRF protection, path restrictions, io.LimitReader bounds, and proper URL encoding (SEC-C1--C4, SEC-H1--H3). See CLAUDE.md Tech Debt Execution Plan for full details.
 
 ---
 

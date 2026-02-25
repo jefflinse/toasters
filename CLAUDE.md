@@ -114,15 +114,15 @@ Identified via comprehensive codebase health audit (code-reviewer, security-audi
 
 These are correctness issues. Fix before any feature work.
 
-- [ ] **CONC-B1**: Add mutex protection to `Session.FinalText()` and `InitialMessage()` — they read `s.messages` without holding `s.mu`, concurrent with `Run()` appending to it (`runtime/session.go`)
-- [ ] **CONC-B2**: Add `sync.RWMutex` to `ToolExecutor` for `Teams` field — written from file watcher goroutine, read from tool execution goroutine without synchronization (`llm/tools/tools.go`, `cmd/root.go`)
-- [ ] **CONC-B3**: Fix Gateway `SpawnTeam` TOCTOU race — finds free slot under lock, releases lock, does I/O, re-acquires lock to assign; another goroutine can claim the same slot in between. Use slot reservation pattern (`gateway/gateway.go`)
-- [ ] **CONC-B4**: Read `g.notify`/`g.send` function pointers under lock via helper method — currently read without lock in subprocess goroutines, written via `SetNotify`/`SetSend` under lock (`gateway/gateway.go`)
-- [ ] **SEC-C1/C2**: Add HTTP client with timeouts to `anthropic.Client` and `provider.AnthropicProvider` — both use `http.DefaultClient` (no timeout), risking goroutine leaks on slow/unresponsive API servers (`anthropic/client.go`, `provider/anthropic.go`)
-- [ ] **SEC-C3**: Add SSRF protection to operator-level `fetch_webpage` — unlike the agent-level `web_fetch` which blocks private IPs, the operator tool has no protection (`llm/tools/tools.go`)
-- [ ] **SEC-C4**: Add path restriction to operator-level `list_directory` — currently accepts any path from the LLM with no validation (`llm/tools/tools.go`)
-- [ ] **SEC-H1**: Add `io.LimitReader` to all unbounded `io.ReadAll` response body reads (`anthropic/client.go`, `provider/anthropic.go`)
-- [ ] **SEC-H2**: Fix OAuth refresh token form body to use `url.Values` encoding instead of `fmt.Sprintf` (`anthropic/client.go`)
+- [x] **CONC-B1**: Add mutex protection to `Session.FinalText()` and `InitialMessage()` — they read `s.messages` without holding `s.mu`, concurrent with `Run()` appending to it (`runtime/session.go`)
+- [x] **CONC-B2**: Add `sync.RWMutex` to `ToolExecutor` for `Teams` field — written from file watcher goroutine, read from tool execution goroutine without synchronization (`llm/tools/tools.go`, `cmd/root.go`)
+- [x] **CONC-B3**: Fix Gateway `SpawnTeam` TOCTOU race — finds free slot under lock, releases lock, does I/O, re-acquires lock to assign; another goroutine can claim the same slot in between. Use slot reservation pattern (`gateway/gateway.go`)
+- [x] **CONC-B4**: Read `g.notify`/`g.send` function pointers under lock via helper method — currently read without lock in subprocess goroutines, written via `SetNotify`/`SetSend` under lock (`gateway/gateway.go`)
+- [x] **SEC-C1/C2**: Add HTTP client with timeouts to `anthropic.Client` and `provider.AnthropicProvider` — both use `http.DefaultClient` (no timeout), risking goroutine leaks on slow/unresponsive API servers (`anthropic/client.go`, `provider/anthropic.go`)
+- [x] **SEC-C3**: Add SSRF protection to operator-level `fetch_webpage` — unlike the agent-level `web_fetch` which blocks private IPs, the operator tool has no protection (`llm/tools/tools.go`)
+- [x] **SEC-C4**: Add path restriction to operator-level `list_directory` — currently accepts any path from the LLM with no validation (`llm/tools/tools.go`)
+- [x] **SEC-H1**: Add `io.LimitReader` to all unbounded `io.ReadAll` response body reads (`anthropic/client.go`, `provider/anthropic.go`)
+- [x] **SEC-H2**: Fix OAuth refresh token form body to use `url.Values` encoding instead of `fmt.Sprintf` (`anthropic/client.go`)
 
 ### Wave 2 — Quick Wins (low-risk cleanup)
 
@@ -143,7 +143,7 @@ Small, mechanical improvements. Each is independent.
 - [ ] **CONC-H2**: Fix late `Subscribe()` — returns never-closed channel if called after session completion, causing goroutine leak (`runtime/session.go`)
 - [ ] **CONC-H3**: Add debouncing to file watcher — file saves generate multiple events, each triggering `DiscoverTeams()` + awareness regeneration (`agents/agents.go`)
 - [ ] **CONC-M1**: Move regex compilation to package level — `regexp.MustCompile` called inside `fetchWebpage` on every invocation (`llm/tools/tools.go`)
-- [ ] **SEC-H3**: Fix `http.Post` without context in `refreshAccessToken` — use `http.NewRequestWithContext` (`anthropic/client.go`)
+- [x] **SEC-H3**: Fix `http.Post` without context in `refreshAccessToken` — use `http.NewRequestWithContext` (`anthropic/client.go`) (completed in Wave 1)
 
 ### Wave 3 — Structural Improvements (architecture)
 
