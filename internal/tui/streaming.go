@@ -143,7 +143,8 @@ func (m *Model) sendAnthropicMessage(prompt string) tea.Cmd {
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancelStream = cancel
 
-	ch := anthropic.StreamMessage(ctx, anthropic.DefaultModel, prompt)
+	client := anthropic.NewClient(anthropic.DefaultModel)
+	ch := client.ChatCompletionStream(ctx, []llm.Message{{Role: "user", Content: prompt}}, 0)
 	return tea.Batch(
 		func() tea.Msg {
 			return streamStartedMsg{ch: ch}

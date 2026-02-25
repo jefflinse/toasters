@@ -131,7 +131,7 @@ func (c *Client) ChatCompletionStream(ctx context.Context, messages []llm.Messag
 		defer close(ch)
 
 		system, msgs := convertMessages(messages)
-		c.streamMessages(ctx, system, msgs, ch)
+		c.streamMessages(ctx, system, msgs, nil, ch)
 	}()
 
 	return ch
@@ -147,7 +147,7 @@ func (c *Client) ChatCompletionStreamWithTools(ctx context.Context, messages []l
 
 		system, msgs := convertMessages(messages)
 		aTools := convertTools(tools)
-		c.streamMessagesWithTools(ctx, system, msgs, aTools, ch)
+		c.streamMessages(ctx, system, msgs, aTools, ch)
 	}()
 
 	return ch
@@ -219,21 +219,6 @@ func (c *Client) ChatCompletion(ctx context.Context, msgs []llm.Message) (string
 	}
 
 	return strings.TrimSpace(strings.Join(parts, "\n")), nil
-}
-
-// StreamMessage reads OAuth credentials from the macOS Keychain and streams
-// a message to the Anthropic Messages API, returning results on a channel.
-// This is the original standalone function kept for backward compatibility
-// with the /anthropic slash command.
-func StreamMessage(ctx context.Context, model string, prompt string) <-chan llm.StreamResponse {
-	ch := make(chan llm.StreamResponse, 1)
-
-	go func() {
-		defer close(ch)
-		streamMessage(ctx, model, prompt, ch)
-	}()
-
-	return ch
 }
 
 // convertMessages splits llm.Message slices into an Anthropic system prompt
@@ -335,56 +320,8 @@ func convertTools(tools []llm.Tool) []anthropicTool {
 }
 
 // streamMessages is the core streaming implementation used by the Client methods.
-func (c *Client) streamMessages(ctx context.Context, system string, messages []anthropicMessage, ch chan<- llm.StreamResponse) {
-	creds, err := readKeychainCredentials()
-	if err != nil {
-		ch <- llm.StreamResponse{Error: fmt.Errorf("anthropic auth: %w", err)}
-		return
-	}
-
-	reqBody := anthropicRequest{
-		Model:     c.model,
-		MaxTokens: 8192,
-		Stream:    true,
-		Messages:  messages,
-		System:    system,
-	}
-
-	body, err := json.Marshal(reqBody)
-	if err != nil {
-		ch <- llm.StreamResponse{Error: fmt.Errorf("marshaling request: %w", err)}
-		return
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiBaseURL+"/v1/messages", bytes.NewReader(body))
-	if err != nil {
-		ch <- llm.StreamResponse{Error: fmt.Errorf("creating request: %w", err)}
-		return
-	}
-
-	req.Header.Set("Authorization", "Bearer "+creds.AccessToken)
-	req.Header.Set("anthropic-beta", "oauth-2025-04-20")
-	req.Header.Set("anthropic-version", "2023-06-01")
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := anthropicHTTPClient.Do(req)
-	if err != nil {
-		ch <- llm.StreamResponse{Error: fmt.Errorf("sending request: %w", err)}
-		return
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-		ch <- llm.StreamResponse{Error: formatAPIError(resp.StatusCode, respBody)}
-		return
-	}
-
-	parseSSEStream(ctx, resp.Body, ch)
-}
-
-// streamMessagesWithTools is like streamMessages but includes tool definitions in the request.
-func (c *Client) streamMessagesWithTools(ctx context.Context, system string, messages []anthropicMessage, tools []anthropicTool, ch chan<- llm.StreamResponse) {
+// When tools is nil or empty, the Tools field is omitted from the request body.
+func (c *Client) streamMessages(ctx context.Context, system string, messages []anthropicMessage, tools []anthropicTool, ch chan<- llm.StreamResponse) {
 	creds, err := readKeychainCredentials()
 	if err != nil {
 		ch <- llm.StreamResponse{Error: fmt.Errorf("anthropic auth: %w", err)}
@@ -426,57 +363,6 @@ func (c *Client) streamMessagesWithTools(ctx context.Context, system string, mes
 
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-		ch <- llm.StreamResponse{Error: formatAPIError(resp.StatusCode, respBody)}
-		return
-	}
-
-	parseSSEStream(ctx, resp.Body, ch)
-}
-
-// streamMessage is the original standalone streaming implementation.
-// Kept for backward compatibility with StreamMessage().
-func streamMessage(ctx context.Context, model string, prompt string, ch chan<- llm.StreamResponse) {
-	creds, err := readKeychainCredentials()
-	if err != nil {
-		ch <- llm.StreamResponse{Error: fmt.Errorf("anthropic auth: %w", err)}
-		return
-	}
-
-	reqBody := anthropicRequest{
-		Model:     model,
-		MaxTokens: 8192,
-		Stream:    true,
-		Messages: []anthropicMessage{
-			newTextMessage("user", prompt),
-		},
-	}
-
-	body, err := json.Marshal(reqBody)
-	if err != nil {
-		ch <- llm.StreamResponse{Error: fmt.Errorf("marshaling request: %w", err)}
-		return
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiBaseURL+"/v1/messages", bytes.NewReader(body))
-	if err != nil {
-		ch <- llm.StreamResponse{Error: fmt.Errorf("creating request: %w", err)}
-		return
-	}
-
-	req.Header.Set("Authorization", "Bearer "+creds.AccessToken)
-	req.Header.Set("anthropic-beta", "oauth-2025-04-20")
-	req.Header.Set("anthropic-version", "2023-06-01")
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		ch <- llm.StreamResponse{Error: fmt.Errorf("sending request: %w", err)}
-		return
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
 		ch <- llm.StreamResponse{Error: formatAPIError(resp.StatusCode, respBody)}
 		return
 	}
