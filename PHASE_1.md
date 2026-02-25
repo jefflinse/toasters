@@ -1,7 +1,7 @@
 # Phase 1: The Foundation — Implementation Plan
 
 **Created:** 2026-02-24
-**Status:** In Progress
+**Status:** All PRs Complete — Ready to Merge
 **Branch:** `phase-1`
 
 ---
@@ -16,10 +16,10 @@ Transform Toasters into a standalone agentic tool with SQLite persistence, multi
 
 | PR | Deliverable | Branch | Effort | Dependencies | Status |
 |----|------------|--------|--------|-------------|--------|
-| PR 1 | 1.1 — SQLite Persistence Layer | `phase-1/sqlite-persistence` | 2–3 days | None | ⬜ Not Started |
-| PR 2 | 1.2 — Multi-Provider LLM Client | `phase-1/multi-provider` | 2–3 days | None | ⬜ Not Started |
-| PR 3 | 1.4 — Async Tool Execution | `phase-1/async-tool-execution` | 1–2 days | None | ⬜ Not Started |
-| PR 4 | 1.3 — In-Process Agent Runtime | `phase-1/agent-runtime` | 3–5 days | PR 2 | ⬜ Not Started |
+| PR 1 | 1.1 — SQLite Persistence Layer | `feat/sqlite-persistence` | 2–3 days | None | ✅ Complete (83.6% coverage) |
+| PR 2 | 1.2 — Multi-Provider LLM Client | `feat/multi-provider` | 2–3 days | None | ✅ Complete (85.1% coverage) |
+| PR 3 | 1.4 — Async Tool Execution | `feat/async-tool-execution` | 1–2 days | None | ✅ Complete |
+| PR 4 | 1.3 — In-Process Agent Runtime | `feat/agent-runtime` | 3–5 days | PR 2 | ✅ Complete (87.8% coverage) |
 
 **Merge order:** PR 3 → PR 1 → PR 2 → PR 4
 
@@ -27,20 +27,20 @@ Transform Toasters into a standalone agentic tool with SQLite persistence, multi
 
 ## PR 1: SQLite Persistence Layer
 
-**Branch:** `phase-1/sqlite-persistence`
+**Branch:** `feat/sqlite-persistence`
 **Depends on:** Nothing
 
 ### Steps
 
 | # | Step | Agent | Status |
 |---|------|-------|--------|
-| 1.1.1 | Add `modernc.org/sqlite` dependency | builder | ⬜ |
-| 1.1.2 | Create `internal/db` types and Store interface | builder | ⬜ |
-| 1.1.3 | Create migration system with embedded SQL | builder | ⬜ |
-| 1.1.4 | Implement SQLite Store (all CRUD) | builder | ⬜ |
-| 1.1.5 | Write comprehensive tests (≥80% coverage) | test-writer | ⬜ |
-| 1.1.6 | Add database path to config | builder | ⬜ |
-| 1.1.7 | Code review | code-reviewer | ⬜ |
+| 1.1.1 | Add `modernc.org/sqlite` dependency | builder | ✅ |
+| 1.1.2 | Create `internal/db` types and Store interface | builder | ✅ |
+| 1.1.3 | Create migration system with embedded SQL | builder | ✅ |
+| 1.1.4 | Implement SQLite Store (all CRUD) | builder | ✅ |
+| 1.1.5 | Write comprehensive tests (≥80% coverage) | test-writer | ✅ 83.6% |
+| 1.1.6 | Add database path to config | builder | ✅ |
+| 1.1.7 | Code review | code-reviewer | ✅ Findings addressed |
 
 ### Details
 
@@ -90,21 +90,21 @@ Transform Toasters into a standalone agentic tool with SQLite persistence, multi
 
 ## PR 2: Multi-Provider LLM Client
 
-**Branch:** `phase-1/multi-provider`
+**Branch:** `feat/multi-provider`
 **Depends on:** Nothing
 
 ### Steps
 
 | # | Step | Agent | Status |
 |---|------|-------|--------|
-| 1.2.1 | Design `provider.Provider` interface | api-designer | ⬜ |
-| 1.2.2 | Implement OpenAI-compatible provider | builder | ⬜ |
-| 1.2.3 | Implement Anthropic provider | builder | ⬜ |
-| 1.2.4 | Implement provider Registry and factory | builder | ⬜ |
-| 1.2.5 | Add providers config section | builder | ⬜ |
-| 1.2.6 | Create conversion utilities (llm ↔ provider) | builder | ⬜ |
-| 1.2.7 | Write tests for all providers (≥70% coverage) | test-writer | ⬜ |
-| 1.2.8 | Code review | code-reviewer | ⬜ |
+| 1.2.1 | Design `provider.Provider` interface | api-designer | ✅ |
+| 1.2.2 | Implement OpenAI-compatible provider | builder | ✅ |
+| 1.2.3 | Implement Anthropic provider | builder | ✅ |
+| 1.2.4 | Implement provider Registry and factory | builder | ✅ |
+| 1.2.5 | Add providers config section | builder | ✅ (in registry.go, not config.go) |
+| 1.2.6 | Create conversion utilities (llm ↔ provider) | builder | ✅ |
+| 1.2.7 | Write tests for all providers (≥70% coverage) | test-writer | ✅ 85.1% |
+| 1.2.8 | Code review | code-reviewer | ✅ Findings addressed |
 
 ### Details
 
@@ -159,21 +159,21 @@ Transform Toasters into a standalone agentic tool with SQLite persistence, multi
 
 ## PR 3: Async Tool Execution Refactor
 
-**Branch:** `phase-1/async-tool-execution`
+**Branch:** `feat/async-tool-execution`
 **Depends on:** Nothing
 
 ### Steps
 
 | # | Step | Agent | Status |
 |---|------|-------|--------|
-| 1.4.1 | Define `ToolResultMsg` and supporting types | builder | ⬜ |
-| 1.4.2 | Create `executeToolsCmd` helper | builder | ⬜ |
-| 1.4.3 | Refactor `handleToolCalls` to be async | builder | ⬜ |
-| 1.4.4 | Add `ToolResultMsg` handler in `Model.Update()` | builder | ⬜ |
-| 1.4.5 | Add Escape cancellation for in-flight tools | builder | ⬜ |
-| 1.4.6 | Update visual indicators (spinner, status bar) | builder | ⬜ |
-| 1.4.7 | Write tests | test-writer | ⬜ |
-| 1.4.8 | Code review (+ concurrency review) | code-reviewer | ⬜ |
+| 1.4.1 | Define `ToolResultMsg` and supporting types | builder | ✅ |
+| 1.4.2 | Create `executeToolsCmd` helper | builder | ✅ |
+| 1.4.3 | Refactor `handleToolCalls` to be async | builder | ✅ |
+| 1.4.4 | Add `ToolResultMsg` handler in `Model.Update()` | builder | ✅ |
+| 1.4.5 | Add Escape cancellation for in-flight tools | builder | ✅ |
+| 1.4.6 | Update visual indicators (spinner, status bar) | builder | ✅ |
+| 1.4.7 | Write tests | test-writer | ✅ |
+| 1.4.8 | Code review (+ concurrency review) | code-reviewer | ✅ Findings addressed |
 
 ### Details
 
@@ -222,21 +222,21 @@ Transform Toasters into a standalone agentic tool with SQLite persistence, multi
 
 ## PR 4: In-Process Agent Runtime
 
-**Branch:** `phase-1/agent-runtime`
+**Branch:** `feat/agent-runtime`
 **Depends on:** PR 2 (multi-provider)
 
 ### Steps
 
 | # | Step | Agent | Status |
 |---|------|-------|--------|
-| 1.3.1 | Define runtime types and interfaces | builder | ⬜ |
-| 1.3.2 | Implement core tools (7 tools) | builder | ⬜ |
-| 1.3.3 | Implement the conversation loop | builder | ⬜ |
-| 1.3.4 | Implement `spawn_agent` tool | builder | ⬜ |
-| 1.3.5 | Implement Runtime manager | builder | ⬜ |
-| 1.3.6 | Write comprehensive tests (≥70% coverage) | test-writer | ⬜ |
-| 1.3.7 | Security audit of core tools | security-auditor | ⬜ |
-| 1.3.8 | Code review | code-reviewer | ⬜ |
+| 1.3.1 | Define runtime types and interfaces | builder | ✅ |
+| 1.3.2 | Implement core tools (8 tools) | builder | ✅ |
+| 1.3.3 | Implement the conversation loop | builder | ✅ |
+| 1.3.4 | Implement `spawn_agent` tool | builder | ✅ |
+| 1.3.5 | Implement Runtime manager | builder | ✅ |
+| 1.3.6 | Write comprehensive tests (≥70% coverage) | test-writer | ✅ 87.8% |
+| 1.3.7 | Security audit of core tools | security-auditor | ✅ 11 findings addressed |
+| 1.3.8 | Code review | code-reviewer | ✅ Findings addressed |
 
 ### Details
 
