@@ -42,13 +42,13 @@ func Open(path string) (*SQLiteStore, error) {
 	}
 	for _, p := range pragmas {
 		if _, err := db.Exec(p); err != nil {
-			db.Close()
+			db.Close() //nolint:errcheck
 			return nil, fmt.Errorf("setting pragma %q: %w", p, err)
 		}
 	}
 
 	if err := migrate(db); err != nil {
-		db.Close()
+		db.Close() //nolint:errcheck
 		return nil, fmt.Errorf("running migrations: %w", err)
 	}
 
@@ -144,7 +144,7 @@ func (s *SQLiteStore) ListJobs(ctx context.Context, filter JobFilter) ([]*Job, e
 	if err != nil {
 		return nil, fmt.Errorf("listing jobs: %w", err)
 	}
-	defer rows.Close()
+	defer rows.Close() //nolint:errcheck
 
 	var jobs []*Job
 	for rows.Next() {
@@ -223,7 +223,7 @@ func (s *SQLiteStore) ListTasksForJob(ctx context.Context, jobID string) ([]*Tas
 	if err != nil {
 		return nil, fmt.Errorf("listing tasks: %w", err)
 	}
-	defer rows.Close()
+	defer rows.Close() //nolint:errcheck
 
 	var tasks []*Task
 	for rows.Next() {
@@ -274,7 +274,7 @@ func (s *SQLiteStore) GetReadyTasks(ctx context.Context, jobID string) ([]*Task,
 	if err != nil {
 		return nil, fmt.Errorf("getting ready tasks: %w", err)
 	}
-	defer rows.Close()
+	defer rows.Close() //nolint:errcheck
 
 	var tasks []*Task
 	for rows.Next() {
@@ -328,7 +328,7 @@ func (s *SQLiteStore) GetRecentProgress(ctx context.Context, jobID string, limit
 	if err != nil {
 		return nil, fmt.Errorf("listing progress reports: %w", err)
 	}
-	defer rows.Close()
+	defer rows.Close() //nolint:errcheck
 
 	var reports []*ProgressReport
 	for rows.Next() {
@@ -421,7 +421,7 @@ func (s *SQLiteStore) ListAgents(ctx context.Context) ([]*Agent, error) {
 	if err != nil {
 		return nil, fmt.Errorf("listing agents: %w", err)
 	}
-	defer rows.Close()
+	defer rows.Close() //nolint:errcheck
 
 	var agents []*Agent
 	for rows.Next() {
@@ -500,7 +500,7 @@ func (s *SQLiteStore) ListTeams(ctx context.Context) ([]*Team, error) {
 	if err != nil {
 		return nil, fmt.Errorf("listing teams: %w", err)
 	}
-	defer rows.Close()
+	defer rows.Close() //nolint:errcheck
 
 	var teams []*Team
 	for rows.Next() {
@@ -610,7 +610,7 @@ func (s *SQLiteStore) GetActiveSessions(ctx context.Context) ([]*AgentSession, e
 	if err != nil {
 		return nil, fmt.Errorf("listing active sessions: %w", err)
 	}
-	defer rows.Close()
+	defer rows.Close() //nolint:errcheck
 
 	var sessions []*AgentSession
 	for rows.Next() {
@@ -659,7 +659,7 @@ func (s *SQLiteStore) ListArtifactsForJob(ctx context.Context, jobID string) ([]
 	if err != nil {
 		return nil, fmt.Errorf("listing artifacts: %w", err)
 	}
-	defer rows.Close()
+	defer rows.Close() //nolint:errcheck
 
 	var artifacts []*Artifact
 	for rows.Next() {
