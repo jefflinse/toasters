@@ -1332,7 +1332,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case loadingTickMsg:
 		if m.loading {
-			m.loadingFrame = (m.loadingFrame + 1) % numLoadingFrames
+			m.loadingFrame++
 			return m, loadingTick()
 		}
 		return m, nil
