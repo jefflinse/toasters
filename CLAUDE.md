@@ -114,50 +114,25 @@ Tests exist across 15 test packages. They use standard Go testing with `t.TempDi
 
 Key coverage numbers: `frontmatter` 100%, `llm/tools` 88.3%, `llm/client` 87.7%, `runtime` 87.0%, `job` 85.7%, `provider` 84.9%, `db` 83.6%, `mcp` 83%, `agents` 72.1%, `config` 65.7%.
 
-## Tech Debt Execution Plan (Pre-Phase 2)
+## Tech Debt Execution Plan (Pre-Phase 3)
 
-Identified via comprehensive codebase health audit (code-reviewer, security-auditor, concurrency-reviewer, refactorer). Findings are organized into three waves by risk and dependency order.
+Identified via comprehensive codebase health audit (code-reviewer, security-auditor, concurrency-reviewer, refactorer). Findings are organized into three waves by risk and dependency order. Waves 1 and 2 were completed pre-Phase 2. Wave 3 is being completed pre-Phase 3.
 
-### Wave 1 — Safety Fixes (data races + security)
+### Wave 1 — Safety Fixes ✅
 
-These are correctness issues. Fix before any feature work.
+**Status: Complete (pre-Phase 2)**
 
-- [x] **CONC-B1**: Add mutex protection to `Session.FinalText()` and `InitialMessage()` — they read `s.messages` without holding `s.mu`, concurrent with `Run()` appending to it (`runtime/session.go`)
-- [x] **CONC-B2**: Add `sync.RWMutex` to `ToolExecutor` for `Teams` field — written from file watcher goroutine, read from tool execution goroutine without synchronization (`llm/tools/tools.go`, `cmd/root.go`)
-- [x] **CONC-B3**: Fix Gateway `SpawnTeam` TOCTOU race — finds free slot under lock, releases lock, does I/O, re-acquires lock to assign; another goroutine can claim the same slot in between. Use slot reservation pattern (`gateway/gateway.go`)
-- [x] **CONC-B4**: Read `g.notify`/`g.send` function pointers under lock via helper method — currently read without lock in subprocess goroutines, written via `SetNotify`/`SetSend` under lock (`gateway/gateway.go`)
-- [x] **SEC-C1/C2**: Add HTTP client with timeouts to `anthropic.Client` and `provider.AnthropicProvider` — both use `http.DefaultClient` (no timeout), risking goroutine leaks on slow/unresponsive API servers (`anthropic/client.go`, `provider/anthropic.go`)
-- [x] **SEC-C3**: Add SSRF protection to operator-level `fetch_webpage` — unlike the agent-level `web_fetch` which blocks private IPs, the operator tool has no protection (`llm/tools/tools.go`)
-- [x] **SEC-C4**: Add path restriction to operator-level `list_directory` — currently accepts any path from the LLM with no validation (`llm/tools/tools.go`)
-- [x] **SEC-H1**: Add `io.LimitReader` to all unbounded `io.ReadAll` response body reads (`anthropic/client.go`, `provider/anthropic.go`)
-- [x] **SEC-H2**: Fix OAuth refresh token form body to use `url.Values` encoding instead of `fmt.Sprintf` (`anthropic/client.go`)
+All data race and security fixes completed: CONC-B1–B4 (mutex/lock fixes), SEC-C1–C4 (HTTP timeouts, SSRF, path restriction), SEC-H1–H2 (response limits, OAuth encoding).
 
-### Wave 2 — Quick Wins (low-risk cleanup)
+### Wave 2 — Quick Wins ✅
 
-Small, mechanical improvements. Each is independent.
+**Status: Complete (2026-02-25, pre-Phase 2)**
 
-**Status: ✅ Complete (2026-02-25)**
+All 16 items completed: ARCH-H3/H4 (Anthropic client consolidation), DUP-M1 (tilde helper), MOD-M1–M7 (modern Go idioms), LINT (15 findings), CONC-H1–H3/M1 (session cleanup, subscribe fix, debounce, regex), SEC-H3 (HTTP context).
 
-- [x] **ARCH-H3**: Merge `streamMessages`/`streamMessagesWithTools` — merged into single method; also fixed a latent `http.DefaultClient` bug in the deleted code (`anthropic/client.go`)
-- [x] **ARCH-H4**: Delete standalone `StreamMessage`/`streamMessage` — dead weight third copy of same logic removed (`anthropic/client.go`)
-- [x] **DUP-M1**: Extract `expandTilde(path, fallback)` helper — tilde expansion extracted from `WorkspaceDir`, `DatabasePath`, and `Dir` (`config/config.go`)
-- [x] **MOD-M1**: `sort.Slice` → `slices.SortFunc`, `sort.Ints` → `slices.Sort`, `sort.Strings` → `slices.Sort` (9 call sites across multiple packages)
-- [x] **MOD-M2**: Range-over-int where applicable — `for i := 0; i < N; i++` → `for i := range N` (`tui/helpers.go`, `tui/grid.go`, `tui/view.go`)
-- [x] **MOD-M3**: `copy(dst, src)` → `slices.Clone` (`agents/agents.go`)
-- [x] **MOD-M4**: `for k := range m { delete(m, k) }` → `clear(m)` (`provider/openai.go`)
-- [x] **MOD-M5**: No-op — migration loop uses early-return pattern, not multi-error collection; `errors.Join` not applicable (`db/sqlite.go`)
-- [x] **MOD-M6**: `context.AfterFunc` for context merging — eliminates goroutine in `Session.Run()` (`runtime/session.go`)
-- [x] **MOD-M7**: Struct conversion instead of field-by-field copy (staticcheck S1016) (`provider/openai.go`)
-- [x] **LINT**: Fixed 15 lint findings (not 6 as originally estimated) across 4 files — errcheck (unchecked `Close`/`Fprint`) + staticcheck (`runtime/tools.go`, `runtime/tools_test.go`, `provider/openai.go`)
-- [x] **CONC-H1**: Add session cleanup to `Runtime` — completed sessions removed from `sessions` map immediately after `Run()` returns (`runtime/runtime.go`)
-- [x] **CONC-H2**: Fix late `Subscribe()` — returns already-closed channel if session is done; uses `closed bool` flag under mutex (`runtime/session.go`)
-- [x] **CONC-H3**: Add debouncing to file watcher — debounced with `time.After` channel in select loop (200ms window) (`agents/agents.go`)
-- [x] **CONC-M1**: Move regex compilation to package level — `regexp.MustCompile` moved out of `fetchWebpage` (`llm/tools/tools.go`)
-- [x] **SEC-H3**: Fix `http.Post` without context in `refreshAccessToken` — use `http.NewRequestWithContext` (`anthropic/client.go`) (completed in Wave 1)
+### Wave 3 — Structural Improvements (pre-Phase 3)
 
-### Wave 3 — Structural Improvements (architecture)
-
-Larger refactorings. Each is independent and can be done incrementally.
+Larger refactorings. Each is independent and can be done incrementally. Must be completed before Phase 3 feature work begins.
 
 - [ ] **ARCH-H1**: Consolidate Anthropic SSE parsing — 3 separate implementations with duplicated event types across `anthropic/`, `provider/`, `llm/client/`. Extract shared `internal/sse` package (~400 lines of duplication eliminated)
 - [ ] **ARCH-H2**: Converge on single Provider interface — `llm.Provider` vs `provider.Provider` with bridge adapter and 261-line `convert.go`. Migrate to `provider.Provider` as canonical interface, eliminate adapter layer. *Highest-impact refactoring in the codebase.*
