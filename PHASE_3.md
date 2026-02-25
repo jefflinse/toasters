@@ -42,24 +42,16 @@ Stop dual-writing jobs to markdown files. SQLite is the source of truth.
 
 ### 3.2 — Teams & Agents Management System (HIGH PRIORITY)
 
-The core Phase 3 deliverable. A complete system for defining, composing, and managing agents and teams.
+The core Phase 3 deliverable. A complete system for defining, composing, and managing agents and teams. **See `PHASE_3_DESIGN.md` for the full design document** with architecture, file formats, directory layout, composition rules, and all design decisions.
 
-**Key goals:**
-- **Composable agent definitions** — Break agent `.md` files into multiple composable files that get combined and cached as actual agent definitions. This enables dynamic configuration of agents with various properties (personality, tools, constraints, domain knowledge) managed independently.
-- **Agent generation** — Ability to generate new agent definitions programmatically or via the operator, not just hand-authored `.md` files.
-- **Curated teams** — Create purpose-built teams for specific workflows (e.g., "frontend team", "security audit team", "migration team") with well-defined roles and coordination patterns.
-- **Shared agents** — Agents that can be reused across multiple teams without duplication. A "senior Go developer" agent shouldn't need to be redefined for every team that needs one.
-- **Per-agent provider/model selection** — Assign specific providers and models to individual agents. A code reviewer might use Claude while a documentation writer uses a cheaper model.
-- **TUI integration** — The `/teams` command and agents panel should reflect the full management system, not just static file listings.
-
-**Design space to explore:**
-- Agent definition layering (base traits + role overlays + team-specific overrides)
-- Agent trait/capability libraries (reusable building blocks)
-- Team templates vs. fully custom teams
-- Hot-reloading of composed definitions (extend existing fsnotify watcher)
-- Agent definition caching strategy
-- How the operator discovers and selects teams for work assignment
-- Whether agents can self-describe their capabilities for dynamic team assembly
+**Summary of the design:**
+- **Three-layer composition**: Skills → Agents → Teams. Skills are reusable capability building blocks. Agents compose skills into personas. Teams assemble agents with a lead, culture document, and coordination rules.
+- **System team**: Toasters itself runs as a team — the operator is the lead, with internal agents (planner, scheduler, blocker handler) as workers. Uses the same infrastructure as user teams. Fully hackable.
+- **Job execution**: The operator delegates planning to a team, then the scheduler creates tasks from the plan and assigns them to teams. Tasks execute serially (parallelism deferred). Task outcomes can spawn new tasks.
+- **File-based source of truth**: All definitions are `.md` files with YAML frontmatter. DB is a runtime cache rebuilt from files. TUI CRUD writes files.
+- **Config layout**: `~/.config/toasters/system/` (toasters internals) + `~/.config/toasters/user/` (user content). No CWD-scoped config.
+- **Auto-team detection**: `~/.claude/agents` and `~/.config/opencode/agents` (user-level) symlinked as auto-teams, promotable to managed teams.
+- **Tool boundaries**: System agents get orchestration tools (create jobs/tasks). User agents get work tools (filesystem, shell). Enforced separation via distinct tool names (`consult_agent` vs `spawn_agent`).
 
 ---
 
