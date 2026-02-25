@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -133,6 +134,29 @@ func expandMCPEnvVars(cfg *Config) {
 	}
 }
 
+// expandTilde expands a leading "~" in path to the user's home directory.
+// If path is empty, fallback is returned. If os.UserHomeDir fails, the error is returned.
+func expandTilde(path, fallback string) (string, error) {
+	if path == "" {
+		return fallback, nil
+	}
+	if path == "~" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", err
+		}
+		return home, nil
+	}
+	if strings.HasPrefix(path, "~/") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", err
+		}
+		return filepath.Join(home, path[2:]), nil
+	}
+	return path, nil
+}
+
 // Dir returns the toasters config directory (~/.config/toasters).
 func Dir() (string, error) {
 	home, err := os.UserHomeDir()
@@ -146,57 +170,21 @@ func Dir() (string, error) {
 // A leading ~ is expanded to the user's home directory.
 // Absolute paths are returned unchanged.
 func WorkspaceDir(cfg *Config) (string, error) {
-	dir := cfg.WorkspaceDir
-	if dir == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "", err
-		}
-		return filepath.Join(home, "toasters"), nil
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
 	}
-	if dir == "~" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "", err
-		}
-		return home, nil
-	}
-	if len(dir) >= 2 && dir[:2] == "~/" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "", err
-		}
-		return filepath.Join(home, dir[2:]), nil
-	}
-	return dir, nil
+	return expandTilde(cfg.WorkspaceDir, filepath.Join(home, "toasters"))
 }
 
 // DatabasePath returns the resolved database file path from cfg.
 // A leading ~ is expanded to the user's home directory.
 func DatabasePath(cfg *Config) (string, error) {
-	p := cfg.DatabasePath
-	if p == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "", err
-		}
-		return filepath.Join(home, ".config", "toasters", "toasters.db"), nil
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
 	}
-	if len(p) >= 2 && p[:2] == "~/" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "", err
-		}
-		return filepath.Join(home, p[2:]), nil
-	}
-	if p == "~" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "", err
-		}
-		return home, nil
-	}
-	return p, nil
+	return expandTilde(cfg.DatabasePath, filepath.Join(home, ".config", "toasters", "toasters.db"))
 }
 
 // BindFlags binds relevant cobra pflags to their Viper configuration keys.

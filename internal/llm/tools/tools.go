@@ -751,6 +751,9 @@ func (te *ToolExecutor) ExecuteTool(ctx context.Context, call llm.ToolCall) (str
 	}
 }
 
+// wsRe matches runs of whitespace for collapsing in fetchWebpage output.
+var wsRe = regexp.MustCompile(`\s+`)
+
 // privateNetworks lists IP ranges that should not be accessible via fetch_webpage.
 var privateNetworks = []*net.IPNet{
 	mustParseCIDR("127.0.0.0/8"),
@@ -859,7 +862,6 @@ func fetchWebpage(url string) (string, error) {
 	result := strings.Join(parts, " ")
 
 	// Collapse runs of whitespace and newlines.
-	wsRe := regexp.MustCompile(`\s+`)
 	result = wsRe.ReplaceAllString(result, " ")
 	result = strings.TrimSpace(result)
 

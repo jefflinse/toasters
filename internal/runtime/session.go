@@ -109,13 +109,8 @@ func (s *Session) Run(ctx context.Context) (retErr error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	go func() {
-		select {
-		case <-s.ctx.Done():
-			cancel()
-		case <-ctx.Done():
-		}
-	}()
+	stop := context.AfterFunc(s.ctx, cancel)
+	defer stop()
 
 	for turn := 0; turn < s.maxTurns; turn++ {
 		if ctx.Err() != nil {
