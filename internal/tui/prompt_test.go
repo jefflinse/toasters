@@ -595,7 +595,7 @@ func TestHandleToolCalls_NormalToolExecution(t *testing.T) {
 		t.Error("promptMode should be false for normal tool calls")
 	}
 
-	// Should have appended entries: assistant tool call turn + indicator + tool result.
+	// Should have appended entries: assistant tool call turn + indicator (but NOT tool result yet — that's async).
 	if len(got.entries) <= initialEntries {
 		t.Errorf("expected entries to grow from %d, got %d", initialEntries, len(got.entries))
 	}
@@ -612,21 +612,15 @@ func TestHandleToolCalls_NormalToolExecution(t *testing.T) {
 		t.Error("expected a tool call indicator entry containing 'calling `job_list`'")
 	}
 
-	// Verify a tool result entry was appended.
-	foundToolResult := false
-	for _, entry := range got.entries {
-		if entry.Message.Role == "tool" && entry.Message.ToolCallID == "call-joblist-1" {
-			foundToolResult = true
-			break
-		}
-	}
-	if !foundToolResult {
-		t.Error("expected a tool result entry with ToolCallID 'call-joblist-1'")
+	// Tool results are now async — they arrive via ToolResultMsg, not inline.
+	// Verify toolsInFlight is set.
+	if !got.toolsInFlight {
+		t.Error("toolsInFlight should be true after dispatching async tool execution")
 	}
 
-	// A cmd should be returned (startStream).
+	// A cmd should be returned (executeToolsCmd).
 	if cmd == nil {
-		t.Error("expected non-nil cmd from handleToolCalls for normal tool execution")
+		t.Error("expected non-nil cmd from handleToolCalls for async tool execution")
 	}
 }
 

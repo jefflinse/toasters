@@ -65,8 +65,10 @@ type Model struct {
 	selectedTeam int
 	focused      focusedPanel
 
-	gateway  *gateway.Gateway
-	toolExec *tools.ToolExecutor
+	gateway        *gateway.Gateway
+	toolExec       *tools.ToolExecutor
+	toolsInFlight  bool
+	toolCancelFunc context.CancelFunc
 
 	teams        []agents.Team // available teams
 	teamsDir     string        // path to the configured teams directory
@@ -583,6 +585,22 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 
 		case "esc":
+			// Cancel in-flight async tool execution.
+			if m.toolsInFlight && m.toolCancelFunc != nil {
+				m.toolCancelFunc()
+				m.toolsInFlight = false
+				m.toolCancelFunc = nil
+				m.appendEntry(ChatEntry{
+					Message:    llm.Message{Role: "assistant", Content: "[tool calls cancelled]"},
+					Timestamp:  time.Now(),
+					ClaudeMeta: "tool-call-indicator",
+				})
+				m.updateViewportContent()
+				if !m.userScrolled {
+					m.chatViewport.GotoBottom()
+				}
+				return m, m.input.Focus()
+			}
 			// Detach from agent slot first.
 			if m.attachedSlot >= 0 {
 				m.attachedSlot = -1
@@ -883,6 +901,37 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ToolCallMsg:
 		return m.handleToolCalls(msg)
 
+	case ToolResultMsg:
+		m.toolsInFlight = false
+		if m.toolCancelFunc != nil {
+			m.toolCancelFunc() // clean up context
+			m.toolCancelFunc = nil
+		}
+
+		// Append each tool result to the conversation.
+		for _, result := range msg.Results {
+			content := result.Result
+			if result.Err != nil {
+				content = fmt.Sprintf("error: %s", result.Err.Error())
+			}
+			m.appendEntry(ChatEntry{
+				Message:   llm.Message{Role: "tool", ToolCallID: result.CallID, Content: content},
+				Timestamp: time.Now(),
+			})
+		}
+
+		// Update the viewport.
+		m.updateViewportContent()
+		if !m.userScrolled {
+			m.chatViewport.GotoBottom()
+		}
+
+		// Drain any completion notifications that arrived while tools were executing.
+		m.drainPendingCompletions()
+
+		// Re-invoke the stream with the updated messages for the final answer.
+		return m, m.startStream(m.messagesFromEntries())
+
 	case AskUserResponseMsg:
 		return m.handleAskUserResponse(msg)
 
@@ -1168,8 +1217,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case spinnerTickMsg:
 		m.spinnerFrame++
-		// Re-arm only if something is animating: operator streaming or any agent running.
-		needTick := m.streaming
+		// Re-arm only if something is animating: operator streaming, tools in flight, or any agent running.
+		needTick := m.streaming || m.toolsInFlight
 		if !needTick && m.gateway != nil {
 			for _, snap := range m.gateway.Slots() {
 				if snap.Status == gateway.SlotRunning {

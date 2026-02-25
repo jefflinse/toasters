@@ -204,6 +204,19 @@ type ToolCallMsg struct {
 	Calls []llm.ToolCall
 }
 
+// ToolResult holds the result of a single tool call execution.
+type ToolResult struct {
+	CallID string
+	Name   string
+	Result string
+	Err    error
+}
+
+// ToolResultMsg is sent when async tool execution completes.
+type ToolResultMsg struct {
+	Results []ToolResult
+}
+
 // AskUserResponseMsg is dispatched when the user submits a response in prompt mode.
 type AskUserResponseMsg struct {
 	Call   llm.ToolCall

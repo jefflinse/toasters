@@ -2,6 +2,7 @@
 package tui
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -221,7 +222,6 @@ func (m *Model) handleToolCalls(msg ToolCallMsg) (tea.Model, tea.Cmd) {
 	}
 
 	// Append the assistant "tool call" turn to the conversation.
-	// Content is empty for tool-call-only turns; ToolCalls carries the calls.
 	assistantMsg := llm.Message{
 		Role:      "assistant",
 		Content:   "",
@@ -232,41 +232,27 @@ func (m *Model) handleToolCalls(msg ToolCallMsg) (tea.Model, tea.Cmd) {
 		Timestamp: time.Now(),
 	})
 
-	// Execute each tool call and append results.
+	// Show visual indicators for each tool being called.
 	for _, call := range msg.Calls {
-		// Show a visual indicator in the chat.
 		indicator := fmt.Sprintf("⚙ calling `%s`…", call.Function.Name)
 		m.appendEntry(ChatEntry{
 			Message:    llm.Message{Role: "assistant", Content: indicator},
 			Timestamp:  time.Now(),
 			ClaudeMeta: "tool-call-indicator",
 		})
-
-		result, err := m.toolExec.ExecuteTool(call)
-		if err != nil {
-			result = fmt.Sprintf("error: %s", err.Error())
-		}
-
-		m.appendEntry(ChatEntry{
-			Message:   llm.Message{Role: "tool", ToolCallID: call.ID, Content: result},
-			Timestamp: time.Now(),
-		})
 	}
 
-	// Update the viewport so the user sees the tool call indicators.
+	// Update the viewport so the user sees the tool call indicators immediately.
 	m.updateViewportContent()
 	if !m.userScrolled {
 		m.chatViewport.GotoBottom()
 	}
 
-	// Drain any completion notifications that arrived while we were streaming,
-	// so the operator sees them in the next context window.
-	// Return values are discarded — drain appends to m.entries and
-	// messagesFromEntries() below builds the updated slice.
-	m.drainPendingCompletions()
-
-	// Re-invoke the stream with the updated messages for the final answer.
-	return m, m.startStream(m.messagesFromEntries())
+	// Dispatch tool execution asynchronously.
+	m.toolsInFlight = true
+	ctx, cancel := context.WithCancel(context.Background())
+	m.toolCancelFunc = cancel
+	return m, executeToolsCmd(msg.Calls, m.toolExec, ctx)
 }
 
 // handleAskUserResponse processes an AskUserResponseMsg — the user has submitted
