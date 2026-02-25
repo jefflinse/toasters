@@ -12,8 +12,8 @@
 |---|---|
 | **Overall health** | **Excellent** (was "Good") |
 | **Build / Vet** | ✅ Clean |
-| **Tests** | ✅ All pass (10 packages, 300+ tests) |
-| **Test coverage** | ✅ 42.9% overall (target 40% met) |
+| **Tests** | ✅ All pass (12 test packages) |
+| **Test coverage** | ✅ Phase 1 packages at 83–88% coverage |
 | **Known vulnerabilities** | ✅ None found (govulncheck clean) |
 | **Lint findings** | **0** (was 26) |
 | **Outdated dependencies** | ✅ All addressed — Charm v2 updated to stable v2.0.0, all `x/` packages current |
@@ -28,6 +28,8 @@
 - Item #18 (test coverage): raised from 12.1% to 42.9%, exceeding the 40% target. 300+ tests across 10 packages.
 
 All findings are now resolved — the codebase has a clean bill of health.
+
+**Phase 1 update (2026-02-24):** Three new packages added (`internal/db`, `internal/provider`, `internal/runtime`) all maintain high test coverage: `db` 83.6%, `provider` 84.9%, `runtime` 87.0%. Total test packages increased from 10 to 12. Existing package coverage unchanged or improved.
 
 ---
 
@@ -183,7 +185,7 @@ All findings are now resolved — the codebase has a clean bill of health.
 - **Clean `go mod tidy`** — no unused or phantom dependencies
 - **Consistent error wrapping** — `fmt.Errorf("context: %w", err)` used correctly throughout
 - **Good `context.Context` threading** — subprocess management properly threads context for cancellation
-- **Strong test coverage** — 42.9% overall with critical packages well-covered: `llm/tools` 96.3%, `config` 87.2%, `llm/client` 87.7%, `job` 85.7%, `agents` 72.1%
+- **Strong test coverage** — 12 test packages with critical packages well-covered: `frontmatter` 100%, `llm/tools` 88.3%, `llm/client` 87.7%, `runtime` 87.0%, `job` 85.7%, `provider` 84.9%, `db` 83.6%, `agents` 72.1%, `config` 65.7%
 - **Well-structured agent discovery** — `internal/agents/` has clean design with hot-reloading
 - **Clean package dependency graph** — no circular dependencies
 - **Thoughtful comments** — meaningful comments explaining *why* decisions were made

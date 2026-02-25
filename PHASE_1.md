@@ -1,7 +1,7 @@
 # Phase 1: The Foundation — Implementation Plan
 
 **Created:** 2026-02-24
-**Status:** All PRs Complete — Ready to Merge
+**Status:** ✅ Complete — All PRs merged, integration done, end-to-end verified
 **Branch:** `phase-1`
 
 ---
@@ -307,11 +307,52 @@ Transform Toasters into a standalone agentic tool with SQLite persistence, multi
 | Recursive `spawn_agent` unbounded goroutines | Max depth limit (3 levels) |
 | `llm.Provider` vs `provider.Provider` confusion | Clear documentation, adapter pattern |
 
-## Out of Scope (Week 3 / Integration)
+## Week 3: Integration and Post-Merge Fixes
 
-- Wiring runtime into TUI
-- Wiring SQLite into existing job management
-- Removing Claude CLI path
+**Branch:** `feat/phase-1-integration` (merged to `phase-1`) + direct commits on `phase-1`
+
+The Week 3 integration work wired all four Phase 1 subsystems into the running TUI and resolved issues discovered during end-to-end testing.
+
+### Integration Commits (feat/phase-1-integration)
+
+| Commit | Description |
+|--------|-------------|
+| Wire startup | SQLite `db.Open()`, provider registry `NewRegistry()`, and `runtime.New()` initialized in `cmd/root.go` |
+| Dual-write + bridge | Jobs written to both markdown files and SQLite; `assign_team` bridges to runtime when provider is configured |
+| Operator tools | `list_sessions` and `cancel_session` tools for operator to manage runtime sessions |
+| Integration tests | 11 new tests covering dual-write, runtime bridge, session tools |
+| Code review fixes | Memory leak fix (cancel context on session done), `shortID` safety, spinner re-arm, lint |
+| Keychain auth | `ReadKeychainAccessToken()` exported from `internal/anthropic`; Anthropic provider uses `Authorization: Bearer` + `anthropic-beta: oauth-2025-04-20` headers when no API key configured |
+
+### Post-Merge Fixes (direct on phase-1)
+
+| Commit | Description |
+|--------|-------------|
+| `fix: deadlock on assign_team dispatch` | **Critical bug**: `ExecuteTool` called synchronously from `Update()` caused deadlock when runtime path was active. `assign_team` → `OnSessionStarted` → `p.Send()` wrote to unbuffered channel blocked by `Update()`. Fixed by making both dispatch paths use async `executeToolsCmd`. |
+| `feat: show runtime sessions in agents panel and grid view` | Runtime sessions displayed in agents panel with ⚡ prefix; empty grid cells show runtime session overlay with cyan borders |
+| `feat: persist completed runtime sessions` | Completed sessions no longer deleted — stay visible like gateway slots. Grid Enter/p keys work for runtime sessions (output modal, prompt modal). Output modal auto-tails (opens scrolled to bottom, live-updates while session active). |
+
+### End-to-End Verification
+
+The full flow was verified working: user prompt → operator creates job → dispatches to team → runtime agent runs as goroutine talking to Anthropic API → executes tools (reads files, writes code, runs tests) → output visible in grid and full-screen modal → session tracked in SQLite.
+
+### Coverage After Integration
+
+| Package | Coverage |
+|---------|----------|
+| `frontmatter` | 100% |
+| `llm/tools` | 88.3% |
+| `llm/client` | 87.7% |
+| `runtime` | 87.0% |
+| `job` | 85.7% |
+| `provider` | 84.9% |
+| `db` | 83.6% |
+| `agents` | 72.1% |
+| `config` | 65.7% |
+
+## Still Out of Scope (Phase 2+)
+
+- Removing Claude CLI path (retained as fallback)
 - MCP integration (Phase 2)
 - Provider selection per-agent in TUI
 - Database migration from markdown jobs to SQLite

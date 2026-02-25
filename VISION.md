@@ -196,7 +196,7 @@ The TUI uses a two-column layout. The left column is the primary work management
 
 ## Current State
 
-What exists today is a functional TUI prototype with operator chat, agent team dispatch, and Claude CLI subprocess integration. The codebase has been through a comprehensive health audit (see `HEALTH_REPORT.md`) — all findings resolved, 0 lint issues, 0 vulnerabilities, 42.9% test coverage. The system is transitioning from subprocess-based agent execution to in-process API-driven agents.
+What exists today is a functional agentic orchestration TUI with operator chat, agent team dispatch, in-process agent runtime, SQLite persistence, and multi-provider LLM support. The codebase has been through a comprehensive health audit (see `HEALTH_REPORT.md`) — all findings resolved, 0 lint issues, 0 vulnerabilities. Phase 1 (The Foundation) is complete: agents run as in-process goroutines talking directly to LLM providers, with Claude CLI subprocess retained as a fallback. 12 test packages, key packages at 83–100% coverage.
 
 ### Implemented
 
@@ -257,14 +257,39 @@ What exists today is a functional TUI prototype with operator chat, agent team d
 
 **`internal/config` — Configuration**
 - Viper-based config from `~/.config/toasters/config.yaml`
-- Operator, Claude CLI, and teams directory settings
+- Operator, Claude CLI, provider, agent, and database settings
 
-### Not Yet Built (Phase 1+)
+**`internal/db` — SQLite Persistence (Phase 1)**
+- Pure Go SQLite via `modernc.org/sqlite`, WAL mode for concurrent reads
+- Store interface with full CRUD for jobs, tasks, task dependencies, progress reports, agents, teams, sessions, artifacts
+- Embedded SQL migrations with auto-apply on open
+- Schema version tracking for safe upgrades
 
-- In-process agent runtime (direct API calls, replacing Claude CLI subprocesses)
-- SQLite persistence layer
-- Multi-provider LLM client (unified Anthropic + OpenAI interface)
-- Async tool execution in TUI
+**`internal/provider` — Multi-Provider LLM Client (Phase 1)**
+- `Provider` interface with `ChatStream` returning `<-chan StreamEvent`
+- OpenAI-compatible provider (LM Studio, Ollama, OpenAI)
+- Anthropic Messages API provider with SSE streaming and tool use
+- Keychain/OAuth authentication fallback for Anthropic (macOS)
+- Provider registry with config-driven factory and `${ENV_VAR}` expansion
+- Conversion utilities bridging `llm.Provider` ↔ `provider.Provider` via `LLMProviderAdapter`
+
+**`internal/runtime` — In-Process Agent Runtime (Phase 1)**
+- Session conversation loop: stream → accumulate → execute tools → loop
+- 8 core tools: read_file, write_file, edit_file, glob, grep, shell, web_fetch, spawn_agent
+- Path traversal prevention (sandbox to workDir), shell timeout (30s), web fetch timeout (10s)
+- Subagent spawning with max depth limit (3 levels)
+- Fan-out observer pattern for streaming events to TUI
+- SQLite session tracking (tokens, status, timing)
+- Runtime manager with mutex-protected session map
+
+**Async Tool Execution (Phase 1)**
+- `executeToolsCmd` helper dispatches tool calls to goroutines
+- TUI remains responsive during tool execution
+- Escape cancels in-flight tool calls
+- Visual "calling tool..." indicators
+
+### Not Yet Built (Phase 2+)
+
 - MCP client integration (consuming external MCP servers)
 - MCP server (agent progress reporting)
 - Ephemeral OpenAPI-to-MCP bridges

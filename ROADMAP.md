@@ -53,9 +53,22 @@ All pre-Phase 1 tech debt is resolved. See `HEALTH_REPORT.md` for the full audit
 
 ---
 
-## Phase 1: The Foundation
+## Phase 1: The Foundation (Completed 2026-02-24)
 
 **Goal:** Toasters is a standalone agentic tool that talks directly to LLM providers, manages its own state in SQLite, and runs agents as in-process goroutines with a full tool set. No dependency on Claude CLI for core operation.
+
+**Status:** ✅ Complete. All four deliverables built, integrated, and end-to-end verified. See `PHASE_1.md` for full implementation details.
+
+**What was delivered:**
+
+| Deliverable | Description | Status |
+|-------------|-------------|--------|
+| 1.1 — SQLite Persistence | `internal/db` package with Store interface, migrations, full CRUD (83.6% coverage) | ✅ Done |
+| 1.2 — Multi-Provider LLM Client | `internal/provider` package with OpenAI + Anthropic providers, registry, Keychain/OAuth auth (84.9% coverage) | ✅ Done |
+| 1.3 — In-Process Agent Runtime | `internal/runtime` package with session loop, 8 core tools, spawn_agent, SQLite tracking (87.0% coverage) | ✅ Done |
+| 1.4 — Async Tool Execution | `executeToolsCmd` helper, goroutine dispatch, Escape cancellation, visual indicators | ✅ Done |
+| Week 3 Integration | Dual-write jobs, assign_team runtime bridge, session event forwarding, operator tools, Keychain auth | ✅ Done |
+| Post-merge fixes | Deadlock fix, runtime session UI (agents panel, grid, output/prompt modals, auto-tail) | ✅ Done |
 
 **Estimated total effort:** 2–3 weeks
 
