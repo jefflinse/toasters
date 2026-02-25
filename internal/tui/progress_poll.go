@@ -8,11 +8,15 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/jefflinse/toasters/internal/db"
+	"github.com/jefflinse/toasters/internal/runtime"
 )
 
-// progressPollCmd queries SQLite for current job/task/session state.
-// Returns a progressPollMsg with the latest data.
-func progressPollCmd(store db.Store) tea.Cmd {
+// progressPollCmd queries SQLite for current job/task/session state and
+// collects live session snapshots from the in-process runtime (which carry
+// accurate token counts, unlike the DB records that are only written on
+// session completion).
+// rt may be nil — in that case RuntimeSessions will be empty.
+func progressPollCmd(store db.Store, rt *runtime.Runtime) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 400*time.Millisecond)
 		defer cancel()
@@ -46,11 +50,18 @@ func progressPollCmd(store db.Store) tea.Cmd {
 			sessions = nil
 		}
 
+		// Get live session snapshots from the in-process runtime (has real token counts).
+		var runtimeSessions []runtime.SessionSnapshot
+		if rt != nil {
+			runtimeSessions = rt.ActiveSessions()
+		}
+
 		return progressPollMsg{
-			Jobs:     jobs,
-			Tasks:    tasks,
-			Progress: progress,
-			Sessions: sessions,
+			Jobs:            jobs,
+			Tasks:           tasks,
+			Progress:        progress,
+			Sessions:        sessions,
+			RuntimeSessions: runtimeSessions,
 		}
 	}
 }

@@ -97,10 +97,11 @@ func estimateTokens(s string) int {
 
 // progressPollMsg carries the latest progress data from SQLite, fired every 500ms.
 type progressPollMsg struct {
-	Jobs     []*db.Job
-	Tasks    map[string][]*db.Task
-	Progress map[string][]*db.ProgressReport
-	Sessions []*db.AgentSession
+	Jobs            []*db.Job
+	Tasks           map[string][]*db.Task
+	Progress        map[string][]*db.ProgressReport
+	Sessions        []*db.AgentSession
+	RuntimeSessions []runtime.SessionSnapshot // live snapshots with real token counts
 }
 
 // progressPollTickMsg is an internal tick that triggers the next poll.

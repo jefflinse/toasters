@@ -14,12 +14,13 @@ import (
 
 // Runtime manages agent sessions.
 type Runtime struct {
-	mu        sync.Mutex
-	sessions  map[string]*Session
-	store     db.Store // may be nil
-	providers *provider.Registry
-	mcpCaller MCPCaller // may be nil
-	mcpDefs   []ToolDef // pre-converted MCP tool definitions
+	mu               sync.Mutex
+	sessions         map[string]*Session
+	store            db.Store // may be nil
+	providers        *provider.Registry
+	mcpCaller        MCPCaller      // may be nil
+	mcpDefs          []ToolDef      // pre-converted MCP tool definitions
+	OnSessionStarted func(*Session) // called after each SpawnAgent; may be nil
 }
 
 // New creates a new Runtime. store may be nil for in-memory only operation.
@@ -94,6 +95,12 @@ func (r *Runtime) SpawnAgent(ctx context.Context, opts SpawnOpts) (*Session, err
 		if err := r.store.CreateSession(ctx, dbSession); err != nil {
 			log.Printf("warning: failed to persist session %s: %v", id, err)
 		}
+	}
+
+	// Notify observer before starting the goroutine so the subscriber is set up
+	// before events start flowing.
+	if r.OnSessionStarted != nil {
+		r.OnSessionStarted(sess)
 	}
 
 	// Start session in goroutine. Use context.Background() because the session

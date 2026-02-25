@@ -447,8 +447,40 @@ func (m Model) renderSidebar(sbWidth int) string {
 		agentsSB.WriteString(DimStyle.Italic(true).Render("No agents running"))
 	}
 
-	// Active sessions from SQLite (token usage per session).
-	if len(m.activeSessions) > 0 {
+	// Active session token usage — prefer live runtime snapshots (accurate token counts)
+	// over DB records (which only have counts after session completion).
+	if len(m.runtimeSessionSnapshots) > 0 {
+		agentsSB.WriteString("\n")
+		agentsSB.WriteString(gradientText("Sessions", [3]uint8{50, 200, 100}, [3]uint8{0, 150, 200}))
+		agentsSB.WriteString("\n")
+		var totalIn, totalOut int64
+		for _, s := range m.runtimeSessionSnapshots {
+			totalIn += s.TokensIn
+			totalOut += s.TokensOut
+			label := s.AgentID
+			if label == "" {
+				label = s.JobID
+			}
+			if label == "" {
+				label = s.ID
+			}
+			label = truncateStr(label, 12)
+			tokLine := fmt.Sprintf("  %s: %s↓ %s↑",
+				label,
+				formatTokenCount(s.TokensOut),
+				formatTokenCount(s.TokensIn),
+			)
+			agentsSB.WriteString(DimStyle.Render(truncateStr(tokLine, contentWidth)))
+			agentsSB.WriteString("\n")
+		}
+		totalLine := fmt.Sprintf("  Total: %s↓ %s↑",
+			formatTokenCount(totalOut),
+			formatTokenCount(totalIn),
+		)
+		agentsSB.WriteString(SidebarValueStyle.Render(truncateStr(totalLine, contentWidth)))
+		agentsSB.WriteString("\n")
+	} else if len(m.activeSessions) > 0 {
+		// Fallback to DB sessions (e.g. gateway-spawned sessions not in runtime).
 		agentsSB.WriteString("\n")
 		agentsSB.WriteString(gradientText("Sessions", [3]uint8{50, 200, 100}, [3]uint8{0, 150, 200}))
 		agentsSB.WriteString("\n")

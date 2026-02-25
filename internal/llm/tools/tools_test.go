@@ -1770,10 +1770,10 @@ func TestAssignTeam_UsesRuntimeWhenProviderConfigured(t *testing.T) {
 	te.DefaultModel = "test-model"
 	te.RepoRoot = t.TempDir()
 
-	// Track session starts.
+	// Track session starts via the runtime callback (the canonical notification path).
 	var sessionStarted bool
 	var mu sync.Mutex
-	te.OnSessionStarted = func(sess *runtime.Session) {
+	rt.OnSessionStarted = func(sess *runtime.Session) {
 		mu.Lock()
 		sessionStarted = true
 		mu.Unlock()

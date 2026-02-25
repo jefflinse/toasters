@@ -140,7 +140,7 @@ func TestProgressPollCmd_HappyPath(t *testing.T) {
 		},
 	}
 
-	cmd := progressPollCmd(store)
+	cmd := progressPollCmd(store, nil)
 	if cmd == nil {
 		t.Fatal("progressPollCmd returned nil cmd")
 	}
@@ -190,7 +190,7 @@ func TestProgressPollCmd_ListJobsError(t *testing.T) {
 		},
 	}
 
-	cmd := progressPollCmd(store)
+	cmd := progressPollCmd(store, nil)
 	raw := cmd()
 	msg, ok := raw.(progressPollMsg)
 	if !ok {
@@ -226,7 +226,7 @@ func TestProgressPollCmd_GetActiveSessionsError(t *testing.T) {
 		},
 	}
 
-	cmd := progressPollCmd(store)
+	cmd := progressPollCmd(store, nil)
 	raw := cmd()
 	msg, ok := raw.(progressPollMsg)
 	if !ok {
@@ -261,7 +261,7 @@ func TestProgressPollCmd_ListTasksForJobError(t *testing.T) {
 		},
 	}
 
-	cmd := progressPollCmd(store)
+	cmd := progressPollCmd(store, nil)
 	raw := cmd()
 	msg, ok := raw.(progressPollMsg)
 	if !ok {
@@ -295,7 +295,7 @@ func TestProgressPollCmd_GetRecentProgressError(t *testing.T) {
 		},
 	}
 
-	cmd := progressPollCmd(store)
+	cmd := progressPollCmd(store, nil)
 	raw := cmd()
 	msg, ok := raw.(progressPollMsg)
 	if !ok {
@@ -323,7 +323,7 @@ func TestProgressPollCmd_EmptyStore(t *testing.T) {
 		},
 	}
 
-	cmd := progressPollCmd(store)
+	cmd := progressPollCmd(store, nil)
 	raw := cmd()
 	msg, ok := raw.(progressPollMsg)
 	if !ok {
@@ -355,7 +355,7 @@ func TestProgressPollCmd_ListJobsPassesActiveFilter(t *testing.T) {
 		},
 	}
 
-	cmd := progressPollCmd(store)
+	cmd := progressPollCmd(store, nil)
 	cmd()
 
 	if capturedFilter.Status == nil {

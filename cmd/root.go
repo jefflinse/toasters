@@ -175,8 +175,10 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 		p.Send(msg)
 	})
 
-	// Wire up runtime session event forwarding to the TUI.
-	toolExec.OnSessionStarted = func(sess *runtime.Session) {
+	// notifySessionStarted wires a runtime session into the TUI event loop.
+	// It is used for all sessions — both coordinator sessions (spawned by assign_team)
+	// and child sessions (spawned by spawn_agent) — via rt.OnSessionStarted.
+	notifySessionStarted := func(sess *runtime.Session) {
 		snap := sess.Snapshot()
 		p.Send(tui.RuntimeSessionStartedMsg{
 			SessionID:      snap.ID,
@@ -203,6 +205,10 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 			})
 		}()
 	}
+
+	// Wire the callback on the runtime so all sessions (coordinator + children)
+	// are forwarded to the TUI through a single path.
+	rt.OnSessionStarted = notifySessionStarted
 
 	// Generate team awareness and pre-fetch the operator greeting in the background
 	// so the TUI appears immediately. Always send AppReadyMsg even on error.

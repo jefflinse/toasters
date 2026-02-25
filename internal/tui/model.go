@@ -187,11 +187,12 @@ type Model struct {
 	runtime         *runtime.Runtime        // may be nil
 	runtimeSessions map[string]*runtimeSlot // keyed by session ID
 
-	// Progress polling state (populated every 500ms from SQLite).
-	progressJobs    []*db.Job
-	progressTasks   map[string][]*db.Task
-	progressReports map[string][]*db.ProgressReport
-	activeSessions  []*db.AgentSession
+	// Progress polling state (populated every 500ms from SQLite and the runtime).
+	progressJobs            []*db.Job
+	progressTasks           map[string][]*db.Task
+	progressReports         map[string][]*db.ProgressReport
+	activeSessions          []*db.AgentSession
+	runtimeSessionSnapshots []runtime.SessionSnapshot // live snapshots with real token counts
 }
 
 // runtimeSlot tracks a runtime agent session for TUI display.
@@ -1386,7 +1387,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case progressPollTickMsg:
 		if m.store != nil {
-			return m, progressPollCmd(m.store)
+			return m, progressPollCmd(m.store, m.runtime)
 		}
 		return m, nil
 
@@ -1395,6 +1396,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.progressTasks = msg.Tasks
 		m.progressReports = msg.Progress
 		m.activeSessions = msg.Sessions
+		m.runtimeSessionSnapshots = msg.RuntimeSessions
 		return m, scheduleProgressPoll()
 	}
 

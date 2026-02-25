@@ -572,9 +572,6 @@ func (te *ToolExecutor) ExecuteTool(ctx context.Context, call llm.ToolCall) (str
 				log.Printf("runtime spawn failed, falling back to gateway: %v", err)
 				// Fall through to gateway path below.
 			} else {
-				if te.OnSessionStarted != nil {
-					te.OnSessionStarted(sess)
-				}
 				return fmt.Sprintf("started runtime session %s for team %s", sess.ID(), team.Name), nil
 			}
 		}
