@@ -186,6 +186,12 @@ type Model struct {
 	store           db.Store                // may be nil — graceful degradation
 	runtime         *runtime.Runtime        // may be nil
 	runtimeSessions map[string]*runtimeSlot // keyed by session ID
+
+	// Progress polling state (populated every 500ms from SQLite).
+	progressJobs    []*db.Job
+	progressTasks   map[string][]*db.Task
+	progressReports map[string][]*db.ProgressReport
+	activeSessions  []*db.AgentSession
 }
 
 // runtimeSlot tracks a runtime agent session for TUI display.
@@ -305,6 +311,9 @@ func (m *Model) Init() tea.Cmd {
 	}
 	if m.agentNotifyCh != nil {
 		cmds = append(cmds, waitForAgentUpdate(m.agentNotifyCh))
+	}
+	if m.store != nil {
+		cmds = append(cmds, scheduleProgressPoll())
 	}
 	return tea.Batch(cmds...)
 }
@@ -1374,6 +1383,19 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		return m, nil
+
+	case progressPollTickMsg:
+		if m.store != nil {
+			return m, progressPollCmd(m.store)
+		}
+		return m, nil
+
+	case progressPollMsg:
+		m.progressJobs = msg.Jobs
+		m.progressTasks = msg.Tasks
+		m.progressReports = msg.Progress
+		m.activeSessions = msg.Sessions
+		return m, scheduleProgressPoll()
 	}
 
 	return m, tea.Batch(cmds...)

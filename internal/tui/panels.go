@@ -8,6 +8,7 @@ import (
 
 	"charm.land/lipgloss/v2"
 
+	"github.com/jefflinse/toasters/internal/db"
 	"github.com/jefflinse/toasters/internal/gateway"
 	"github.com/jefflinse/toasters/internal/job"
 )
@@ -144,6 +145,14 @@ func (m Model) renderLeftPanel(panelWidth, panelHeight int) string {
 				if m.hasBlocker(j) {
 					blockerLine := "  ⚠ BLOCKED"
 					topLines = append(topLines, TaskBlockedStyle.Render(blockerLine))
+				}
+
+				// SQLite task progress summary (if available from polling).
+				if dbTasks := m.progressTasks[j.ID]; len(dbTasks) > 0 {
+					summary := renderJobProgressSummary(dbTasks)
+					if summary != "" {
+						topLines = append(topLines, DimStyle.Render("  ")+summary)
+					}
 				}
 
 				// Task subitems from TODO.md.
@@ -438,6 +447,39 @@ func (m Model) renderSidebar(sbWidth int) string {
 		agentsSB.WriteString(DimStyle.Italic(true).Render("No agents running"))
 	}
 
+	// Active sessions from SQLite (token usage per session).
+	if len(m.activeSessions) > 0 {
+		agentsSB.WriteString("\n")
+		agentsSB.WriteString(gradientText("Sessions", [3]uint8{50, 200, 100}, [3]uint8{0, 150, 200}))
+		agentsSB.WriteString("\n")
+		var totalIn, totalOut int64
+		for _, s := range m.activeSessions {
+			totalIn += s.TokensIn
+			totalOut += s.TokensOut
+			label := s.AgentID
+			if label == "" {
+				label = s.JobID
+			}
+			if label == "" {
+				label = s.ID
+			}
+			label = truncateStr(label, 12)
+			tokLine := fmt.Sprintf("  %s: %s↓ %s↑",
+				label,
+				formatTokenCount(s.TokensOut),
+				formatTokenCount(s.TokensIn),
+			)
+			agentsSB.WriteString(DimStyle.Render(truncateStr(tokLine, contentWidth)))
+			agentsSB.WriteString("\n")
+		}
+		totalLine := fmt.Sprintf("  Total: %s↓ %s↑",
+			formatTokenCount(totalOut),
+			formatTokenCount(totalIn),
+		)
+		agentsSB.WriteString(SidebarValueStyle.Render(truncateStr(totalLine, contentWidth)))
+		agentsSB.WriteString("\n")
+	}
+
 	agentsPaneStyle := UnfocusedPaneStyle
 	if m.focused == focusAgents {
 		agentsPaneStyle = FocusedPaneStyle
@@ -470,4 +512,61 @@ func (m Model) renderSidebar(sbWidth int) string {
 func sidebarRow(label, value string) string {
 	return SidebarLabelStyle.Render(fmt.Sprintf("%-12s", label)) +
 		SidebarValueStyle.Render(value) + "\n"
+}
+
+// taskStatusIndicator returns the status indicator rune and style for a db task status.
+func taskStatusIndicator(status db.TaskStatus) (string, lipgloss.Style) {
+	switch status {
+	case db.TaskStatusPending:
+		return "○", dbTaskPendingStyle
+	case db.TaskStatusInProgress:
+		return "◉", dbTaskInProgressStyle
+	case db.TaskStatusCompleted:
+		return "✓", dbTaskCompletedStyle
+	case db.TaskStatusFailed:
+		return "✗", dbTaskFailedStyle
+	case db.TaskStatusBlocked:
+		return "⊘", dbTaskBlockedStyle
+	case db.TaskStatusCancelled:
+		return "—", dbTaskCancelledStyle
+	default:
+		return "?", dbTaskPendingStyle
+	}
+}
+
+// renderJobProgressSummary returns a summary line for a job's SQLite task progress.
+// Returns an empty string if there are no tasks.
+func renderJobProgressSummary(tasks []*db.Task) string {
+	if len(tasks) == 0 {
+		return ""
+	}
+	var completed, blocked, failed int
+	for _, t := range tasks {
+		switch t.Status {
+		case db.TaskStatusCompleted:
+			completed++
+		case db.TaskStatusBlocked:
+			blocked++
+		case db.TaskStatusFailed:
+			failed++
+		}
+	}
+	if blocked > 0 {
+		_, style := taskStatusIndicator(db.TaskStatusBlocked)
+		return style.Render("⚠ BLOCKED")
+	}
+	if failed > 0 {
+		_, style := taskStatusIndicator(db.TaskStatusFailed)
+		return style.Render(fmt.Sprintf("%d failed", failed))
+	}
+	_, style := taskStatusIndicator(db.TaskStatusCompleted)
+	return style.Render(fmt.Sprintf("%d/%d tasks ✓", completed, len(tasks)))
+}
+
+// formatTokenCount formats a token count compactly: ≥1000 → "1.2k", else as-is.
+func formatTokenCount(n int64) string {
+	if n >= 1000 {
+		return fmt.Sprintf("%.1fk", float64(n)/1000.0)
+	}
+	return fmt.Sprintf("%d", n)
 }

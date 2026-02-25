@@ -7,6 +7,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/jefflinse/toasters/internal/agents"
+	"github.com/jefflinse/toasters/internal/db"
 	"github.com/jefflinse/toasters/internal/job"
 	"github.com/jefflinse/toasters/internal/llm"
 	"github.com/jefflinse/toasters/internal/runtime"
@@ -93,6 +94,17 @@ func estimateTokens(s string) int {
 	}
 	return (n + 3) / 4 // ceiling division
 }
+
+// progressPollMsg carries the latest progress data from SQLite, fired every 500ms.
+type progressPollMsg struct {
+	Jobs     []*db.Job
+	Tasks    map[string][]*db.Task
+	Progress map[string][]*db.ProgressReport
+	Sessions []*db.AgentSession
+}
+
+// progressPollTickMsg is an internal tick that triggers the next poll.
+type progressPollTickMsg struct{}
 
 // Message types for the Bubble Tea event loop.
 
