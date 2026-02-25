@@ -46,7 +46,6 @@ type ToolExecutor struct {
 	// Runtime agent configuration — set after construction.
 	DefaultProvider  string                      // default provider name for runtime agents
 	DefaultModel     string                      // default model for runtime agents
-	RepoRoot         string                      // repo root for agent working directory
 	OnSessionStarted func(sess *runtime.Session) // callback when a runtime session starts
 }
 
@@ -565,7 +564,7 @@ func (te *ToolExecutor) ExecuteTool(ctx context.Context, call llm.ToolCall) (str
 				SystemPrompt:   prompt,
 				JobID:          args.JobID,
 				InitialMessage: args.Task,
-				WorkDir:        te.RepoRoot,
+				WorkDir:        jobDir,
 			}
 			sess, err := te.Runtime.SpawnAgent(context.Background(), opts)
 			if err != nil {

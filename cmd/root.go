@@ -74,13 +74,6 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 
-	// repoRoot is the directory containing the agents/ folder.
-	// For now, use the current working directory.
-	repoRoot, err := os.Getwd()
-	if err != nil {
-		return err
-	}
-
 	// Discover teams from the configured teams directory.
 	teamsDir := cfg.Operator.TeamsDir
 	teams, err := agents.DiscoverTeams(teamsDir)
@@ -153,7 +146,6 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 	toolExec := llmtools.NewToolExecutor(gw, teams, workspaceDir, store, rt)
 	toolExec.DefaultProvider = cfg.Agents.DefaultProvider
 	toolExec.DefaultModel = cfg.Agents.DefaultModel
-	toolExec.RepoRoot = repoRoot
 
 	// Wire MCP tools into operator tool set.
 	toolExec.MCPManager = mcpManager
@@ -167,7 +159,7 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 		client = llmclient.NewClient(cfg.Operator.Endpoint, cfg.Operator.Model)
 	}
 
-	m := tui.NewModel(client, cfg.Claude, workspaceDir, gw, repoRoot, teamsDir, teams, "", toolExec, store, rt)
+	m := tui.NewModel(client, cfg.Claude, workspaceDir, gw, teamsDir, teams, "", toolExec, store, rt)
 
 	p := tea.NewProgram(&m)
 

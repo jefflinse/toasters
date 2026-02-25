@@ -76,7 +76,6 @@ type Model struct {
 	teamsDir     string        // path to the configured teams directory
 	awareness    string        // team-awareness content used to build the operator prompt
 	systemPrompt string        // assembled at startup; prepended to every LLM call
-	repoRoot     string        // path to repo root (for /claude slash command path)
 
 	// Teams modal state.
 	teamsModal teamsModalState
@@ -208,7 +207,7 @@ type runtimeSlot struct {
 }
 
 // NewModel returns an initialized root model.
-func NewModel(client llm.Provider, claudeCfg config.ClaudeConfig, workspaceDir string, gw *gateway.Gateway, repoRoot string, teamsDir string, teams []agents.Team, awareness string, toolExec *tools.ToolExecutor, store db.Store, rt *runtime.Runtime) Model {
+func NewModel(client llm.Provider, claudeCfg config.ClaudeConfig, workspaceDir string, gw *gateway.Gateway, teamsDir string, teams []agents.Team, awareness string, toolExec *tools.ToolExecutor, store db.Store, rt *runtime.Runtime) Model {
 	ta := textarea.New()
 	ta.Placeholder = "Type your message here..."
 	ta.Prompt = ""
@@ -262,7 +261,6 @@ func NewModel(client llm.Provider, claudeCfg config.ClaudeConfig, workspaceDir s
 	m.focused = focusChat
 	m.gateway = gw
 
-	m.repoRoot = repoRoot
 	m.teamsDir = teamsDir
 	m.teams = teams
 	m.awareness = awareness
