@@ -392,7 +392,7 @@ func (ct *CoreTools) readFile(_ context.Context, args json.RawMessage) (string, 
 	if err != nil {
 		return "", fmt.Errorf("opening file: %w", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	offset := params.Offset
 	if offset < 1 {
@@ -637,7 +637,7 @@ func (ct *CoreTools) grepFiles(_ context.Context, args json.RawMessage) (string,
 		if err != nil {
 			return nil
 		}
-		defer f.Close()
+		defer func() { _ = f.Close() }()
 
 		relPath, _ := filepath.Rel(absSearchDir, path)
 
@@ -797,7 +797,7 @@ func (ct *CoreTools) webFetch(ctx context.Context, args json.RawMessage) (string
 	if err != nil {
 		return "", fmt.Errorf("fetching URL: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	// Limit response body to 1MB.
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))

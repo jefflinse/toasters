@@ -28,7 +28,7 @@ func TestMain(m *testing.M) {
 		fmt.Fprintf(os.Stderr, "failed to create temp file for test server: %v\n", err)
 		os.Exit(1)
 	}
-	bin.Close()
+	_ = bin.Close()
 	binPath := bin.Name()
 
 	cmd := exec.Command("go", "build", "-o", binPath, "./testdata/mcpserver/")

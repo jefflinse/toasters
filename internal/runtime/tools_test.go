@@ -316,7 +316,7 @@ func TestWebFetch(t *testing.T) {
 	t.Run("successful fetch", func(t *testing.T) {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "text/plain")
-			fmt.Fprint(w, "hello from server")
+			_, _ = fmt.Fprint(w, "hello from server")
 		}))
 		defer srv.Close()
 
@@ -334,7 +334,7 @@ func TestWebFetch(t *testing.T) {
 	t.Run("HTTP error", func(t *testing.T) {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusNotFound)
-			fmt.Fprint(w, "not found")
+			_, _ = fmt.Fprint(w, "not found")
 		}))
 		defer srv.Close()
 

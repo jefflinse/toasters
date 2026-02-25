@@ -34,7 +34,7 @@ func startTestServer(t *testing.T, store db.Store) (
 
 	go func() {
 		_ = stdio.Listen(ctx, stdinReader, stdoutWriter)
-		stdoutWriter.Close()
+		_ = stdoutWriter.Close()
 	}()
 
 	scanner := bufio.NewScanner(stdoutReader)
@@ -74,9 +74,9 @@ func startTestServer(t *testing.T, store db.Store) (
 
 	cleanup = func() {
 		cancel()
-		stdinWriter.Close()
-		stdinReader.Close()
-		stdoutReader.Close()
+		_ = stdinWriter.Close()
+		_ = stdinReader.Close()
+		_ = stdoutReader.Close()
 	}
 
 	return send, cleanup
@@ -472,12 +472,12 @@ func TestStartStdioServer_CancelledContext(t *testing.T) {
 
 	// Create pipes so the server has something to read from.
 	stdinReader, stdinWriter := io.Pipe()
-	defer stdinWriter.Close()
-	defer stdinReader.Close()
+	defer func() { _ = stdinWriter.Close() }()
+	defer func() { _ = stdinReader.Close() }()
 
 	stdoutReader, stdoutWriter := io.Pipe()
-	defer stdoutReader.Close()
-	defer stdoutWriter.Close()
+	defer func() { _ = stdoutReader.Close() }()
+	defer func() { _ = stdoutWriter.Close() }()
 
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -517,16 +517,6 @@ func TestMCPServer_ViaTestHelper(t *testing.T) {
 	t.Cleanup(func() { store.Close() }) //nolint:errcheck
 
 	createTestJob(t, ctx, store, "job-via-helper")
-
-	// Wire up the MCP server's tools into the mcptest helper.
-	mcpSrv := NewMCPServer(store)
-	registeredTools := mcpSrv.ListTools()
-
-	// Convert to []mcpserver.ServerTool for mcptest.
-	var serverTools []mcpserver.ServerTool
-	for _, st := range registeredTools {
-		serverTools = append(serverTools, *st)
-	}
 
 	// Use the raw stdio approach since mcptest creates its own MCPServer internally.
 	// We test via the in-process pipe approach instead.
