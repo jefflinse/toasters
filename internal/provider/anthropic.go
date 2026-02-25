@@ -9,12 +9,21 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+
+	"github.com/jefflinse/toasters/internal/anthropic"
 )
 
 const (
 	defaultAnthropicBaseURL = "https://api.anthropic.com"
 	defaultAnthropicVersion = "2023-06-01"
 )
+
+// authHeaders holds the resolved authentication headers for a request.
+type authHeaders struct {
+	header string            // primary auth header name (e.g. "x-api-key" or "Authorization")
+	value  string            // primary auth header value
+	extra  map[string]string // additional headers (e.g. "anthropic-beta")
+}
 
 // AnthropicProvider implements Provider for the Anthropic Messages API.
 type AnthropicProvider struct {
@@ -23,6 +32,7 @@ type AnthropicProvider struct {
 	baseURL    string
 	version    string
 	httpClient *http.Client
+	authFunc   func() (*authHeaders, error)
 }
 
 // AnthropicOption configures an AnthropicProvider.
@@ -42,7 +52,18 @@ func WithAnthropicVersion(version string) AnthropicOption {
 	}
 }
 
+// WithAnthropicAuthFunc overrides the default authentication function.
+// This is primarily useful for testing.
+func WithAnthropicAuthFunc(fn func() (*authHeaders, error)) AnthropicOption {
+	return func(p *AnthropicProvider) {
+		p.authFunc = fn
+	}
+}
+
 // NewAnthropic creates a new Anthropic provider.
+// If apiKey is non-empty, requests use the x-api-key header.
+// If apiKey is empty, requests fall back to macOS Keychain OAuth credentials
+// (piggybacking on Claude Code's stored tokens).
 func NewAnthropic(name, apiKey string, opts ...AnthropicOption) *AnthropicProvider {
 	p := &AnthropicProvider{
 		name:       name,
@@ -54,6 +75,33 @@ func NewAnthropic(name, apiKey string, opts ...AnthropicOption) *AnthropicProvid
 	for _, opt := range opts {
 		opt(p)
 	}
+
+	// Set default authFunc if not overridden by an option.
+	if p.authFunc == nil {
+		if p.apiKey != "" {
+			p.authFunc = func() (*authHeaders, error) {
+				return &authHeaders{
+					header: "x-api-key",
+					value:  p.apiKey,
+				}, nil
+			}
+		} else {
+			p.authFunc = func() (*authHeaders, error) {
+				token, err := anthropic.ReadKeychainAccessToken()
+				if err != nil {
+					return nil, fmt.Errorf("keychain auth: %w", err)
+				}
+				return &authHeaders{
+					header: "Authorization",
+					value:  "Bearer " + token,
+					extra: map[string]string{
+						"anthropic-beta": "oauth-2025-04-20",
+					},
+				}, nil
+			}
+		}
+	}
+
 	return p
 }
 
@@ -96,14 +144,20 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, req ChatRequest) (<-
 		return nil, fmt.Errorf("marshaling request: %w", err)
 	}
 
+	auth, err := p.authFunc()
+	if err != nil {
+		return nil, fmt.Errorf("resolving credentials: %w", err)
+	}
+
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, p.baseURL+"/v1/messages", bytes.NewReader(jsonBody))
 	if err != nil {
 		return nil, fmt.Errorf("creating request: %w", err)
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
-	if p.apiKey != "" {
-		httpReq.Header.Set("x-api-key", p.apiKey)
+	httpReq.Header.Set(auth.header, auth.value)
+	for k, v := range auth.extra {
+		httpReq.Header.Set(k, v)
 	}
 	httpReq.Header.Set("anthropic-version", p.version)
 

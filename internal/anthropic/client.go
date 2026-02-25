@@ -826,6 +826,17 @@ func readKeychainCredentials() (*keychainCredentials, error) {
 	}, nil
 }
 
+// ReadKeychainAccessToken reads the OAuth access token from the macOS Keychain.
+// If the token is expired, it automatically refreshes it. This is the exported
+// entry point for other packages that need Keychain-based authentication.
+func ReadKeychainAccessToken() (string, error) {
+	creds, err := readKeychainCredentials()
+	if err != nil {
+		return "", err
+	}
+	return creds.AccessToken, nil
+}
+
 // ---- Anthropic API types ----
 
 // anthropicRequest is the Anthropic Messages API request body.
