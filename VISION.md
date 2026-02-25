@@ -183,9 +183,9 @@ The TUI uses a two-column layout. The left column is the primary work management
 | Component | Version / Details |
 |---|---|
 | Go | 1.25 |
-| Bubble Tea | `charm.land/bubbletea/v2 v2.0.0-rc.2` |
-| Lipgloss | `charm.land/lipgloss/v2 v2.0.0-beta.3` |
-| Bubbles | `charm.land/bubbles/v2 v2.0.0-rc.1` |
+| Bubble Tea | `charm.land/bubbletea/v2 v2.0.0` |
+| Lipgloss | `charm.land/lipgloss/v2 v2.0.0` |
+| Bubbles | `charm.land/bubbles/v2 v2.0.0` |
 | Glamour | `github.com/charmbracelet/glamour v0.10.0` |
 | SQLite | `modernc.org/sqlite` (pure Go, no CGO) |
 | MCP | `github.com/mark3labs/mcp-go` (client + server) |
@@ -196,17 +196,25 @@ The TUI uses a two-column layout. The left column is the primary work management
 
 ## Current State
 
-What exists today is a functional TUI prototype with operator chat, agent team dispatch, and Claude CLI subprocess integration. The system is transitioning from subprocess-based agent execution to in-process API-driven agents.
+What exists today is a functional TUI prototype with operator chat, agent team dispatch, and Claude CLI subprocess integration. The codebase has been through a comprehensive health audit (see `HEALTH_REPORT.md`) — all findings resolved, 0 lint issues, 0 vulnerabilities, 42.9% test coverage. The system is transitioning from subprocess-based agent execution to in-process API-driven agents.
 
 ### Implemented
 
-**`internal/llm` — LM Studio client**
+**`internal/llm` — Shared LLM types and Provider interface**
+- Shared types (`Message`, `Tool`, `ToolCall`, `Usage`, etc.) and `Provider` interface
+- Split into three focused sub-packages for clean separation of concerns
+
+**`internal/llm/client` — OpenAI-compatible streaming client**
 - `Client` connects to any OpenAI-compatible API endpoint with proper HTTP timeouts
 - `ChatCompletionStream` sends messages and returns a channel of streamed response chunks
 - `ChatCompletionStreamWithTools` supports function calling
 - `FetchModels` queries available models
-- `ToolExecutor` struct for dependency-injected tool execution (no global state)
+- Shared `doStream` helper eliminates duplication between streaming methods
 - Token usage tracking and context window monitoring
+
+**`internal/llm/tools` — Tool executor**
+- `ToolExecutor` struct with dependency injection (no global state)
+- Executes operator tool calls (job management, team dispatch, web fetch)
 
 **`internal/tui` — TUI application**
 - Two-column layout: main chat area (left) + stats sidebar (right)
@@ -215,6 +223,8 @@ What exists today is a functional TUI prototype with operator chat, agent team d
 - Slash command system: `/help`, `/new`, `/exit`, `/quit`, `/claude`, `/kill`
 - Grid view (Ctrl+G) showing 2×2 agent slot status
 - Prompt mode for operator questions
+- `ChatEntry` struct replaces parallel slices for message data
+- Split into 11 focused files (model, view, grid, panels, modals, streaming, messages, prompt, helpers, update, commands)
 
 **`internal/agents` — Agent system**
 - Agent discovery from `.md` files with YAML frontmatter
@@ -227,7 +237,7 @@ What exists today is a functional TUI prototype with operator chat, agent team d
 
 **`internal/anthropic` — Anthropic API client**
 - Direct Anthropic Messages API client with SSE streaming
-- OAuth/Keychain integration for authentication (macOS)
+- OAuth/Keychain integration for authentication (macOS, with platform guard)
 
 **`internal/gateway` — Claude subprocess management**
 - Up to 4 concurrent Claude CLI subprocess slots
@@ -238,14 +248,26 @@ What exists today is a functional TUI prototype with operator chat, agent team d
 - OVERVIEW.md + TODO.md per job
 - YAML frontmatter + markdown format
 
-### Not Yet Built
+**`internal/frontmatter` — Shared YAML frontmatter parsing**
+- `Split()` and `Parse()` functions used by `job/` and `agents/`
+- Replaces four duplicate parsing implementations
+
+**`internal/orchestration` — Cross-cutting orchestration types**
+- `GatewaySlot` and `AgentSpawner` interfaces (moved out of `internal/llm` to break import cycles)
+
+**`internal/config` — Configuration**
+- Viper-based config from `~/.config/toasters/config.yaml`
+- Operator, Claude CLI, and teams directory settings
+
+### Not Yet Built (Phase 1+)
 
 - In-process agent runtime (direct API calls, replacing Claude CLI subprocesses)
 - SQLite persistence layer
+- Multi-provider LLM client (unified Anthropic + OpenAI interface)
+- Async tool execution in TUI
 - MCP client integration (consuming external MCP servers)
 - MCP server (agent progress reporting)
 - Ephemeral OpenAPI-to-MCP bridges
-- Multi-provider LLM client (Anthropic, OpenAI direct)
 - Left panel: job list, task DAG visualization, streaming updates pane
 - Team templates and workflows
 - Ecosystems (ephemeral and long-lived)

@@ -36,20 +36,20 @@ This is the master plan for evolving Toasters from a TUI prototype into a full a
 | Dead code removal | Removed unused fields, functions, and ineffectual assignments | ✅ Done |
 | Lint cleanup | Fixed all staticcheck findings; `golangci-lint run` reports 0 issues | ✅ Done |
 
-**Remaining tech debt (to address incrementally during Phase 1):**
+**Additional tech debt resolved (originally planned for Phase 1):**
 
-| Item | Description | Effort |
+| Item | Description | Status |
 |------|-------------|--------|
-| Break up `model.go` | 5,300+ line god file — extract modals, grid, key handling | XL |
-| Parallel slices → struct | Replace 4 parallel slices with `ChatEntry` struct | L |
-| Unify frontmatter parsing | 4 duplicate parsers across `job/` and `agents/` | M |
-| Split `internal/llm` | Package has too many responsibilities (client + types + tools + HTML) | M |
-| macOS Keychain guard | Add platform check for Keychain-dependent auth | S |
-| Charm v2 stable update | Update pre-release Charm v2 deps to stable releases | M |
-| Test coverage | Overall 12.1% — target 40% before Phase 1 completion | L |
-| Vulnerability scan | Run `govulncheck` once compatible binary is available | S |
+| Break up `model.go` | Split from 5,300 lines into 11 focused files | ✅ Done |
+| Parallel slices → struct | Replaced with `ChatEntry` struct and `appendEntry()` helper | ✅ Done |
+| Unify frontmatter parsing | Created `internal/frontmatter` package with `Split()` + `Parse()` | ✅ Done |
+| Split `internal/llm` | Split into `llm`, `llm/client`, `llm/tools` sub-packages | ✅ Done |
+| macOS Keychain guard | Added runtime `GOOS` guard with clear error on non-macOS | ✅ Done |
+| Charm v2 stable update | Updated all three to stable `v2.0.0` | ✅ Done |
+| Test coverage | Raised from 12.1% to 42.9% (300+ tests, 10 packages) | ✅ Done |
+| Vulnerability scan | `govulncheck` clean — no vulnerabilities found | ✅ Done |
 
-See `HEALTH_REPORT.md` for the full audit details.
+All pre-Phase 1 tech debt is resolved. See `HEALTH_REPORT.md` for the full audit details.
 
 ---
 

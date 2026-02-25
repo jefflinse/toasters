@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-Toasters is a Go-based TUI orchestration tool for agentic coding work. It coordinates multiple Claude CLI subprocess workers (up to 4 concurrent) through a Bubble Tea interface. An LM Studio "operator" LLM dispatches work to specialized agent teams, which execute autonomously via Claude Code subprocesses.
+Toasters is a Go-based TUI orchestration tool for agentic coding work. It coordinates multiple concurrent LLM-powered agents through a Bubble Tea interface. An LM Studio "operator" LLM dispatches work to specialized agent teams, which execute autonomously via Claude Code subprocesses (transitioning to in-process API-driven agents).
 
 ## Quick Reference
 
@@ -23,9 +23,13 @@ internal/
   anthropic/                # Anthropic API client + OAuth/Keychain
   claude/                   # Shared Claude CLI stream-json types
   config/                   # Viper-based config from ~/.config/toasters/config.yaml
+  frontmatter/              # Shared YAML frontmatter parsing (Split + Parse)
   gateway/                  # Claude subprocess slot management (4 concurrent slots)
-  llm/                      # LM Studio OpenAI-compatible client + tool execution
-  tui/                      # Bubble Tea TUI (model, styles, commands, claude subprocess)
+  llm/                      # Shared LLM types and Provider interface
+    client/                 # OpenAI-compatible streaming client
+    tools/                  # Tool executor with dependency injection
+  orchestration/            # Cross-cutting orchestration types (GatewaySlot, AgentSpawner)
+  tui/                      # Bubble Tea TUI (model, views, grid, modals, streaming)
   job/                      # Job file persistence (OVERVIEW.md + TODO.md)
 ```
 
@@ -40,7 +44,7 @@ internal/
 ## Tech Stack
 
 - **Go 1.25.0**
-- **TUI**: Charmbracelet v2 (bubbletea, bubbles, lipgloss) — all pre-release
+- **TUI**: Charmbracelet v2 (bubbletea, bubbles, lipgloss) — all stable v2.0.0
 - **CLI**: Cobra + Viper
 - **Markdown rendering**: Glamour
 - **File watching**: fsnotify
@@ -86,4 +90,4 @@ Key settings:
 
 ## Testing
 
-Tests exist in `internal/agents/`, `internal/gateway/`, `internal/job/`, `internal/llm/`, and `internal/tui/`. They use standard Go testing with `t.TempDir()` for file I/O and helper functions for assertions. Overall coverage is 12.1%. Run `golangci-lint run` for linting — the codebase currently has 0 lint findings.
+Tests exist in `internal/agents/`, `internal/gateway/`, `internal/job/`, `internal/llm/`, and `internal/tui/`. They use standard Go testing with `t.TempDir()` for file I/O and helper functions for assertions. Overall coverage is 42.9%. Run `golangci-lint run` for linting — the codebase currently has 0 lint findings.
