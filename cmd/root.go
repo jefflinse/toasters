@@ -13,11 +13,14 @@ import (
 	"github.com/jefflinse/toasters/internal/agents"
 	"github.com/jefflinse/toasters/internal/anthropic"
 	"github.com/jefflinse/toasters/internal/config"
+	"github.com/jefflinse/toasters/internal/db"
 	"github.com/jefflinse/toasters/internal/gateway"
 	"github.com/jefflinse/toasters/internal/job"
 	"github.com/jefflinse/toasters/internal/llm"
 	llmclient "github.com/jefflinse/toasters/internal/llm/client"
 	llmtools "github.com/jefflinse/toasters/internal/llm/tools"
+	"github.com/jefflinse/toasters/internal/provider"
+	"github.com/jefflinse/toasters/internal/runtime"
 	"github.com/jefflinse/toasters/internal/tui"
 )
 
@@ -90,10 +93,46 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 	autoTeams := agents.AutoDetectTeams()
 	teams = append(teams, autoTeams...)
 
+	// Open SQLite database for persistence (graceful degradation if it fails).
+	var store db.Store
+	dbPath, err := config.DatabasePath(cfg)
+	if err != nil {
+		log.Printf("warning: failed to resolve database path: %v", err)
+	} else {
+		sqliteStore, dbErr := db.Open(dbPath)
+		if dbErr != nil {
+			log.Printf("warning: failed to open database at %s: %v", dbPath, dbErr)
+		} else {
+			store = sqliteStore
+			defer func() { _ = sqliteStore.Close() }()
+		}
+	}
+
+	// Create provider registry and register configured providers.
+	registry := provider.NewRegistry()
+	for _, pc := range cfg.Providers {
+		provCfg := provider.ProviderConfig{
+			Name:     pc.Name,
+			Type:     pc.Type,
+			Endpoint: pc.Endpoint,
+			APIKey:   pc.APIKey,
+			Model:    pc.Model,
+		}
+		p, provErr := provider.NewFromConfig(provCfg)
+		if provErr != nil {
+			log.Printf("warning: failed to create provider %q: %v", pc.Name, provErr)
+			continue
+		}
+		registry.Register(pc.Name, p)
+	}
+
+	// Create the runtime for agent session management.
+	rt := runtime.New(store, registry)
+
 	// Create the gateway with a no-op notify for now.
 	// The TUI will replace this with a real notify after the program starts.
 	gw := gateway.New(cfg.Claude, workspaceDir, func() {})
-	toolExec := llmtools.NewToolExecutor(gw, teams, workspaceDir)
+	toolExec := llmtools.NewToolExecutor(gw, teams, workspaceDir, store, rt)
 
 	var client llm.Provider
 	switch cfg.Operator.Provider {
@@ -103,7 +142,7 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 		client = llmclient.NewClient(cfg.Operator.Endpoint, cfg.Operator.Model)
 	}
 
-	m := tui.NewModel(client, cfg.Claude, workspaceDir, gw, repoRoot, teamsDir, teams, "", toolExec)
+	m := tui.NewModel(client, cfg.Claude, workspaceDir, gw, repoRoot, teamsDir, teams, "", toolExec, store, rt)
 
 	p := tea.NewProgram(&m)
 

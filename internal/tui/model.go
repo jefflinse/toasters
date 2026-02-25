@@ -17,10 +17,12 @@ import (
 
 	"github.com/jefflinse/toasters/internal/agents"
 	"github.com/jefflinse/toasters/internal/config"
+	"github.com/jefflinse/toasters/internal/db"
 	"github.com/jefflinse/toasters/internal/gateway"
 	"github.com/jefflinse/toasters/internal/job"
 	"github.com/jefflinse/toasters/internal/llm"
 	"github.com/jefflinse/toasters/internal/llm/tools"
+	"github.com/jefflinse/toasters/internal/runtime"
 )
 
 const (
@@ -178,10 +180,14 @@ type Model struct {
 	// Toast notification state.
 	toasts      []toast
 	nextToastID int
+
+	// Phase 1 integration: persistence and provider runtime.
+	store   db.Store         // may be nil — graceful degradation
+	runtime *runtime.Runtime // may be nil
 }
 
 // NewModel returns an initialized root model.
-func NewModel(client llm.Provider, claudeCfg config.ClaudeConfig, workspaceDir string, gw *gateway.Gateway, repoRoot string, teamsDir string, teams []agents.Team, awareness string, toolExec *tools.ToolExecutor) Model {
+func NewModel(client llm.Provider, claudeCfg config.ClaudeConfig, workspaceDir string, gw *gateway.Gateway, repoRoot string, teamsDir string, teams []agents.Team, awareness string, toolExec *tools.ToolExecutor, store db.Store, rt *runtime.Runtime) Model {
 	ta := textarea.New()
 	ta.Placeholder = "Type your message here..."
 	ta.Prompt = ""
@@ -220,6 +226,8 @@ func NewModel(client llm.Provider, claudeCfg config.ClaudeConfig, workspaceDir s
 		chatViewport: vp,
 		input:        ta,
 		toolExec:     toolExec,
+		store:        store,
+		runtime:      rt,
 		stats: SessionStats{
 			Endpoint:  client.BaseURL(),
 			Connected: false,

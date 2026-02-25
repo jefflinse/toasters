@@ -14,9 +14,11 @@ import (
 	"golang.org/x/net/html"
 
 	"github.com/jefflinse/toasters/internal/agents"
+	"github.com/jefflinse/toasters/internal/db"
 	"github.com/jefflinse/toasters/internal/job"
 	"github.com/jefflinse/toasters/internal/llm"
 	"github.com/jefflinse/toasters/internal/orchestration"
+	"github.com/jefflinse/toasters/internal/runtime"
 )
 
 // ToolExecutor holds the dependencies needed to execute operator tool calls.
@@ -25,15 +27,19 @@ type ToolExecutor struct {
 	Teams        []agents.Team
 	WorkspaceDir string
 	Tools        []llm.Tool
+	Store        db.Store         // may be nil
+	Runtime      *runtime.Runtime // may be nil
 }
 
 // NewToolExecutor creates a ToolExecutor with the default static tools.
-func NewToolExecutor(gateway orchestration.AgentSpawner, teams []agents.Team, workspaceDir string) *ToolExecutor {
+func NewToolExecutor(gateway orchestration.AgentSpawner, teams []agents.Team, workspaceDir string, store db.Store, rt *runtime.Runtime) *ToolExecutor {
 	return &ToolExecutor{
 		Gateway:      gateway,
 		Teams:        teams,
 		WorkspaceDir: workspaceDir,
 		Tools:        staticTools,
+		Store:        store,
+		Runtime:      rt,
 	}
 }
 

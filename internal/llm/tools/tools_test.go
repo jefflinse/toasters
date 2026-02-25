@@ -104,7 +104,7 @@ func newTestExecutor(t *testing.T) (*ToolExecutor, string) {
 		t.Fatalf("creating config dir: %v", err)
 	}
 
-	te := NewToolExecutor(nil, nil, configDir)
+	te := NewToolExecutor(nil, nil, configDir, nil, nil)
 	return te, configDir
 }
 
@@ -1491,7 +1491,7 @@ func TestNewToolExecutor_SetsFields(t *testing.T) {
 	spawner := &mockSpawner{}
 	teams := []agents.Team{{Name: "test-team"}}
 
-	te := NewToolExecutor(spawner, teams, "/tmp/workspace")
+	te := NewToolExecutor(spawner, teams, "/tmp/workspace", nil, nil)
 
 	if te.Gateway != spawner {
 		t.Error("expected Gateway to be set")
