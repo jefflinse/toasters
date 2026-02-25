@@ -365,14 +365,14 @@ func (m Model) renderSidebar(sbWidth int) string {
 	agentsSB.WriteString(gradientText("Agents", [3]uint8{50, 130, 255}, [3]uint8{0, 200, 200}))
 	agentsSB.WriteString("\n")
 
+	hasAnyGateway := false
 	if m.gateway != nil {
 		slots := m.gateway.Slots()
-		hasAny := false
 		for i, snap := range slots {
 			if !snap.Active {
 				continue
 			}
-			hasAny = true
+			hasAnyGateway = true
 			label := snap.AgentName + " · " + snap.JobID
 			var statusIcon string
 			if snap.Status == gateway.SlotRunning {
@@ -389,9 +389,6 @@ func (m Model) renderSidebar(sbWidth int) string {
 				agentsSB.WriteString(SidebarValueStyle.Render(line))
 			}
 			agentsSB.WriteString("\n")
-		}
-		if !hasAny {
-			agentsSB.WriteString(DimStyle.Italic(true).Render("No agents running"))
 		}
 
 		var totalAgentIn, totalAgentOut int
@@ -411,7 +408,33 @@ func (m Model) renderSidebar(sbWidth int) string {
 				}
 			}
 		}
-	} else {
+	}
+
+	// Runtime sessions — sorted by start time for stable ordering.
+	runtimeStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("39")) // cyan/blue for runtime
+	sortedRT := m.sortedRuntimeSessions()
+	hasAnyRuntime := len(sortedRT) > 0
+	if hasAnyRuntime {
+		for _, rs := range sortedRT {
+			label := rs.agentName + " · " + rs.jobID
+			var statusIcon string
+			if rs.status == "active" {
+				statusIcon = string(spinnerChars[m.spinnerFrame%len(spinnerChars)]) + " "
+			} else {
+				statusIcon = "✓ "
+			}
+			prefix := runtimeStyle.Render("⚡")
+			line := prefix + statusIcon + truncateStr(label, contentWidth-4)
+			if rs.status != "active" {
+				agentsSB.WriteString(DimStyle.Render("⚡" + statusIcon + truncateStr(label, contentWidth-4)))
+			} else {
+				agentsSB.WriteString(line)
+			}
+			agentsSB.WriteString("\n")
+		}
+	}
+
+	if !hasAnyGateway && !hasAnyRuntime {
 		agentsSB.WriteString(DimStyle.Italic(true).Render("No agents running"))
 	}
 

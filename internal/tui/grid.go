@@ -23,6 +23,10 @@ func (m *Model) renderGrid() string {
 		slots = m.gateway.Slots()
 	}
 
+	// Collect sorted runtime sessions to overlay into empty grid cells.
+	sortedRT := m.sortedRuntimeSessions()
+	rtIdx := 0 // index into sortedRT for the next runtime session to place
+
 	pageOffset := m.gridPage * 4
 
 	for i := 0; i < 4; i++ {
@@ -96,6 +100,13 @@ func (m *Model) renderGrid() string {
 			Padding(0, 1)
 
 		if !snap.Active {
+			// Try to fill this empty cell with a runtime session.
+			if rtIdx < len(sortedRT) {
+				rs := sortedRT[rtIdx]
+				rtIdx++
+				cells[i] = m.renderRuntimeGridCell(rs, cellW, cellH, innerW, innerH, focused)
+				continue
+			}
 			emptyContent := DimStyle.Render(fmt.Sprintf("slot %d — empty", absIdx))
 			emptyLines := strings.Split(emptyContent, "\n")
 			if len(emptyLines) > innerH {
@@ -334,6 +345,96 @@ func (m *Model) renderGrid() string {
 	top := lipgloss.JoinHorizontal(lipgloss.Top, cells[0], cells[1])
 	bottom := lipgloss.JoinHorizontal(lipgloss.Top, cells[2], cells[3])
 	return lipgloss.JoinVertical(lipgloss.Left, hotkeyBar, top, bottom)
+}
+
+// renderRuntimeGridCell renders a single runtime session into a grid cell.
+func (m *Model) renderRuntimeGridCell(rs *runtimeSlot, cellW, cellH, innerW, innerH int, focused bool) string {
+	// Distinct cyan border for runtime sessions.
+	var borderColor color.Color
+	if rs.status == "active" {
+		if focused {
+			borderColor = lipgloss.Color("#5fd7ff") // bright cyan when focused
+		} else {
+			borderColor = lipgloss.Color("#0087d7") // medium cyan
+		}
+	} else {
+		if focused {
+			borderColor = ColorPrimary
+		} else {
+			borderColor = ColorDim
+		}
+	}
+
+	var hdrStyle lipgloss.Style
+	if focused {
+		hdrStyle = HeaderStyle
+	} else {
+		hdrStyle = SidebarHeaderStyle
+	}
+
+	borderType := lipgloss.RoundedBorder()
+	if focused {
+		borderType = lipgloss.ThickBorder()
+	}
+
+	cellStyle := lipgloss.NewStyle().
+		Width(cellW).
+		Height(cellH).
+		Border(borderType).
+		BorderForeground(borderColor).
+		Padding(0, 1)
+
+	// Header: ⚡ agentName · jobID · elapsed
+	elapsed := time.Since(rs.startTime).Round(time.Second)
+	statusMark := "⚡"
+	if rs.status != "active" {
+		statusMark = "✓"
+	}
+	header := fmt.Sprintf("%s %s · %s · %s", statusMark, rs.agentName, rs.jobID, elapsed)
+	headerLine := hdrStyle.Render(truncateStr(header, innerW))
+
+	// Status line
+	runtimeLabel := "⚡ runtime"
+	if rs.status != "active" {
+		runtimeLabel = "✓ " + rs.status
+	}
+	statusLine := lipgloss.NewStyle().Foreground(lipgloss.Color("39")).Render(truncateStr(runtimeLabel, innerW))
+
+	// Separator
+	separator := DimStyle.Render(strings.Repeat("─", innerW))
+
+	// Output tail: fill remaining height with the last N lines of output.
+	metaLines := 3 // header + status + separator
+	outputH := innerH - metaLines
+	if outputH < 0 {
+		outputH = 0
+	}
+
+	var outputBody string
+	outStr := rs.output.String()
+	if outStr != "" && outputH > 0 {
+		outLines := strings.Split(outStr, "\n")
+		if len(outLines) > outputH {
+			outLines = outLines[len(outLines)-outputH:]
+		}
+		for j, l := range outLines {
+			if len([]rune(l)) > innerW {
+				outLines[j] = string([]rune(l)[:innerW])
+			}
+		}
+		outputBody = strings.Join(outLines, "\n")
+	}
+
+	inner := strings.Join([]string{headerLine, statusLine, separator, outputBody}, "\n")
+
+	// Hard-clamp to innerH lines.
+	innerLines := strings.Split(inner, "\n")
+	if len(innerLines) > innerH {
+		innerLines = innerLines[:innerH]
+	}
+	inner = strings.Join(innerLines, "\n")
+
+	return cellStyle.Render(inner)
 }
 
 // commaInt formats an integer with comma-separated thousands (e.g. 200000 → "200,000").

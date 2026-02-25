@@ -2,6 +2,7 @@
 package tui
 
 import (
+	"sort"
 	"strings"
 	"time"
 
@@ -411,4 +412,17 @@ func (m *Model) jobByID(id string) (job.Job, bool) {
 		}
 	}
 	return job.Job{}, false
+}
+
+// sortedRuntimeSessions returns the runtime sessions sorted by start time
+// for stable, deterministic display ordering.
+func (m *Model) sortedRuntimeSessions() []*runtimeSlot {
+	slots := make([]*runtimeSlot, 0, len(m.runtimeSessions))
+	for _, rs := range m.runtimeSessions {
+		slots = append(slots, rs)
+	}
+	sort.Slice(slots, func(i, j int) bool {
+		return slots[i].startTime.Before(slots[j].startTime)
+	})
+	return slots
 }
