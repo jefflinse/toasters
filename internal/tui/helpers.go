@@ -9,6 +9,7 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/jefflinse/toasters/internal/agents"
+	"github.com/jefflinse/toasters/internal/gateway"
 	"github.com/jefflinse/toasters/internal/job"
 	"github.com/jefflinse/toasters/internal/llm"
 )
@@ -425,4 +426,37 @@ func (m *Model) sortedRuntimeSessions() []*runtimeSlot {
 		return slots[i].startTime.Before(slots[j].startTime)
 	})
 	return slots
+}
+
+// runtimeSessionForGridCell returns the runtime session displayed in the given
+// grid cell index (0-3 within the current page), or nil if the cell does not
+// contain a runtime session. This replicates the overlay logic used in renderGrid:
+// iterate gateway slots for the current page, and for each inactive slot, assign
+// the next sorted runtime session.
+func (m *Model) runtimeSessionForGridCell(cellIdx int) *runtimeSlot {
+	var slots [gateway.MaxSlots]gateway.SlotSnapshot
+	if m.gateway != nil {
+		slots = m.gateway.Slots()
+	}
+
+	sortedRT := m.sortedRuntimeSessions()
+	rtIdx := 0
+	pageOffset := m.gridPage * 4
+
+	for i := 0; i < 4; i++ {
+		absIdx := pageOffset + i
+		snap := slots[absIdx]
+		if !snap.Active {
+			if rtIdx < len(sortedRT) {
+				rs := sortedRT[rtIdx]
+				rtIdx++
+				if i == cellIdx {
+					return rs
+				}
+				continue
+			}
+		}
+		// Active gateway slot or no more runtime sessions — skip.
+	}
+	return nil
 }

@@ -4,6 +4,7 @@ package tui
 import (
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -45,6 +46,7 @@ func (m *Model) updateOutputModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc", "o", "q":
 		m.showOutputModal = false
+		m.outputModalSessionID = ""
 	case "up", "k":
 		if m.outputModalScroll > 0 {
 			m.outputModalScroll--
@@ -81,7 +83,19 @@ func (m *Model) updateGrid(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			if snap.Active && snap.Output != "" {
 				m.showOutputModal = true
 				m.outputModalContent = snap.Output
-				m.outputModalScroll = 0
+				m.outputModalScroll = len(strings.Split(snap.Output, "\n")) // auto-tail: start at bottom
+				m.outputModalSessionID = ""
+				return m, nil
+			}
+		}
+		// Check for runtime session in this cell.
+		if rs := m.runtimeSessionForGridCell(m.gridFocusCell); rs != nil {
+			output := rs.output.String()
+			if output != "" {
+				m.showOutputModal = true
+				m.outputModalContent = output
+				m.outputModalScroll = len(strings.Split(output, "\n")) // auto-tail: start at bottom
+				m.outputModalSessionID = rs.sessionID
 			}
 		}
 		return m, nil
@@ -92,6 +106,27 @@ func (m *Model) updateGrid(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			if snap.Active && snap.Prompt != "" {
 				m.showPromptModal = true
 				m.promptModalContent = snap.Prompt
+				m.promptModalScroll = 0
+				return m, nil
+			}
+		}
+		// Check for runtime session in this cell.
+		if rs := m.runtimeSessionForGridCell(m.gridFocusCell); rs != nil {
+			// Build a combined prompt view: system prompt + initial message.
+			var promptContent strings.Builder
+			if rs.systemPrompt != "" {
+				promptContent.WriteString("=== System Prompt ===\n\n")
+				promptContent.WriteString(rs.systemPrompt)
+				promptContent.WriteString("\n\n")
+			}
+			if rs.initialMessage != "" {
+				promptContent.WriteString("=== Initial Message ===\n\n")
+				promptContent.WriteString(rs.initialMessage)
+			}
+			content := promptContent.String()
+			if content != "" {
+				m.showPromptModal = true
+				m.promptModalContent = content
 				m.promptModalScroll = 0
 			}
 		}

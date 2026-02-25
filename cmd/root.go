@@ -157,9 +157,11 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 	toolExec.OnSessionStarted = func(sess *runtime.Session) {
 		snap := sess.Snapshot()
 		p.Send(tui.RuntimeSessionStartedMsg{
-			SessionID: snap.ID,
-			AgentName: snap.AgentID,
-			JobID:     snap.JobID,
+			SessionID:      snap.ID,
+			AgentName:      snap.AgentID,
+			JobID:          snap.JobID,
+			SystemPrompt:   sess.SystemPrompt(),
+			InitialMessage: sess.InitialMessage(),
 		})
 
 		// Forward events in a goroutine.

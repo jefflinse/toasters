@@ -114,9 +114,10 @@ type Model struct {
 	promptModalScroll  int    // scroll offset in lines
 
 	// Output modal state.
-	showOutputModal    bool
-	outputModalContent string // the full output text being displayed
-	outputModalScroll  int    // scroll offset in lines
+	showOutputModal      bool
+	outputModalContent   string // the full output text being displayed
+	outputModalScroll    int    // scroll offset in lines
+	outputModalSessionID string // runtime session ID being viewed (empty = gateway slot)
 
 	// Prompt mode — active when the operator calls ask_user
 	promptMode        bool
@@ -189,12 +190,14 @@ type Model struct {
 
 // runtimeSlot tracks a runtime agent session for TUI display.
 type runtimeSlot struct {
-	sessionID string
-	agentName string
-	jobID     string
-	status    string // "active", "completed", "failed", "cancelled"
-	output    strings.Builder
-	startTime time.Time
+	sessionID      string
+	agentName      string
+	jobID          string
+	status         string // "active", "completed", "failed", "cancelled"
+	output         strings.Builder
+	startTime      time.Time
+	systemPrompt   string // the system prompt given to the LLM
+	initialMessage string // the initial user message / task description
 }
 
 // NewModel returns an initialized root model.
@@ -1167,11 +1170,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case RuntimeSessionStartedMsg:
 		m.runtimeSessions[msg.SessionID] = &runtimeSlot{
-			sessionID: msg.SessionID,
-			agentName: msg.AgentName,
-			jobID:     msg.JobID,
-			status:    "active",
-			startTime: time.Now(),
+			sessionID:      msg.SessionID,
+			agentName:      msg.AgentName,
+			jobID:          msg.JobID,
+			status:         "active",
+			startTime:      time.Now(),
+			systemPrompt:   msg.SystemPrompt,
+			initialMessage: msg.InitialMessage,
 		}
 		cmds = append(cmds, m.addToast("🤖 "+msg.AgentName+" started (runtime)", toastInfo))
 		return m, tea.Batch(cmds...)
@@ -1198,6 +1203,22 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				fmt.Fprintf(&slot.output, "→ %s\n", result)
 			}
 		}
+
+		// Live-update the output modal if it's showing this session.
+		if m.showOutputModal && m.outputModalSessionID == ev.SessionID {
+			m.outputModalContent = slot.output.String()
+			// Auto-tail: keep scroll at bottom if user hasn't scrolled up.
+			allLines := strings.Split(m.outputModalContent, "\n")
+			modalH := m.height * 3 / 4
+			maxScroll := len(allLines) - modalH + 4
+			if maxScroll < 0 {
+				maxScroll = 0
+			}
+			if m.outputModalScroll >= maxScroll-2 {
+				m.outputModalScroll = maxScroll
+			}
+		}
+
 		return m, nil
 
 	case RuntimeSessionDoneMsg:
@@ -1206,9 +1227,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		slot.status = msg.Status
-
-		// Clean up the session entry to prevent unbounded growth.
-		defer delete(m.runtimeSessions, msg.SessionID)
 
 		// Build completion notification for the operator (same pattern as gateway).
 		outputTail := slot.output.String()

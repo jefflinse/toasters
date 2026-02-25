@@ -120,9 +120,11 @@ type AgentOutputMsg struct{}
 
 // RuntimeSessionStartedMsg is sent when a new runtime session begins.
 type RuntimeSessionStartedMsg struct {
-	SessionID string
-	AgentName string
-	JobID     string
+	SessionID      string
+	AgentName      string
+	JobID          string
+	SystemPrompt   string
+	InitialMessage string
 }
 
 // RuntimeSessionEventMsg carries a runtime session event to the TUI.

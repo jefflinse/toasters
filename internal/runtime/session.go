@@ -287,6 +287,19 @@ func (s *Session) ID() string {
 	return s.id
 }
 
+// SystemPrompt returns the system prompt given to the LLM.
+func (s *Session) SystemPrompt() string {
+	return s.systemPrompt
+}
+
+// InitialMessage returns the initial user message, if any.
+func (s *Session) InitialMessage() string {
+	if len(s.messages) > 0 && s.messages[0].Role == "user" {
+		return s.messages[0].Content
+	}
+	return ""
+}
+
 // emit sends an event to all subscribers. Non-blocking — slow subscribers miss events.
 func (s *Session) emit(ev SessionEvent) {
 	s.mu.Lock()
