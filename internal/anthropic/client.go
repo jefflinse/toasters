@@ -7,7 +7,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"os/exec"
 	"runtime"
 	"sort"
@@ -16,6 +18,20 @@ import (
 
 	"github.com/jefflinse/toasters/internal/llm"
 )
+
+// anthropicHTTPClient is a shared HTTP client with proper timeouts for
+// Anthropic API requests, replacing http.DefaultClient to prevent goroutine
+// leaks on slow/unresponsive API servers.
+var anthropicHTTPClient = &http.Client{
+	Transport: &http.Transport{
+		DialContext: (&net.Dialer{
+			Timeout:   30 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ResponseHeaderTimeout: 30 * time.Second,
+	},
+}
 
 // goos is the runtime OS, overridable in tests.
 var goos = runtime.GOOS
@@ -170,13 +186,13 @@ func (c *Client) ChatCompletion(ctx context.Context, msgs []llm.Message) (string
 	req.Header.Set("anthropic-version", "2023-06-01")
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := anthropicHTTPClient.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("sending request: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	respBody, err := io.ReadAll(resp.Body)
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
 	if err != nil {
 		return "", fmt.Errorf("reading response: %w", err)
 	}
@@ -351,7 +367,7 @@ func (c *Client) streamMessages(ctx context.Context, system string, messages []a
 	req.Header.Set("anthropic-version", "2023-06-01")
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := anthropicHTTPClient.Do(req)
 	if err != nil {
 		ch <- llm.StreamResponse{Error: fmt.Errorf("sending request: %w", err)}
 		return
@@ -359,7 +375,7 @@ func (c *Client) streamMessages(ctx context.Context, system string, messages []a
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
+		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 		ch <- llm.StreamResponse{Error: formatAPIError(resp.StatusCode, respBody)}
 		return
 	}
@@ -401,7 +417,7 @@ func (c *Client) streamMessagesWithTools(ctx context.Context, system string, mes
 	req.Header.Set("anthropic-version", "2023-06-01")
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := anthropicHTTPClient.Do(req)
 	if err != nil {
 		ch <- llm.StreamResponse{Error: fmt.Errorf("sending request: %w", err)}
 		return
@@ -409,7 +425,7 @@ func (c *Client) streamMessagesWithTools(ctx context.Context, system string, mes
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
+		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 		ch <- llm.StreamResponse{Error: formatAPIError(resp.StatusCode, respBody)}
 		return
 	}
@@ -746,15 +762,28 @@ func writeKeychainBlob(blob *keychainBlob) error {
 // refreshAccessToken uses the refresh token to obtain a new access token
 // from the Anthropic OAuth token endpoint.
 func refreshAccessToken(refreshToken string) (*tokenResponse, error) {
-	form := fmt.Sprintf("grant_type=refresh_token&refresh_token=%s&client_id=%s", refreshToken, clientID)
+	form := url.Values{
+		"grant_type":    {"refresh_token"},
+		"refresh_token": {refreshToken},
+		"client_id":     {clientID},
+	}
 
-	resp, err := http.Post(tokenURL, "application/x-www-form-urlencoded", strings.NewReader(form))
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, tokenURL, strings.NewReader(form.Encode()))
+	if err != nil {
+		return nil, fmt.Errorf("creating token refresh request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	resp, err := anthropicHTTPClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("token refresh request: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	body, _ := io.ReadAll(resp.Body)
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("token refresh failed (status %d): %s", resp.StatusCode, string(body))

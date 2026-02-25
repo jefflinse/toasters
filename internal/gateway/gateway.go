@@ -153,9 +153,20 @@ func (g *Gateway) SpawnTeam(teamName, jobID, task string, team agents.Team) (slo
 		}
 	}
 
+	// Reserve the slot immediately under the lock to prevent TOCTOU races.
+	ctx, cancel := context.WithCancel(context.Background())
+	s := &slot{
+		agentName:  teamName,
+		jobID:      jobID,
+		status:     SlotRunning,
+		startTime:  time.Now(),
+		cancel:     cancel,
+		resetTimer: make(chan time.Duration, 1),
+	}
+	g.slots[idx] = s
 	g.mu.Unlock()
 
-	// Build permission args from the team coordinator.
+	// Build permission args from the team coordinator (outside lock — no I/O race).
 	var permissionArgs []string
 	if team.Coordinator != nil {
 		permissionArgs = team.Coordinator.ClaudePermissionArgs()
@@ -213,21 +224,10 @@ func (g *Gateway) SpawnTeam(teamName, jobID, task string, team agents.Team) (slo
 		summary = summary[:80]
 	}
 
-	// Create the slot and assign it.
-	ctx, cancel := context.WithCancel(context.Background())
-	s := &slot{
-		agentName:  teamName,
-		jobID:      jobID,
-		status:     SlotRunning,
-		startTime:  time.Now(),
-		cancel:     cancel,
-		summary:    summary,
-		prompt:     prompt,
-		resetTimer: make(chan time.Duration, 1),
-	}
-
+	// Update the slot with I/O-dependent fields.
 	g.mu.Lock()
-	g.slots[idx] = s
+	s.summary = summary
+	s.prompt = prompt
 	g.mu.Unlock()
 
 	// Start the timer goroutine that fires SlotTimeoutMsg after defaultTimeout.
@@ -239,12 +239,11 @@ func (g *Gateway) SpawnTeam(teamName, jobID, task string, team agents.Team) (slo
 			case <-timer.C:
 				g.mu.Lock()
 				stillRunning := g.slots[idx] == s && s.status == SlotRunning
-				sendFn := g.send
 				g.mu.Unlock()
 				if !stillRunning {
 					return
 				}
-				sendFn(SlotTimeoutMsg{SlotID: idx})
+				g.doSend(SlotTimeoutMsg{SlotID: idx})
 				// Wait for a reset signal or context cancellation.
 				select {
 				case d := <-s.resetTimer:
@@ -285,32 +284,32 @@ func (g *Gateway) SpawnTeam(teamName, jobID, task string, team agents.Team) (slo
 				s.sessionID = resp.Meta.SessionID
 				s.claudeVersion = resp.Meta.Version
 				g.mu.Unlock()
-				g.notify()
+				g.doNotify()
 			case resp.Content != "":
 				g.mu.Lock()
 				s.output.WriteString(resp.Content)
 				g.mu.Unlock()
-				g.notify()
+				g.doNotify()
 			case resp.Reasoning != "":
 				g.mu.Lock()
 				s.thinkingOutput.WriteString(resp.Reasoning)
 				g.mu.Unlock()
-				g.notify()
+				g.doNotify()
 			case resp.PendingTool != "":
 				g.mu.Lock()
 				s.pendingTool = resp.PendingTool
 				g.mu.Unlock()
-				g.notify()
+				g.doNotify()
 			case resp.ClearPendingTool:
 				g.mu.Lock()
 				s.pendingTool = ""
 				g.mu.Unlock()
-				g.notify()
+				g.doNotify()
 			case resp.ExitSummary != "":
 				g.mu.Lock()
 				s.exitSummary = resp.ExitSummary
 				g.mu.Unlock()
-				g.notify()
+				g.doNotify()
 			case resp.StopReason != "" || resp.Usage != nil:
 				g.mu.Lock()
 				if resp.StopReason != "" {
@@ -331,7 +330,7 @@ func (g *Gateway) SpawnTeam(teamName, jobID, task string, team agents.Team) (slo
 				s.status = SlotDone
 				s.endTime = time.Now()
 				g.mu.Unlock()
-				g.notify()
+				g.doNotify()
 			}
 		}
 
@@ -342,11 +341,31 @@ func (g *Gateway) SpawnTeam(teamName, jobID, task string, team agents.Team) (slo
 			s.output.WriteString("\n\n---\n\n## Team Report\n\n")
 			s.output.WriteString(string(reportData))
 			g.mu.Unlock()
-			g.notify()
+			g.doNotify()
 		}
 	}()
 
 	return idx, false, nil
+}
+
+// doNotify reads the notify function pointer under the lock and calls it.
+func (g *Gateway) doNotify() {
+	g.mu.Lock()
+	fn := g.notify
+	g.mu.Unlock()
+	if fn != nil {
+		fn()
+	}
+}
+
+// doSend reads the send function pointer under the lock and calls it.
+func (g *Gateway) doSend(msg SlotTimeoutMsg) {
+	g.mu.Lock()
+	fn := g.send
+	g.mu.Unlock()
+	if fn != nil {
+		fn(msg)
+	}
 }
 
 // SetNotify replaces the notify callback. Safe to call after New.
@@ -493,7 +512,7 @@ func (g *Gateway) Kill(slotID int) error {
 	s.output.WriteString("\n[killed]")
 	g.mu.Unlock() // unlock BEFORE calling notify to avoid deadlock
 
-	g.notify()
+	g.doNotify()
 	return nil
 }
 

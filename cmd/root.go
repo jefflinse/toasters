@@ -212,7 +212,7 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 			}
 			autoTeams := agents.AutoDetectTeams()
 			allTeams := append(newTeams, autoTeams...)
-			toolExec.Teams = allTeams
+			toolExec.SetTeams(allTeams)
 			newAwareness := generateTeamAwareness(context.Background(), client, allTeams, configDir)
 			p.Send(tui.TeamsReloadedMsg{Teams: allTeams, Awareness: newAwareness})
 		})

@@ -6,12 +6,29 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/jefflinse/toasters/internal/anthropic"
 )
+
+// anthropicProviderHTTPClient is a shared HTTP client with proper timeouts for
+// Anthropic API requests, replacing http.DefaultClient to prevent goroutine
+// leaks on slow/unresponsive API servers.
+var anthropicProviderHTTPClient = &http.Client{
+	Transport: &http.Transport{
+		DialContext: (&net.Dialer{
+			Timeout:   30 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ResponseHeaderTimeout: 30 * time.Second,
+	},
+}
 
 const (
 	defaultAnthropicBaseURL = "https://api.anthropic.com"
@@ -70,7 +87,7 @@ func NewAnthropic(name, apiKey string, opts ...AnthropicOption) *AnthropicProvid
 		apiKey:     apiKey,
 		baseURL:    defaultAnthropicBaseURL,
 		version:    defaultAnthropicVersion,
-		httpClient: http.DefaultClient,
+		httpClient: anthropicProviderHTTPClient,
 	}
 	for _, opt := range opts {
 		opt(p)
@@ -252,7 +269,7 @@ func (p *AnthropicProvider) streamResponse(ctx context.Context, req *http.Reques
 
 	if resp.StatusCode != http.StatusOK {
 		var buf bytes.Buffer
-		_, _ = buf.ReadFrom(resp.Body)
+		_, _ = buf.ReadFrom(io.LimitReader(resp.Body, 1<<20))
 		ch <- StreamEvent{Type: EventError, Error: fmt.Errorf("anthropic API error (%d): %s", resp.StatusCode, buf.String())}
 		return
 	}

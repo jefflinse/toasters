@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/net/html"
@@ -26,7 +28,8 @@ import (
 // ToolExecutor holds the dependencies needed to execute operator tool calls.
 type ToolExecutor struct {
 	Gateway      orchestration.AgentSpawner
-	Teams        []agents.Team
+	teams        []agents.Team
+	teamsMu      sync.RWMutex
 	WorkspaceDir string
 	Tools        []llm.Tool
 	Store        db.Store         // may be nil
@@ -39,11 +42,27 @@ type ToolExecutor struct {
 	OnSessionStarted func(sess *runtime.Session) // callback when a runtime session starts
 }
 
+// SetTeams replaces the team list. Safe for concurrent use.
+func (te *ToolExecutor) SetTeams(teams []agents.Team) {
+	te.teamsMu.Lock()
+	te.teams = teams
+	te.teamsMu.Unlock()
+}
+
+// getTeams returns a copy of the current team list. Safe for concurrent use.
+func (te *ToolExecutor) getTeams() []agents.Team {
+	te.teamsMu.RLock()
+	defer te.teamsMu.RUnlock()
+	teams := make([]agents.Team, len(te.teams))
+	copy(teams, te.teams)
+	return teams
+}
+
 // NewToolExecutor creates a ToolExecutor with the default static tools.
 func NewToolExecutor(gateway orchestration.AgentSpawner, teams []agents.Team, workspaceDir string, store db.Store, rt *runtime.Runtime) *ToolExecutor {
 	return &ToolExecutor{
 		Gateway:      gateway,
-		Teams:        teams,
+		teams:        teams,
 		WorkspaceDir: workspaceDir,
 		Tools:        staticTools,
 		Store:        store,
@@ -375,7 +394,7 @@ func (te *ToolExecutor) ExecuteTool(call llm.ToolCall) (string, error) {
 		if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
 			return "", fmt.Errorf("parsing list_directory args: %w", err)
 		}
-		return listDirectory(args.Path)
+		return listDirectory(args.Path, te.WorkspaceDir)
 	case "job_list":
 		jobs, err := job.List(te.WorkspaceDir)
 		if err != nil {
@@ -514,7 +533,7 @@ func (te *ToolExecutor) ExecuteTool(call llm.ToolCall) (string, error) {
 		// Look up team by name.
 		var team agents.Team
 		found := false
-		for _, t := range te.Teams {
+		for _, t := range te.getTeams() {
 			if t.Name == args.TeamName {
 				team = t
 				found = true
@@ -719,17 +738,70 @@ func (te *ToolExecutor) ExecuteTool(call llm.ToolCall) (string, error) {
 	}
 }
 
+// privateNetworks lists IP ranges that should not be accessible via fetch_webpage.
+var privateNetworks = []*net.IPNet{
+	mustParseCIDR("127.0.0.0/8"),
+	mustParseCIDR("10.0.0.0/8"),
+	mustParseCIDR("172.16.0.0/12"),
+	mustParseCIDR("192.168.0.0/16"),
+	mustParseCIDR("169.254.0.0/16"),
+	mustParseCIDR("::1/128"),
+	mustParseCIDR("fc00::/7"),
+	mustParseCIDR("fe80::/10"),
+}
+
+func mustParseCIDR(s string) *net.IPNet {
+	_, n, err := net.ParseCIDR(s)
+	if err != nil {
+		panic(err)
+	}
+	return n
+}
+
+func isPrivateIP(ip net.IP) bool {
+	for _, network := range privateNetworks {
+		if network.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+// operatorFetchClient is a dedicated HTTP client with SSRF protection for the
+// operator-level fetch_webpage tool. It resolves DNS and checks against private
+// networks before connecting.
+var operatorFetchClient = &http.Client{
+	Timeout: 10 * time.Second,
+	Transport: &http.Transport{
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			host, _, err := net.SplitHostPort(addr)
+			if err != nil {
+				return nil, err
+			}
+			ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+			if err != nil {
+				return nil, err
+			}
+			for _, ip := range ips {
+				if isPrivateIP(ip.IP) {
+					return nil, fmt.Errorf("access to private/reserved IP %s is blocked", ip.IP)
+				}
+			}
+			dialer := &net.Dialer{Timeout: 10 * time.Second}
+			return dialer.DialContext(ctx, network, addr)
+		},
+	},
+}
+
 // fetchWebpage retrieves a URL and returns its content as plain text.
 func fetchWebpage(url string) (string, error) {
-	client := &http.Client{Timeout: 10 * time.Second}
-
 	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
 		return "", fmt.Errorf("creating request: %w", err)
 	}
 	req.Header.Set("User-Agent", "toasters/0.1")
 
-	resp, err := client.Do(req)
+	resp, err := operatorFetchClient.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("fetching %s: %w", url, err)
 	}
@@ -787,7 +859,43 @@ func fetchWebpage(url string) (string, error) {
 }
 
 // listDirectory returns a formatted listing of the directory at path.
-func listDirectory(path string) (string, error) {
+// The path is validated against workspaceDir to prevent directory traversal.
+// Relative paths are resolved relative to workspaceDir; absolute paths must
+// be under workspaceDir.
+func listDirectory(path, workspaceDir string) (string, error) {
+	path = filepath.Clean(path)
+
+	if filepath.IsAbs(path) {
+		// Absolute path must be under the workspace dir.
+		absWorkspace, err := filepath.Abs(workspaceDir)
+		if err != nil {
+			return "", fmt.Errorf("resolving workspace dir: %w", err)
+		}
+		absWorkspace = filepath.Clean(absWorkspace)
+		if !strings.HasPrefix(path, absWorkspace+string(filepath.Separator)) && path != absWorkspace {
+			return "", fmt.Errorf("access denied: path %q is outside workspace %q", path, absWorkspace)
+		}
+	} else {
+		// Relative path — resolve relative to workspace dir.
+		path = filepath.Join(workspaceDir, path)
+		path = filepath.Clean(path)
+
+		// Verify the resolved path is still under workspace dir (prevents ../.. traversal).
+		absWorkspace, err := filepath.Abs(workspaceDir)
+		if err != nil {
+			return "", fmt.Errorf("resolving workspace dir: %w", err)
+		}
+		absPath, err := filepath.Abs(path)
+		if err != nil {
+			return "", fmt.Errorf("resolving path: %w", err)
+		}
+		absWorkspace = filepath.Clean(absWorkspace)
+		absPath = filepath.Clean(absPath)
+		if !strings.HasPrefix(absPath, absWorkspace+string(filepath.Separator)) && absPath != absWorkspace {
+			return "", fmt.Errorf("access denied: resolved path %q is outside workspace %q", absPath, absWorkspace)
+		}
+	}
+
 	entries, err := os.ReadDir(path)
 	if err != nil {
 		return "", fmt.Errorf("reading directory %s: %w", path, err)

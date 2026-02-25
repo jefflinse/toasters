@@ -1030,7 +1030,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.awareness = msg.Awareness
 		m.systemPrompt = agents.BuildOperatorPrompt(m.teams, m.awareness)
 		m.stats.SystemPromptTokens = estimateTokens(m.systemPrompt)
-		m.toolExec.Teams = m.teams
+		m.toolExec.SetTeams(m.teams)
 		if m.hasConversation() {
 			m.entries[0].Message.Content = m.systemPrompt
 		} else {

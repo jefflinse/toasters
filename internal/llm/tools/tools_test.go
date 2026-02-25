@@ -732,9 +732,13 @@ func TestJobCompleteTodo_BadJSON(t *testing.T) {
 // ============================================================================
 
 func TestListDirectory_Success(t *testing.T) {
-	dir := t.TempDir()
+	te, configDir := newTestExecutor(t)
 
-	// Create some files and a subdirectory.
+	// Create some files and a subdirectory under the workspace dir.
+	dir := filepath.Join(configDir, "testdir")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatalf("creating dir: %v", err)
+	}
 	if err := os.WriteFile(filepath.Join(dir, "file.txt"), []byte("hello"), 0o644); err != nil {
 		t.Fatalf("creating file: %v", err)
 	}
@@ -742,7 +746,6 @@ func TestListDirectory_Success(t *testing.T) {
 		t.Fatalf("creating subdir: %v", err)
 	}
 
-	te, _ := newTestExecutor(t)
 	call := makeToolCall("list_directory", map[string]string{"path": dir})
 
 	result, err := te.ExecuteTool(call)
@@ -767,8 +770,8 @@ func TestListDirectory_Success(t *testing.T) {
 }
 
 func TestListDirectory_NonexistentPath(t *testing.T) {
-	te, _ := newTestExecutor(t)
-	call := makeToolCall("list_directory", map[string]string{"path": "/nonexistent/path/xyz"})
+	te, configDir := newTestExecutor(t)
+	call := makeToolCall("list_directory", map[string]string{"path": filepath.Join(configDir, "nonexistent", "path", "xyz")})
 
 	_, err := te.ExecuteTool(call)
 	if err == nil {
@@ -777,9 +780,13 @@ func TestListDirectory_NonexistentPath(t *testing.T) {
 }
 
 func TestListDirectory_EmptyDirectory(t *testing.T) {
-	dir := t.TempDir()
+	te, configDir := newTestExecutor(t)
 
-	te, _ := newTestExecutor(t)
+	dir := filepath.Join(configDir, "emptydir")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatalf("creating dir: %v", err)
+	}
+
 	call := makeToolCall("list_directory", map[string]string{"path": dir})
 
 	result, err := te.ExecuteTool(call)
@@ -798,6 +805,55 @@ func TestListDirectory_BadJSON(t *testing.T) {
 	_, err := te.ExecuteTool(call)
 	if err == nil {
 		t.Fatal("expected error for bad JSON, got nil")
+	}
+}
+
+func TestListDirectory_RejectsPathOutsideWorkspace(t *testing.T) {
+	te, _ := newTestExecutor(t)
+	call := makeToolCall("list_directory", map[string]string{"path": "/etc"})
+
+	_, err := te.ExecuteTool(call)
+	if err == nil {
+		t.Fatal("expected error for path outside workspace, got nil")
+	}
+	if !strings.Contains(err.Error(), "access denied") {
+		t.Errorf("expected 'access denied' error, got: %v", err)
+	}
+}
+
+func TestListDirectory_RejectsTraversalAttack(t *testing.T) {
+	te, _ := newTestExecutor(t)
+	call := makeToolCall("list_directory", map[string]string{"path": "../../../../../../etc"})
+
+	_, err := te.ExecuteTool(call)
+	if err == nil {
+		t.Fatal("expected error for traversal attack, got nil")
+	}
+	if !strings.Contains(err.Error(), "access denied") {
+		t.Errorf("expected 'access denied' error, got: %v", err)
+	}
+}
+
+func TestListDirectory_AllowsRelativePath(t *testing.T) {
+	te, configDir := newTestExecutor(t)
+
+	// Create a subdirectory under the workspace.
+	subdir := filepath.Join(configDir, "mydir")
+	if err := os.Mkdir(subdir, 0o755); err != nil {
+		t.Fatalf("creating subdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(subdir, "test.txt"), []byte("hi"), 0o644); err != nil {
+		t.Fatalf("creating file: %v", err)
+	}
+
+	call := makeToolCall("list_directory", map[string]string{"path": "mydir"})
+
+	result, err := te.ExecuteTool(call)
+	if err != nil {
+		t.Fatalf("ExecuteTool returned error: %v", err)
+	}
+	if !strings.Contains(result, "test.txt") {
+		t.Errorf("expected result to contain 'test.txt', got %q", result)
 	}
 }
 
@@ -1104,7 +1160,18 @@ func TestTaskSetStatus_BadJSON(t *testing.T) {
 // fetch_webpage tests
 // ============================================================================
 
+// withTestFetchClient temporarily replaces the operatorFetchClient with a plain
+// HTTP client (no SSRF protection) for testing against httptest.NewServer, which
+// binds to 127.0.0.1. Restores the original client when the test completes.
+func withTestFetchClient(t *testing.T) {
+	t.Helper()
+	orig := operatorFetchClient
+	operatorFetchClient = &http.Client{Timeout: 10 * time.Second}
+	t.Cleanup(func() { operatorFetchClient = orig })
+}
+
 func TestFetchWebpage_Success(t *testing.T) {
+	withTestFetchClient(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
 		_, _ = fmt.Fprint(w, `<!DOCTYPE html>
@@ -1134,6 +1201,7 @@ func TestFetchWebpage_Success(t *testing.T) {
 }
 
 func TestFetchWebpage_StripsScriptAndStyle(t *testing.T) {
+	withTestFetchClient(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
 		_, _ = fmt.Fprint(w, `<html>
@@ -1173,6 +1241,7 @@ func TestFetchWebpage_StripsScriptAndStyle(t *testing.T) {
 }
 
 func TestFetchWebpage_NonOKStatus(t *testing.T) {
+	withTestFetchClient(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 	}))
@@ -1191,12 +1260,27 @@ func TestFetchWebpage_NonOKStatus(t *testing.T) {
 }
 
 func TestFetchWebpage_InvalidURL(t *testing.T) {
+	withTestFetchClient(t)
 	te, _ := newTestExecutor(t)
 	call := makeToolCall("fetch_webpage", map[string]string{"url": "http://localhost:1"})
 
 	_, err := te.ExecuteTool(call)
 	if err == nil {
 		t.Fatal("expected error for unreachable URL, got nil")
+	}
+}
+
+func TestFetchWebpage_SSRFBlocksPrivateIP(t *testing.T) {
+	// Do NOT call withTestFetchClient — use the real SSRF-protected client.
+	te, _ := newTestExecutor(t)
+	call := makeToolCall("fetch_webpage", map[string]string{"url": "http://127.0.0.1:9999"})
+
+	_, err := te.ExecuteTool(call)
+	if err == nil {
+		t.Fatal("expected error for private IP, got nil")
+	}
+	if !strings.Contains(err.Error(), "private/reserved IP") {
+		t.Errorf("expected SSRF block error, got: %v", err)
 	}
 }
 
@@ -1211,6 +1295,7 @@ func TestFetchWebpage_BadJSON(t *testing.T) {
 }
 
 func TestFetchWebpage_CollapsesWhitespace(t *testing.T) {
+	withTestFetchClient(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
 		_, _ = fmt.Fprint(w, `<html><body>
@@ -1240,6 +1325,7 @@ func TestFetchWebpage_CollapsesWhitespace(t *testing.T) {
 }
 
 func TestFetchWebpage_TruncatesLongContent(t *testing.T) {
+	withTestFetchClient(t)
 	// Generate content longer than 8000 chars.
 	longText := strings.Repeat("A", 9000)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -1285,7 +1371,7 @@ func TestAssignTeam_NilGateway(t *testing.T) {
 func TestAssignTeam_JobDoesNotExist(t *testing.T) {
 	te, _ := newTestExecutor(t)
 	te.Gateway = &mockSpawner{}
-	te.Teams = []agents.Team{{Name: "coding"}}
+	te.SetTeams([]agents.Team{{Name: "coding"}})
 
 	call := makeToolCall("assign_team", map[string]string{
 		"team_name": "coding",
@@ -1309,7 +1395,7 @@ func TestAssignTeam_JobDoesNotExist(t *testing.T) {
 func TestAssignTeam_TeamNotFound(t *testing.T) {
 	te, configDir := newTestExecutor(t)
 	te.Gateway = &mockSpawner{}
-	te.Teams = []agents.Team{{Name: "coding"}}
+	te.SetTeams([]agents.Team{{Name: "coding"}})
 
 	makeJobDir(t, configDir, "team-test", "active", "")
 
@@ -1344,7 +1430,7 @@ func TestAssignTeam_SuccessfulDispatch(t *testing.T) {
 			return 1, false, nil
 		},
 	}
-	te.Teams = []agents.Team{{Name: "coding"}}
+	te.SetTeams([]agents.Team{{Name: "coding"}})
 
 	makeJobDir(t, configDir, "dispatch-job", "active", "")
 
@@ -1373,7 +1459,7 @@ func TestAssignTeam_AlreadyRunning(t *testing.T) {
 			return 3, true, nil
 		},
 	}
-	te.Teams = []agents.Team{{Name: "coding"}}
+	te.SetTeams([]agents.Team{{Name: "coding"}})
 
 	makeJobDir(t, configDir, "running-job", "active", "")
 
@@ -1402,7 +1488,7 @@ func TestAssignTeam_SpawnError(t *testing.T) {
 			return 0, false, fmt.Errorf("no available slots")
 		},
 	}
-	te.Teams = []agents.Team{{Name: "coding"}}
+	te.SetTeams([]agents.Team{{Name: "coding"}})
 
 	makeJobDir(t, configDir, "spawn-err-job", "active", "")
 
@@ -1439,7 +1525,7 @@ func TestAssignTeam_SetsTaskTeam(t *testing.T) {
 			return 0, false, nil
 		},
 	}
-	te.Teams = []agents.Team{{Name: "coding"}}
+	te.SetTeams([]agents.Team{{Name: "coding"}})
 
 	// Use job.Create to get a real job with tasks.
 	j, err := job.Create(configDir, "team-assign-job", "Team Assign", "Test team assignment")
@@ -1501,8 +1587,8 @@ func TestNewToolExecutor_SetsFields(t *testing.T) {
 	if te.Gateway != spawner {
 		t.Error("expected Gateway to be set")
 	}
-	if len(te.Teams) != 1 || te.Teams[0].Name != "test-team" {
-		t.Error("expected Teams to be set")
+	if teams := te.getTeams(); len(teams) != 1 || teams[0].Name != "test-team" {
+		t.Error("expected teams to be set")
 	}
 	if te.WorkspaceDir != "/tmp/workspace" {
 		t.Errorf("expected WorkspaceDir '/tmp/workspace', got %q", te.WorkspaceDir)
@@ -1701,7 +1787,7 @@ func TestAssignTeam_UsesRuntimeWhenProviderConfigured(t *testing.T) {
 			return 0, false, nil
 		},
 	}
-	te.Teams = []agents.Team{{Name: "coding"}}
+	te.SetTeams([]agents.Team{{Name: "coding"}})
 
 	// Create a job directory.
 	makeJobDir(t, configDir, "runtime-job", "active", "")
@@ -1758,7 +1844,7 @@ func TestAssignTeam_FallsBackToGatewayWhenNoProvider(t *testing.T) {
 			return 2, false, nil
 		},
 	}
-	te.Teams = []agents.Team{{Name: "coding"}}
+	te.SetTeams([]agents.Team{{Name: "coding"}})
 
 	makeJobDir(t, configDir, "gateway-fallback-job", "active", "")
 
@@ -1803,7 +1889,7 @@ func TestAssignTeam_FallsBackToGatewayOnRuntimeError(t *testing.T) {
 			return 5, false, nil
 		},
 	}
-	te.Teams = []agents.Team{{Name: "coding"}}
+	te.SetTeams([]agents.Team{{Name: "coding"}})
 
 	makeJobDir(t, configDir, "runtime-fail-job", "active", "")
 

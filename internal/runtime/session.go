@@ -264,6 +264,8 @@ func (s *Session) Snapshot() SessionSnapshot {
 
 // FinalText returns the last assistant message text (for spawn_agent results).
 func (s *Session) FinalText() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	for i := len(s.messages) - 1; i >= 0; i-- {
 		if s.messages[i].Role == "assistant" && s.messages[i].Content != "" {
 			return s.messages[i].Content
@@ -294,6 +296,8 @@ func (s *Session) SystemPrompt() string {
 
 // InitialMessage returns the initial user message, if any.
 func (s *Session) InitialMessage() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if len(s.messages) > 0 && s.messages[0].Role == "user" {
 		return s.messages[0].Content
 	}
