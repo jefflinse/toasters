@@ -44,12 +44,13 @@ type authHeaders struct {
 
 // AnthropicProvider implements Provider for the Anthropic Messages API.
 type AnthropicProvider struct {
-	name       string
-	apiKey     string
-	baseURL    string
-	version    string
-	httpClient *http.Client
-	authFunc   func() (*authHeaders, error)
+	name         string
+	apiKey       string
+	baseURL      string
+	version      string
+	defaultModel string
+	httpClient   *http.Client
+	authFunc     func() (*authHeaders, error)
 }
 
 // AnthropicOption configures an AnthropicProvider.
@@ -66,6 +67,13 @@ func WithAnthropicBaseURL(url string) AnthropicOption {
 func WithAnthropicVersion(version string) AnthropicOption {
 	return func(p *AnthropicProvider) {
 		p.version = version
+	}
+}
+
+// WithAnthropicModel sets the default model used when ChatRequest.Model is empty.
+func WithAnthropicModel(model string) AnthropicOption {
+	return func(p *AnthropicProvider) {
+		p.defaultModel = model
 	}
 }
 
@@ -127,8 +135,12 @@ func (p *AnthropicProvider) Name() string { return p.name }
 
 // ChatStream sends a chat request and streams events via a channel.
 func (p *AnthropicProvider) ChatStream(ctx context.Context, req ChatRequest) (<-chan StreamEvent, error) {
+	model := req.Model
+	if model == "" {
+		model = p.defaultModel
+	}
 	body := anthropicReq{
-		Model:     req.Model,
+		Model:     model,
 		MaxTokens: req.MaxTokens,
 		Stream:    true,
 	}

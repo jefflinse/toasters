@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/jefflinse/toasters/internal/job"
-	"github.com/jefflinse/toasters/internal/llm"
+	"github.com/jefflinse/toasters/internal/provider"
 )
 
 func TestWrapText(t *testing.T) {
@@ -944,48 +944,48 @@ func TestHasConversation(t *testing.T) {
 		{
 			name: "system-only entries returns false",
 			entries: []ChatEntry{
-				{Message: llm.Message{Role: "system", Content: "You are a helpful assistant."}},
+				{Message: provider.Message{Role: "system", Content: "You are a helpful assistant."}},
 			},
 			want: false,
 		},
 		{
 			name: "assistant-only entries returns false",
 			entries: []ChatEntry{
-				{Message: llm.Message{Role: "assistant", Content: "Hello! How can I help?"}},
+				{Message: provider.Message{Role: "assistant", Content: "Hello! How can I help?"}},
 			},
 			want: false,
 		},
 		{
 			name: "system and assistant entries returns false",
 			entries: []ChatEntry{
-				{Message: llm.Message{Role: "system", Content: "You are a helpful assistant."}},
-				{Message: llm.Message{Role: "assistant", Content: "Hello!"}},
+				{Message: provider.Message{Role: "system", Content: "You are a helpful assistant."}},
+				{Message: provider.Message{Role: "assistant", Content: "Hello!"}},
 			},
 			want: false,
 		},
 		{
 			name: "single user message returns true",
 			entries: []ChatEntry{
-				{Message: llm.Message{Role: "user", Content: "Hi there"}},
+				{Message: provider.Message{Role: "user", Content: "Hi there"}},
 			},
 			want: true,
 		},
 		{
 			name: "user message among other roles returns true",
 			entries: []ChatEntry{
-				{Message: llm.Message{Role: "system", Content: "You are a helpful assistant."}},
-				{Message: llm.Message{Role: "assistant", Content: "Hello!"}},
-				{Message: llm.Message{Role: "user", Content: "What is Go?"}},
-				{Message: llm.Message{Role: "assistant", Content: "Go is a programming language."}},
+				{Message: provider.Message{Role: "system", Content: "You are a helpful assistant."}},
+				{Message: provider.Message{Role: "assistant", Content: "Hello!"}},
+				{Message: provider.Message{Role: "user", Content: "What is Go?"}},
+				{Message: provider.Message{Role: "assistant", Content: "Go is a programming language."}},
 			},
 			want: true,
 		},
 		{
 			name: "tool role entries without user returns false",
 			entries: []ChatEntry{
-				{Message: llm.Message{Role: "system", Content: "system prompt"}},
-				{Message: llm.Message{Role: "assistant", Content: "calling tool"}},
-				{Message: llm.Message{Role: "tool", Content: "tool result"}},
+				{Message: provider.Message{Role: "system", Content: "system prompt"}},
+				{Message: provider.Message{Role: "assistant", Content: "calling tool"}},
+				{Message: provider.Message{Role: "tool", Content: "tool result"}},
 			},
 			want: false,
 		},
@@ -1024,7 +1024,7 @@ func TestMessagesFromEntries(t *testing.T) {
 		m := newMinimalModel(t)
 		m.chat.entries = []ChatEntry{
 			{
-				Message:   llm.Message{Role: "user", Content: "hello"},
+				Message:   provider.Message{Role: "user", Content: "hello"},
 				Timestamp: time.Now(),
 			},
 		}
@@ -1045,9 +1045,9 @@ func TestMessagesFromEntries(t *testing.T) {
 		t.Parallel()
 		m := newMinimalModel(t)
 		m.chat.entries = []ChatEntry{
-			{Message: llm.Message{Role: "system", Content: "system prompt"}},
-			{Message: llm.Message{Role: "user", Content: "question"}},
-			{Message: llm.Message{Role: "assistant", Content: "answer"}},
+			{Message: provider.Message{Role: "system", Content: "system prompt"}},
+			{Message: provider.Message{Role: "user", Content: "question"}},
+			{Message: provider.Message{Role: "assistant", Content: "answer"}},
 		}
 
 		msgs := m.messagesFromEntries()
@@ -1072,7 +1072,7 @@ func TestMessagesFromEntries(t *testing.T) {
 		m := newMinimalModel(t)
 		m.chat.entries = []ChatEntry{
 			{
-				Message:    llm.Message{Role: "assistant", Content: "response"},
+				Message:    provider.Message{Role: "assistant", Content: "response"},
 				Timestamp:  time.Now(),
 				Reasoning:  "I thought about it",
 				ClaudeMeta: "operator · model-name",
@@ -1083,7 +1083,7 @@ func TestMessagesFromEntries(t *testing.T) {
 		if len(msgs) != 1 {
 			t.Fatalf("expected 1 message, got %d", len(msgs))
 		}
-		// The returned message should be the llm.Message from the entry.
+		// The returned message should be the provider.Message from the entry.
 		if msgs[0].Role != "assistant" {
 			t.Errorf("expected role 'assistant', got %q", msgs[0].Role)
 		}
@@ -1096,7 +1096,7 @@ func TestMessagesFromEntries(t *testing.T) {
 		t.Parallel()
 		m := newMinimalModel(t)
 		m.chat.entries = []ChatEntry{
-			{Message: llm.Message{Role: "tool", Content: "result", ToolCallID: "call_123"}},
+			{Message: provider.Message{Role: "tool", Content: "result", ToolCallID: "call_123"}},
 		}
 
 		msgs := m.messagesFromEntries()
@@ -1120,25 +1120,25 @@ func TestIsToolCallIndicatorIdx(t *testing.T) {
 	}{
 		{
 			name:    "negative index returns false",
-			entries: []ChatEntry{{Message: llm.Message{Role: "assistant"}, ClaudeMeta: "tool-call-indicator"}},
+			entries: []ChatEntry{{Message: provider.Message{Role: "assistant"}, ClaudeMeta: "tool-call-indicator"}},
 			idx:     -1,
 			want:    false,
 		},
 		{
 			name:    "index out of bounds returns false",
-			entries: []ChatEntry{{Message: llm.Message{Role: "assistant"}, ClaudeMeta: "tool-call-indicator"}},
+			entries: []ChatEntry{{Message: provider.Message{Role: "assistant"}, ClaudeMeta: "tool-call-indicator"}},
 			idx:     5,
 			want:    false,
 		},
 		{
 			name:    "valid index with tool-call-indicator returns true",
-			entries: []ChatEntry{{Message: llm.Message{Role: "assistant"}, ClaudeMeta: "tool-call-indicator"}},
+			entries: []ChatEntry{{Message: provider.Message{Role: "assistant"}, ClaudeMeta: "tool-call-indicator"}},
 			idx:     0,
 			want:    true,
 		},
 		{
 			name:    "valid index without tool-call-indicator returns false",
-			entries: []ChatEntry{{Message: llm.Message{Role: "assistant"}, ClaudeMeta: "operator"}},
+			entries: []ChatEntry{{Message: provider.Message{Role: "assistant"}, ClaudeMeta: "operator"}},
 			idx:     0,
 			want:    false,
 		},

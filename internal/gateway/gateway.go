@@ -18,8 +18,8 @@ import (
 	"github.com/jefflinse/toasters/internal/claude"
 	"github.com/jefflinse/toasters/internal/config"
 	"github.com/jefflinse/toasters/internal/job"
-	"github.com/jefflinse/toasters/internal/llm"
 	"github.com/jefflinse/toasters/internal/orchestration"
+	"github.com/jefflinse/toasters/internal/provider"
 )
 
 // MaxSlots is the maximum number of concurrent Claude subprocess slots.
@@ -262,17 +262,17 @@ func (g *Gateway) SpawnTeam(teamName, jobID, task string, team agents.Team) (slo
 	// Start the subprocess goroutine.
 	go func() {
 		ch := spawnClaudeStream(ctx, prompt, g.claudeCfg, permissionArgs, agentsJSON, jobDir, dbPath)
-		for resp := range ch {
-			// Handle subagent tracking fields (may accompany Content).
-			if resp.SubagentSpawned {
+		for ev := range ch {
+			// Handle subagent tracking fields (may accompany text content).
+			if ev.SubagentSpawned {
 				g.mu.Lock()
 				s.subagentsSpawned++
 				s.subagentsInFlight++
 				g.mu.Unlock()
 			}
-			if resp.SubagentResult != "" {
+			if ev.SubagentResult != "" {
 				g.mu.Lock()
-				s.subagentOutput.WriteString(resp.SubagentResult + "\n")
+				s.subagentOutput.WriteString(ev.SubagentResult + "\n")
 				if s.subagentsInFlight > 0 {
 					s.subagentsInFlight--
 				}
@@ -280,54 +280,54 @@ func (g *Gateway) SpawnTeam(teamName, jobID, task string, team agents.Team) (slo
 			}
 
 			switch {
-			case resp.Meta != nil:
+			case ev.Meta != nil:
 				g.mu.Lock()
-				s.model = resp.Meta.Model
-				s.sessionID = resp.Meta.SessionID
-				s.claudeVersion = resp.Meta.Version
+				s.model = ev.Meta.Model
+				s.sessionID = ev.Meta.SessionID
+				s.claudeVersion = ev.Meta.Version
 				g.mu.Unlock()
 				g.doNotify()
-			case resp.Content != "":
+			case ev.Text != "":
 				g.mu.Lock()
-				s.output.WriteString(resp.Content)
+				s.output.WriteString(ev.Text)
 				g.mu.Unlock()
 				g.doNotify()
-			case resp.Reasoning != "":
+			case ev.Reasoning != "":
 				g.mu.Lock()
-				s.thinkingOutput.WriteString(resp.Reasoning)
+				s.thinkingOutput.WriteString(ev.Reasoning)
 				g.mu.Unlock()
 				g.doNotify()
-			case resp.PendingTool != "":
+			case ev.PendingTool != "":
 				g.mu.Lock()
-				s.pendingTool = resp.PendingTool
+				s.pendingTool = ev.PendingTool
 				g.mu.Unlock()
 				g.doNotify()
-			case resp.ClearPendingTool:
+			case ev.ClearPendingTool:
 				g.mu.Lock()
 				s.pendingTool = ""
 				g.mu.Unlock()
 				g.doNotify()
-			case resp.ExitSummary != "":
+			case ev.ExitSummary != "":
 				g.mu.Lock()
-				s.exitSummary = resp.ExitSummary
+				s.exitSummary = ev.ExitSummary
 				g.mu.Unlock()
 				g.doNotify()
-			case resp.StopReason != "" || resp.Usage != nil:
+			case ev.StopReason != "" || ev.Usage != nil:
 				g.mu.Lock()
-				if resp.StopReason != "" {
-					s.stopReason = resp.StopReason
+				if ev.StopReason != "" {
+					s.stopReason = ev.StopReason
 				}
-				if resp.Usage != nil {
-					if resp.Usage.PromptTokens > 0 {
-						s.inputTokens += resp.Usage.PromptTokens
+				if ev.Usage != nil {
+					if ev.Usage.InputTokens > 0 {
+						s.inputTokens += ev.Usage.InputTokens
 					}
-					if resp.Usage.CompletionTokens > 0 {
-						s.outputTokens += resp.Usage.CompletionTokens
+					if ev.Usage.OutputTokens > 0 {
+						s.outputTokens += ev.Usage.OutputTokens
 						s.turnCount++
 					}
 				}
 				g.mu.Unlock()
-			case resp.Done || resp.Error != nil:
+			case ev.Type == provider.EventDone || ev.Type == provider.EventError:
 				g.mu.Lock()
 				s.status = SlotDone
 				s.endTime = time.Now()
@@ -538,8 +538,8 @@ func (g *Gateway) Kill(slotID int) error {
 // passed to Claude CLI via --mcp-config so the subprocess can report progress
 // back to the Toasters database. If dbPath is empty or the binary path cannot
 // be determined, MCP injection is silently skipped.
-func spawnClaudeStream(ctx context.Context, prompt string, claudeCfg config.ClaudeConfig, permissionArgs []string, agentsJSON string, jobDir string, dbPath string) <-chan llm.StreamResponse {
-	ch := make(chan llm.StreamResponse, 64)
+func spawnClaudeStream(ctx context.Context, prompt string, claudeCfg config.ClaudeConfig, permissionArgs []string, agentsJSON string, jobDir string, dbPath string) <-chan provider.StreamEvent {
+	ch := make(chan provider.StreamEvent, 64)
 
 	go func() {
 		defer close(ch)
@@ -617,18 +617,18 @@ func spawnClaudeStream(ctx context.Context, prompt string, claudeCfg config.Clau
 
 		stderrPipe, err := cmd.StderrPipe()
 		if err != nil {
-			ch <- llm.StreamResponse{Error: fmt.Errorf("opening claude stderr pipe: %w", err)}
+			ch <- provider.StreamEvent{Type: provider.EventError, Error: fmt.Errorf("opening claude stderr pipe: %w", err)}
 			return
 		}
 
 		stdout, err := cmd.StdoutPipe()
 		if err != nil {
-			ch <- llm.StreamResponse{Error: fmt.Errorf("opening claude stdout pipe: %w", err)}
+			ch <- provider.StreamEvent{Type: provider.EventError, Error: fmt.Errorf("opening claude stdout pipe: %w", err)}
 			return
 		}
 
 		if err := cmd.Start(); err != nil {
-			ch <- llm.StreamResponse{Error: fmt.Errorf("starting claude: %w", err)}
+			ch <- provider.StreamEvent{Type: provider.EventError, Error: fmt.Errorf("starting claude: %w", err)}
 			return
 		}
 
@@ -655,7 +655,7 @@ func spawnClaudeStream(ctx context.Context, prompt string, claudeCfg config.Clau
 				var init claude.InitEvent
 				if err := json.Unmarshal([]byte(line), &init); err == nil &&
 					init.Type == "system" && init.Subtype == "init" {
-					ch <- llm.StreamResponse{Meta: &llm.ClaudeMeta{
+					ch <- provider.StreamEvent{Meta: &provider.ClaudeMeta{
 						Model:          init.Model,
 						PermissionMode: init.PermissionMode,
 						Version:        init.ClaudeCodeVersion,
@@ -679,31 +679,32 @@ func spawnClaudeStream(ctx context.Context, prompt string, claudeCfg config.Clau
 					// Only capture streaming text deltas — tool input deltas are
 					// assembled server-side and surfaced via the "assistant" event.
 					if event.Event.Delta.Type == "text_delta" && event.Event.Delta.Text != "" {
-						ch <- llm.StreamResponse{Content: event.Event.Delta.Text}
+						ch <- provider.StreamEvent{Type: provider.EventText, Text: event.Event.Delta.Text}
 					}
 				case "content_block_start":
 					// Notify when a tool_use block begins so the TUI can show which
 					// tool is currently executing.
 					if event.Event.ContentBlock.Type == "tool_use" && event.Event.ContentBlock.Name != "" {
-						ch <- llm.StreamResponse{PendingTool: event.Event.ContentBlock.Name}
+						ch <- provider.StreamEvent{PendingTool: event.Event.ContentBlock.Name}
 					}
 				case "content_block_stop":
 					// Clear the pending tool signal.
-					ch <- llm.StreamResponse{ClearPendingTool: true}
+					ch <- provider.StreamEvent{ClearPendingTool: true}
 				case "message_start":
 					// Accumulate input token count from the opening message event.
 					if event.Event.Message.Usage.InputTokens > 0 {
-						ch <- llm.StreamResponse{Usage: &llm.Usage{
-							PromptTokens: event.Event.Message.Usage.InputTokens,
+						ch <- provider.StreamEvent{Type: provider.EventUsage, Usage: &provider.Usage{
+							InputTokens: event.Event.Message.Usage.InputTokens,
 						}}
 					}
 				case "message_delta":
 					// Accumulate output tokens and capture stop reason.
 					if event.Event.Delta.StopReason != "" || event.Event.Usage.OutputTokens > 0 {
-						ch <- llm.StreamResponse{
+						ch <- provider.StreamEvent{
 							StopReason: event.Event.Delta.StopReason,
-							Usage: &llm.Usage{
-								CompletionTokens: event.Event.Usage.OutputTokens,
+							Type:       provider.EventUsage,
+							Usage: &provider.Usage{
+								OutputTokens: event.Event.Usage.OutputTokens,
 							},
 						}
 					}
@@ -721,17 +722,17 @@ func spawnClaudeStream(ctx context.Context, prompt string, claudeCfg config.Clau
 						if block.Text != "" {
 							// Text already streamed via stream_event deltas above;
 							// emit two newlines to separate turns cleanly.
-							ch <- llm.StreamResponse{Content: "\n\n"}
+							ch <- provider.StreamEvent{Type: provider.EventText, Text: "\n\n"}
 						}
 					case "tool_use":
-						resp := llm.StreamResponse{Content: "\n" + formatToolUse(block.Name, block.Input) + "\n"}
+						ev := provider.StreamEvent{Type: provider.EventText, Text: "\n" + formatToolUse(block.Name, block.Input) + "\n"}
 						if block.Name == "Task" {
-							resp.SubagentSpawned = true
+							ev.SubagentSpawned = true
 						}
-						ch <- resp
+						ch <- ev
 					case "thinking":
 						if block.Thinking != "" {
-							ch <- llm.StreamResponse{Reasoning: block.Thinking}
+							ch <- provider.StreamEvent{Type: provider.EventText, Reasoning: block.Thinking}
 						}
 					}
 				}
@@ -762,8 +763,9 @@ func spawnClaudeStream(ctx context.Context, prompt string, claudeCfg config.Clau
 							}
 						}
 						if text != "" {
-							ch <- llm.StreamResponse{
-								Content:        "\n[subagent result]\n" + text + "\n",
+							ch <- provider.StreamEvent{
+								Type:           provider.EventText,
+								Text:           "\n[subagent result]\n" + text + "\n",
 								SubagentResult: text,
 							}
 						}
@@ -772,12 +774,12 @@ func spawnClaudeStream(ctx context.Context, prompt string, claudeCfg config.Clau
 			case "result":
 				done = true
 				if event.IsError {
-					ch <- llm.StreamResponse{Error: fmt.Errorf("claude error: %s", event.Result)}
+					ch <- provider.StreamEvent{Type: provider.EventError, Error: fmt.Errorf("claude error: %s", event.Result)}
 				} else {
 					if event.Result != "" {
-						ch <- llm.StreamResponse{ExitSummary: event.Result}
+						ch <- provider.StreamEvent{ExitSummary: event.Result}
 					}
-					ch <- llm.StreamResponse{Done: true}
+					ch <- provider.StreamEvent{Type: provider.EventDone}
 				}
 			}
 		}
@@ -786,11 +788,11 @@ func spawnClaudeStream(ctx context.Context, prompt string, claudeCfg config.Clau
 		_ = cmd.Wait()
 
 		if stderrStr := strings.TrimSpace(stderrBuf.String()); stderrStr != "" {
-			ch <- llm.StreamResponse{Content: "\n[stderr]: " + stderrStr}
+			ch <- provider.StreamEvent{Type: provider.EventText, Text: "\n[stderr]: " + stderrStr}
 		}
 
 		if !done {
-			ch <- llm.StreamResponse{Done: true}
+			ch <- provider.StreamEvent{Type: provider.EventDone}
 		}
 	}()
 

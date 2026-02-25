@@ -9,13 +9,13 @@ import (
 	"strings"
 
 	"github.com/jefflinse/toasters/internal/agents"
-	"github.com/jefflinse/toasters/internal/llm"
+	"github.com/jefflinse/toasters/internal/provider"
 )
 
 // generateTeamAwareness builds ~/.config/toasters/team-awareness.md
 // with one-sentence dispatch summaries for each team.
 // Returns the file content, or "" on error.
-func generateTeamAwareness(ctx context.Context, client llm.Provider, teams []agents.Team, configDir string) string {
+func generateTeamAwareness(ctx context.Context, client provider.Provider, teams []agents.Team, configDir string) string {
 	if len(teams) == 0 {
 		return ""
 	}
@@ -42,7 +42,7 @@ func generateTeamAwareness(ctx context.Context, client llm.Provider, teams []age
 
 // summarizeTeam asks the LLM for a one-sentence "Use this team when..."
 // summary suitable for operator dispatch decisions.
-func summarizeTeam(ctx context.Context, client llm.Provider, team agents.Team) string {
+func summarizeTeam(ctx context.Context, client provider.Provider, team agents.Team) string {
 	var prompt string
 	if team.Coordinator != nil && strings.TrimSpace(team.Coordinator.Body) != "" {
 		prompt = fmt.Sprintf(
@@ -73,8 +73,8 @@ Write exactly one sentence starting with "Use this team when" that describes wha
 		)
 	}
 
-	msgs := []llm.Message{{Role: "user", Content: prompt}}
-	resp, err := client.ChatCompletion(ctx, msgs)
+	msgs := []provider.Message{{Role: "user", Content: prompt}}
+	resp, err := provider.ChatCompletion(ctx, client, msgs)
 	if err != nil {
 		log.Printf("warning: team awareness inference failed for %q: %v", team.Name, err)
 		// Fallback: generic sentence

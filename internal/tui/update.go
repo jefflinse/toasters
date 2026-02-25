@@ -11,7 +11,7 @@ import (
 
 	"github.com/jefflinse/toasters/internal/gateway"
 	"github.com/jefflinse/toasters/internal/job"
-	"github.com/jefflinse/toasters/internal/llm"
+	"github.com/jefflinse/toasters/internal/provider"
 )
 
 // updatePromptModal handles key events when the prompt modal is visible.
@@ -268,7 +268,7 @@ func (m *Model) handleAgentOutput(msg AgentOutputMsg) (tea.Model, tea.Cmd) {
 				} else {
 					// Inject immediately and start a new stream.
 					m.appendEntry(ChatEntry{
-						Message:   llm.Message{Role: "user", Content: notification},
+						Message:   provider.Message{Role: "user", Content: notification},
 						Timestamp: time.Now(),
 					})
 					// Tag this message as a collapsible completion entry and auto-select it.

@@ -7,10 +7,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jefflinse/toasters/internal/llm"
+	"github.com/jefflinse/toasters/internal/provider"
 )
 
-func handleListSessions(_ context.Context, te *ToolExecutor, _ llm.ToolCall) (string, error) {
+func handleListSessions(_ context.Context, te *ToolExecutor, _ provider.ToolCall) (string, error) {
 	if te.Runtime == nil {
 		return "runtime not initialized", nil
 	}
@@ -27,14 +27,14 @@ func handleListSessions(_ context.Context, te *ToolExecutor, _ llm.ToolCall) (st
 	return strings.Join(lines, "\n"), nil
 }
 
-func handleCancelSession(_ context.Context, te *ToolExecutor, call llm.ToolCall) (string, error) {
+func handleCancelSession(_ context.Context, te *ToolExecutor, call provider.ToolCall) (string, error) {
 	if te.Runtime == nil {
 		return "runtime not initialized", nil
 	}
 	var args struct {
 		SessionID string `json:"session_id"`
 	}
-	if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
+	if err := json.Unmarshal(call.Arguments, &args); err != nil {
 		return "", fmt.Errorf("parsing cancel_session args: %w", err)
 	}
 	// Support prefix matching — find the session whose ID starts with the given prefix.

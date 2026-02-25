@@ -18,9 +18,9 @@ import (
 
 	"github.com/jefflinse/toasters/internal/agents"
 	"github.com/jefflinse/toasters/internal/db"
-	"github.com/jefflinse/toasters/internal/llm"
 	"github.com/jefflinse/toasters/internal/mcp"
 	"github.com/jefflinse/toasters/internal/orchestration"
+	"github.com/jefflinse/toasters/internal/provider"
 	"github.com/jefflinse/toasters/internal/runtime"
 )
 
@@ -37,7 +37,7 @@ type ToolExecutor struct {
 	teams        []agents.Team
 	teamsMu      sync.RWMutex
 	WorkspaceDir string
-	Tools        []llm.Tool
+	Tools        []provider.Tool
 	Store        db.Store         // may be nil
 	Runtime      *runtime.Runtime // may be nil
 	MCPManager   MCPCaller        // may be nil
@@ -76,315 +76,271 @@ func NewToolExecutor(gateway orchestration.AgentSpawner, teams []agents.Team, wo
 	}
 }
 
+// mustMarshalJSON marshals v to json.RawMessage, panicking on error.
+// Used for static tool parameter definitions that are known at compile time.
+func mustMarshalJSON(v any) json.RawMessage {
+	b, err := json.Marshal(v)
+	if err != nil {
+		panic(err)
+	}
+	return b
+}
+
 // staticTools contains all tools available to the operator LLM.
-var staticTools = []llm.Tool{
+var staticTools = []provider.Tool{
 	{
-		Type: "function",
-		Function: llm.ToolFunction{
-			Name:        "assign_team",
-			Description: "Assign a task to a team to work on autonomously. The job_id must be the ID of an existing job — call job_create first if no job exists yet.",
-			Parameters: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"team_name": map[string]any{
-						"type":        "string",
-						"description": "The name of the team to assign the task to.",
-					},
-					"job_id": map[string]any{
-						"type":        "string",
-						"description": "The ID of the job this task belongs to.",
-					},
-					"task": map[string]any{
-						"type":        "string",
-						"description": "A clear description of what the team should accomplish.",
-					},
+		Name:        "assign_team",
+		Description: "Assign a task to a team to work on autonomously. The job_id must be the ID of an existing job — call job_create first if no job exists yet.",
+		Parameters: mustMarshalJSON(map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"team_name": map[string]any{
+					"type":        "string",
+					"description": "The name of the team to assign the task to.",
 				},
-				"required": []string{"team_name", "job_id", "task"},
-			},
-		},
-	},
-	{
-		Type: "function",
-		Function: llm.ToolFunction{
-			Name:        "escalate_to_user",
-			Description: "Surface a blocker or question to the user that requires human input before work can continue.",
-			Parameters: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"question": map[string]any{
-						"type":        "string",
-						"description": "The question or blocker to present to the user.",
-					},
-					"context": map[string]any{
-						"type":        "string",
-						"description": "Additional context about why this is blocking.",
-					},
+				"job_id": map[string]any{
+					"type":        "string",
+					"description": "The ID of the job this task belongs to.",
 				},
-				"required": []string{"question", "context"},
-			},
-		},
-	},
-	{
-		Type: "function",
-		Function: llm.ToolFunction{
-			Name:        "fetch_webpage",
-			Description: "Fetches the content of a web page and returns it as plain text.",
-			Parameters: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"url": map[string]any{
-						"type":        "string",
-						"description": "The URL of the web page to fetch.",
-					},
+				"task": map[string]any{
+					"type":        "string",
+					"description": "A clear description of what the team should accomplish.",
 				},
-				"required": []string{"url"},
 			},
-		},
+			"required": []string{"team_name", "job_id", "task"},
+		}),
 	},
 	{
-		Type: "function",
-		Function: llm.ToolFunction{
-			Name:        "list_directory",
-			Description: "Lists the contents of a local directory.",
-			Parameters: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"path": map[string]any{
-						"type":        "string",
-						"description": "The absolute or relative path to the directory.",
-					},
+		Name:        "escalate_to_user",
+		Description: "Surface a blocker or question to the user that requires human input before work can continue.",
+		Parameters: mustMarshalJSON(map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"question": map[string]any{
+					"type":        "string",
+					"description": "The question or blocker to present to the user.",
 				},
-				"required": []string{"path"},
-			},
-		},
-	},
-	{
-		Type: "function",
-		Function: llm.ToolFunction{
-			Name:        "job_list",
-			Description: "List all jobs.",
-			Parameters: map[string]any{
-				"type":       "object",
-				"properties": map[string]any{},
-			},
-		},
-	},
-	{
-		Type: "function",
-		Function: llm.ToolFunction{
-			Name:        "job_create",
-			Description: "Create a new job.",
-			Parameters: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"id":          map[string]any{"type": "string", "description": "Slug identifier (lowercase letters, digits, hyphens only, e.g. 'auth-refactor')."},
-					"name":        map[string]any{"type": "string", "description": "Human-readable name."},
-					"description": map[string]any{"type": "string", "description": "1-3 sentence summary of the job."},
+				"context": map[string]any{
+					"type":        "string",
+					"description": "Additional context about why this is blocking.",
 				},
-				"required": []string{"id", "name", "description"},
 			},
-		},
+			"required": []string{"question", "context"},
+		}),
 	},
 	{
-		Type: "function",
-		Function: llm.ToolFunction{
-			Name:        "job_read_overview",
-			Description: "Read the OVERVIEW.md file for a job.",
-			Parameters: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"id": map[string]any{"type": "string", "description": "The job ID."},
+		Name:        "fetch_webpage",
+		Description: "Fetches the content of a web page and returns it as plain text.",
+		Parameters: mustMarshalJSON(map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"url": map[string]any{
+					"type":        "string",
+					"description": "The URL of the web page to fetch.",
 				},
-				"required": []string{"id"},
 			},
-		},
+			"required": []string{"url"},
+		}),
 	},
 	{
-		Type: "function",
-		Function: llm.ToolFunction{
-			Name:        "job_read_todos",
-			Description: "Read the TODO.md file for a job.",
-			Parameters: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"id": map[string]any{"type": "string", "description": "The job ID."},
+		Name:        "list_directory",
+		Description: "Lists the contents of a local directory.",
+		Parameters: mustMarshalJSON(map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"path": map[string]any{
+					"type":        "string",
+					"description": "The absolute or relative path to the directory.",
 				},
-				"required": []string{"id"},
 			},
-		},
+			"required": []string{"path"},
+		}),
 	},
 	{
-		Type: "function",
-		Function: llm.ToolFunction{
-			Name:        "job_update_overview",
-			Description: "Overwrite or append to the OVERVIEW.md body for a job. Does not touch frontmatter.",
-			Parameters: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"id":      map[string]any{"type": "string", "description": "The job ID."},
-					"content": map[string]any{"type": "string", "description": "Markdown content to write."},
-					"mode":    map[string]any{"type": "string", "enum": []string{"overwrite", "append"}, "description": "Whether to overwrite or append."},
+		Name:        "job_list",
+		Description: "List all jobs.",
+		Parameters: mustMarshalJSON(map[string]any{
+			"type":       "object",
+			"properties": map[string]any{},
+		}),
+	},
+	{
+		Name:        "job_create",
+		Description: "Create a new job.",
+		Parameters: mustMarshalJSON(map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"id":          map[string]any{"type": "string", "description": "Slug identifier (lowercase letters, digits, hyphens only, e.g. 'auth-refactor')."},
+				"name":        map[string]any{"type": "string", "description": "Human-readable name."},
+				"description": map[string]any{"type": "string", "description": "1-3 sentence summary of the job."},
+			},
+			"required": []string{"id", "name", "description"},
+		}),
+	},
+	{
+		Name:        "job_read_overview",
+		Description: "Read the OVERVIEW.md file for a job.",
+		Parameters: mustMarshalJSON(map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"id": map[string]any{"type": "string", "description": "The job ID."},
+			},
+			"required": []string{"id"},
+		}),
+	},
+	{
+		Name:        "job_read_todos",
+		Description: "Read the TODO.md file for a job.",
+		Parameters: mustMarshalJSON(map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"id": map[string]any{"type": "string", "description": "The job ID."},
+			},
+			"required": []string{"id"},
+		}),
+	},
+	{
+		Name:        "job_update_overview",
+		Description: "Overwrite or append to the OVERVIEW.md body for a job. Does not touch frontmatter.",
+		Parameters: mustMarshalJSON(map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"id":      map[string]any{"type": "string", "description": "The job ID."},
+				"content": map[string]any{"type": "string", "description": "Markdown content to write."},
+				"mode":    map[string]any{"type": "string", "enum": []string{"overwrite", "append"}, "description": "Whether to overwrite or append."},
+			},
+			"required": []string{"id", "content", "mode"},
+		}),
+	},
+	{
+		Name:        "job_add_todo",
+		Description: "Append a new TODO item to the TODO.md file for a job.",
+		Parameters: mustMarshalJSON(map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"id":   map[string]any{"type": "string", "description": "The job ID."},
+				"task": map[string]any{"type": "string", "description": "Task description (plain text)."},
+			},
+			"required": []string{"id", "task"},
+		}),
+	},
+	{
+		Name:        "job_complete_todo",
+		Description: "Mark a TODO item as done in the TODO.md file for a job.",
+		Parameters: mustMarshalJSON(map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"id":            map[string]any{"type": "string", "description": "The job ID."},
+				"index_or_text": map[string]any{"type": "string", "description": "1-based index of the TODO item, or a substring of the task text to match."},
+			},
+			"required": []string{"id", "index_or_text"},
+		}),
+	},
+	{
+		Name:        "ask_user",
+		Description: "Pause execution and ask the user a question with a set of options to choose from. Use this when you need the user to make a decision before proceeding. The user can select one of the provided options or type a custom response.",
+		Parameters: mustMarshalJSON(map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"question": map[string]any{
+					"type":        "string",
+					"description": "The question to ask the user.",
 				},
-				"required": []string{"id", "content", "mode"},
-			},
-		},
-	},
-	{
-		Type: "function",
-		Function: llm.ToolFunction{
-			Name:        "job_add_todo",
-			Description: "Append a new TODO item to the TODO.md file for a job.",
-			Parameters: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"id":   map[string]any{"type": "string", "description": "The job ID."},
-					"task": map[string]any{"type": "string", "description": "Task description (plain text)."},
+				"options": map[string]any{
+					"type":        "array",
+					"items":       map[string]any{"type": "string"},
+					"description": "A list of options for the user to choose from. A 'Custom response...' option is always appended automatically.",
 				},
-				"required": []string{"id", "task"},
 			},
-		},
+			"required": []string{"question", "options"},
+		}),
 	},
 	{
-		Type: "function",
-		Function: llm.ToolFunction{
-			Name:        "job_complete_todo",
-			Description: "Mark a TODO item as done in the TODO.md file for a job.",
-			Parameters: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"id":            map[string]any{"type": "string", "description": "The job ID."},
-					"index_or_text": map[string]any{"type": "string", "description": "1-based index of the TODO item, or a substring of the task text to match."},
+		Name:        "list_slots",
+		Description: "List all gateway slots with their current status, team, job, and elapsed time.",
+		Parameters:  mustMarshalJSON(map[string]any{"type": "object", "properties": map[string]any{}, "required": []string{}}),
+	},
+	{
+		Name:        "kill_slot",
+		Description: "Kill a running agent slot by its slot index. Use list_slots to find the slot index.",
+		Parameters: mustMarshalJSON(map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"slot_id": map[string]any{
+					"type":        "integer",
+					"description": "The index of the slot to kill.",
 				},
-				"required": []string{"id", "index_or_text"},
 			},
-		},
+			"required": []string{"slot_id"},
+		}),
 	},
 	{
-		Type: "function",
-		Function: llm.ToolFunction{
-			Name:        "ask_user",
-			Description: "Pause execution and ask the user a question with a set of options to choose from. Use this when you need the user to make a decision before proceeding. The user can select one of the provided options or type a custom response.",
-			Parameters: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"question": map[string]any{
-						"type":        "string",
-						"description": "The question to ask the user.",
-					},
-					"options": map[string]any{
-						"type":        "array",
-						"items":       map[string]any{"type": "string"},
-						"description": "A list of options for the user to choose from. A 'Custom response...' option is always appended automatically.",
-					},
+		Name:        "task_set_status",
+		Description: "Update the status of a specific task within a job. Valid statuses: active, done, paused.",
+		Parameters: mustMarshalJSON(map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"job_id": map[string]any{
+					"type":        "string",
+					"description": "The job ID.",
 				},
-				"required": []string{"question", "options"},
-			},
-		},
-	},
-	{
-		Type: "function",
-		Function: llm.ToolFunction{
-			Name:        "list_slots",
-			Description: "List all gateway slots with their current status, team, job, and elapsed time.",
-			Parameters:  map[string]any{"type": "object", "properties": map[string]any{}, "required": []string{}},
-		},
-	},
-	{
-		Type: "function",
-		Function: llm.ToolFunction{
-			Name:        "kill_slot",
-			Description: "Kill a running agent slot by its slot index. Use list_slots to find the slot index.",
-			Parameters: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"slot_id": map[string]any{
-						"type":        "integer",
-						"description": "The index of the slot to kill.",
-					},
+				"task_id": map[string]any{
+					"type":        "string",
+					"description": "The task UUID.",
 				},
-				"required": []string{"slot_id"},
-			},
-		},
-	},
-	{
-		Type: "function",
-		Function: llm.ToolFunction{
-			Name:        "task_set_status",
-			Description: "Update the status of a specific task within a job. Valid statuses: active, done, paused.",
-			Parameters: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"job_id": map[string]any{
-						"type":        "string",
-						"description": "The job ID.",
-					},
-					"task_id": map[string]any{
-						"type":        "string",
-						"description": "The task UUID.",
-					},
-					"status": map[string]any{
-						"type":        "string",
-						"description": "The new status: active, done, or paused.",
-						"enum":        []string{"active", "done", "paused"},
-					},
+				"status": map[string]any{
+					"type":        "string",
+					"description": "The new status: active, done, or paused.",
+					"enum":        []string{"active", "done", "paused"},
 				},
-				"required": []string{"job_id", "task_id", "status"},
 			},
-		},
+			"required": []string{"job_id", "task_id", "status"},
+		}),
 	},
 	{
-		Type: "function",
-		Function: llm.ToolFunction{
-			Name:        "job_set_status",
-			Description: "Update the status of a job. Valid statuses: active, done, cancelled, paused.",
-			Parameters: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"id": map[string]any{
-						"type":        "string",
-						"description": "The job ID.",
-					},
-					"status": map[string]any{
-						"type":        "string",
-						"description": "The new status: active, done, cancelled, or paused.",
-						"enum":        []string{"active", "done", "cancelled", "paused"},
-					},
+		Name:        "job_set_status",
+		Description: "Update the status of a job. Valid statuses: active, done, cancelled, paused.",
+		Parameters: mustMarshalJSON(map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"id": map[string]any{
+					"type":        "string",
+					"description": "The job ID.",
 				},
-				"required": []string{"id", "status"},
-			},
-		},
-	},
-	{
-		Type: "function",
-		Function: llm.ToolFunction{
-			Name:        "list_sessions",
-			Description: "List all active runtime agent sessions with their status, agent name, model, and elapsed time.",
-			Parameters:  map[string]any{"type": "object", "properties": map[string]any{}, "required": []string{}},
-		},
-	},
-	{
-		Type: "function",
-		Function: llm.ToolFunction{
-			Name:        "cancel_session",
-			Description: "Cancel a running runtime agent session by its session ID (or prefix).",
-			Parameters: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"session_id": map[string]any{
-						"type":        "string",
-						"description": "The session ID or prefix to cancel.",
-					},
+				"status": map[string]any{
+					"type":        "string",
+					"description": "The new status: active, done, cancelled, or paused.",
+					"enum":        []string{"active", "done", "cancelled", "paused"},
 				},
-				"required": []string{"session_id"},
 			},
-		},
+			"required": []string{"id", "status"},
+		}),
+	},
+	{
+		Name:        "list_sessions",
+		Description: "List all active runtime agent sessions with their status, agent name, model, and elapsed time.",
+		Parameters:  mustMarshalJSON(map[string]any{"type": "object", "properties": map[string]any{}, "required": []string{}}),
+	},
+	{
+		Name:        "cancel_session",
+		Description: "Cancel a running runtime agent session by its session ID (or prefix).",
+		Parameters: mustMarshalJSON(map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"session_id": map[string]any{
+					"type":        "string",
+					"description": "The session ID or prefix to cancel.",
+				},
+			},
+			"required": []string{"session_id"},
+		}),
 	},
 }
 
 // toolHandler is the function signature for individual tool handlers.
 // Each handler receives the request context, the executor (for access to
 // dependencies), and the full tool call.
-type toolHandler func(ctx context.Context, te *ToolExecutor, call llm.ToolCall) (string, error)
+type toolHandler func(ctx context.Context, te *ToolExecutor, call provider.ToolCall) (string, error)
 
 // handlers maps tool names to their handler functions.
 var handlers = map[string]toolHandler{
@@ -410,21 +366,21 @@ var handlers = map[string]toolHandler{
 
 // ExecuteTool dispatches a tool call to the appropriate handler and returns
 // the result as plain text.
-func (te *ToolExecutor) ExecuteTool(ctx context.Context, call llm.ToolCall) (string, error) {
-	if handler, ok := handlers[call.Function.Name]; ok {
+func (te *ToolExecutor) ExecuteTool(ctx context.Context, call provider.ToolCall) (string, error) {
+	if handler, ok := handlers[call.Name]; ok {
 		return handler(ctx, te, call)
 	}
 
 	// Check if this is an MCP tool call (namespaced with __).
-	if te.MCPManager != nil && strings.Contains(call.Function.Name, "__") {
-		result, err := te.MCPManager.Call(ctx, call.Function.Name, json.RawMessage(call.Function.Arguments))
+	if te.MCPManager != nil && strings.Contains(call.Name, "__") {
+		result, err := te.MCPManager.Call(ctx, call.Name, call.Arguments)
 		if err != nil {
-			return "", fmt.Errorf("MCP tool %s: %w", call.Function.Name, err)
+			return "", fmt.Errorf("MCP tool %s: %w", call.Name, err)
 		}
 		return mcp.TruncateResult(result, mcp.DefaultMaxResultLen), nil
 	}
 
-	return "", fmt.Errorf("unknown tool: %s", call.Function.Name)
+	return "", fmt.Errorf("unknown tool: %s", call.Name)
 }
 
 // wsRe matches runs of whitespace for collapsing in fetchWebpage output.

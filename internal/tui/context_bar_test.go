@@ -3,7 +3,7 @@ package tui
 import (
 	"testing"
 
-	"github.com/jefflinse/toasters/internal/llm"
+	"github.com/jefflinse/toasters/internal/provider"
 )
 
 // TestStreamDoneMsg_PromptTokensAssigned verifies that PromptTokens is assigned
@@ -18,7 +18,7 @@ func TestStreamDoneMsg_PromptTokensAssigned(t *testing.T) {
 	// Simulate first turn: API reports 500 prompt tokens.
 	m.stream.streaming = true
 	result1, _ := m.Update(StreamDoneMsg{
-		Usage: &llm.Usage{PromptTokens: 500, CompletionTokens: 100},
+		Usage: &provider.Usage{InputTokens: 500, OutputTokens: 100},
 	})
 	model1 := result1.(*Model)
 	if model1.stats.PromptTokens != 500 {
@@ -28,7 +28,7 @@ func TestStreamDoneMsg_PromptTokensAssigned(t *testing.T) {
 	// Simulate second turn: API reports 1500 prompt tokens (includes previous messages).
 	model1.stream.streaming = true
 	result2, _ := model1.Update(StreamDoneMsg{
-		Usage: &llm.Usage{PromptTokens: 1500, CompletionTokens: 200},
+		Usage: &provider.Usage{InputTokens: 1500, OutputTokens: 200},
 	})
 	model2 := result2.(*Model)
 
@@ -85,9 +85,9 @@ func TestStreamDoneMsg_MultiTurnContextSize(t *testing.T) {
 	for i, turn := range turns {
 		model.stream.streaming = true
 		result, _ := model.Update(StreamDoneMsg{
-			Usage: &llm.Usage{
-				PromptTokens:     turn.promptTokens,
-				CompletionTokens: turn.completionTokens,
+			Usage: &provider.Usage{
+				InputTokens:  turn.promptTokens,
+				OutputTokens: turn.completionTokens,
 			},
 		})
 		model = result.(*Model)
@@ -121,7 +121,7 @@ func TestStreamDoneMsg_PromptTokensDecrease(t *testing.T) {
 	// First turn: large context.
 	m.stream.streaming = true
 	result1, _ := m.Update(StreamDoneMsg{
-		Usage: &llm.Usage{PromptTokens: 5000, CompletionTokens: 100},
+		Usage: &provider.Usage{InputTokens: 5000, OutputTokens: 100},
 	})
 	model1 := result1.(*Model)
 	if model1.stats.PromptTokens != 5000 {
@@ -131,7 +131,7 @@ func TestStreamDoneMsg_PromptTokensDecrease(t *testing.T) {
 	// Second turn: context was truncated, API reports fewer prompt tokens.
 	model1.stream.streaming = true
 	result2, _ := model1.Update(StreamDoneMsg{
-		Usage: &llm.Usage{PromptTokens: 2000, CompletionTokens: 50},
+		Usage: &provider.Usage{InputTokens: 2000, OutputTokens: 50},
 	})
 	model2 := result2.(*Model)
 
@@ -155,7 +155,7 @@ func TestStreamDoneMsg_LiveTokensResetOnDone(t *testing.T) {
 	m.stream.streaming = true
 
 	result, _ := m.Update(StreamDoneMsg{
-		Usage: &llm.Usage{PromptTokens: 1000, CompletionTokens: 300},
+		Usage: &provider.Usage{InputTokens: 1000, OutputTokens: 300},
 	})
 	model := result.(*Model)
 
@@ -178,7 +178,7 @@ func TestStreamDoneMsg_ReasoningTokensAccumulated(t *testing.T) {
 	m.stats.ReasoningTokensLive = 100
 	m.stream.streaming = true
 	result1, _ := m.Update(StreamDoneMsg{
-		Usage: &llm.Usage{PromptTokens: 500, CompletionTokens: 50},
+		Usage: &provider.Usage{InputTokens: 500, OutputTokens: 50},
 	})
 	model1 := result1.(*Model)
 	if model1.stats.ReasoningTokens != 100 {
@@ -189,7 +189,7 @@ func TestStreamDoneMsg_ReasoningTokensAccumulated(t *testing.T) {
 	model1.stats.ReasoningTokensLive = 150
 	model1.stream.streaming = true
 	result2, _ := model1.Update(StreamDoneMsg{
-		Usage: &llm.Usage{PromptTokens: 700, CompletionTokens: 80},
+		Usage: &provider.Usage{InputTokens: 700, OutputTokens: 80},
 	})
 	model2 := result2.(*Model)
 

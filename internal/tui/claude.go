@@ -12,15 +12,15 @@ import (
 
 	"github.com/jefflinse/toasters/internal/claude"
 	"github.com/jefflinse/toasters/internal/config"
-	"github.com/jefflinse/toasters/internal/llm"
+	"github.com/jefflinse/toasters/internal/provider"
 )
 
 // streamClaudeResponse launches the claude CLI as a subprocess and returns a
 // channel that delivers streamed response chunks. The subprocess is started
 // with exec.CommandContext so context cancellation kills it automatically.
 // The channel is closed when the stream ends, either normally or due to an error.
-func streamClaudeResponse(ctx context.Context, prompt string, claudeCfg config.ClaudeConfig) <-chan llm.StreamResponse {
-	ch := make(chan llm.StreamResponse, 64)
+func streamClaudeResponse(ctx context.Context, prompt string, claudeCfg config.ClaudeConfig) <-chan provider.StreamEvent {
+	ch := make(chan provider.StreamEvent, 64)
 
 	go func() {
 		defer close(ch)
@@ -46,12 +46,12 @@ func streamClaudeResponse(ctx context.Context, prompt string, claudeCfg config.C
 
 		stdout, err := cmd.StdoutPipe()
 		if err != nil {
-			ch <- llm.StreamResponse{Error: fmt.Errorf("opening claude stdout pipe: %w", err)}
+			ch <- provider.StreamEvent{Type: provider.EventError, Error: fmt.Errorf("opening claude stdout pipe: %w", err)}
 			return
 		}
 
 		if err := cmd.Start(); err != nil {
-			ch <- llm.StreamResponse{Error: fmt.Errorf("starting claude: %w", err)}
+			ch <- provider.StreamEvent{Type: provider.EventError, Error: fmt.Errorf("starting claude: %w", err)}
 			return
 		}
 
@@ -71,7 +71,7 @@ func streamClaudeResponse(ctx context.Context, prompt string, claudeCfg config.C
 				var init claude.InitEvent
 				if err := json.Unmarshal([]byte(line), &init); err == nil &&
 					init.Type == "system" && init.Subtype == "init" {
-					ch <- llm.StreamResponse{Meta: &llm.ClaudeMeta{
+					ch <- provider.StreamEvent{Meta: &provider.ClaudeMeta{
 						Model:          init.Model,
 						PermissionMode: init.PermissionMode,
 						Version:        init.ClaudeCodeVersion,
@@ -94,14 +94,14 @@ func streamClaudeResponse(ctx context.Context, prompt string, claudeCfg config.C
 				case "content_block_delta":
 					// Content deltas are wrapped: {"type":"stream_event","event":{"type":"content_block_delta",...}}
 					if event.Event.Delta.Type == "text_delta" && event.Event.Delta.Text != "" {
-						ch <- llm.StreamResponse{Content: event.Event.Delta.Text}
+						ch <- provider.StreamEvent{Type: provider.EventText, Text: event.Event.Delta.Text}
 					}
 				case "content_block_start":
 					if event.Event.ContentBlock.Type == "tool_use" {
-						ch <- llm.StreamResponse{PendingTool: event.Event.ContentBlock.Name}
+						ch <- provider.StreamEvent{PendingTool: event.Event.ContentBlock.Name}
 					}
 				case "content_block_stop":
-					ch <- llm.StreamResponse{ClearPendingTool: true}
+					ch <- provider.StreamEvent{ClearPendingTool: true}
 				}
 			case "assistant":
 				// Handle thinking and tool_use blocks.
@@ -109,11 +109,11 @@ func streamClaudeResponse(ctx context.Context, prompt string, claudeCfg config.C
 					switch block.Type {
 					case "thinking":
 						if block.Thinking != "" {
-							ch <- llm.StreamResponse{Reasoning: block.Thinking}
+							ch <- provider.StreamEvent{Type: provider.EventText, Reasoning: block.Thinking}
 						}
 					case "tool_use":
 						toolStr := fmt.Sprintf("[tool: %s]", block.Name)
-						ch <- llm.StreamResponse{Content: "\n" + toolStr + "\n"}
+						ch <- provider.StreamEvent{Type: provider.EventText, Text: "\n" + toolStr + "\n"}
 					}
 				}
 			case "user":
@@ -143,8 +143,9 @@ func streamClaudeResponse(ctx context.Context, prompt string, claudeCfg config.C
 							}
 						}
 						if text != "" {
-							ch <- llm.StreamResponse{
-								Content:        "\n[subagent result]\n" + text + "\n",
+							ch <- provider.StreamEvent{
+								Type:           provider.EventText,
+								Text:           "\n[subagent result]\n" + text + "\n",
 								SubagentResult: text,
 							}
 						}
@@ -153,12 +154,12 @@ func streamClaudeResponse(ctx context.Context, prompt string, claudeCfg config.C
 			case "result":
 				done = true
 				if event.IsError {
-					ch <- llm.StreamResponse{Error: fmt.Errorf("claude error: %s", event.Result)}
+					ch <- provider.StreamEvent{Type: provider.EventError, Error: fmt.Errorf("claude error: %s", event.Result)}
 				} else {
 					if event.Result != "" {
-						ch <- llm.StreamResponse{Content: "\n[exit summary] " + event.Result}
+						ch <- provider.StreamEvent{Type: provider.EventText, Text: "\n[exit summary] " + event.Result}
 					}
-					ch <- llm.StreamResponse{Done: true}
+					ch <- provider.StreamEvent{Type: provider.EventDone}
 				}
 			}
 		}
@@ -167,7 +168,7 @@ func streamClaudeResponse(ctx context.Context, prompt string, claudeCfg config.C
 		_ = cmd.Wait()
 
 		if !done {
-			ch <- llm.StreamResponse{Done: true}
+			ch <- provider.StreamEvent{Type: provider.EventDone}
 		}
 	}()
 

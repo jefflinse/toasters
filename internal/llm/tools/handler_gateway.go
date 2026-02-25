@@ -6,10 +6,10 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/jefflinse/toasters/internal/llm"
+	"github.com/jefflinse/toasters/internal/provider"
 )
 
-func handleListSlots(_ context.Context, te *ToolExecutor, _ llm.ToolCall) (string, error) {
+func handleListSlots(_ context.Context, te *ToolExecutor, _ provider.ToolCall) (string, error) {
 	if te.Gateway == nil {
 		return "gateway not initialized", nil
 	}
@@ -24,14 +24,14 @@ func handleListSlots(_ context.Context, te *ToolExecutor, _ llm.ToolCall) (strin
 	return strings.Join(lines, "\n"), nil
 }
 
-func handleKillSlot(_ context.Context, te *ToolExecutor, call llm.ToolCall) (string, error) {
+func handleKillSlot(_ context.Context, te *ToolExecutor, call provider.ToolCall) (string, error) {
 	if te.Gateway == nil {
 		return "gateway not initialized", nil
 	}
 	var args struct {
 		SlotID int `json:"slot_id"`
 	}
-	if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
+	if err := json.Unmarshal(call.Arguments, &args); err != nil {
 		return "", fmt.Errorf("parsing kill_slot args: %w", err)
 	}
 	if err := te.Gateway.Kill(args.SlotID); err != nil {

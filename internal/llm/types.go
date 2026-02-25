@@ -79,30 +79,18 @@ type ToolCall struct {
 	Function ToolCallFunction `json:"function"`
 }
 
-// ClaudeMeta carries metadata from the claude CLI system/init event.
-type ClaudeMeta struct {
-	Model          string
-	PermissionMode string
-	Version        string
-	SessionID      string
-}
-
 // StreamResponse carries a single update from the streaming API.
 type StreamResponse struct {
-	Content          string      // text chunk (may be empty for final message)
-	Reasoning        string      // reasoning/thinking chunk (chain-of-thought, if supported)
-	Done             bool        // true when stream is complete
-	Model            string      // model name from response
-	Usage            *Usage      // token usage (usually only on final chunk)
-	Error            error       // non-nil if something went wrong
-	Meta             *ClaudeMeta // non-nil only for the claude CLI system/init event
-	ToolCalls        []ToolCall  // non-nil when the LLM requested tool calls
-	PendingTool      string      // tool name when a tool_use content_block_start fires
-	ClearPendingTool bool        // true when content_block_stop fires (clears PendingTool)
-	ExitSummary      string      // final result text from a clean claude result event
-	StopReason       string      // stop reason from message_delta (e.g. "end_turn", "tool_use")
-	SubagentSpawned  bool        // true when a Task tool call was made
-	SubagentResult   string      // non-empty when a tool_result for a subagent arrived
+	Content   string     // text chunk (may be empty for final message)
+	Reasoning string     // reasoning/thinking chunk (chain-of-thought, if supported)
+	Done      bool       // true when stream is complete
+	Model     string     // model name from response
+	Usage     *Usage     // token usage (usually only on final chunk)
+	Error     error      // non-nil if something went wrong
+	ToolCalls []ToolCall // non-nil when the LLM requested tool calls
+
+	// StopReason carries the stop reason from message_delta (e.g. "end_turn", "tool_use").
+	StopReason string
 }
 
 // ModelInfo holds metadata about an available model.

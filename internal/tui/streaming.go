@@ -8,22 +8,21 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/jefflinse/toasters/internal/anthropic"
-	"github.com/jefflinse/toasters/internal/llm"
+	"github.com/jefflinse/toasters/internal/provider"
 )
 
 // streamStartedMsg carries the channel back to the model after the stream begins.
 type streamStartedMsg struct {
-	ch <-chan llm.StreamResponse
+	ch <-chan provider.StreamEvent
 }
 
-func (m *Model) drainPendingCompletions() ([]llm.Message, bool) {
+func (m *Model) drainPendingCompletions() ([]provider.Message, bool) {
 	if len(m.chat.pendingCompletions) == 0 {
 		return m.messagesFromEntries(), false
 	}
 	for _, pc := range m.chat.pendingCompletions {
 		m.appendEntry(ChatEntry{
-			Message:   llm.Message{Role: "user", Content: pc.notification},
+			Message:   provider.Message{Role: "user", Content: pc.notification},
 			Timestamp: time.Now(),
 		})
 	}
@@ -33,7 +32,7 @@ func (m *Model) drainPendingCompletions() ([]llm.Message, bool) {
 
 // startStream begins a new LLM stream with the current messages and available tools.
 // It sets m.stream.streaming = true and m.stats.ResponseStart.
-func (m *Model) startStream(msgs []llm.Message) tea.Cmd {
+func (m *Model) startStream(msgs []provider.Message) tea.Cmd {
 	ctx, cancel := context.WithCancel(context.Background())
 	m.stream.cancelStream = cancel
 	m.stream.streaming = true
@@ -41,13 +40,38 @@ func (m *Model) startStream(msgs []llm.Message) tea.Cmd {
 	m.stream.currentReasoning = ""
 	m.stats.ResponseStart = time.Now()
 
-	var temperature float64
-
 	client := m.llmClient
 	tools := m.toolExec.Tools
+
+	// Build the ChatRequest: extract system messages, pass tools.
+	req := provider.ChatRequest{}
+	var systemParts []string
+	for _, msg := range msgs {
+		if msg.Role == "system" {
+			if msg.Content != "" {
+				systemParts = append(systemParts, msg.Content)
+			}
+			continue
+		}
+		req.Messages = append(req.Messages, msg)
+	}
+	if len(systemParts) > 0 {
+		req.System = strings.Join(systemParts, "\n\n")
+	}
+	for _, t := range tools {
+		req.Tools = append(req.Tools, t)
+	}
+
 	return tea.Batch(
 		func() tea.Msg {
-			ch := client.ChatCompletionStreamWithTools(ctx, msgs, tools, temperature)
+			ch, err := client.ChatStream(ctx, req)
+			if err != nil {
+				// Return error as a stream event channel with one error event.
+				errCh := make(chan provider.StreamEvent, 1)
+				errCh <- provider.StreamEvent{Type: provider.EventError, Error: err}
+				close(errCh)
+				return streamStartedMsg{ch: errCh}
+			}
 			return streamStartedMsg{ch: ch}
 		},
 		spinnerTick(), // re-arm spinner animation for streaming cursor
@@ -68,7 +92,7 @@ func (m *Model) sendMessage() tea.Cmd {
 	m.cmdPopup.selectedIdx = 0
 
 	m.appendEntry(ChatEntry{
-		Message:   llm.Message{Role: "user", Content: text},
+		Message:   provider.Message{Role: "user", Content: text},
 		Timestamp: time.Now(),
 	})
 	m.stats.MessageCount++
@@ -90,7 +114,7 @@ func (m *Model) sendClaudeMessage(prompt string) tea.Cmd {
 	m.cmdPopup.selectedIdx = 0
 
 	m.appendEntry(ChatEntry{
-		Message:   llm.Message{Role: "user", Content: "/claude " + prompt},
+		Message:   provider.Message{Role: "user", Content: "/claude " + prompt},
 		Timestamp: time.Now(),
 	})
 	m.stats.MessageCount++
@@ -125,7 +149,7 @@ func (m *Model) sendAnthropicMessage(prompt string) tea.Cmd {
 	m.cmdPopup.selectedIdx = 0
 
 	m.appendEntry(ChatEntry{
-		Message:   llm.Message{Role: "user", Content: "/anthropic " + prompt},
+		Message:   provider.Message{Role: "user", Content: "/anthropic " + prompt},
 		Timestamp: time.Now(),
 	})
 	m.stats.MessageCount++
@@ -143,8 +167,16 @@ func (m *Model) sendAnthropicMessage(prompt string) tea.Cmd {
 	ctx, cancel := context.WithCancel(context.Background())
 	m.stream.cancelStream = cancel
 
-	client := anthropic.NewClient(anthropic.DefaultModel)
-	ch := client.ChatCompletionStream(ctx, []llm.Message{{Role: "user", Content: prompt}}, 0)
+	client := provider.NewAnthropic("anthropic", "")
+	ch, err := client.ChatStream(ctx, provider.ChatRequest{
+		Messages: []provider.Message{{Role: "user", Content: prompt}},
+	})
+	if err != nil {
+		errCh := make(chan provider.StreamEvent, 1)
+		errCh <- provider.StreamEvent{Type: provider.EventError, Error: err}
+		close(errCh)
+		ch = errCh
+	}
 	return tea.Batch(
 		func() tea.Msg {
 			return streamStartedMsg{ch: ch}
@@ -154,30 +186,43 @@ func (m *Model) sendAnthropicMessage(prompt string) tea.Cmd {
 }
 
 // waitForChunk reads one item from the stream channel and returns the appropriate Msg.
-func waitForChunk(ch <-chan llm.StreamResponse) tea.Cmd {
+func waitForChunk(ch <-chan provider.StreamEvent) tea.Cmd {
 	return func() tea.Msg {
-		resp, ok := <-ch
+		ev, ok := <-ch
 		if !ok {
 			return StreamDoneMsg{}
 		}
-		if resp.Error != nil {
-			return StreamErrMsg{Err: resp.Error}
+		switch ev.Type {
+		case provider.EventError:
+			return StreamErrMsg{Err: ev.Error}
+		case provider.EventToolCall:
+			if ev.ToolCall != nil {
+				return ToolCallMsg{Calls: []provider.ToolCall{*ev.ToolCall}}
+			}
+			return StreamChunkMsg{}
+		case provider.EventUsage:
+			if ev.Usage != nil {
+				return StreamDoneMsg{
+					Model: ev.Model,
+					Usage: ev.Usage,
+				}
+			}
+			return StreamChunkMsg{}
+		case provider.EventDone:
+			return StreamDoneMsg{Model: ev.Model, Usage: ev.Usage}
+		case provider.EventText:
+			return StreamChunkMsg{Content: ev.Text, Reasoning: ev.Reasoning}
 		}
-		if resp.Meta != nil {
+		// Gateway-specific events.
+		if ev.Meta != nil {
 			return claudeMetaMsg{
-				Model:          resp.Meta.Model,
-				PermissionMode: resp.Meta.PermissionMode,
-				Version:        resp.Meta.Version,
-				SessionID:      resp.Meta.SessionID,
+				Model:          ev.Meta.Model,
+				PermissionMode: ev.Meta.PermissionMode,
+				Version:        ev.Meta.Version,
+				SessionID:      ev.Meta.SessionID,
 			}
 		}
-		if len(resp.ToolCalls) > 0 {
-			return ToolCallMsg{Calls: resp.ToolCalls}
-		}
-		if resp.Done {
-			return StreamDoneMsg{Model: resp.Model, Usage: resp.Usage}
-		}
-		return StreamChunkMsg{Content: resp.Content, Reasoning: resp.Reasoning}
+		return StreamChunkMsg{Content: ev.Text, Reasoning: ev.Reasoning}
 	}
 }
 
@@ -187,7 +232,7 @@ func (m Model) fetchModels() tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		models, err := client.FetchModels(ctx)
+		models, err := client.Models(ctx)
 		return ModelsMsg{Models: models, Err: err}
 	}
 }

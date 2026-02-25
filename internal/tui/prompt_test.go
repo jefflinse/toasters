@@ -10,7 +10,7 @@ import (
 	"github.com/jefflinse/toasters/internal/agents"
 	"github.com/jefflinse/toasters/internal/config"
 	"github.com/jefflinse/toasters/internal/gateway"
-	"github.com/jefflinse/toasters/internal/llm"
+	"github.com/jefflinse/toasters/internal/provider"
 )
 
 // --------------------------------------------------------------------------
@@ -94,7 +94,7 @@ func TestUpdatePromptMode_SelectPredefinedOption(t *testing.T) {
 	m.prompt.promptMode = true
 	m.prompt.promptOptions = []string{"Option A", "Option B", "Option C"}
 	m.prompt.promptSelected = 1 // "Option B"
-	m.prompt.promptPendingCall = llm.ToolCall{ID: "call-123", Function: llm.ToolCallFunction{Name: "ask_user"}}
+	m.prompt.promptPendingCall = provider.ToolCall{ID: "call-123", Name: "ask_user"}
 
 	result, cmd := m.updatePromptMode(specialKey(tea.KeyEnter))
 	got := result.(*Model)
@@ -150,7 +150,7 @@ func TestUpdatePromptMode_SubmitCustomText(t *testing.T) {
 	m.prompt.promptMode = true
 	m.prompt.promptCustom = true
 	m.prompt.promptOptions = []string{"Option A"}
-	m.prompt.promptPendingCall = llm.ToolCall{ID: "call-456", Function: llm.ToolCallFunction{Name: "ask_user"}}
+	m.prompt.promptPendingCall = provider.ToolCall{ID: "call-456", Name: "ask_user"}
 	m.input.SetValue("My custom answer")
 
 	_, cmd := m.updatePromptMode(specialKey(tea.KeyEnter))
@@ -179,7 +179,7 @@ func TestUpdatePromptMode_SubmitEmptyCustomText(t *testing.T) {
 	m.prompt.promptMode = true
 	m.prompt.promptCustom = true
 	m.prompt.promptOptions = []string{"Option A"}
-	m.prompt.promptPendingCall = llm.ToolCall{ID: "call-789"}
+	m.prompt.promptPendingCall = provider.ToolCall{ID: "call-789"}
 	m.input.SetValue("   ") // whitespace only
 
 	_, cmd := m.updatePromptMode(specialKey(tea.KeyEnter))
@@ -205,7 +205,7 @@ func TestUpdatePromptMode_EscCancelFromOptionSelection(t *testing.T) {
 	m.prompt.promptMode = true
 	m.prompt.promptCustom = false
 	m.prompt.promptOptions = []string{"Option A", "Option B"}
-	m.prompt.promptPendingCall = llm.ToolCall{ID: "call-esc"}
+	m.prompt.promptPendingCall = provider.ToolCall{ID: "call-esc"}
 
 	_, cmd := m.updatePromptMode(specialKey(tea.KeyEscape))
 
@@ -285,10 +285,11 @@ func TestHandleToolCalls_KillSlot(t *testing.T) {
 
 	args, _ := json.Marshal(map[string]int{"slot_id": 2})
 	msg := ToolCallMsg{
-		Calls: []llm.ToolCall{
+		Calls: []provider.ToolCall{
 			{
 				ID:       "call-kill-1",
-				Function: llm.ToolCallFunction{Name: "kill_slot", Arguments: string(args)},
+				Name:      "kill_slot",
+				Arguments: args,
 			},
 		},
 	}
@@ -337,10 +338,11 @@ func TestHandleToolCalls_AssignTeam(t *testing.T) {
 
 	args, _ := json.Marshal(map[string]string{"team_name": "alpha", "job_id": "job-42"})
 	msg := ToolCallMsg{
-		Calls: []llm.ToolCall{
+		Calls: []provider.ToolCall{
 			{
 				ID:       "call-assign-1",
-				Function: llm.ToolCallFunction{Name: "assign_team", Arguments: string(args)},
+				Name:      "assign_team",
+				Arguments: args,
 			},
 		},
 	}
@@ -395,10 +397,11 @@ func TestHandleToolCalls_AskUser(t *testing.T) {
 		"options":  []string{"PostgreSQL", "MySQL", "SQLite"},
 	})
 	msg := ToolCallMsg{
-		Calls: []llm.ToolCall{
+		Calls: []provider.ToolCall{
 			{
 				ID:       "call-ask-1",
-				Function: llm.ToolCallFunction{Name: "ask_user", Arguments: string(args)},
+				Name:      "ask_user",
+				Arguments: args,
 			},
 		},
 	}
@@ -444,10 +447,11 @@ func TestHandleToolCalls_AskUser_InvalidJSON(t *testing.T) {
 	m := newMinimalModel(t)
 
 	msg := ToolCallMsg{
-		Calls: []llm.ToolCall{
+		Calls: []provider.ToolCall{
 			{
 				ID:       "call-ask-bad",
-				Function: llm.ToolCallFunction{Name: "ask_user", Arguments: "not-json"},
+				Name:      "ask_user",
+				Arguments: json.RawMessage("not-json"),
 			},
 		},
 	}
@@ -477,10 +481,11 @@ func TestHandleToolCalls_EscalateToUser(t *testing.T) {
 		"context":  "The deployment requires credentials",
 	})
 	msg := ToolCallMsg{
-		Calls: []llm.ToolCall{
+		Calls: []provider.ToolCall{
 			{
 				ID:       "call-escalate-1",
-				Function: llm.ToolCallFunction{Name: "escalate_to_user", Arguments: string(args)},
+				Name:      "escalate_to_user",
+				Arguments: args,
 			},
 		},
 	}
@@ -523,10 +528,11 @@ func TestHandleToolCalls_EscalateToUser_InvalidJSON(t *testing.T) {
 	m := newMinimalModel(t)
 
 	msg := ToolCallMsg{
-		Calls: []llm.ToolCall{
+		Calls: []provider.ToolCall{
 			{
 				ID:       "call-escalate-bad",
-				Function: llm.ToolCallFunction{Name: "escalate_to_user", Arguments: "bad-json"},
+				Name:      "escalate_to_user",
+				Arguments: json.RawMessage("bad-json"),
 			},
 		},
 	}
@@ -553,10 +559,11 @@ func TestHandleToolCalls_EscalateToUser_NoContext(t *testing.T) {
 		"context":  "",
 	})
 	msg := ToolCallMsg{
-		Calls: []llm.ToolCall{
+		Calls: []provider.ToolCall{
 			{
 				ID:       "call-escalate-nocontext",
-				Function: llm.ToolCallFunction{Name: "escalate_to_user", Arguments: string(args)},
+				Name:      "escalate_to_user",
+				Arguments: args,
 			},
 		},
 	}
@@ -578,10 +585,11 @@ func TestHandleToolCalls_NormalToolExecution(t *testing.T) {
 	m.toolExec.WorkspaceDir = t.TempDir()
 
 	msg := ToolCallMsg{
-		Calls: []llm.ToolCall{
+		Calls: []provider.ToolCall{
 			{
 				ID:       "call-joblist-1",
-				Function: llm.ToolCallFunction{Name: "job_list", Arguments: "{}"},
+				Name:      "job_list",
+				Arguments: json.RawMessage("{}"),
 			},
 		},
 	}
@@ -632,10 +640,11 @@ func TestHandleToolCalls_StreamingSetToFalse(t *testing.T) {
 
 	args, _ := json.Marshal(map[string]string{"question": "test?", "context": ""})
 	msg := ToolCallMsg{
-		Calls: []llm.ToolCall{
+		Calls: []provider.ToolCall{
 			{
 				ID:       "call-ask-stream",
-				Function: llm.ToolCallFunction{Name: "ask_user", Arguments: string(args)},
+				Name:      "ask_user",
+				Arguments: args,
 			},
 		},
 	}
@@ -662,14 +671,16 @@ func TestHandleToolCalls_MultipleCallsFirstSpecialWins(t *testing.T) {
 	m.gateway = gw
 
 	msg := ToolCallMsg{
-		Calls: []llm.ToolCall{
+		Calls: []provider.ToolCall{
 			{
 				ID:       "call-kill-first",
-				Function: llm.ToolCallFunction{Name: "kill_slot", Arguments: string(killArgs)},
+				Name:      "kill_slot",
+				Arguments: killArgs,
 			},
 			{
 				ID:       "call-ask-second",
-				Function: llm.ToolCallFunction{Name: "ask_user", Arguments: string(askArgs)},
+				Name:      "ask_user",
+				Arguments: askArgs,
 			},
 		},
 	}
@@ -785,7 +796,7 @@ func TestHandleAskUserResponse_KillConfirm_Yes(t *testing.T) {
 	m.prompt.confirmKill = true
 	m.prompt.promptMode = true
 	m.prompt.pendingKillSlot = 0
-	m.prompt.promptPendingCall = llm.ToolCall{ID: "call-kill-confirm"}
+	m.prompt.promptPendingCall = provider.ToolCall{ID: "call-kill-confirm"}
 
 	msg := AskUserResponseMsg{Result: "Yes, kill"}
 
@@ -828,7 +839,7 @@ func TestHandleAskUserResponse_KillConfirm_Cancel(t *testing.T) {
 	m.prompt.confirmKill = true
 	m.prompt.promptMode = true
 	m.prompt.pendingKillSlot = 1
-	m.prompt.promptPendingCall = llm.ToolCall{ID: "call-kill-cancel"}
+	m.prompt.promptPendingCall = provider.ToolCall{ID: "call-kill-cancel"}
 
 	msg := AskUserResponseMsg{Result: "Cancel"}
 
@@ -863,9 +874,10 @@ func TestHandleAskUserResponse_DispatchConfirm_YesDispatch(t *testing.T) {
 	m.toolExec.WorkspaceDir = t.TempDir()
 	m.prompt.confirmDispatch = true
 	m.prompt.promptMode = true
-	m.prompt.pendingDispatch = llm.ToolCall{
+	m.prompt.pendingDispatch = provider.ToolCall{
 		ID:       "call-dispatch-yes",
-		Function: llm.ToolCallFunction{Name: "assign_team", Arguments: `{"team_name":"alpha","job_id":"job-1","task":"do stuff"}`},
+		Name:      "assign_team",
+		Arguments: json.RawMessage(`{"team_name":"alpha","job_id":"job-1","task":"do stuff"}`),
 	}
 
 	msg := AskUserResponseMsg{Result: "Yes, dispatch"}
@@ -909,9 +921,10 @@ func TestHandleAskUserResponse_DispatchConfirm_Cancel(t *testing.T) {
 	m := newMinimalModel(t)
 	m.prompt.confirmDispatch = true
 	m.prompt.promptMode = true
-	m.prompt.pendingDispatch = llm.ToolCall{
+	m.prompt.pendingDispatch = provider.ToolCall{
 		ID:       "call-dispatch-cancel",
-		Function: llm.ToolCallFunction{Name: "assign_team", Arguments: `{"team_name":"beta","job_id":"job-2"}`},
+		Name:      "assign_team",
+		Arguments: json.RawMessage(`{"team_name":"beta","job_id":"job-2"}`),
 	}
 
 	msg := AskUserResponseMsg{Result: "Cancel"}
@@ -951,9 +964,10 @@ func TestHandleAskUserResponse_DispatchConfirm_ChangeTeam(t *testing.T) {
 		{Name: "beta"},
 		{Name: "gamma"},
 	}
-	m.prompt.pendingDispatch = llm.ToolCall{
+	m.prompt.pendingDispatch = provider.ToolCall{
 		ID:       "call-dispatch-change",
-		Function: llm.ToolCallFunction{Name: "assign_team", Arguments: `{"team_name":"alpha","job_id":"job-3"}`},
+		Name:      "assign_team",
+		Arguments: json.RawMessage(`{"team_name":"alpha","job_id":"job-3"}`),
 	}
 
 	msg := AskUserResponseMsg{Result: "Change team"}
@@ -998,9 +1012,10 @@ func TestHandleAskUserResponse_DispatchConfirm_ChangingTeamSelection(t *testing.
 	m.prompt.confirmDispatch = true
 	m.prompt.changingTeam = true
 	m.prompt.promptMode = true
-	m.prompt.pendingDispatch = llm.ToolCall{
+	m.prompt.pendingDispatch = provider.ToolCall{
 		ID:       "call-dispatch-changed",
-		Function: llm.ToolCallFunction{Name: "assign_team", Arguments: `{"team_name":"alpha","job_id":"job-4","task":"do stuff"}`},
+		Name:      "assign_team",
+		Arguments: json.RawMessage(`{"team_name":"alpha","job_id":"job-4","task":"do stuff"}`),
 	}
 
 	msg := AskUserResponseMsg{Result: "beta"}
@@ -1023,7 +1038,7 @@ func TestHandleAskUserResponse_DispatchConfirm_ChangingTeamSelection(t *testing.
 	for _, entry := range got.chat.entries {
 		if entry.Message.Role == "assistant" && len(entry.Message.ToolCalls) > 0 {
 			var args map[string]any
-			_ = json.Unmarshal([]byte(entry.Message.ToolCalls[0].Function.Arguments), &args)
+			_ = json.Unmarshal(entry.Message.ToolCalls[0].Arguments, &args)
 			if args["team_name"] == "beta" {
 				foundToolCall = true
 				break
@@ -1056,9 +1071,9 @@ func TestHandleAskUserResponse_NormalAskUser(t *testing.T) {
 	m.prompt.promptSelected = 1
 	m.input.SetValue("some leftover text")
 
-	pendingCall := llm.ToolCall{
+	pendingCall := provider.ToolCall{
 		ID:       "call-normal-ask",
-		Function: llm.ToolCallFunction{Name: "ask_user"},
+		Name: "ask_user",
 	}
 
 	msg := AskUserResponseMsg{Call: pendingCall, Result: "Blue"}
@@ -1126,9 +1141,9 @@ func TestPromptMode_FullFlow_SelectAndRespond(t *testing.T) {
 	m.prompt.promptMode = true
 	m.prompt.promptOptions = []string{"Yes", "No"}
 	m.prompt.promptSelected = 0
-	m.prompt.promptPendingCall = llm.ToolCall{
+	m.prompt.promptPendingCall = provider.ToolCall{
 		ID:       "call-flow-1",
-		Function: llm.ToolCallFunction{Name: "ask_user"},
+		Name: "ask_user",
 	}
 
 	// Step 1: Navigate down to "No".
@@ -1181,9 +1196,9 @@ func TestPromptMode_FullFlow_CustomResponse(t *testing.T) {
 	m.prompt.promptMode = true
 	m.prompt.promptOptions = []string{"Option A"}
 	m.prompt.promptSelected = 0
-	m.prompt.promptPendingCall = llm.ToolCall{
+	m.prompt.promptPendingCall = provider.ToolCall{
 		ID:       "call-flow-custom",
-		Function: llm.ToolCallFunction{Name: "ask_user"},
+		Name: "ask_user",
 	}
 
 	// Step 1: Navigate to "Custom response..." (index 1, since there's 1 option + Custom).

@@ -20,9 +20,9 @@ import (
 	"github.com/jefflinse/toasters/internal/db"
 	"github.com/jefflinse/toasters/internal/gateway"
 	"github.com/jefflinse/toasters/internal/job"
-	"github.com/jefflinse/toasters/internal/llm"
 	"github.com/jefflinse/toasters/internal/llm/tools"
 	"github.com/jefflinse/toasters/internal/mcp"
+	"github.com/jefflinse/toasters/internal/provider"
 	"github.com/jefflinse/toasters/internal/runtime"
 )
 
@@ -38,7 +38,7 @@ const (
 // ModelConfig holds all dependencies and configuration needed to create a Model.
 // It replaces the 11-parameter NewModel constructor signature.
 type ModelConfig struct {
-	Client       llm.Provider
+	Client       provider.Provider
 	ClaudeCfg    config.ClaudeConfig
 	WorkspaceDir string
 	Gateway      *gateway.Gateway
@@ -56,7 +56,7 @@ type streamingState struct {
 	streaming        bool
 	currentResponse  string
 	currentReasoning string
-	streamCh         <-chan llm.StreamResponse
+	streamCh         <-chan provider.StreamEvent
 	cancelStream     context.CancelFunc
 	claudeActiveMeta string // formatted byline for the in-progress claude stream; cleared when done
 }
@@ -73,14 +73,14 @@ type gridState struct {
 type promptModeState struct {
 	promptMode        bool
 	promptQuestion    string
-	promptOptions     []string     // LLM-provided options; "Custom response..." appended at render time
-	promptSelected    int          // cursor index
-	promptCustom      bool         // true when user selected "Custom response..." and is typing
-	promptPendingCall llm.ToolCall // the tool call to resume after input
+	promptOptions     []string          // LLM-provided options; "Custom response..." appended at render time
+	promptSelected    int               // cursor index
+	promptCustom      bool              // true when user selected "Custom response..." and is typing
+	promptPendingCall provider.ToolCall // the tool call to resume after input
 
-	confirmDispatch bool         // true when promptMode is a dispatch confirmation
-	changingTeam    bool         // true when promptMode is the "change team" sub-prompt
-	pendingDispatch llm.ToolCall // the assign_team call awaiting confirmation
+	confirmDispatch bool              // true when promptMode is a dispatch confirmation
+	changingTeam    bool              // true when promptMode is the "change team" sub-prompt
+	pendingDispatch provider.ToolCall // the assign_team call awaiting confirmation
 
 	confirmKill     bool // true when promptMode is a kill confirmation
 	pendingKillSlot int  // slot index awaiting kill confirmation
@@ -164,7 +164,7 @@ type Model struct {
 	width  int
 	height int
 
-	llmClient    llm.Provider
+	llmClient    provider.Provider
 	claudeCfg    config.ClaudeConfig
 	chatViewport viewport.Model
 	input        textarea.Model
@@ -318,7 +318,7 @@ func NewModel(cfg ModelConfig) Model {
 		runtime:      rt,
 		mcpManager:   mcpMgr,
 		stats: SessionStats{
-			Endpoint:  client.BaseURL(),
+			Endpoint:  client.Name(),
 			Connected: false,
 		},
 	}
@@ -704,7 +704,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.toolsInFlight = false
 				m.toolCancelFunc = nil
 				m.appendEntry(ChatEntry{
-					Message:    llm.Message{Role: "assistant", Content: "[tool calls cancelled]"},
+					Message:    provider.Message{Role: "assistant", Content: "[tool calls cancelled]"},
 					Timestamp:  time.Now(),
 					ClaudeMeta: "tool-call-indicator",
 				})
@@ -732,7 +732,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.stream.streamCh = nil
 				if m.stream.currentResponse != "" {
 					m.appendEntry(ChatEntry{
-						Message:    llm.Message{Role: "assistant", Content: m.stream.currentResponse},
+						Message:    provider.Message{Role: "assistant", Content: m.stream.currentResponse},
 						Timestamp:  time.Now(),
 						Reasoning:  m.stream.currentReasoning,
 						ClaudeMeta: m.stream.claudeActiveMeta,
@@ -844,7 +844,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 					if len(running) == 0 {
 						m.appendEntry(ChatEntry{
-							Message:   llm.Message{Role: "assistant", Content: "No running agents."},
+							Message:   provider.Message{Role: "assistant", Content: "No running agents."},
 							Timestamp: time.Now(),
 						})
 						m.updateViewportContent()
@@ -970,8 +970,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.stats.ModelName = msg.Model
 		}
 		if msg.Usage != nil {
-			m.stats.PromptTokens = msg.Usage.PromptTokens
-			m.stats.CompletionTokens += msg.Usage.CompletionTokens
+			m.stats.PromptTokens = msg.Usage.InputTokens
+			m.stats.CompletionTokens += msg.Usage.OutputTokens
 		}
 		// Accumulate reasoning tokens from live estimate (server doesn't report them separately).
 		m.stats.ReasoningTokens += m.stats.ReasoningTokensLive
@@ -989,7 +989,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				byline = "operator · " + m.stats.ModelName
 			}
 			m.appendEntry(ChatEntry{
-				Message:    llm.Message{Role: "assistant", Content: m.stream.currentResponse},
+				Message:    provider.Message{Role: "assistant", Content: m.stream.currentResponse},
 				Timestamp:  time.Now(),
 				Reasoning:  m.stream.currentReasoning,
 				ClaudeMeta: byline,
@@ -1042,7 +1042,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				content = fmt.Sprintf("error: %s", result.Err.Error())
 			}
 			m.appendEntry(ChatEntry{
-				Message:   llm.Message{Role: "tool", ToolCallID: result.CallID, Content: content},
+				Message:   provider.Message{Role: "tool", ToolCallID: result.CallID, Content: content},
 				Timestamp: time.Now(),
 			})
 		}
@@ -1074,7 +1074,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				byline = "operator · " + m.stats.ModelName
 			}
 			m.appendEntry(ChatEntry{
-				Message:    llm.Message{Role: "assistant", Content: m.stream.currentResponse},
+				Message:    provider.Message{Role: "assistant", Content: m.stream.currentResponse},
 				Timestamp:  time.Now(),
 				Reasoning:  m.stream.currentReasoning,
 				ClaudeMeta: byline,
@@ -1163,7 +1163,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Inject the pre-fetched greeting directly — no stream, no flash.
 		if msg.Greeting != "" {
 			m.appendEntry(ChatEntry{
-				Message:   llm.Message{Role: "assistant", Content: msg.Greeting},
+				Message:   provider.Message{Role: "assistant", Content: msg.Greeting},
 				Timestamp: time.Now(),
 			})
 			m.updateViewportContent()
@@ -1181,7 +1181,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		promptText := fmt.Sprintf("⏱ %s has been running for 15m. Continue for another 15m, or kill it?\n\n(Auto-continuing in 1 minute...)", slotDesc)
 		// Append as an assistant message so it shows in the chat.
 		m.appendEntry(ChatEntry{
-			Message:    llm.Message{Role: "assistant", Content: promptText},
+			Message:    provider.Message{Role: "assistant", Content: promptText},
 			Timestamp:  time.Now(),
 			ClaudeMeta: "ask-user-prompt",
 		})
@@ -1193,7 +1193,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.prompt.promptSelected = 0
 		// Zero out the pending tool call so the AskUserResponseMsg handler
 		// doesn't try to execute a real tool.
-		m.prompt.promptPendingCall = llm.ToolCall{}
+		m.prompt.promptPendingCall = provider.ToolCall{}
 		m.updateViewportContent()
 		if !m.scroll.userScrolled {
 			m.chatViewport.GotoBottom()
@@ -1210,10 +1210,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.prompt.promptMode = false
 		m.prompt.promptOptions = nil
 		m.prompt.promptSelected = 0
-		m.prompt.promptPendingCall = llm.ToolCall{}
+		m.prompt.promptPendingCall = provider.ToolCall{}
 		_ = m.gateway.ExtendSlot(msg.SlotID)
 		m.appendEntry(ChatEntry{
-			Message:    llm.Message{Role: "assistant", Content: fmt.Sprintf("Slot %d auto-continued (no response within 1m).", msg.SlotID)},
+			Message:    provider.Message{Role: "assistant", Content: fmt.Sprintf("Slot %d auto-continued (no response within 1m).", msg.SlotID)},
 			Timestamp:  time.Now(),
 			ClaudeMeta: "tool-call-indicator",
 		})
@@ -1345,7 +1345,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			})
 		} else {
 			m.appendEntry(ChatEntry{
-				Message:   llm.Message{Role: "user", Content: notification},
+				Message:   provider.Message{Role: "user", Content: notification},
 				Timestamp: time.Now(),
 			})
 			completionIdx := len(m.chat.entries) - 1

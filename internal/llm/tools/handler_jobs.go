@@ -10,10 +10,10 @@ import (
 
 	"github.com/jefflinse/toasters/internal/db"
 	"github.com/jefflinse/toasters/internal/job"
-	"github.com/jefflinse/toasters/internal/llm"
+	"github.com/jefflinse/toasters/internal/provider"
 )
 
-func handleJobList(_ context.Context, te *ToolExecutor, _ llm.ToolCall) (string, error) {
+func handleJobList(_ context.Context, te *ToolExecutor, _ provider.ToolCall) (string, error) {
 	jobs, err := job.List(te.WorkspaceDir)
 	if err != nil {
 		return "", fmt.Errorf("listing jobs: %w", err)
@@ -32,13 +32,13 @@ func handleJobList(_ context.Context, te *ToolExecutor, _ llm.ToolCall) (string,
 	return string(b), nil
 }
 
-func handleJobCreate(_ context.Context, te *ToolExecutor, call llm.ToolCall) (string, error) {
+func handleJobCreate(_ context.Context, te *ToolExecutor, call provider.ToolCall) (string, error) {
 	var args struct {
 		ID          string `json:"id"`
 		Name        string `json:"name"`
 		Description string `json:"description"`
 	}
-	if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
+	if err := json.Unmarshal(call.Arguments, &args); err != nil {
 		return "", fmt.Errorf("parsing job_create args: %w", err)
 	}
 	j, err := job.Create(te.WorkspaceDir, args.ID, args.Name, args.Description)
@@ -61,35 +61,35 @@ func handleJobCreate(_ context.Context, te *ToolExecutor, call llm.ToolCall) (st
 	return "created: " + j.ID, nil
 }
 
-func handleJobReadOverview(_ context.Context, te *ToolExecutor, call llm.ToolCall) (string, error) {
+func handleJobReadOverview(_ context.Context, te *ToolExecutor, call provider.ToolCall) (string, error) {
 	var args struct {
 		ID string `json:"id"`
 	}
-	if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
+	if err := json.Unmarshal(call.Arguments, &args); err != nil {
 		return "", fmt.Errorf("parsing job_read_overview args: %w", err)
 	}
 	dir := filepath.Join(job.JobsDir(te.WorkspaceDir), args.ID)
 	return job.ReadOverview(dir)
 }
 
-func handleJobReadTodos(_ context.Context, te *ToolExecutor, call llm.ToolCall) (string, error) {
+func handleJobReadTodos(_ context.Context, te *ToolExecutor, call provider.ToolCall) (string, error) {
 	var args struct {
 		ID string `json:"id"`
 	}
-	if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
+	if err := json.Unmarshal(call.Arguments, &args); err != nil {
 		return "", fmt.Errorf("parsing job_read_todos args: %w", err)
 	}
 	dir := filepath.Join(job.JobsDir(te.WorkspaceDir), args.ID)
 	return job.ReadTodos(dir)
 }
 
-func handleJobUpdateOverview(_ context.Context, te *ToolExecutor, call llm.ToolCall) (string, error) {
+func handleJobUpdateOverview(_ context.Context, te *ToolExecutor, call provider.ToolCall) (string, error) {
 	var args struct {
 		ID      string `json:"id"`
 		Content string `json:"content"`
 		Mode    string `json:"mode"`
 	}
-	if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
+	if err := json.Unmarshal(call.Arguments, &args); err != nil {
 		return "", fmt.Errorf("parsing job_update_overview args: %w", err)
 	}
 	if args.Mode != "overwrite" && args.Mode != "append" {
@@ -108,12 +108,12 @@ func handleJobUpdateOverview(_ context.Context, te *ToolExecutor, call llm.ToolC
 	return "ok", nil
 }
 
-func handleJobAddTodo(_ context.Context, te *ToolExecutor, call llm.ToolCall) (string, error) {
+func handleJobAddTodo(_ context.Context, te *ToolExecutor, call provider.ToolCall) (string, error) {
 	var args struct {
 		ID   string `json:"id"`
 		Task string `json:"task"`
 	}
-	if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
+	if err := json.Unmarshal(call.Arguments, &args); err != nil {
 		return "", fmt.Errorf("parsing job_add_todo args: %w", err)
 	}
 	dir := filepath.Join(job.JobsDir(te.WorkspaceDir), args.ID)
@@ -123,12 +123,12 @@ func handleJobAddTodo(_ context.Context, te *ToolExecutor, call llm.ToolCall) (s
 	return "ok", nil
 }
 
-func handleJobCompleteTodo(_ context.Context, te *ToolExecutor, call llm.ToolCall) (string, error) {
+func handleJobCompleteTodo(_ context.Context, te *ToolExecutor, call provider.ToolCall) (string, error) {
 	var args struct {
 		ID          string `json:"id"`
 		IndexOrText string `json:"index_or_text"`
 	}
-	if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
+	if err := json.Unmarshal(call.Arguments, &args); err != nil {
 		return "", fmt.Errorf("parsing job_complete_todo args: %w", err)
 	}
 	dir := filepath.Join(job.JobsDir(te.WorkspaceDir), args.ID)
@@ -138,13 +138,13 @@ func handleJobCompleteTodo(_ context.Context, te *ToolExecutor, call llm.ToolCal
 	return "ok", nil
 }
 
-func handleTaskSetStatus(_ context.Context, te *ToolExecutor, call llm.ToolCall) (string, error) {
+func handleTaskSetStatus(_ context.Context, te *ToolExecutor, call provider.ToolCall) (string, error) {
 	var args struct {
 		JobID  string `json:"job_id"`
 		TaskID string `json:"task_id"`
 		Status string `json:"status"`
 	}
-	if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
+	if err := json.Unmarshal(call.Arguments, &args); err != nil {
 		return "", fmt.Errorf("parsing task_set_status args: %w", err)
 	}
 	validStatuses := map[string]bool{"active": true, "done": true, "paused": true}
@@ -167,12 +167,12 @@ func handleTaskSetStatus(_ context.Context, te *ToolExecutor, call llm.ToolCall)
 	return fmt.Sprintf("task %q not found in job %q", args.TaskID, args.JobID), nil
 }
 
-func handleJobSetStatus(_ context.Context, te *ToolExecutor, call llm.ToolCall) (string, error) {
+func handleJobSetStatus(_ context.Context, te *ToolExecutor, call provider.ToolCall) (string, error) {
 	var args struct {
 		ID     string `json:"id"`
 		Status string `json:"status"`
 	}
-	if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
+	if err := json.Unmarshal(call.Arguments, &args); err != nil {
 		return "", fmt.Errorf("parsing job_set_status args: %w", err)
 	}
 	validStatuses := map[string]bool{"active": true, "done": true, "cancelled": true, "paused": true}

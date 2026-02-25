@@ -16,7 +16,6 @@ import (
 	"github.com/jefflinse/toasters/internal/agents"
 	"github.com/jefflinse/toasters/internal/db"
 	"github.com/jefflinse/toasters/internal/job"
-	"github.com/jefflinse/toasters/internal/llm"
 	"github.com/jefflinse/toasters/internal/orchestration"
 	"github.com/jefflinse/toasters/internal/provider"
 	"github.com/jefflinse/toasters/internal/runtime"
@@ -64,34 +63,28 @@ func makeJobDirWithTodo(t *testing.T, configDir, jobID string, todos []string) s
 }
 
 // toolCall builds a ToolCall for job_set_status with the given job ID and status.
-func jobSetStatusCall(jobID, status string) llm.ToolCall {
+func jobSetStatusCall(jobID, status string) provider.ToolCall {
 	args, _ := json.Marshal(map[string]string{"id": jobID, "status": status})
-	return llm.ToolCall{
-		Function: llm.ToolCallFunction{
-			Name:      "job_set_status",
-			Arguments: string(args),
-		},
+	return provider.ToolCall{
+		Name:      "job_set_status",
+		Arguments: args,
 	}
 }
 
 // makeToolCall builds a generic ToolCall with the given name and arguments map.
-func makeToolCall(name string, args any) llm.ToolCall {
+func makeToolCall(name string, args any) provider.ToolCall {
 	b, _ := json.Marshal(args)
-	return llm.ToolCall{
-		Function: llm.ToolCallFunction{
-			Name:      name,
-			Arguments: string(b),
-		},
+	return provider.ToolCall{
+		Name:      name,
+		Arguments: b,
 	}
 }
 
 // makeToolCallRaw builds a ToolCall with raw string arguments.
-func makeToolCallRaw(name, rawArgs string) llm.ToolCall {
-	return llm.ToolCall{
-		Function: llm.ToolCallFunction{
-			Name:      name,
-			Arguments: rawArgs,
-		},
+func makeToolCallRaw(name, rawArgs string) provider.ToolCall {
+	return provider.ToolCall{
+		Name:      name,
+		Arguments: json.RawMessage(rawArgs),
 	}
 }
 

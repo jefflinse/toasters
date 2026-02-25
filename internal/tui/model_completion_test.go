@@ -12,8 +12,8 @@ import (
 	"github.com/jefflinse/toasters/internal/config"
 	"github.com/jefflinse/toasters/internal/gateway"
 	"github.com/jefflinse/toasters/internal/job"
-	"github.com/jefflinse/toasters/internal/llm"
 	llmtools "github.com/jefflinse/toasters/internal/llm/tools"
+	"github.com/jefflinse/toasters/internal/provider"
 )
 
 // newMinimalModel returns a Model with only the fields needed to exercise the
@@ -235,7 +235,7 @@ func TestPendingCompletion_NotBufferedWhenNotStreaming(t *testing.T) {
 func TestDrainPendingCompletions_Empty(t *testing.T) {
 	m := newMinimalModel(t)
 	m.appendEntry(ChatEntry{
-		Message: llm.Message{Role: "system", Content: "sys"},
+		Message: provider.Message{Role: "system", Content: "sys"},
 	})
 
 	msgs, ok := m.drainPendingCompletions()
@@ -256,7 +256,7 @@ func TestDrainPendingCompletions_Empty(t *testing.T) {
 func TestDrainPendingCompletions_Multiple(t *testing.T) {
 	m := newMinimalModel(t)
 	m.appendEntry(ChatEntry{
-		Message: llm.Message{Role: "system", Content: "sys"},
+		Message: provider.Message{Role: "system", Content: "sys"},
 	})
 	m.chat.pendingCompletions = []pendingCompletion{
 		{notification: "first completion"},

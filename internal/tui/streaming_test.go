@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jefflinse/toasters/internal/llm"
+	"github.com/jefflinse/toasters/internal/provider"
 )
 
 // --- waitForChunk tests ---
@@ -15,8 +15,8 @@ import (
 func TestWaitForChunk_ContentResponse(t *testing.T) {
 	t.Parallel()
 
-	ch := make(chan llm.StreamResponse, 1)
-	ch <- llm.StreamResponse{Content: "hello", Reasoning: "thinking"}
+	ch := make(chan provider.StreamEvent, 1)
+	ch <- provider.StreamEvent{Type: provider.EventText, Text: "hello", Reasoning: "thinking"}
 
 	cmd := waitForChunk(ch)
 	if cmd == nil {
@@ -39,9 +39,9 @@ func TestWaitForChunk_ContentResponse(t *testing.T) {
 func TestWaitForChunk_ErrorResponse(t *testing.T) {
 	t.Parallel()
 
-	ch := make(chan llm.StreamResponse, 1)
+	ch := make(chan provider.StreamEvent, 1)
 	testErr := errors.New("stream failed")
-	ch <- llm.StreamResponse{Error: testErr}
+	ch <- provider.StreamEvent{Type: provider.EventError, Error: testErr}
 
 	cmd := waitForChunk(ch)
 	msg := cmd()
@@ -58,9 +58,9 @@ func TestWaitForChunk_ErrorResponse(t *testing.T) {
 func TestWaitForChunk_DoneResponse(t *testing.T) {
 	t.Parallel()
 
-	ch := make(chan llm.StreamResponse, 1)
-	usage := &llm.Usage{PromptTokens: 10, CompletionTokens: 20, TotalTokens: 30}
-	ch <- llm.StreamResponse{Done: true, Model: "test-model", Usage: usage}
+	ch := make(chan provider.StreamEvent, 1)
+	usage := &provider.Usage{InputTokens: 10, OutputTokens: 20}
+	ch <- provider.StreamEvent{Type: provider.EventDone, Model: "test-model", Usage: usage}
 
 	cmd := waitForChunk(ch)
 	msg := cmd()
@@ -75,19 +75,19 @@ func TestWaitForChunk_DoneResponse(t *testing.T) {
 	if done.Usage == nil {
 		t.Fatal("expected non-nil Usage")
 	}
-	if done.Usage.PromptTokens != 10 {
-		t.Errorf("PromptTokens = %d, want 10", done.Usage.PromptTokens)
+	if done.Usage.InputTokens != 10 {
+		t.Errorf("InputTokens = %d, want 10", done.Usage.InputTokens)
 	}
-	if done.Usage.CompletionTokens != 20 {
-		t.Errorf("CompletionTokens = %d, want 20", done.Usage.CompletionTokens)
+	if done.Usage.OutputTokens != 20 {
+		t.Errorf("OutputTokens = %d, want 20", done.Usage.OutputTokens)
 	}
 }
 
 func TestWaitForChunk_DoneWithNoModelOrUsage(t *testing.T) {
 	t.Parallel()
 
-	ch := make(chan llm.StreamResponse, 1)
-	ch <- llm.StreamResponse{Done: true}
+	ch := make(chan provider.StreamEvent, 1)
+	ch <- provider.StreamEvent{Type: provider.EventDone}
 
 	cmd := waitForChunk(ch)
 	msg := cmd()
@@ -107,12 +107,13 @@ func TestWaitForChunk_DoneWithNoModelOrUsage(t *testing.T) {
 func TestWaitForChunk_ToolCallResponse(t *testing.T) {
 	t.Parallel()
 
-	ch := make(chan llm.StreamResponse, 1)
-	calls := []llm.ToolCall{
-		{Index: 0, ID: "call-1", Type: "function", Function: llm.ToolCallFunction{Name: "read_file", Arguments: `{"path":"foo.go"}`}},
-		{Index: 1, ID: "call-2", Type: "function", Function: llm.ToolCallFunction{Name: "write_file", Arguments: `{"path":"bar.go"}`}},
+	// With provider.StreamEvent, each tool call is a separate event.
+	// Test that a single EventToolCall produces a ToolCallMsg.
+	ch := make(chan provider.StreamEvent, 1)
+	ch <- provider.StreamEvent{
+		Type:     provider.EventToolCall,
+		ToolCall: &provider.ToolCall{ID: "call-1", Name: "read_file", Arguments: []byte(`{"path":"foo.go"}`)},
 	}
-	ch <- llm.StreamResponse{ToolCalls: calls}
 
 	cmd := waitForChunk(ch)
 	msg := cmd()
@@ -121,25 +122,21 @@ func TestWaitForChunk_ToolCallResponse(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected ToolCallMsg, got %T", msg)
 	}
-	if len(toolMsg.Calls) != 2 {
-		t.Fatalf("expected 2 tool calls, got %d", len(toolMsg.Calls))
+	if len(toolMsg.Calls) != 1 {
+		t.Fatalf("expected 1 tool call, got %d", len(toolMsg.Calls))
 	}
-	if toolMsg.Calls[0].Function.Name != "read_file" {
-		t.Errorf("first call name = %q, want %q", toolMsg.Calls[0].Function.Name, "read_file")
-	}
-	if toolMsg.Calls[1].Function.Name != "write_file" {
-		t.Errorf("second call name = %q, want %q", toolMsg.Calls[1].Function.Name, "write_file")
+	if toolMsg.Calls[0].Name != "read_file" {
+		t.Errorf("first call name = %q, want %q", toolMsg.Calls[0].Name, "read_file")
 	}
 }
 
 func TestWaitForChunk_SingleToolCall(t *testing.T) {
 	t.Parallel()
 
-	ch := make(chan llm.StreamResponse, 1)
-	ch <- llm.StreamResponse{
-		ToolCalls: []llm.ToolCall{
-			{Index: 0, ID: "call-abc", Type: "function", Function: llm.ToolCallFunction{Name: "list_files", Arguments: `{}`}},
-		},
+	ch := make(chan provider.StreamEvent, 1)
+	ch <- provider.StreamEvent{
+		Type:     provider.EventToolCall,
+		ToolCall: &provider.ToolCall{ID: "call-abc", Name: "list_files", Arguments: []byte(`{}`)},
 	}
 
 	cmd := waitForChunk(ch)
@@ -160,9 +157,9 @@ func TestWaitForChunk_SingleToolCall(t *testing.T) {
 func TestWaitForChunk_MetaResponse(t *testing.T) {
 	t.Parallel()
 
-	ch := make(chan llm.StreamResponse, 1)
-	ch <- llm.StreamResponse{
-		Meta: &llm.ClaudeMeta{
+	ch := make(chan provider.StreamEvent, 1)
+	ch <- provider.StreamEvent{
+		Meta: &provider.ClaudeMeta{
 			Model:          "claude-sonnet-4-20250514",
 			PermissionMode: "plan",
 			Version:        "1.0.42",
@@ -194,7 +191,7 @@ func TestWaitForChunk_MetaResponse(t *testing.T) {
 func TestWaitForChunk_ClosedChannel(t *testing.T) {
 	t.Parallel()
 
-	ch := make(chan llm.StreamResponse)
+	ch := make(chan provider.StreamEvent)
 	close(ch)
 
 	cmd := waitForChunk(ch)
@@ -209,7 +206,7 @@ func TestWaitForChunk_ClosedChannel(t *testing.T) {
 func TestWaitForChunk_ClosedChannelReturnsDoneWithEmptyFields(t *testing.T) {
 	t.Parallel()
 
-	ch := make(chan llm.StreamResponse)
+	ch := make(chan provider.StreamEvent)
 	close(ch)
 
 	cmd := waitForChunk(ch)
@@ -231,8 +228,8 @@ func TestWaitForChunk_ClosedChannelReturnsDoneWithEmptyFields(t *testing.T) {
 func TestWaitForChunk_EmptyContentChunk(t *testing.T) {
 	t.Parallel()
 
-	ch := make(chan llm.StreamResponse, 1)
-	ch <- llm.StreamResponse{Content: "", Reasoning: ""}
+	ch := make(chan provider.StreamEvent, 1)
+	ch <- provider.StreamEvent{Type: provider.EventText, Text: "", Reasoning: ""}
 
 	cmd := waitForChunk(ch)
 	msg := cmd()
@@ -254,9 +251,9 @@ func TestWaitForChunk_ErrorTakesPrecedenceOverContent(t *testing.T) {
 
 	// When both Error and Content are set, Error should take precedence
 	// because the code checks resp.Error first.
-	ch := make(chan llm.StreamResponse, 1)
+	ch := make(chan provider.StreamEvent, 1)
 	testErr := errors.New("error with content")
-	ch <- llm.StreamResponse{Error: testErr, Content: "some content"}
+	ch <- provider.StreamEvent{Type: provider.EventError, Error: testErr}
 
 	cmd := waitForChunk(ch)
 	msg := cmd()
@@ -267,17 +264,13 @@ func TestWaitForChunk_ErrorTakesPrecedenceOverContent(t *testing.T) {
 	}
 }
 
-func TestWaitForChunk_MetaTakesPrecedenceOverToolCalls(t *testing.T) {
+func TestWaitForChunk_MetaEventProducesClaudeMetaMsg(t *testing.T) {
 	t.Parallel()
 
-	// When both Meta and ToolCalls are set, Meta should take precedence
-	// because the code checks resp.Meta before resp.ToolCalls.
-	ch := make(chan llm.StreamResponse, 1)
-	ch <- llm.StreamResponse{
-		Meta: &llm.ClaudeMeta{Model: "test-model"},
-		ToolCalls: []llm.ToolCall{
-			{ID: "call-1"},
-		},
+	// Meta events have no Type set — they are gateway-specific.
+	ch := make(chan provider.StreamEvent, 1)
+	ch <- provider.StreamEvent{
+		Meta: &provider.ClaudeMeta{Model: "test-model"},
 	}
 
 	cmd := waitForChunk(ch)
@@ -285,36 +278,17 @@ func TestWaitForChunk_MetaTakesPrecedenceOverToolCalls(t *testing.T) {
 
 	_, ok := msg.(claudeMetaMsg)
 	if !ok {
-		t.Fatalf("expected claudeMetaMsg (meta takes precedence over tool calls), got %T", msg)
-	}
-}
-
-func TestWaitForChunk_ToolCallsTakePrecedenceOverDone(t *testing.T) {
-	t.Parallel()
-
-	// When both ToolCalls and Done are set, ToolCalls should take precedence.
-	ch := make(chan llm.StreamResponse, 1)
-	ch <- llm.StreamResponse{
-		ToolCalls: []llm.ToolCall{{ID: "call-1"}},
-		Done:      true,
-	}
-
-	cmd := waitForChunk(ch)
-	msg := cmd()
-
-	_, ok := msg.(ToolCallMsg)
-	if !ok {
-		t.Fatalf("expected ToolCallMsg (tool calls take precedence over done), got %T", msg)
+		t.Fatalf("expected claudeMetaMsg, got %T", msg)
 	}
 }
 
 func TestWaitForChunk_MultipleChunksInSequence(t *testing.T) {
 	t.Parallel()
 
-	ch := make(chan llm.StreamResponse, 3)
-	ch <- llm.StreamResponse{Content: "chunk1"}
-	ch <- llm.StreamResponse{Content: "chunk2"}
-	ch <- llm.StreamResponse{Done: true, Model: "final-model"}
+	ch := make(chan provider.StreamEvent, 3)
+	ch <- provider.StreamEvent{Type: provider.EventText, Text: "chunk1"}
+	ch <- provider.StreamEvent{Type: provider.EventText, Text: "chunk2"}
+	ch <- provider.StreamEvent{Type: provider.EventDone, Model: "final-model"}
 
 	// First chunk.
 	msg1 := waitForChunk(ch)()
@@ -555,8 +529,8 @@ func TestDrainPendingCompletions_NoPending(t *testing.T) {
 	m := &Model{
 		chat: chatState{
 			entries: []ChatEntry{
-				{Message: llm.Message{Role: "system", Content: "system prompt"}},
-				{Message: llm.Message{Role: "user", Content: "hello"}},
+				{Message: provider.Message{Role: "system", Content: "system prompt"}},
+				{Message: provider.Message{Role: "user", Content: "hello"}},
 			},
 			pendingCompletions: nil,
 		},
@@ -583,7 +557,7 @@ func TestDrainPendingCompletions_OnePending(t *testing.T) {
 	m := &Model{
 		chat: chatState{
 			entries: []ChatEntry{
-				{Message: llm.Message{Role: "system", Content: "system prompt"}},
+				{Message: provider.Message{Role: "system", Content: "system prompt"}},
 			},
 			pendingCompletions: []pendingCompletion{
 				{notification: "Agent completed task X"},
@@ -617,7 +591,7 @@ func TestDrainPendingCompletions_MultiplePending(t *testing.T) {
 	m := &Model{
 		chat: chatState{
 			entries: []ChatEntry{
-				{Message: llm.Message{Role: "system", Content: "system prompt"}},
+				{Message: provider.Message{Role: "system", Content: "system prompt"}},
 			},
 			pendingCompletions: []pendingCompletion{
 				{notification: "Agent A done"},
@@ -675,7 +649,7 @@ func TestDrainPendingCompletions_EntriesUpdated(t *testing.T) {
 	m := &Model{
 		chat: chatState{
 			entries: []ChatEntry{
-				{Message: llm.Message{Role: "system", Content: "sys"}},
+				{Message: provider.Message{Role: "system", Content: "sys"}},
 			},
 			pendingCompletions: []pendingCompletion{
 				{notification: "notification 1"},
@@ -702,34 +676,24 @@ func TestDrainPendingCompletions_EntriesUpdated(t *testing.T) {
 
 // --- fetchModels tests ---
 
-// mockProvider implements llm.Provider for testing fetchModels.
+// mockProvider implements provider.Provider for testing fetchModels.
 type mockProvider struct {
-	models []llm.ModelInfo
+	models []provider.ModelInfo
 	err    error
 }
 
-func (m *mockProvider) ChatCompletionStream(_ context.Context, _ []llm.Message, _ float64) <-chan llm.StreamResponse {
-	ch := make(chan llm.StreamResponse)
+func (m *mockProvider) ChatStream(_ context.Context, _ provider.ChatRequest) (<-chan provider.StreamEvent, error) {
+	ch := make(chan provider.StreamEvent)
 	close(ch)
-	return ch
+	return ch, nil
 }
 
-func (m *mockProvider) ChatCompletionStreamWithTools(_ context.Context, _ []llm.Message, _ []llm.Tool, _ float64) <-chan llm.StreamResponse {
-	ch := make(chan llm.StreamResponse)
-	close(ch)
-	return ch
-}
-
-func (m *mockProvider) ChatCompletion(_ context.Context, _ []llm.Message) (string, error) {
-	return "", nil
-}
-
-func (m *mockProvider) FetchModels(_ context.Context) ([]llm.ModelInfo, error) {
+func (m *mockProvider) Models(_ context.Context) ([]provider.ModelInfo, error) {
 	return m.models, m.err
 }
 
-func (m *mockProvider) BaseURL() string {
-	return "http://test:1234"
+func (m *mockProvider) Name() string {
+	return "mock"
 }
 
 func TestFetchModels_ReturnsNonNilCmd(t *testing.T) {
@@ -748,7 +712,7 @@ func TestFetchModels_ReturnsNonNilCmd(t *testing.T) {
 func TestFetchModels_SuccessReturnsModelsMsg(t *testing.T) {
 	t.Parallel()
 
-	models := []llm.ModelInfo{
+	models := []provider.ModelInfo{
 		{ID: "model-1", State: "loaded", MaxContextLength: 8192},
 		{ID: "model-2", State: "not-loaded", MaxContextLength: 4096},
 	}
@@ -804,7 +768,7 @@ func TestFetchModels_EmptyModelsReturnsEmptySlice(t *testing.T) {
 	t.Parallel()
 
 	m := Model{
-		llmClient: &mockProvider{models: []llm.ModelInfo{}},
+		llmClient: &mockProvider{models: []provider.ModelInfo{}},
 	}
 
 	cmd := m.fetchModels()

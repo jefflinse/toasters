@@ -9,8 +9,8 @@ import (
 	"github.com/jefflinse/toasters/internal/agents"
 	"github.com/jefflinse/toasters/internal/db"
 	"github.com/jefflinse/toasters/internal/job"
-	"github.com/jefflinse/toasters/internal/llm"
 	"github.com/jefflinse/toasters/internal/mcp"
+	"github.com/jefflinse/toasters/internal/provider"
 	"github.com/jefflinse/toasters/internal/runtime"
 )
 
@@ -117,7 +117,7 @@ type StreamChunkMsg struct {
 
 type StreamDoneMsg struct {
 	Model string
-	Usage *llm.Usage
+	Usage *provider.Usage
 }
 
 type StreamErrMsg struct {
@@ -125,7 +125,7 @@ type StreamErrMsg struct {
 }
 
 type ModelsMsg struct {
-	Models []llm.ModelInfo
+	Models []provider.ModelInfo
 	Err    error
 }
 
@@ -239,7 +239,7 @@ type claudeMetaMsg struct {
 
 // ToolCallMsg is emitted when the LLM requests one or more tool calls.
 type ToolCallMsg struct {
-	Calls []llm.ToolCall
+	Calls []provider.ToolCall
 }
 
 // ToolResult holds the result of a single tool call execution.
@@ -257,7 +257,7 @@ type ToolResultMsg struct {
 
 // AskUserResponseMsg is dispatched when the user submits a response in prompt mode.
 type AskUserResponseMsg struct {
-	Call   llm.ToolCall
+	Call   provider.ToolCall
 	Result string
 }
 
@@ -284,7 +284,7 @@ type MCPStatusMsg struct {
 // Reasoning and ClaudeMeta are only meaningful for assistant-role messages;
 // for other roles they are empty strings.
 type ChatEntry struct {
-	Message    llm.Message
+	Message    provider.Message
 	Timestamp  time.Time
 	Reasoning  string
 	ClaudeMeta string

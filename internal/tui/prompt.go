@@ -10,7 +10,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/jefflinse/toasters/internal/llm"
+	"github.com/jefflinse/toasters/internal/provider"
 )
 
 // updatePromptMode handles key presses when the model is in prompt mode
@@ -88,11 +88,11 @@ func (m *Model) handleToolCalls(msg ToolCallMsg) (tea.Model, tea.Cmd) {
 
 	// Check for kill_slot, assign_team, ask_user, or escalate_to_user — intercept before ExecuteTool.
 	for _, call := range msg.Calls {
-		if call.Function.Name == "kill_slot" {
+		if call.Name == "kill_slot" {
 			var args struct {
 				SlotID int `json:"slot_id"`
 			}
-			_ = json.Unmarshal([]byte(call.Function.Arguments), &args)
+			_ = json.Unmarshal(call.Arguments, &args)
 
 			// Look up slot info for the confirmation message.
 			question := fmt.Sprintf("Kill slot %d?", args.SlotID)
@@ -105,7 +105,7 @@ func (m *Model) handleToolCalls(msg ToolCallMsg) (tea.Model, tea.Cmd) {
 			}
 
 			m.appendEntry(ChatEntry{
-				Message:    llm.Message{Role: "assistant", Content: question},
+				Message:    provider.Message{Role: "assistant", Content: question},
 				Timestamp:  time.Now(),
 				ClaudeMeta: "kill-confirm",
 			})
@@ -126,16 +126,16 @@ func (m *Model) handleToolCalls(msg ToolCallMsg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, m.input.Focus())
 			return m, tea.Batch(cmds...)
 		}
-		if call.Function.Name == "assign_team" {
+		if call.Name == "assign_team" {
 			var args struct {
 				TeamName string `json:"team_name"`
 				JobID    string `json:"job_id"`
 			}
-			_ = json.Unmarshal([]byte(call.Function.Arguments), &args)
+			_ = json.Unmarshal(call.Arguments, &args)
 
 			question := fmt.Sprintf("Assign job '%s' to team '%s'?", args.JobID, args.TeamName)
 			m.appendEntry(ChatEntry{
-				Message:    llm.Message{Role: "assistant", Content: question},
+				Message:    provider.Message{Role: "assistant", Content: question},
 				Timestamp:  time.Now(),
 				ClaudeMeta: "dispatch-confirm",
 			})
@@ -156,12 +156,12 @@ func (m *Model) handleToolCalls(msg ToolCallMsg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, m.input.Focus())
 			return m, tea.Batch(cmds...)
 		}
-		if call.Function.Name == "escalate_to_user" {
+		if call.Name == "escalate_to_user" {
 			var args struct {
 				Question string `json:"question"`
 				Context  string `json:"context"`
 			}
-			if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
+			if err := json.Unmarshal(call.Arguments, &args); err != nil {
 				args.Question = "A team has encountered a blocker."
 				args.Context = ""
 			}
@@ -170,7 +170,7 @@ func (m *Model) handleToolCalls(msg ToolCallMsg) (tea.Model, tea.Cmd) {
 				fullQuestion = args.Question + "\n\n" + args.Context
 			}
 			m.appendEntry(ChatEntry{
-				Message:    llm.Message{Role: "assistant", Content: fullQuestion},
+				Message:    provider.Message{Role: "assistant", Content: fullQuestion},
 				Timestamp:  time.Now(),
 				ClaudeMeta: "escalate-prompt",
 			})
@@ -188,19 +188,19 @@ func (m *Model) handleToolCalls(msg ToolCallMsg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, m.input.Focus())
 			return m, tea.Batch(cmds...)
 		}
-		if call.Function.Name == "ask_user" {
+		if call.Name == "ask_user" {
 			// Parse arguments.
 			var args struct {
 				Question string   `json:"question"`
 				Options  []string `json:"options"`
 			}
-			if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
+			if err := json.Unmarshal(call.Arguments, &args); err != nil {
 				args.Question = "What would you like to do?"
 				args.Options = []string{}
 			}
 			// Render question into chat history as an assistant message.
 			m.appendEntry(ChatEntry{
-				Message:    llm.Message{Role: "assistant", Content: args.Question},
+				Message:    provider.Message{Role: "assistant", Content: args.Question},
 				Timestamp:  time.Now(),
 				ClaudeMeta: "ask-user-prompt",
 			})
@@ -222,7 +222,7 @@ func (m *Model) handleToolCalls(msg ToolCallMsg) (tea.Model, tea.Cmd) {
 	}
 
 	// Append the assistant "tool call" turn to the conversation.
-	assistantMsg := llm.Message{
+	assistantMsg := provider.Message{
 		Role:      "assistant",
 		Content:   "",
 		ToolCalls: msg.Calls,
@@ -234,9 +234,9 @@ func (m *Model) handleToolCalls(msg ToolCallMsg) (tea.Model, tea.Cmd) {
 
 	// Show visual indicators for each tool being called.
 	for _, call := range msg.Calls {
-		indicator := fmt.Sprintf("⚙ calling `%s`…", call.Function.Name)
+		indicator := fmt.Sprintf("⚙ calling `%s`…", call.Name)
 		m.appendEntry(ChatEntry{
-			Message:    llm.Message{Role: "assistant", Content: indicator},
+			Message:    provider.Message{Role: "assistant", Content: indicator},
 			Timestamp:  time.Now(),
 			ClaudeMeta: "tool-call-indicator",
 		})
@@ -264,19 +264,19 @@ func (m *Model) handleAskUserResponse(msg AskUserResponseMsg) (tea.Model, tea.Cm
 		m.prompt.promptMode = false
 		m.prompt.promptOptions = nil
 		m.prompt.promptSelected = 0
-		m.prompt.promptPendingCall = llm.ToolCall{}
+		m.prompt.promptPendingCall = provider.ToolCall{}
 		switch msg.Result {
 		case "Continue (+15m)":
 			_ = m.gateway.ExtendSlot(m.prompt.pendingTimeoutSlot)
 			m.appendEntry(ChatEntry{
-				Message:    llm.Message{Role: "assistant", Content: fmt.Sprintf("Slot %d extended by 15m.", m.prompt.pendingTimeoutSlot)},
+				Message:    provider.Message{Role: "assistant", Content: fmt.Sprintf("Slot %d extended by 15m.", m.prompt.pendingTimeoutSlot)},
 				Timestamp:  time.Now(),
 				ClaudeMeta: "tool-call-indicator",
 			})
 		default: // "Kill"
 			_ = m.gateway.Kill(m.prompt.pendingTimeoutSlot)
 			m.appendEntry(ChatEntry{
-				Message:    llm.Message{Role: "assistant", Content: fmt.Sprintf("Slot %d killed.", m.prompt.pendingTimeoutSlot)},
+				Message:    provider.Message{Role: "assistant", Content: fmt.Sprintf("Slot %d killed.", m.prompt.pendingTimeoutSlot)},
 				Timestamp:  time.Now(),
 				ClaudeMeta: "tool-call-indicator",
 			})
@@ -304,12 +304,12 @@ func (m *Model) handleAskUserResponse(msg AskUserResponseMsg) (tea.Model, tea.Cm
 			result = "User cancelled the kill."
 		}
 		m.appendEntry(ChatEntry{
-			Message:    llm.Message{Role: "assistant", ToolCalls: []llm.ToolCall{m.prompt.promptPendingCall}},
+			Message:    provider.Message{Role: "assistant", ToolCalls: []provider.ToolCall{m.prompt.promptPendingCall}},
 			Timestamp:  time.Now(),
 			ClaudeMeta: "tool-call-indicator",
 		})
 		m.appendEntry(ChatEntry{
-			Message:   llm.Message{Role: "tool", Content: result, ToolCallID: m.prompt.promptPendingCall.ID},
+			Message:   provider.Message{Role: "tool", Content: result, ToolCallID: m.prompt.promptPendingCall.ID},
 			Timestamp: time.Now(),
 		})
 		m.updateViewportContent()
@@ -330,21 +330,21 @@ func (m *Model) handleAskUserResponse(msg AskUserResponseMsg) (tea.Model, tea.Cm
 
 			// Rewrite the team_name in the pending dispatch args.
 			var args map[string]any
-			_ = json.Unmarshal([]byte(m.prompt.pendingDispatch.Function.Arguments), &args)
+			_ = json.Unmarshal(m.prompt.pendingDispatch.Arguments, &args)
 			args["team_name"] = msg.Result
 			newArgs, _ := json.Marshal(args)
-			m.prompt.pendingDispatch.Function.Arguments = string(newArgs)
+			m.prompt.pendingDispatch.Arguments = newArgs
 
 			m.toolsInFlight = true
 			ctx, cancel := context.WithCancel(context.Background())
 			m.toolCancelFunc = cancel
 			m.appendEntry(ChatEntry{
-				Message:    llm.Message{Role: "assistant", ToolCalls: []llm.ToolCall{m.prompt.pendingDispatch}},
+				Message:    provider.Message{Role: "assistant", ToolCalls: []provider.ToolCall{m.prompt.pendingDispatch}},
 				Timestamp:  time.Now(),
 				ClaudeMeta: "tool-call-indicator",
 			})
 			m.updateViewportContent()
-			return m, executeToolsCmd(ctx, []llm.ToolCall{m.prompt.pendingDispatch}, m.toolExec)
+			return m, executeToolsCmd(ctx, []provider.ToolCall{m.prompt.pendingDispatch}, m.toolExec)
 		}
 
 		switch msg.Result {
@@ -354,12 +354,12 @@ func (m *Model) handleAskUserResponse(msg AskUserResponseMsg) (tea.Model, tea.Cm
 			ctx, cancel := context.WithCancel(context.Background())
 			m.toolCancelFunc = cancel
 			m.appendEntry(ChatEntry{
-				Message:    llm.Message{Role: "assistant", ToolCalls: []llm.ToolCall{m.prompt.pendingDispatch}},
+				Message:    provider.Message{Role: "assistant", ToolCalls: []provider.ToolCall{m.prompt.pendingDispatch}},
 				Timestamp:  time.Now(),
 				ClaudeMeta: "tool-call-indicator",
 			})
 			m.updateViewportContent()
-			return m, executeToolsCmd(ctx, []llm.ToolCall{m.prompt.pendingDispatch}, m.toolExec)
+			return m, executeToolsCmd(ctx, []provider.ToolCall{m.prompt.pendingDispatch}, m.toolExec)
 
 		case "Change team":
 			// Show second prompt with available team names.
@@ -380,12 +380,12 @@ func (m *Model) handleAskUserResponse(msg AskUserResponseMsg) (tea.Model, tea.Cm
 		default: // "Cancel" or anything else
 			m.prompt.confirmDispatch = false
 			m.appendEntry(ChatEntry{
-				Message:    llm.Message{Role: "assistant", ToolCalls: []llm.ToolCall{m.prompt.pendingDispatch}},
+				Message:    provider.Message{Role: "assistant", ToolCalls: []provider.ToolCall{m.prompt.pendingDispatch}},
 				Timestamp:  time.Now(),
 				ClaudeMeta: "tool-call-indicator",
 			})
 			m.appendEntry(ChatEntry{
-				Message:   llm.Message{Role: "tool", Content: "User cancelled the dispatch.", ToolCallID: m.prompt.pendingDispatch.ID},
+				Message:   provider.Message{Role: "tool", Content: "User cancelled the dispatch.", ToolCallID: m.prompt.pendingDispatch.ID},
 				Timestamp: time.Now(),
 			})
 			m.updateViewportContent()
@@ -404,13 +404,13 @@ func (m *Model) handleAskUserResponse(msg AskUserResponseMsg) (tea.Model, tea.Cm
 	// Inject the tool call + result into message history.
 	// First: the assistant turn with the tool call.
 	m.appendEntry(ChatEntry{
-		Message:    llm.Message{Role: "assistant", ToolCalls: []llm.ToolCall{msg.Call}},
+		Message:    provider.Message{Role: "assistant", ToolCalls: []provider.ToolCall{msg.Call}},
 		Timestamp:  time.Now(),
 		ClaudeMeta: "tool-call-indicator",
 	})
 	// Then: the tool result.
 	m.appendEntry(ChatEntry{
-		Message:   llm.Message{Role: "tool", Content: msg.Result, ToolCallID: msg.Call.ID},
+		Message:   provider.Message{Role: "tool", Content: msg.Result, ToolCallID: msg.Call.ID},
 		Timestamp: time.Now(),
 	})
 	m.updateViewportContent()

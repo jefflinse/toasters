@@ -9,11 +9,11 @@ import (
 
 	"github.com/jefflinse/toasters/internal/agents"
 	"github.com/jefflinse/toasters/internal/job"
-	"github.com/jefflinse/toasters/internal/llm"
+	"github.com/jefflinse/toasters/internal/provider"
 	"github.com/jefflinse/toasters/internal/runtime"
 )
 
-func handleAssignTeam(_ context.Context, te *ToolExecutor, call llm.ToolCall) (string, error) {
+func handleAssignTeam(_ context.Context, te *ToolExecutor, call provider.ToolCall) (string, error) {
 	if te.Gateway == nil {
 		return "", fmt.Errorf("gateway not initialized")
 	}
@@ -22,7 +22,7 @@ func handleAssignTeam(_ context.Context, te *ToolExecutor, call llm.ToolCall) (s
 		JobID    string `json:"job_id"`
 		Task     string `json:"task"`
 	}
-	if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
+	if err := json.Unmarshal(call.Arguments, &args); err != nil {
 		return "", fmt.Errorf("parsing assign_team args: %w", err)
 	}
 	// Guard: verify the job exists before dispatching to a team.
@@ -79,20 +79,20 @@ func handleAssignTeam(_ context.Context, te *ToolExecutor, call llm.ToolCall) (s
 	return fmt.Sprintf("started: slot %d", slotID), nil
 }
 
-func handleEscalateToUser(_ context.Context, _ *ToolExecutor, call llm.ToolCall) (string, error) {
+func handleEscalateToUser(_ context.Context, _ *ToolExecutor, call provider.ToolCall) (string, error) {
 	// The TUI intercepts escalate_to_user before ExecuteTool is called.
 	// If we reach here, return the question as a plain string so the operator can relay it.
 	var args struct {
 		Question string `json:"question"`
 		Context  string `json:"context"`
 	}
-	if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
+	if err := json.Unmarshal(call.Arguments, &args); err != nil {
 		return "", fmt.Errorf("parsing escalate_to_user args: %w", err)
 	}
 	return fmt.Sprintf("__escalate__:%s\n\nContext: %s", args.Question, args.Context), nil
 }
 
-func handleAskUser(_ context.Context, _ *ToolExecutor, _ llm.ToolCall) (string, error) {
+func handleAskUser(_ context.Context, _ *ToolExecutor, _ provider.ToolCall) (string, error) {
 	// ask_user is normally intercepted by the TUI before ExecuteTool is called.
 	// This case is a safety fallback.
 	return "ask_user was handled by the TUI", nil

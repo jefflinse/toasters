@@ -2,13 +2,14 @@ package tui
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/jefflinse/toasters/internal/llm"
 	"github.com/jefflinse/toasters/internal/llm/tools"
+	"github.com/jefflinse/toasters/internal/provider"
 )
 
 func TestExecuteToolsCmd_BasicResults(t *testing.T) {
@@ -18,14 +19,11 @@ func TestExecuteToolsCmd_BasicResults(t *testing.T) {
 	// returns an empty list, which is a valid non-error result.
 	executor := tools.NewToolExecutor(nil, nil, t.TempDir(), nil, nil)
 
-	calls := []llm.ToolCall{
+	calls := []provider.ToolCall{
 		{
-			ID:   "call-1",
-			Type: "function",
-			Function: llm.ToolCallFunction{
-				Name:      "job_list",
-				Arguments: "{}",
-			},
+			ID:        "call-1",
+			Name:      "job_list",
+			Arguments: json.RawMessage("{}"),
 		},
 	}
 
@@ -56,10 +54,10 @@ func TestExecuteToolsCmd_MultipleTools(t *testing.T) {
 
 	executor := tools.NewToolExecutor(nil, nil, t.TempDir(), nil, nil)
 
-	calls := []llm.ToolCall{
-		{ID: "call-1", Type: "function", Function: llm.ToolCallFunction{Name: "job_list", Arguments: "{}"}},
-		{ID: "call-2", Type: "function", Function: llm.ToolCallFunction{Name: "job_list", Arguments: "{}"}},
-		{ID: "call-3", Type: "function", Function: llm.ToolCallFunction{Name: "job_list", Arguments: "{}"}},
+	calls := []provider.ToolCall{
+		{ID: "call-1", Name: "job_list", Arguments: json.RawMessage("{}")},
+		{ID: "call-2", Name: "job_list", Arguments: json.RawMessage("{}")},
+		{ID: "call-3", Name: "job_list", Arguments: json.RawMessage("{}")},
 	}
 
 	ctx := context.Background()
@@ -88,14 +86,11 @@ func TestExecuteToolsCmd_ErrorHandling(t *testing.T) {
 
 	executor := tools.NewToolExecutor(nil, nil, t.TempDir(), nil, nil)
 
-	calls := []llm.ToolCall{
+	calls := []provider.ToolCall{
 		{
-			ID:   "call-err",
-			Type: "function",
-			Function: llm.ToolCallFunction{
-				Name:      "list_directory",
-				Arguments: `{"path":"/nonexistent/path/that/does/not/exist"}`,
-			},
+			ID:        "call-err",
+			Name:      "list_directory",
+			Arguments: json.RawMessage(`{"path":"/nonexistent/path/that/does/not/exist"}`),
 		},
 	}
 
@@ -123,22 +118,16 @@ func TestExecuteToolsCmd_Cancellation(t *testing.T) {
 
 	executor := tools.NewToolExecutor(nil, nil, t.TempDir(), nil, nil)
 
-	calls := []llm.ToolCall{
+	calls := []provider.ToolCall{
 		{
-			ID:   "call-1",
-			Type: "function",
-			Function: llm.ToolCallFunction{
-				Name:      "job_list",
-				Arguments: "{}",
-			},
+			ID:        "call-1",
+			Name:      "job_list",
+			Arguments: json.RawMessage("{}"),
 		},
 		{
-			ID:   "call-2",
-			Type: "function",
-			Function: llm.ToolCallFunction{
-				Name:      "job_list",
-				Arguments: "{}",
-			},
+			ID:        "call-2",
+			Name:      "job_list",
+			Arguments: json.RawMessage("{}"),
 		},
 	}
 
@@ -171,30 +160,21 @@ func TestExecuteToolsCmd_ResultOrdering(t *testing.T) {
 
 	executor := tools.NewToolExecutor(nil, nil, t.TempDir(), nil, nil)
 
-	calls := []llm.ToolCall{
+	calls := []provider.ToolCall{
 		{
-			ID:   "alpha",
-			Type: "function",
-			Function: llm.ToolCallFunction{
-				Name:      "job_list",
-				Arguments: "{}",
-			},
+			ID:        "alpha",
+			Name:      "job_list",
+			Arguments: json.RawMessage("{}"),
 		},
 		{
-			ID:   "beta",
-			Type: "function",
-			Function: llm.ToolCallFunction{
-				Name:      "job_list",
-				Arguments: "{}",
-			},
+			ID:        "beta",
+			Name:      "job_list",
+			Arguments: json.RawMessage("{}"),
 		},
 		{
-			ID:   "gamma",
-			Type: "function",
-			Function: llm.ToolCallFunction{
-				Name:      "job_list",
-				Arguments: "{}",
-			},
+			ID:        "gamma",
+			Name:      "job_list",
+			Arguments: json.RawMessage("{}"),
 		},
 	}
 
@@ -223,7 +203,7 @@ func TestToolResultMsg_HandlerAppendsEntries(t *testing.T) {
 	m := newMinimalModel(t)
 	// Seed with a system message so messagesFromEntries has something.
 	m.appendEntry(ChatEntry{
-		Message:   llm.Message{Role: "system", Content: "system prompt"},
+		Message:   provider.Message{Role: "system", Content: "system prompt"},
 		Timestamp: time.Now(),
 	})
 	m.toolsInFlight = true // must be true for handler to process results
@@ -271,7 +251,7 @@ func TestToolResultMsg_HandlerFormatsErrors(t *testing.T) {
 
 	m := newMinimalModel(t)
 	m.appendEntry(ChatEntry{
-		Message:   llm.Message{Role: "system", Content: "system prompt"},
+		Message:   provider.Message{Role: "system", Content: "system prompt"},
 		Timestamp: time.Now(),
 	})
 	m.toolsInFlight = true // must be true for handler to process results
@@ -306,7 +286,7 @@ func TestEscCancelsToolsInFlight(t *testing.T) {
 
 	m := newMinimalModel(t)
 	m.appendEntry(ChatEntry{
-		Message:   llm.Message{Role: "system", Content: "system prompt"},
+		Message:   provider.Message{Role: "system", Content: "system prompt"},
 		Timestamp: time.Now(),
 	})
 
@@ -348,7 +328,7 @@ func TestToolResultMsg_DiscardedAfterEscapeCancellation(t *testing.T) {
 
 	m := newMinimalModel(t)
 	m.appendEntry(ChatEntry{
-		Message:   llm.Message{Role: "system", Content: "system prompt"},
+		Message:   provider.Message{Role: "system", Content: "system prompt"},
 		Timestamp: time.Now(),
 	})
 

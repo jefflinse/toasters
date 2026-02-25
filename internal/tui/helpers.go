@@ -12,7 +12,7 @@ import (
 	"github.com/jefflinse/toasters/internal/agents"
 	"github.com/jefflinse/toasters/internal/gateway"
 	"github.com/jefflinse/toasters/internal/job"
-	"github.com/jefflinse/toasters/internal/llm"
+	"github.com/jefflinse/toasters/internal/provider"
 )
 
 // wrapText wraps s to fit within maxWidth columns.
@@ -317,7 +317,7 @@ func (m *Model) appendHelpMessage() {
 		"Type `/` to open the command picker. Use ↑↓ to navigate, Tab or Enter to select, Esc to dismiss."
 
 	m.appendEntry(ChatEntry{
-		Message:   llm.Message{Role: "assistant", Content: helpText},
+		Message:   provider.Message{Role: "assistant", Content: helpText},
 		Timestamp: time.Now(),
 	})
 	m.stats.MessageCount++
@@ -334,7 +334,7 @@ func (m *Model) initMessages() {
 	m.chat.entries = nil
 	if m.systemPrompt != "" {
 		m.appendEntry(ChatEntry{
-			Message:   llm.Message{Role: "system", Content: m.systemPrompt},
+			Message:   provider.Message{Role: "system", Content: m.systemPrompt},
 			Timestamp: time.Now(),
 		})
 		m.stats.SystemPromptTokens = estimateTokens(m.systemPrompt)
@@ -348,7 +348,7 @@ func (m *Model) initMessages() {
 	m.chat.collapsedTools = make(map[int]bool)
 	m.prompt.confirmDispatch = false
 	m.prompt.changingTeam = false
-	m.prompt.pendingDispatch = llm.ToolCall{}
+	m.prompt.pendingDispatch = provider.ToolCall{}
 	m.prompt.confirmKill = false
 	m.prompt.pendingKillSlot = 0
 	m.prompt.confirmTimeout = false
@@ -382,10 +382,10 @@ func isDisplayOnly(e ChatEntry) bool {
 	return false
 }
 
-// messagesFromEntries extracts the llm.Message slice from entries for passing to the LLM client.
+// messagesFromEntries extracts the provider.Message slice from entries for passing to the LLM client.
 // Display-only entries (visual indicators, confirmation prompts) are filtered out.
-func (m *Model) messagesFromEntries() []llm.Message {
-	msgs := make([]llm.Message, 0, len(m.chat.entries))
+func (m *Model) messagesFromEntries() []provider.Message {
+	msgs := make([]provider.Message, 0, len(m.chat.entries))
 	for _, e := range m.chat.entries {
 		if isDisplayOnly(e) {
 			continue

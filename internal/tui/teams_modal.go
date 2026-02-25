@@ -14,7 +14,7 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/jefflinse/toasters/internal/agents"
-	"github.com/jefflinse/toasters/internal/llm"
+	"github.com/jefflinse/toasters/internal/provider"
 )
 
 // teamsModalState holds all state for the /teams modal overlay.
@@ -258,8 +258,8 @@ func (m *Model) maybeAutoDetectCoordinator(team agents.Team) tea.Cmd {
 			fmt.Fprintf(&sb, "- %s: %s\n", a.Name, desc)
 		}
 
-		msgs := []llm.Message{{Role: "user", Content: sb.String()}}
-		result, err := client.ChatCompletion(ctx, msgs)
+		msgs := []provider.Message{{Role: "user", Content: sb.String()}}
+		result, err := provider.ChatCompletion(ctx, client, msgs)
 		if err != nil {
 			return TeamsAutoDetectDoneMsg{teamDir: teamDir, err: err}
 		}

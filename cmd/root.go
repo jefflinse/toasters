@@ -11,13 +11,10 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/jefflinse/toasters/internal/agents"
-	"github.com/jefflinse/toasters/internal/anthropic"
 	"github.com/jefflinse/toasters/internal/config"
 	"github.com/jefflinse/toasters/internal/db"
 	"github.com/jefflinse/toasters/internal/gateway"
 	"github.com/jefflinse/toasters/internal/job"
-	"github.com/jefflinse/toasters/internal/llm"
-	llmclient "github.com/jefflinse/toasters/internal/llm/client"
 	llmtools "github.com/jefflinse/toasters/internal/llm/tools"
 	"github.com/jefflinse/toasters/internal/mcp"
 	"github.com/jefflinse/toasters/internal/provider"
@@ -150,14 +147,14 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 
 	// Wire MCP tools into operator tool set.
 	toolExec.MCPManager = mcpManager
-	toolExec.Tools = append(toolExec.Tools, mcp.ToLLMTools(mcpManager.Tools())...)
+	toolExec.Tools = append(toolExec.Tools, mcp.ToProviderTools(mcpManager.Tools())...)
 
-	var client llm.Provider
+	var client provider.Provider
 	switch cfg.Operator.Provider {
 	case "anthropic":
-		client = anthropic.NewClient(cfg.Operator.Model)
+		client = provider.NewAnthropic("anthropic", "", provider.WithAnthropicModel(cfg.Operator.Model))
 	default:
-		client = llmclient.NewClient(cfg.Operator.Endpoint, cfg.Operator.Model)
+		client = provider.NewOpenAI("operator", cfg.Operator.Endpoint, "", cfg.Operator.Model)
 	}
 
 	m := tui.NewModel(tui.ModelConfig{
@@ -223,7 +220,7 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 
 		// Pre-fetch greeting so it renders instantly when the loading screen clears.
 		systemPrompt := agents.BuildOperatorPrompt(teams, awareness)
-		greeting, err := client.ChatCompletion(ctx, []llm.Message{
+		greeting, err := provider.ChatCompletion(ctx, client, []provider.Message{
 			{Role: "system", Content: systemPrompt},
 			{Role: "user", Content: "Greet the user briefly. One or two sentences max. Be direct and ready to work."},
 		})
