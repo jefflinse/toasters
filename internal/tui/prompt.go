@@ -335,42 +335,31 @@ func (m *Model) handleAskUserResponse(msg AskUserResponseMsg) (tea.Model, tea.Cm
 			newArgs, _ := json.Marshal(args)
 			m.pendingDispatch.Function.Arguments = string(newArgs)
 
-			// Execute the modified assign_team call.
-			result, err := m.toolExec.ExecuteTool(m.pendingDispatch)
-			if err != nil {
-				result = fmt.Sprintf("error: %v", err)
-			}
+			m.toolsInFlight = true
+			ctx, cancel := context.WithCancel(context.Background())
+			m.toolCancelFunc = cancel
 			m.appendEntry(ChatEntry{
 				Message:    llm.Message{Role: "assistant", ToolCalls: []llm.ToolCall{m.pendingDispatch}},
 				Timestamp:  time.Now(),
 				ClaudeMeta: "tool-call-indicator",
 			})
-			m.appendEntry(ChatEntry{
-				Message:   llm.Message{Role: "tool", Content: result, ToolCallID: m.pendingDispatch.ID},
-				Timestamp: time.Now(),
-			})
 			m.updateViewportContent()
-			return m, m.startStream(m.messagesFromEntries())
+			return m, executeToolsCmd(ctx, []llm.ToolCall{m.pendingDispatch}, m.toolExec)
 		}
 
 		switch msg.Result {
 		case "Yes, dispatch":
 			m.confirmDispatch = false
-			result, err := m.toolExec.ExecuteTool(m.pendingDispatch)
-			if err != nil {
-				result = fmt.Sprintf("error: %v", err)
-			}
+			m.toolsInFlight = true
+			ctx, cancel := context.WithCancel(context.Background())
+			m.toolCancelFunc = cancel
 			m.appendEntry(ChatEntry{
 				Message:    llm.Message{Role: "assistant", ToolCalls: []llm.ToolCall{m.pendingDispatch}},
 				Timestamp:  time.Now(),
 				ClaudeMeta: "tool-call-indicator",
 			})
-			m.appendEntry(ChatEntry{
-				Message:   llm.Message{Role: "tool", Content: result, ToolCallID: m.pendingDispatch.ID},
-				Timestamp: time.Now(),
-			})
 			m.updateViewportContent()
-			return m, m.startStream(m.messagesFromEntries())
+			return m, executeToolsCmd(ctx, []llm.ToolCall{m.pendingDispatch}, m.toolExec)
 
 		case "Change team":
 			// Show second prompt with available team names.

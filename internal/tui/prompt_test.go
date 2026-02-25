@@ -880,20 +880,26 @@ func TestHandleAskUserResponse_DispatchConfirm_YesDispatch(t *testing.T) {
 		t.Error("promptMode should be false after dispatch")
 	}
 
-	// Should have appended entries for the tool call and result.
-	foundToolResult := false
+	// Should have appended the tool call indicator entry.
+	foundToolCall := false
 	for _, entry := range got.entries {
-		if entry.Message.Role == "tool" && entry.Message.ToolCallID == "call-dispatch-yes" {
-			foundToolResult = true
+		if entry.Message.Role == "assistant" && len(entry.Message.ToolCalls) > 0 &&
+			entry.Message.ToolCalls[0].ID == "call-dispatch-yes" {
+			foundToolCall = true
 			break
 		}
 	}
-	if !foundToolResult {
-		t.Error("expected tool result entry for dispatch")
+	if !foundToolCall {
+		t.Error("expected tool call indicator entry for dispatch")
+	}
+
+	// Tool results are now async — they arrive via ToolResultMsg, not inline.
+	if !got.toolsInFlight {
+		t.Error("toolsInFlight should be true after dispatching async tool execution")
 	}
 
 	if cmd == nil {
-		t.Error("expected non-nil cmd (startStream) after dispatch")
+		t.Error("expected non-nil cmd (executeToolsCmd) after dispatch")
 	}
 }
 
@@ -1028,8 +1034,13 @@ func TestHandleAskUserResponse_DispatchConfirm_ChangingTeamSelection(t *testing.
 		t.Error("expected the tool call entry to have team_name rewritten to 'beta'")
 	}
 
+	// Tool results are now async — they arrive via ToolResultMsg, not inline.
+	if !got.toolsInFlight {
+		t.Error("toolsInFlight should be true after dispatching async tool execution")
+	}
+
 	if cmd == nil {
-		t.Error("expected non-nil cmd (startStream) after team change")
+		t.Error("expected non-nil cmd (executeToolsCmd) after team change")
 	}
 }
 
