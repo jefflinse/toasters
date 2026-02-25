@@ -1,7 +1,7 @@
 # Phase 2: Connect to the World — Implementation Plan
 
 **Created:** 2026-02-24
-**Status:** Draft — Awaiting approval
+**Status:** Complete
 **Branch:** `phase-2`
 
 ---
@@ -28,9 +28,9 @@ Give Toasters agents access to external tools via MCP (GitHub, Jira, Linear, etc
 
 | PR | Deliverable | Branch | Effort | Dependencies | Status |
 |----|------------|--------|--------|-------------|--------|
-| PR 1 | 2.1 — MCP Client (Consume External Servers) | `feat/mcp-client` | 2–3 days | None (Phase 1 complete) | |
-| PR 2 | 2.2 — Toasters MCP Server (Progress Reporting) | `feat/mcp-server` | 2–3 days | None (Phase 1 complete) | |
-| PR 3 | 2.3 — Real-Time TUI Progress Display | `feat/tui-progress` | 1–2 days | PR 2 must be merged first | |
+| PR 1 | 2.1 — MCP Client (Consume External Servers) | `feat/mcp-client` | 2–3 days | None (Phase 1 complete) | ✅ Merged |
+| PR 2 | 2.2 — Toasters MCP Server (Progress Reporting) | `feat/mcp-server` | 2–3 days | None (Phase 1 complete) | ✅ Merged |
+| PR 3 | 2.3 — Real-Time TUI Progress Display | `feat/tui-progress` | 1–2 days | PR 2 must be merged first | ✅ Merged |
 
 **Merge order:** PR 1 and PR 2 can merge in either order (they touch different packages). PR 3 merges last.
 
@@ -45,15 +45,15 @@ Give Toasters agents access to external tools via MCP (GitHub, Jira, Linear, etc
 
 | # | Step | Agent | Status |
 |---|------|-------|--------|
-| 2.1.1 | Add `mcp-go` dependency | builder | |
-| 2.1.2 | Add MCP config schema | builder | |
-| 2.1.3 | Create `internal/mcp/` package — Manager, connect, discover, dispatch | builder | |
-| 2.1.4 | Implement tool conversion and namespacing | builder | |
-| 2.1.5 | Wire MCP tools into operator tool set | builder | |
-| 2.1.6 | Wire MCP tools into agent runtime tool set | builder | |
-| 2.1.7 | Write comprehensive tests (≥75% coverage) | test-writer | |
-| 2.1.8 | Security audit | security-auditor | |
-| 2.1.9 | Code review (+ concurrency review) | code-reviewer | |
+| 2.1.1 | Add `mcp-go` dependency | builder | ✅ Done |
+| 2.1.2 | Add MCP config schema | builder | ✅ Done |
+| 2.1.3 | Create `internal/mcp/` package — Manager, connect, discover, dispatch | builder | ✅ Done |
+| 2.1.4 | Implement tool conversion and namespacing | builder | ✅ Done |
+| 2.1.5 | Wire MCP tools into operator tool set | builder | ✅ Done |
+| 2.1.6 | Wire MCP tools into agent runtime tool set | builder | ✅ Done |
+| 2.1.7 | Write comprehensive tests (≥75% coverage) | test-writer | ✅ Done |
+| 2.1.8 | Security audit | security-auditor | ✅ Done |
+| 2.1.9 | Code review (+ concurrency review) | code-reviewer | ✅ Done |
 
 ### Details
 
@@ -164,13 +164,13 @@ Give Toasters agents access to external tools via MCP (GitHub, Jira, Linear, etc
 
 | # | Step | Agent | Status |
 |---|------|-------|--------|
-| 2.2.1 | Add `mcp-go` dependency (if not already added by PR 1) | builder | |
-| 2.2.2 | Create progress tool handlers package | builder | |
-| 2.2.3 | Wire progress tools into agent runtime (in-process) | builder | |
-| 2.2.4 | Create MCP server for external agents (Claude CLI) | builder | |
-| 2.2.5 | Wire MCP server into gateway spawn path | builder | |
-| 2.2.6 | Write comprehensive tests (≥80% coverage) | test-writer | |
-| 2.2.7 | Code review | code-reviewer | |
+| 2.2.1 | Add `mcp-go` dependency (if not already added by PR 1) | builder | ✅ Done |
+| 2.2.2 | Create progress tool handlers package | builder | ✅ Done |
+| 2.2.3 | Wire progress tools into agent runtime (in-process) | builder | ✅ Done |
+| 2.2.4 | Create MCP server for external agents (Claude CLI) | builder | ✅ Done |
+| 2.2.5 | Wire MCP server into gateway spawn path | builder | ✅ Done |
+| 2.2.6 | Write comprehensive tests (≥80% coverage) | test-writer | ✅ Done |
+| 2.2.7 | Code review | code-reviewer | ✅ Done |
 
 ### Details
 
@@ -272,14 +272,14 @@ Give Toasters agents access to external tools via MCP (GitHub, Jira, Linear, etc
 
 | # | Step | Agent | Status |
 |---|------|-------|--------|
-| 2.3.1 | Define progress polling types and messages | builder | |
-| 2.3.2 | Implement SQLite polling command | builder | |
-| 2.3.3 | Add progress state to TUI Model | builder | |
-| 2.3.4 | Render task status in the left panel | builder | |
-| 2.3.5 | Render blocker alerts | builder | |
-| 2.3.6 | Render token usage and cost per session | builder | |
-| 2.3.7 | Write tests | test-writer | |
-| 2.3.8 | Code review | code-reviewer | |
+| 2.3.1 | Define progress polling types and messages | builder | ✅ Done |
+| 2.3.2 | Implement SQLite polling command | builder | ✅ Done |
+| 2.3.3 | Add progress state to TUI Model | builder | ✅ Done |
+| 2.3.4 | Render task status in the left panel | builder | ✅ Done |
+| 2.3.5 | Render blocker alerts | builder | ✅ Done |
+| 2.3.6 | Render token usage and cost per session | builder | ✅ Done |
+| 2.3.7 | Write tests | test-writer | ✅ Done |
+| 2.3.8 | Code review | code-reviewer | ✅ Done |
 
 ### Details
 
@@ -457,9 +457,26 @@ Week 2:
 
 ## Phase 2 Exit Criteria
 
-1. Configure a GitHub MCP server → operator sees `github__*` tools
-2. Operator uses `github__create_issue` → tool call routed to GitHub MCP server
-3. Agents report progress via `report_progress` / `update_task_status` → data in SQLite
-4. TUI shows real-time task status updates → polling every 500ms
-5. Blockers are visually highlighted → left panel + status bar
-6. Token usage is tracked → per-session display in sidebar
+All criteria met (2026-02-25):
+
+1. Configure a GitHub MCP server → operator sees `github__*` tools ✅
+2. Operator uses `github__create_issue` → tool call routed to GitHub MCP server ✅
+3. Agents report progress via `report_progress` / `update_task_status` → data in SQLite ✅
+4. TUI shows real-time task status updates → polling every 500ms ✅
+5. Blockers are visually highlighted → left panel + status bar ✅
+6. Token usage is tracked → per-session display in sidebar ✅
+
+---
+
+## Post-Delivery Fixes
+
+The following bug fixes were applied after the three PRs merged into `phase-2`:
+
+| Fix | Description |
+|-----|-------------|
+| `fix: wire subagent TUI notifications and live session token counts` | Subagent sessions were not emitting TUI notification events; live token counts were not updating for child sessions. |
+| `fix: filter display-only entries from messagesFromEntries` | Display-only chat entries (e.g. tool result separators) were incorrectly included when reconstructing the message history for the LLM, causing malformed conversation context. |
+| `fix: propagate provider and model to child SpawnOpts in spawn_agent tool` | `CoreTools` was not passing `ProviderName` or `Model` to child `SpawnOpts`, causing `spawn_agent` to silently fail when the runtime had no default provider configured. |
+| `fix: use job workspace dir instead of cwd for coordinator spawns` | Removed the `repoRoot = os.Getwd()` concept entirely. Coordinators now start in the job workspace directory (`jobDir`). Toasters is workspace-centric, not cwd-centric. |
+| `fix: enforce max spawn depth of 1` | Added depth tracking to `SpawnOpts`. Coordinators (depth 0) may spawn workers (depth 1); workers may not spawn further agents. Attempts to exceed depth 1 return an error. |
+| `fix: enforce spawn_agent tool filter` | `params.Tools` is now wired to `SpawnOpts.Tools`. A `filteredToolExecutor` wraps the child session's tool executor and enforces the allowlist at both `Definitions()` and `Execute()` time. |

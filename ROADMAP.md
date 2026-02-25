@@ -11,7 +11,7 @@ This is the master plan for evolving Toasters from a TUI prototype into a full a
 
 - [Pre-Phase 1: Code Health](#pre-phase-1-code-health-completed-2026-02-24)
 - [Phase 1: The Foundation](#phase-1-the-foundation)
-- [Phase 2: Connect to the World](#phase-2-connect-to-the-world)
+- [Phase 2: Connect to the World](#phase-2-connect-to-the-world-completed-2026-02-25)
 - [Phase 3: Structure and Polish](#phase-3-structure-and-polish)
 - [Phase 4: Intelligence](#phase-4-intelligence)
 - [Dependency Graph](#dependency-graph)
@@ -518,9 +518,21 @@ Week 3 (buffer / polish):
 
 ---
 
-## Phase 2: Connect to the World
+## Phase 2: Connect to the World (Completed 2026-02-25)
 
 **Goal:** Agents have access to external tools via MCP, and report progress back to Toasters through a structured protocol. The TUI shows real-time progress driven by database updates.
+
+**Status:** ✅ Complete. All three deliverables built, integrated, and end-to-end verified. See `PHASE_2.md` for full implementation details.
+
+**What was delivered:**
+
+| Deliverable | Description | Status |
+|-------------|-------------|--------|
+| 2.1 — MCP Client | `internal/mcp` package with Manager, tool conversion, namespacing, operator + agent wiring | ✅ Done |
+| 2.2 — Toasters MCP Server | `internal/progress` package with 6 progress tool handlers, MCP server, `toasters mcp-server` subcommand | ✅ Done |
+| 2.3 — Real-Time TUI Progress | SQLite polling loop, task status rendering, blocker alerts, token usage display | ✅ Done |
+
+**Post-delivery fixes:** 6 bug fixes applied after PRs merged — subagent TUI notifications, message history filtering, provider/model propagation to child agents, workspace-centric coordinator spawning, max spawn depth enforcement, and spawn_agent tool filter enforcement. See `PHASE_2.md` for details.
 
 **Estimated total effort:** 1.5–2 weeks
 
@@ -622,16 +634,16 @@ Wire the SQLite progress data into the TUI. The right panel's "Active Tasks" sec
 
 ```
 Week 1:
-  2.1 (MCP client) ──────────────────►  done
-  2.2 (MCP server) ──────────────────►  done
+  2.1 (MCP client) ──────────────────►  ✅ done
+  2.2 (MCP server) ──────────────────►  ✅ done
        (can be parallel — different packages)
 
 Week 2:
-  2.3 (TUI progress) ────────►  done
+  2.3 (TUI progress) ────────►  ✅ done
   Integration testing + polish
 ```
 
-**Phase 2 exit criteria:** You can configure a GitHub MCP server, the operator uses `github__create_issue` to file a bug, agents report progress via `report_progress` / `update_task_status`, and the TUI shows real-time task status updates. Blockers are visible. Token usage is tracked.
+**Phase 2 exit criteria:** All criteria met (2026-02-25). You can configure a GitHub MCP server, the operator uses `github__create_issue` to file a bug, agents report progress via `report_progress` / `update_task_status`, and the TUI shows real-time task status updates. Blockers are visible. Token usage is tracked.
 
 ---
 

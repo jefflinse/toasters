@@ -8,7 +8,7 @@ Toasters is a Go-based TUI orchestration tool for agentic coding work. It coordi
 
 ```bash
 go build ./...          # Build
-go test ./...           # Test (12 test packages)
+go test ./...           # Test (14 test packages)
 go run main.go          # Run the TUI
 ```
 
@@ -17,6 +17,7 @@ go run main.go          # Run the TUI
 ```
 main.go                     # Entry point → cmd.Execute()
 cmd/                        # Cobra CLI setup, launches TUI
+  mcp_server.go             # `toasters mcp-server` subcommand (stdio MCP server for agents)
 agents/                     # Built-in agent definition files (.md with YAML frontmatter)
 internal/
   agents/                   # Agent discovery, parsing, team management
@@ -29,10 +30,14 @@ internal/
   llm/                      # Shared LLM types and Provider interface
     client/                 # OpenAI-compatible streaming client
     tools/                  # Tool executor with dependency injection
+  mcp/                      # MCP client manager, tool conversion, namespacing
   orchestration/            # Cross-cutting orchestration types (GatewaySlot, AgentSpawner)
+  progress/                 # Progress tool handlers, MCP server (report_progress, etc.)
   provider/                 # Multi-provider LLM client (OpenAI, Anthropic, registry)
   runtime/                  # In-process agent runtime (sessions, core tools, spawn)
+    composite_tools.go      # CompositeTools wrapper combining CoreTools + MCP tools
   tui/                      # Bubble Tea TUI (model, views, grid, modals, streaming)
+    progress_poll.go        # SQLite polling loop for real-time progress display
   job/                      # Job file persistence (OVERVIEW.md + TODO.md)
 ```
 
@@ -40,12 +45,14 @@ internal/
 
 - **Operator**: LLM that coordinates work. Receives user messages, decides which team to assign work to, and manages jobs. Can be backed by any configured provider (LM Studio, Anthropic, OpenAI).
 - **Teams**: Groups of agents defined in `~/.config/toasters/teams/` (or configured via `operator.teams_dir`). Each team has one coordinator and multiple workers.
-- **Agent Runtime**: In-process agent sessions running as goroutines. Each session is a conversation loop: send messages to the LLM → receive response → execute tool calls → loop. Core tools include file I/O, shell, glob, grep, web fetch, and subagent spawning. Sessions are tracked in SQLite and observable via the TUI.
+- **Agent Runtime**: In-process agent sessions running as goroutines. Each session is a conversation loop: send messages to the LLM → receive response → execute tool calls → loop. Core tools include file I/O, shell, glob, grep, web fetch, subagent spawning, and progress reporting (`report_progress`, `update_task_status`, `report_blocker`, `request_review`, `query_job_context`, `log_artifact`). Sessions are tracked in SQLite and observable via the TUI. `spawn_agent` enforces a max depth of 1 (coordinators may spawn workers; workers may not spawn further agents) and propagates tool filtering via `filteredToolExecutor`.
+- **MCP Client**: `internal/mcp` package manages connections to external MCP servers (GitHub, Jira, Linear, etc.). Tools are namespaced as `{server_name}__{tool_name}` and merged into both the operator and agent tool sets. Failed servers are skipped with a warning.
+- **Toasters MCP Server**: `internal/progress` package exposes progress tools via an MCP server (`toasters mcp-server` subcommand). Claude CLI subprocesses use this to report progress back to SQLite. In-process agents call the same handlers directly without the MCP protocol.
 - **Gateway**: Manages up to 4 concurrent Claude CLI subprocesses (`MaxSlots = 4`). Each slot runs a Claude agent with a specific prompt and job context. Retained as a fallback alongside the in-process runtime.
 - **Provider Registry**: Multi-provider LLM abstraction supporting OpenAI-compatible APIs (LM Studio, Ollama, OpenAI) and Anthropic's Messages API. Providers are configured in YAML and looked up by name. Anthropic supports both API key and Keychain/OAuth authentication.
 - **SQLite Persistence**: Operational state stored in SQLite via `modernc.org/sqlite` (pure Go). WAL mode for concurrent reads. Schema includes jobs, tasks, task dependencies, progress reports, agents, teams, sessions, and artifacts. Auto-migrating on open.
-- **Jobs**: Dual-persisted — markdown files (`OVERVIEW.md` + `TODO.md`) for human readability, SQLite for structured queries. New jobs are written to both.
-- **Agents**: Defined as `.md` files with YAML frontmatter (name, description, mode, color, temperature, tools). Discovered from directories and hot-reloaded via fsnotify.
+- **Jobs**: Dual-persisted — markdown files (`OVERVIEW.md` + `TODO.md`) for human readability, SQLite for structured queries. New jobs are written to both. Toasters is workspace-centric — coordinators start in the job workspace directory; there is no concept of a "current working directory."
+- **Agents**: Defined as `.md` files with YAML frontmatter (name, description, mode, color, temperature, tools). Discovered from directories and hot-reloaded via fsnotify (debounced at 200ms).
 
 ## Tech Stack
 
@@ -102,7 +109,7 @@ Key settings:
 
 ## Testing
 
-Tests exist across 12 test packages. They use standard Go testing with `t.TempDir()` for file I/O and helper functions for assertions. Run `golangci-lint run` for linting — the codebase currently has 0 lint findings.
+Tests exist across 14 test packages. They use standard Go testing with `t.TempDir()` for file I/O and helper functions for assertions. Run `golangci-lint run` for linting — the codebase currently has 0 lint findings.
 
 Key coverage numbers: `frontmatter` 100%, `llm/tools` 88.3%, `llm/client` 87.7%, `runtime` 87.0%, `job` 85.7%, `provider` 84.9%, `db` 83.6%, `agents` 72.1%, `config` 65.7%.
 
@@ -128,21 +135,23 @@ These are correctness issues. Fix before any feature work.
 
 Small, mechanical improvements. Each is independent.
 
-- [ ] **ARCH-H3**: Merge `streamMessages`/`streamMessagesWithTools` — 95% identical, differ only by `Tools` field in request body (`anthropic/client.go`)
-- [ ] **ARCH-H4**: Delete standalone `StreamMessage`/`streamMessage` — dead weight third copy of same logic (`anthropic/client.go`)
-- [ ] **DUP-M1**: Extract `expandTilde(path, fallback)` helper — tilde expansion duplicated 3x in `WorkspaceDir`, `DatabasePath`, and `Dir` (`config/config.go`)
-- [ ] **MOD-M1**: `sort.Slice` → `slices.SortFunc`, `sort.Ints` → `slices.Sort`, `sort.Strings` → `slices.Sort` (9 call sites across multiple packages)
-- [ ] **MOD-M2**: Range-over-int where applicable — `for i := 0; i < N; i++` → `for i := range N` (`tui/helpers.go`, `tui/grid.go`, `tui/view.go`)
-- [ ] **MOD-M3**: `copy(dst, src)` → `slices.Clone` (`agents/agents.go`)
-- [ ] **MOD-M4**: `for k := range m { delete(m, k) }` → `clear(m)` (`provider/openai.go`)
-- [ ] **MOD-M5**: `errors.Join` for multi-error aggregation in migration error handling (`db/sqlite.go`)
-- [ ] **MOD-M6**: `context.AfterFunc` for context merging — eliminates goroutine in `Session.Run()` (`runtime/session.go`)
-- [ ] **MOD-M7**: Struct conversion instead of field-by-field copy (staticcheck S1016) (`provider/openai.go`)
-- [ ] **LINT**: Fix all 6 existing lint findings — 5 errcheck (unchecked `Close`/`Fprint`) + 1 staticcheck (`runtime/tools.go`, `runtime/tools_test.go`, `provider/openai.go`)
-- [ ] **CONC-H1**: Add session cleanup to `Runtime` — completed sessions never removed from `sessions` map, unbounded memory growth (`runtime/runtime.go`)
-- [ ] **CONC-H2**: Fix late `Subscribe()` — returns never-closed channel if called after session completion, causing goroutine leak (`runtime/session.go`)
-- [ ] **CONC-H3**: Add debouncing to file watcher — file saves generate multiple events, each triggering `DiscoverTeams()` + awareness regeneration (`agents/agents.go`)
-- [ ] **CONC-M1**: Move regex compilation to package level — `regexp.MustCompile` called inside `fetchWebpage` on every invocation (`llm/tools/tools.go`)
+**Status: ✅ Complete (2026-02-25)**
+
+- [x] **ARCH-H3**: Merge `streamMessages`/`streamMessagesWithTools` — merged into single method; also fixed a latent `http.DefaultClient` bug in the deleted code (`anthropic/client.go`)
+- [x] **ARCH-H4**: Delete standalone `StreamMessage`/`streamMessage` — dead weight third copy of same logic removed (`anthropic/client.go`)
+- [x] **DUP-M1**: Extract `expandTilde(path, fallback)` helper — tilde expansion extracted from `WorkspaceDir`, `DatabasePath`, and `Dir` (`config/config.go`)
+- [x] **MOD-M1**: `sort.Slice` → `slices.SortFunc`, `sort.Ints` → `slices.Sort`, `sort.Strings` → `slices.Sort` (9 call sites across multiple packages)
+- [x] **MOD-M2**: Range-over-int where applicable — `for i := 0; i < N; i++` → `for i := range N` (`tui/helpers.go`, `tui/grid.go`, `tui/view.go`)
+- [x] **MOD-M3**: `copy(dst, src)` → `slices.Clone` (`agents/agents.go`)
+- [x] **MOD-M4**: `for k := range m { delete(m, k) }` → `clear(m)` (`provider/openai.go`)
+- [x] **MOD-M5**: No-op — migration loop uses early-return pattern, not multi-error collection; `errors.Join` not applicable (`db/sqlite.go`)
+- [x] **MOD-M6**: `context.AfterFunc` for context merging — eliminates goroutine in `Session.Run()` (`runtime/session.go`)
+- [x] **MOD-M7**: Struct conversion instead of field-by-field copy (staticcheck S1016) (`provider/openai.go`)
+- [x] **LINT**: Fixed 15 lint findings (not 6 as originally estimated) across 4 files — errcheck (unchecked `Close`/`Fprint`) + staticcheck (`runtime/tools.go`, `runtime/tools_test.go`, `provider/openai.go`)
+- [x] **CONC-H1**: Add session cleanup to `Runtime` — completed sessions removed from `sessions` map immediately after `Run()` returns (`runtime/runtime.go`)
+- [x] **CONC-H2**: Fix late `Subscribe()` — returns already-closed channel if session is done; uses `closed bool` flag under mutex (`runtime/session.go`)
+- [x] **CONC-H3**: Add debouncing to file watcher — debounced with `time.After` channel in select loop (200ms window) (`agents/agents.go`)
+- [x] **CONC-M1**: Move regex compilation to package level — `regexp.MustCompile` moved out of `fetchWebpage` (`llm/tools/tools.go`)
 - [x] **SEC-H3**: Fix `http.Post` without context in `refreshAccessToken` — use `http.NewRequestWithContext` (`anthropic/client.go`) (completed in Wave 1)
 
 ### Wave 3 — Structural Improvements (architecture)
