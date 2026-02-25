@@ -18,6 +18,8 @@ type Runtime struct {
 	sessions  map[string]*Session
 	store     db.Store // may be nil
 	providers *provider.Registry
+	mcpCaller MCPCaller // may be nil
+	mcpDefs   []ToolDef // pre-converted MCP tool definitions
 }
 
 // New creates a new Runtime. store may be nil for in-memory only operation.
@@ -27,6 +29,15 @@ func New(store db.Store, providers *provider.Registry) *Runtime {
 		store:     store,
 		providers: providers,
 	}
+}
+
+// SetMCPCaller wires an MCP caller into the runtime for agent tool dispatch.
+// mcpDefs are the pre-converted tool definitions in runtime.ToolDef format.
+// IMPORTANT: This must be called before any calls to SpawnAgent. It is not
+// safe to call concurrently with SpawnAgent.
+func (r *Runtime) SetMCPCaller(caller MCPCaller, defs []ToolDef) {
+	r.mcpCaller = caller
+	r.mcpDefs = defs
 }
 
 // SpawnAgent creates and starts a new agent session.
@@ -46,12 +57,20 @@ func (r *Runtime) SpawnAgent(ctx context.Context, opts SpawnOpts) (*Session, err
 		maxDepth = defaultMaxDepth
 	}
 
-	// Create tool executor with core tools.
-	tools := NewCoreTools(
+	// Create tool executor with core tools, optionally wrapping with MCP dispatch.
+	coreTools := NewCoreTools(
 		opts.WorkDir,
 		WithShell(true),
 		WithSpawner(r, depth+1, maxDepth),
+		WithStore(r.store),
+		WithSessionContext(id, opts.AgentID, opts.JobID),
 	)
+	var tools ToolExecutor
+	if r.mcpCaller != nil {
+		tools = NewCompositeTools(coreTools, r.mcpCaller, r.mcpDefs)
+	} else {
+		tools = coreTools
+	}
 
 	sess := newSession(id, p, opts, tools)
 

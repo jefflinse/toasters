@@ -17,6 +17,24 @@ type Config struct {
 	Claude       ClaudeConfig     `mapstructure:"claude"`
 	Providers    []ProviderConfig `mapstructure:"providers"`
 	Agents       AgentsConfig     `mapstructure:"agents"`
+	MCP          MCPConfig        `mapstructure:"mcp"`
+}
+
+// MCPServerConfig holds configuration for a single MCP server.
+type MCPServerConfig struct {
+	Name         string            `mapstructure:"name"`
+	Transport    string            `mapstructure:"transport"`     // "stdio", "http", "sse"
+	Command      string            `mapstructure:"command"`       // for stdio transport
+	Args         []string          `mapstructure:"args"`          // for stdio transport
+	Env          map[string]string `mapstructure:"env"`           // env vars for stdio subprocess
+	URL          string            `mapstructure:"url"`           // for http/sse transport
+	Headers      map[string]string `mapstructure:"headers"`       // for http/sse transport
+	EnabledTools []string          `mapstructure:"enabled_tools"` // whitelist; empty = all
+}
+
+// MCPConfig holds configuration for all MCP servers.
+type MCPConfig struct {
+	Servers []MCPServerConfig `mapstructure:"servers"`
 }
 
 // ProviderConfig holds configuration for a single LLM provider.
@@ -89,7 +107,30 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 
+	expandMCPEnvVars(&cfg)
+
 	return &cfg, nil
+}
+
+// expandMCPEnvVars expands ${VAR} references in MCP server configuration fields
+// (Command, Args, URL, Env values, and Headers values) using os.Getenv.
+func expandMCPEnvVars(cfg *Config) {
+	for i := range cfg.MCP.Servers {
+		s := &cfg.MCP.Servers[i]
+		s.Command = os.Expand(s.Command, os.Getenv)
+		for j, arg := range s.Args {
+			s.Args[j] = os.Expand(arg, os.Getenv)
+		}
+		if s.URL != "" {
+			s.URL = os.Expand(s.URL, os.Getenv)
+		}
+		for k, v := range s.Env {
+			s.Env[k] = os.Expand(v, os.Getenv)
+		}
+		for k, v := range s.Headers {
+			s.Headers[k] = os.Expand(v, os.Getenv)
+		}
+	}
 }
 
 // Dir returns the toasters config directory (~/.config/toasters).

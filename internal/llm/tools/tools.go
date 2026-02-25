@@ -25,6 +25,13 @@ import (
 	"github.com/jefflinse/toasters/internal/runtime"
 )
 
+// MCPCaller is the interface for dispatching MCP tool calls.
+// The concrete implementation is *mcp.Manager from internal/mcp.
+// Defined here to avoid importing internal/mcp from internal/llm/tools.
+type MCPCaller interface {
+	Call(ctx context.Context, name string, args json.RawMessage) (string, error)
+}
+
 // ToolExecutor holds the dependencies needed to execute operator tool calls.
 type ToolExecutor struct {
 	Gateway      orchestration.AgentSpawner
@@ -34,6 +41,7 @@ type ToolExecutor struct {
 	Tools        []llm.Tool
 	Store        db.Store         // may be nil
 	Runtime      *runtime.Runtime // may be nil
+	MCPManager   MCPCaller        // may be nil
 
 	// Runtime agent configuration — set after construction.
 	DefaultProvider  string                      // default provider name for runtime agents
@@ -377,7 +385,7 @@ var staticTools = []llm.Tool{
 
 // ExecuteTool dispatches a tool call to the appropriate handler and returns
 // the result as plain text.
-func (te *ToolExecutor) ExecuteTool(call llm.ToolCall) (string, error) {
+func (te *ToolExecutor) ExecuteTool(ctx context.Context, call llm.ToolCall) (string, error) {
 	switch call.Function.Name {
 	case "fetch_webpage":
 		var args struct {
@@ -734,6 +742,14 @@ func (te *ToolExecutor) ExecuteTool(call llm.ToolCall) (string, error) {
 		return fmt.Sprintf("cancelled session %s", shortID(matchID)), nil
 
 	default:
+		// Check if this is an MCP tool call (namespaced with __).
+		if te.MCPManager != nil && strings.Contains(call.Function.Name, "__") {
+			result, err := te.MCPManager.Call(ctx, call.Function.Name, json.RawMessage(call.Function.Arguments))
+			if err != nil {
+				return "", fmt.Errorf("MCP tool %s: %w", call.Function.Name, err)
+			}
+			return result, nil
+		}
 		return "", fmt.Errorf("unknown tool: %s", call.Function.Name)
 	}
 }
@@ -811,7 +827,7 @@ func fetchWebpage(url string) (string, error) {
 		return "", fmt.Errorf("unexpected status %d fetching %s", resp.StatusCode, url)
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20)) // 1 MB limit
 	if err != nil {
 		return "", fmt.Errorf("reading response body: %w", err)
 	}

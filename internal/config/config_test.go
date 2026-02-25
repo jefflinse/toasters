@@ -367,6 +367,160 @@ func TestLoad_EmptyConfigFile_AppliesDefaults(t *testing.T) {
 	}
 }
 
+// --- MCP config tests ---
+
+func TestLoad_NoMCPKey_ZeroValueMCPConfig(t *testing.T) {
+	resetViper(t)
+
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+
+	configDir := filepath.Join(tmpHome, ".config", "toasters")
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		t.Fatalf("creating config dir: %v", err)
+	}
+
+	writeConfigYAML(t, configDir, `
+operator:
+  model: my-model
+`)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(cfg.MCP.Servers) != 0 {
+		t.Errorf("MCP.Servers: got %d servers, want 0", len(cfg.MCP.Servers))
+	}
+}
+
+func TestLoad_MCPServers_UnmarshalsCorrectly(t *testing.T) {
+	resetViper(t)
+
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+
+	configDir := filepath.Join(tmpHome, ".config", "toasters")
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		t.Fatalf("creating config dir: %v", err)
+	}
+
+	writeConfigYAML(t, configDir, `
+mcp:
+  servers:
+    - name: my-stdio-server
+      transport: stdio
+      command: /usr/local/bin/mcp-server
+      args:
+        - --port
+        - "8080"
+      env:
+        FOO: bar
+        BAZ: qux
+    - name: my-sse-server
+      transport: sse
+      url: https://example.com/mcp
+      headers:
+        Authorization: Bearer token123
+      enabled_tools:
+        - tool_a
+        - tool_b
+`)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(cfg.MCP.Servers) != 2 {
+		t.Fatalf("MCP.Servers: got %d servers, want 2", len(cfg.MCP.Servers))
+	}
+
+	s0 := cfg.MCP.Servers[0]
+	if s0.Name != "my-stdio-server" {
+		t.Errorf("Servers[0].Name: got %q, want %q", s0.Name, "my-stdio-server")
+	}
+	if s0.Transport != "stdio" {
+		t.Errorf("Servers[0].Transport: got %q, want %q", s0.Transport, "stdio")
+	}
+	if s0.Command != "/usr/local/bin/mcp-server" {
+		t.Errorf("Servers[0].Command: got %q, want %q", s0.Command, "/usr/local/bin/mcp-server")
+	}
+	if len(s0.Args) != 2 || s0.Args[0] != "--port" || s0.Args[1] != "8080" {
+		t.Errorf("Servers[0].Args: got %v, want [--port 8080]", s0.Args)
+	}
+	// Note: Viper lowercases all map keys during unmarshal.
+	if s0.Env["foo"] != "bar" || s0.Env["baz"] != "qux" {
+		t.Errorf("Servers[0].Env: got %v", s0.Env)
+	}
+
+	s1 := cfg.MCP.Servers[1]
+	if s1.Name != "my-sse-server" {
+		t.Errorf("Servers[1].Name: got %q, want %q", s1.Name, "my-sse-server")
+	}
+	if s1.Transport != "sse" {
+		t.Errorf("Servers[1].Transport: got %q, want %q", s1.Transport, "sse")
+	}
+	if s1.URL != "https://example.com/mcp" {
+		t.Errorf("Servers[1].URL: got %q, want %q", s1.URL, "https://example.com/mcp")
+	}
+	// Note: Viper lowercases all map keys during unmarshal.
+	if s1.Headers["authorization"] != "Bearer token123" {
+		t.Errorf("Servers[1].Headers: got %v", s1.Headers)
+	}
+	if len(s1.EnabledTools) != 2 || s1.EnabledTools[0] != "tool_a" || s1.EnabledTools[1] != "tool_b" {
+		t.Errorf("Servers[1].EnabledTools: got %v, want [tool_a tool_b]", s1.EnabledTools)
+	}
+}
+
+func TestLoad_MCPEnvVarExpansion(t *testing.T) {
+	resetViper(t)
+
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+	t.Setenv("MCP_TOKEN", "secret-token")
+	t.Setenv("MCP_HOST", "api.example.com")
+
+	configDir := filepath.Join(tmpHome, ".config", "toasters")
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		t.Fatalf("creating config dir: %v", err)
+	}
+
+	writeConfigYAML(t, configDir, `
+mcp:
+  servers:
+    - name: test-server
+      transport: sse
+      url: https://${MCP_HOST}/mcp
+      headers:
+        Authorization: Bearer ${MCP_TOKEN}
+      env:
+        TOKEN: ${MCP_TOKEN}
+`)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(cfg.MCP.Servers) != 1 {
+		t.Fatalf("MCP.Servers: got %d servers, want 1", len(cfg.MCP.Servers))
+	}
+
+	s := cfg.MCP.Servers[0]
+	if s.URL != "https://api.example.com/mcp" {
+		t.Errorf("URL: got %q, want %q", s.URL, "https://api.example.com/mcp")
+	}
+	// Note: Viper lowercases all map keys during unmarshal.
+	if s.Headers["authorization"] != "Bearer secret-token" {
+		t.Errorf("Headers[authorization]: got %q, want %q", s.Headers["authorization"], "Bearer secret-token")
+	}
+	if s.Env["token"] != "secret-token" {
+		t.Errorf("Env[token]: got %q, want %q", s.Env["token"], "secret-token")
+	}
+}
+
 // --- BindFlags tests ---
 
 func TestBindFlags_DoesNotPanic(t *testing.T) {

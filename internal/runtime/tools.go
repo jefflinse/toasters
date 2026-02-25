@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -16,7 +17,12 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/jefflinse/toasters/internal/db"
 )
+
+// ErrUnknownTool is returned by Execute when the tool name is not recognized.
+var ErrUnknownTool = errors.New("unknown tool")
 
 // ToolExecutor executes tool calls by name.
 type ToolExecutor interface {
@@ -38,6 +44,10 @@ type CoreTools struct {
 	depth      int          // current spawn depth
 	maxDepth   int          // max spawn depth
 	httpClient *http.Client // for web_fetch; nil uses webFetchClient
+	store      db.Store     // may be nil; for progress tools
+	sessionID  string
+	agentID    string
+	jobID      string
 }
 
 // CoreToolsOption configures a CoreTools instance.
@@ -54,6 +64,20 @@ func WithSpawner(s AgentSpawner, depth, maxDepth int) CoreToolsOption {
 		ct.spawner = s
 		ct.depth = depth
 		ct.maxDepth = maxDepth
+	}
+}
+
+// WithStore enables progress tools by providing a database store.
+func WithStore(store db.Store) CoreToolsOption {
+	return func(ct *CoreTools) { ct.store = store }
+}
+
+// WithSessionContext sets the session context for progress tool calls.
+func WithSessionContext(sessionID, agentID, jobID string) CoreToolsOption {
+	return func(ct *CoreTools) {
+		ct.sessionID = sessionID
+		ct.agentID = agentID
+		ct.jobID = jobID
 	}
 }
 
@@ -90,7 +114,7 @@ func (ct *CoreTools) Execute(ctx context.Context, name string, args json.RawMess
 	case "spawn_agent":
 		return ct.spawnAgent(ctx, args)
 	default:
-		return "", fmt.Errorf("unknown tool: %s", name)
+		return "", fmt.Errorf("%w: %s", ErrUnknownTool, name)
 	}
 }
 
