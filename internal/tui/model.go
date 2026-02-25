@@ -1187,7 +1187,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			slot.output.WriteString(ev.Text)
 		case runtime.SessionEventToolCall:
 			if ev.ToolCall != nil {
-				slot.output.WriteString(fmt.Sprintf("\n⚙ %s\n", ev.ToolCall.Name))
+				fmt.Fprintf(&slot.output, "\n⚙ %s\n", ev.ToolCall.Name)
 			}
 		case runtime.SessionEventToolResult:
 			if ev.ToolResult != nil {
@@ -1195,7 +1195,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if len(result) > 200 {
 					result = result[:200] + "..."
 				}
-				slot.output.WriteString(fmt.Sprintf("→ %s\n", result))
+				fmt.Fprintf(&slot.output, "→ %s\n", result)
 			}
 		}
 		return m, nil
