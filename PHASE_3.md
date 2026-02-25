@@ -7,7 +7,7 @@
 
 ## Objective
 
-Build a complete teams and agents management system — dynamic agent generation, composable agent definitions, curated teams for specific purposes, shared agents reusable across teams, per-agent provider/model selection, and cost visibility. Consolidate job persistence to SQLite-only.
+Build a complete teams and agents management system — dynamic agent generation, composable agent definitions, curated teams for specific purposes, shared agents reusable across teams, and per-agent provider/model selection. Consolidate job persistence to SQLite-only.
 
 ---
 
@@ -27,28 +27,7 @@ All Wave 3 items completed (2026-02-25).
 
 ## Deliverables
 
-### 3.1 — Teams & Agents Management System (HIGH PRIORITY)
-
-The core Phase 3 deliverable. A complete system for defining, composing, and managing agents and teams.
-
-**Key goals:**
-- **Composable agent definitions** — Break agent `.md` files into multiple composable files that get combined and cached as actual agent definitions. This enables dynamic configuration of agents with various properties (personality, tools, constraints, domain knowledge) managed independently.
-- **Agent generation** — Ability to generate new agent definitions programmatically or via the operator, not just hand-authored `.md` files.
-- **Curated teams** — Create purpose-built teams for specific workflows (e.g., "frontend team", "security audit team", "migration team") with well-defined roles and coordination patterns.
-- **Shared agents** — Agents that can be reused across multiple teams without duplication. A "senior Go developer" agent shouldn't need to be redefined for every team that needs one.
-- **Per-agent provider/model selection** — Assign specific providers and models to individual agents. A code reviewer might use Claude while a documentation writer uses a cheaper model. This was previously listed as a standalone item but belongs naturally in the teams management system.
-- **TUI integration** — The `/teams` command and agents panel should reflect the full management system, not just static file listings.
-
-**Design space to explore:**
-- Agent definition layering (base traits + role overlays + team-specific overrides)
-- Agent trait/capability libraries (reusable building blocks)
-- Team templates vs. fully custom teams
-- Hot-reloading of composed definitions (extend existing fsnotify watcher)
-- Agent definition caching strategy
-- How the operator discovers and selects teams for work assignment
-- Whether agents can self-describe their capabilities for dynamic team assembly
-
-### 3.2 — SQLite-Only Job Persistence
+### 3.1 — SQLite-Only Job Persistence
 
 Stop dual-writing jobs to markdown files. SQLite is the source of truth.
 
@@ -61,45 +40,51 @@ Stop dual-writing jobs to markdown files. SQLite is the source of truth.
 - Agent definition `.md` files — these are configuration, not job state
 - Any markdown that's part of the project workspace (README, docs, etc.)
 
-### 3.3 — Cost Estimation (NICE TO HAVE)
+### 3.2 — Teams & Agents Management System (HIGH PRIORITY)
 
-Token usage is already tracked per-session with model identity. The `CostUSD *float64` field exists in the DB schema but is never populated.
+The core Phase 3 deliverable. A complete system for defining, composing, and managing agents and teams.
 
-**What's needed:**
-- A pricing table — `map[string]ModelPricing` keyed by model name, containing per-input-token and per-output-token rates. Could be hardcoded for known models, configurable in YAML for custom/local models, or both.
-- A ~10-line cost calculation at session completion in `runtime.go` — `cost := pricing.Estimate(provider, model, tokensIn, tokensOut)`
-- TUI display — extend the agent session panel to show estimated cost per session and a running total
+**Key goals:**
+- **Composable agent definitions** — Break agent `.md` files into multiple composable files that get combined and cached as actual agent definitions. This enables dynamic configuration of agents with various properties (personality, tools, constraints, domain knowledge) managed independently.
+- **Agent generation** — Ability to generate new agent definitions programmatically or via the operator, not just hand-authored `.md` files.
+- **Curated teams** — Create purpose-built teams for specific workflows (e.g., "frontend team", "security audit team", "migration team") with well-defined roles and coordination patterns.
+- **Shared agents** — Agents that can be reused across multiple teams without duplication. A "senior Go developer" agent shouldn't need to be redefined for every team that needs one.
+- **Per-agent provider/model selection** — Assign specific providers and models to individual agents. A code reviewer might use Claude while a documentation writer uses a cheaper model.
+- **TUI integration** — The `/teams` command and agents panel should reflect the full management system, not just static file listings.
 
-**Open questions:**
-- Where does pricing data live? Config YAML? Hardcoded table? Fetched from provider APIs?
-- How to handle models with tiered pricing (e.g., cached vs. uncached input tokens)?
-- Should we show cost in real-time (per-poll-cycle) or only at session completion?
-- How to handle local models (LM Studio, Ollama) where cost is effectively $0?
+**Design space to explore:**
+- Agent definition layering (base traits + role overlays + team-specific overrides)
+- Agent trait/capability libraries (reusable building blocks)
+- Team templates vs. fully custom teams
+- Hot-reloading of composed definitions (extend existing fsnotify watcher)
+- Agent definition caching strategy
+- How the operator discovers and selects teams for work assignment
+- Whether agents can self-describe their capabilities for dynamic team assembly
 
 ---
 
 ## Deferred Items
 
-These were considered for Phase 3 but are explicitly deferred to a later phase:
+These were considered for Phase 3 but are explicitly deferred to Phase 4:
 
-| Item | Reason |
-|------|--------|
-| OpenAPI-to-MCP bridges | Cool idea, lower priority than teams management |
-| Event-driven TUI updates (replace polling) | 500ms polling is sufficient for now |
-| MCP server HTTP transport | stdio is sufficient; HTTP needed only for non-Claude external agents |
-| MCP resource/prompt support | Only MCP tools are consumed; resources and prompts are future scope |
-| Remove Claude CLI subprocess fallback | Keep as-is in case it's still useful |
+| Item | Reason | Destination |
+|------|--------|-------------|
+| Cost estimation | Nice-to-have, not core to teams/agents work | Phase 4 |
+| OpenAPI-to-MCP bridges | Cool idea, lower priority than teams management | Phase 4 |
+| Event-driven TUI updates (replace polling) | 500ms polling is sufficient for now | Phase 4 |
+| MCP server HTTP transport | stdio is sufficient; HTTP needed only for non-Claude external agents | Phase 4 |
+| MCP resource/prompt support | Only MCP tools are consumed; resources and prompts are future scope | Phase 4 |
+| Remove Claude CLI subprocess fallback | Keep as-is in case it's still useful | Phase 4 |
 
 ---
 
 ## Delivery Approach
 
-Unlike Phases 1 and 2, Phase 3 has a significant design exploration component (deliverable 3.1). The plan is:
+Phase 3 has a significant design exploration component (deliverable 3.2). The plan is:
 
-1. **Wave 3 tech debt** — Execute all 5 items first. These are well-defined refactorings with clear acceptance criteria.
-2. **Design exploration for 3.1** — Before writing code, explore the agent composition and teams management design space. This may involve prototyping, discussing tradeoffs, and iterating on the data model.
-3. **Implementation** — Once the design is settled, break into PRs and execute.
-4. **3.2 and 3.3** — Can be done in parallel with or after 3.1, as they're independent.
+1. **3.1 (SQLite-only)** — Execute first. Well-defined, low risk, quick win.
+2. **Design exploration for 3.2** — Before writing code, explore the agent composition and teams management design space. This may involve prototyping, discussing tradeoffs, and iterating on the data model.
+3. **Implementation of 3.2** — Once the design is settled, break into PRs and execute.
 
 ---
 
