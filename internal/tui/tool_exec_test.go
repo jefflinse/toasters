@@ -16,7 +16,7 @@ func TestExecuteToolsCmd_BasicResults(t *testing.T) {
 
 	// Use a real ToolExecutor with no gateway — job_list with an empty workspace
 	// returns an empty list, which is a valid non-error result.
-	executor := tools.NewToolExecutor(nil, nil, t.TempDir())
+	executor := tools.NewToolExecutor(nil, nil, t.TempDir(), nil, nil)
 
 	calls := []llm.ToolCall{
 		{
@@ -54,25 +54,12 @@ func TestExecuteToolsCmd_BasicResults(t *testing.T) {
 func TestExecuteToolsCmd_MultipleTools(t *testing.T) {
 	t.Parallel()
 
-	executor := tools.NewToolExecutor(nil, nil, t.TempDir())
+	executor := tools.NewToolExecutor(nil, nil, t.TempDir(), nil, nil)
 
 	calls := []llm.ToolCall{
-		{
-			ID:   "call-1",
-			Type: "function",
-			Function: llm.ToolCallFunction{
-				Name:      "job_list",
-				Arguments: "{}",
-			},
-		},
-		{
-			ID:   "call-2",
-			Type: "function",
-			Function: llm.ToolCallFunction{
-				Name:      "job_list",
-				Arguments: "{}",
-			},
-		},
+		{ID: "call-1", Type: "function", Function: llm.ToolCallFunction{Name: "job_list", Arguments: "{}"}},
+		{ID: "call-2", Type: "function", Function: llm.ToolCallFunction{Name: "job_list", Arguments: "{}"}},
+		{ID: "call-3", Type: "function", Function: llm.ToolCallFunction{Name: "job_list", Arguments: "{}"}},
 	}
 
 	ctx := context.Background()
@@ -83,24 +70,24 @@ func TestExecuteToolsCmd_MultipleTools(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected ToolResultMsg, got %T", msg)
 	}
-	if len(result.Results) != 2 {
-		t.Fatalf("expected 2 results, got %d", len(result.Results))
+	if len(result.Results) != 3 {
+		t.Fatalf("expected 3 results, got %d", len(result.Results))
 	}
-	// Verify ordering matches call ordering.
-	if result.Results[0].CallID != "call-1" {
-		t.Errorf("Results[0].CallID = %q, want %q", result.Results[0].CallID, "call-1")
-	}
-	if result.Results[1].CallID != "call-2" {
-		t.Errorf("Results[1].CallID = %q, want %q", result.Results[1].CallID, "call-2")
+	for i, want := range []string{"call-1", "call-2", "call-3"} {
+		if result.Results[i].CallID != want {
+			t.Errorf("Results[%d].CallID = %q, want %q", i, result.Results[i].CallID, want)
+		}
+		if result.Results[i].Err != nil {
+			t.Errorf("Results[%d] unexpected error: %v", i, result.Results[i].Err)
+		}
 	}
 }
 
 func TestExecuteToolsCmd_ErrorHandling(t *testing.T) {
 	t.Parallel()
 
-	executor := tools.NewToolExecutor(nil, nil, t.TempDir())
+	executor := tools.NewToolExecutor(nil, nil, t.TempDir(), nil, nil)
 
-	// list_directory with a non-existent path should return an error.
 	calls := []llm.ToolCall{
 		{
 			ID:   "call-err",
@@ -134,7 +121,7 @@ func TestExecuteToolsCmd_ErrorHandling(t *testing.T) {
 func TestExecuteToolsCmd_Cancellation(t *testing.T) {
 	t.Parallel()
 
-	executor := tools.NewToolExecutor(nil, nil, t.TempDir())
+	executor := tools.NewToolExecutor(nil, nil, t.TempDir(), nil, nil)
 
 	calls := []llm.ToolCall{
 		{
@@ -182,7 +169,7 @@ func TestExecuteToolsCmd_Cancellation(t *testing.T) {
 func TestExecuteToolsCmd_ResultOrdering(t *testing.T) {
 	t.Parallel()
 
-	executor := tools.NewToolExecutor(nil, nil, t.TempDir())
+	executor := tools.NewToolExecutor(nil, nil, t.TempDir(), nil, nil)
 
 	calls := []llm.ToolCall{
 		{

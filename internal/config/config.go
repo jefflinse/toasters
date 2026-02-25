@@ -11,10 +11,27 @@ import (
 
 // Config holds all application configuration.
 type Config struct {
-	WorkspaceDir string         `mapstructure:"workspace_dir"`
-	DatabasePath string         `mapstructure:"database_path"`
-	Operator     OperatorConfig `mapstructure:"operator"`
-	Claude       ClaudeConfig   `mapstructure:"claude"`
+	WorkspaceDir string           `mapstructure:"workspace_dir"`
+	DatabasePath string           `mapstructure:"database_path"`
+	Operator     OperatorConfig   `mapstructure:"operator"`
+	Claude       ClaudeConfig     `mapstructure:"claude"`
+	Providers    []ProviderConfig `mapstructure:"providers"`
+	Agents       AgentsConfig     `mapstructure:"agents"`
+}
+
+// ProviderConfig holds configuration for a single LLM provider.
+type ProviderConfig struct {
+	Name     string `mapstructure:"name"`
+	Type     string `mapstructure:"type"` // "openai" or "anthropic"
+	Endpoint string `mapstructure:"endpoint"`
+	APIKey   string `mapstructure:"api_key"`
+	Model    string `mapstructure:"model"`
+}
+
+// AgentsConfig holds default provider/model settings for agents.
+type AgentsConfig struct {
+	DefaultProvider string `mapstructure:"default_provider"`
+	DefaultModel    string `mapstructure:"default_model"`
 }
 
 // OperatorConfig holds configuration for the operator LLM backend.
@@ -57,6 +74,8 @@ func Load() (*Config, error) {
 	viper.SetDefault("claude.default_model", "")
 	viper.SetDefault("claude.permission_mode", "")
 	viper.SetDefault("claude.slot_timeout_minutes", 15)
+	viper.SetDefault("agents.default_provider", "")
+	viper.SetDefault("agents.default_model", "")
 
 	if err := viper.ReadInConfig(); err != nil {
 		var notFound viper.ConfigFileNotFoundError

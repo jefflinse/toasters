@@ -1,9 +1,11 @@
 package tools
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -14,9 +16,11 @@ import (
 	"golang.org/x/net/html"
 
 	"github.com/jefflinse/toasters/internal/agents"
+	"github.com/jefflinse/toasters/internal/db"
 	"github.com/jefflinse/toasters/internal/job"
 	"github.com/jefflinse/toasters/internal/llm"
 	"github.com/jefflinse/toasters/internal/orchestration"
+	"github.com/jefflinse/toasters/internal/runtime"
 )
 
 // ToolExecutor holds the dependencies needed to execute operator tool calls.
@@ -25,15 +29,25 @@ type ToolExecutor struct {
 	Teams        []agents.Team
 	WorkspaceDir string
 	Tools        []llm.Tool
+	Store        db.Store         // may be nil
+	Runtime      *runtime.Runtime // may be nil
+
+	// Runtime agent configuration — set after construction.
+	DefaultProvider  string                      // default provider name for runtime agents
+	DefaultModel     string                      // default model for runtime agents
+	RepoRoot         string                      // repo root for agent working directory
+	OnSessionStarted func(sess *runtime.Session) // callback when a runtime session starts
 }
 
 // NewToolExecutor creates a ToolExecutor with the default static tools.
-func NewToolExecutor(gateway orchestration.AgentSpawner, teams []agents.Team, workspaceDir string) *ToolExecutor {
+func NewToolExecutor(gateway orchestration.AgentSpawner, teams []agents.Team, workspaceDir string, store db.Store, rt *runtime.Runtime) *ToolExecutor {
 	return &ToolExecutor{
 		Gateway:      gateway,
 		Teams:        teams,
 		WorkspaceDir: workspaceDir,
 		Tools:        staticTools,
+		Store:        store,
+		Runtime:      rt,
 	}
 }
 
@@ -315,6 +329,31 @@ var staticTools = []llm.Tool{
 			},
 		},
 	},
+	{
+		Type: "function",
+		Function: llm.ToolFunction{
+			Name:        "list_sessions",
+			Description: "List all active runtime agent sessions with their status, agent name, model, and elapsed time.",
+			Parameters:  map[string]any{"type": "object", "properties": map[string]any{}, "required": []string{}},
+		},
+	},
+	{
+		Type: "function",
+		Function: llm.ToolFunction{
+			Name:        "cancel_session",
+			Description: "Cancel a running runtime agent session by its session ID (or prefix).",
+			Parameters: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"session_id": map[string]any{
+						"type":        "string",
+						"description": "The session ID or prefix to cancel.",
+					},
+				},
+				"required": []string{"session_id"},
+			},
+		},
+	},
 }
 
 // ExecuteTool dispatches a tool call to the appropriate handler and returns
@@ -367,6 +406,19 @@ func (te *ToolExecutor) ExecuteTool(call llm.ToolCall) (string, error) {
 		j, err := job.Create(te.WorkspaceDir, args.ID, args.Name, args.Description)
 		if err != nil {
 			return "", fmt.Errorf("creating job: %w", err)
+		}
+		// Dual-write to SQLite if available.
+		if te.Store != nil {
+			ctx := context.Background()
+			dbJob := &db.Job{
+				ID:     j.ID,
+				Title:  args.Name,
+				Type:   "general",
+				Status: db.JobStatusPending,
+			}
+			if dbErr := te.Store.CreateJob(ctx, dbJob); dbErr != nil {
+				log.Printf("warning: failed to persist job %s to SQLite: %v", j.ID, dbErr)
+			}
 		}
 		return "created: " + j.ID, nil
 
@@ -476,6 +528,30 @@ func (te *ToolExecutor) ExecuteTool(call llm.ToolCall) (string, error) {
 		if tasks, err := job.ListTasks(jobDir); err == nil && len(tasks) > 0 {
 			_ = job.SetTaskTeam(tasks[0].Dir, args.TeamName)
 		}
+		// Try runtime path first if available and configured.
+		if te.Runtime != nil && te.DefaultProvider != "" {
+			prompt := agents.BuildTeamCoordinatorPrompt(team, jobDir)
+			opts := runtime.SpawnOpts{
+				AgentID:        team.Name,
+				ProviderName:   te.DefaultProvider,
+				Model:          te.DefaultModel,
+				SystemPrompt:   prompt,
+				JobID:          args.JobID,
+				InitialMessage: args.Task,
+				WorkDir:        te.RepoRoot,
+			}
+			sess, err := te.Runtime.SpawnAgent(context.Background(), opts)
+			if err != nil {
+				log.Printf("runtime spawn failed, falling back to gateway: %v", err)
+				// Fall through to gateway path below.
+			} else {
+				if te.OnSessionStarted != nil {
+					te.OnSessionStarted(sess)
+				}
+				return fmt.Sprintf("started runtime session %s for team %s", sess.ID(), team.Name), nil
+			}
+		}
+		// Fall through to gateway path.
 		slotID, alreadyRunning, err := te.Gateway.SpawnTeam(args.TeamName, args.JobID, args.Task, team)
 		if err != nil {
 			return "", fmt.Errorf("spawning team: %w", err)
@@ -579,7 +655,64 @@ func (te *ToolExecutor) ExecuteTool(call llm.ToolCall) (string, error) {
 		if err := job.UpdateFrontmatter(dir, updates); err != nil {
 			return "", fmt.Errorf("updating job status: %w", err)
 		}
+		// Dual-write to SQLite if available.
+		if te.Store != nil {
+			ctx := context.Background()
+			dbStatus := mapJobStatus(args.Status)
+			if dbErr := te.Store.UpdateJobStatus(ctx, args.ID, dbStatus); dbErr != nil {
+				log.Printf("warning: failed to update job %s status in SQLite: %v", args.ID, dbErr)
+			}
+		}
 		return fmt.Sprintf("job %s status set to %s", args.ID, args.Status), nil
+
+	case "list_sessions":
+		if te.Runtime == nil {
+			return "runtime not initialized", nil
+		}
+		sessions := te.Runtime.ActiveSessions()
+		if len(sessions) == 0 {
+			return "no active runtime sessions", nil
+		}
+		var lines []string
+		for _, s := range sessions {
+			elapsed := time.Since(s.StartTime).Truncate(time.Second)
+			lines = append(lines, fmt.Sprintf("session %s: agent=%s model=%s provider=%s status=%s tokens_in=%d tokens_out=%d elapsed=%s",
+				shortID(s.ID), s.AgentID, s.Model, s.Provider, s.Status, s.TokensIn, s.TokensOut, elapsed))
+		}
+		return strings.Join(lines, "\n"), nil
+
+	case "cancel_session":
+		if te.Runtime == nil {
+			return "runtime not initialized", nil
+		}
+		var args struct {
+			SessionID string `json:"session_id"`
+		}
+		if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
+			return "", fmt.Errorf("parsing cancel_session args: %w", err)
+		}
+		// Support prefix matching — find the session whose ID starts with the given prefix.
+		sessions := te.Runtime.ActiveSessions()
+		var matchID string
+		for _, s := range sessions {
+			if strings.HasPrefix(s.ID, args.SessionID) {
+				if matchID != "" {
+					return fmt.Sprintf("ambiguous session prefix %q — matches multiple sessions", args.SessionID), nil
+				}
+				matchID = s.ID
+			}
+		}
+		if matchID == "" {
+			// Try exact match on all sessions (including non-active).
+			if err := te.Runtime.CancelSession(args.SessionID); err != nil {
+				return fmt.Sprintf("session %q not found: %v", args.SessionID, err), nil
+			}
+			return fmt.Sprintf("cancelled session %s", args.SessionID), nil
+		}
+		if err := te.Runtime.CancelSession(matchID); err != nil {
+			return fmt.Sprintf("error cancelling session: %v", err), nil
+		}
+		return fmt.Sprintf("cancelled session %s", shortID(matchID)), nil
 
 	default:
 		return "", fmt.Errorf("unknown tool: %s", call.Function.Name)
@@ -674,4 +807,28 @@ func listDirectory(path string) (string, error) {
 	}
 
 	return strings.Join(lines, "\n"), nil
+}
+
+// shortID returns the first 8 characters of an ID, or the full ID if shorter.
+func shortID(id string) string {
+	if len(id) > 8 {
+		return id[:8]
+	}
+	return id
+}
+
+// mapJobStatus maps markdown job status strings to db.JobStatus constants.
+func mapJobStatus(status string) db.JobStatus {
+	switch status {
+	case "active":
+		return db.JobStatusActive
+	case "done":
+		return db.JobStatusCompleted
+	case "cancelled":
+		return db.JobStatusCancelled
+	case "paused":
+		return db.JobStatusPending // closest match
+	default:
+		return db.JobStatusPending
+	}
 }

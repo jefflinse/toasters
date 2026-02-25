@@ -684,6 +684,148 @@ func TestAnthropic_Models(t *testing.T) {
 	}
 }
 
+func TestAnthropic_ChatStream_KeychainFallback_BearerToken(t *testing.T) {
+	t.Parallel()
+
+	var capturedAuthHeader string
+	var capturedBetaHeader string
+	var capturedAPIKey string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedAuthHeader = r.Header.Get("Authorization")
+		capturedBetaHeader = r.Header.Get("anthropic-beta")
+		capturedAPIKey = r.Header.Get("x-api-key")
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w, "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
+	}))
+	defer srv.Close()
+
+	// Empty apiKey → should use the injected authFunc (simulating Keychain fallback).
+	p := NewAnthropic("test", "",
+		WithAnthropicBaseURL(srv.URL),
+		WithAnthropicAuthFunc(func() (*authHeaders, error) {
+			return &authHeaders{
+				header: "Authorization",
+				value:  "Bearer test-oauth-token",
+				extra: map[string]string{
+					"anthropic-beta": "oauth-2025-04-20",
+				},
+			}, nil
+		}),
+	)
+
+	ch, err := p.ChatStream(context.Background(), ChatRequest{
+		Model:    "test",
+		Messages: []Message{{Role: "user", Content: "test"}},
+	})
+	if err != nil {
+		t.Fatalf("ChatStream error: %v", err)
+	}
+	collectEvents(ch)
+
+	if capturedAuthHeader != "Bearer test-oauth-token" {
+		t.Errorf("Authorization = %q, want %q", capturedAuthHeader, "Bearer test-oauth-token")
+	}
+	if capturedBetaHeader != "oauth-2025-04-20" {
+		t.Errorf("anthropic-beta = %q, want %q", capturedBetaHeader, "oauth-2025-04-20")
+	}
+	if capturedAPIKey != "" {
+		t.Errorf("x-api-key = %q, want empty (should not be set)", capturedAPIKey)
+	}
+}
+
+func TestAnthropic_ChatStream_APIKeyOverridesKeychain(t *testing.T) {
+	t.Parallel()
+
+	var capturedAuthHeader string
+	var capturedAPIKey string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedAuthHeader = r.Header.Get("Authorization")
+		capturedAPIKey = r.Header.Get("x-api-key")
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w, "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
+	}))
+	defer srv.Close()
+
+	// Non-empty apiKey → should use x-api-key, not Bearer.
+	p := NewAnthropic("test", "sk-ant-explicit-key", WithAnthropicBaseURL(srv.URL))
+
+	ch, err := p.ChatStream(context.Background(), ChatRequest{
+		Model:    "test",
+		Messages: []Message{{Role: "user", Content: "test"}},
+	})
+	if err != nil {
+		t.Fatalf("ChatStream error: %v", err)
+	}
+	collectEvents(ch)
+
+	if capturedAPIKey != "sk-ant-explicit-key" {
+		t.Errorf("x-api-key = %q, want %q", capturedAPIKey, "sk-ant-explicit-key")
+	}
+	if capturedAuthHeader != "" {
+		t.Errorf("Authorization = %q, want empty (should not be set when apiKey is provided)", capturedAuthHeader)
+	}
+}
+
+func TestAnthropic_ChatStream_AuthFuncError(t *testing.T) {
+	t.Parallel()
+
+	p := NewAnthropic("test", "",
+		WithAnthropicAuthFunc(func() (*authHeaders, error) {
+			return nil, fmt.Errorf("keychain unavailable")
+		}),
+	)
+
+	_, err := p.ChatStream(context.Background(), ChatRequest{
+		Model:    "test",
+		Messages: []Message{{Role: "user", Content: "test"}},
+	})
+	if err == nil {
+		t.Fatal("expected error from ChatStream when authFunc fails")
+	}
+	if !strings.Contains(err.Error(), "keychain unavailable") {
+		t.Errorf("error = %v, want to contain 'keychain unavailable'", err)
+	}
+	if !strings.Contains(err.Error(), "resolving credentials") {
+		t.Errorf("error = %v, want to contain 'resolving credentials'", err)
+	}
+}
+
+func TestAnthropic_WithAnthropicAuthFunc_OverridesDefault(t *testing.T) {
+	t.Parallel()
+
+	var capturedAuthHeader string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedAuthHeader = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w, "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
+	}))
+	defer srv.Close()
+
+	// Even with an apiKey set, WithAnthropicAuthFunc should override.
+	p := NewAnthropic("test", "sk-ant-should-be-ignored",
+		WithAnthropicBaseURL(srv.URL),
+		WithAnthropicAuthFunc(func() (*authHeaders, error) {
+			return &authHeaders{
+				header: "Authorization",
+				value:  "Bearer custom-token",
+			}, nil
+		}),
+	)
+
+	ch, err := p.ChatStream(context.Background(), ChatRequest{
+		Model:    "test",
+		Messages: []Message{{Role: "user", Content: "test"}},
+	})
+	if err != nil {
+		t.Fatalf("ChatStream error: %v", err)
+	}
+	collectEvents(ch)
+
+	if capturedAuthHeader != "Bearer custom-token" {
+		t.Errorf("Authorization = %q, want %q", capturedAuthHeader, "Bearer custom-token")
+	}
+}
+
 func TestAnthropic_ChatStream_ToolResultMessages(t *testing.T) {
 	t.Parallel()
 

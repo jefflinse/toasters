@@ -17,10 +17,12 @@ import (
 
 	"github.com/jefflinse/toasters/internal/agents"
 	"github.com/jefflinse/toasters/internal/config"
+	"github.com/jefflinse/toasters/internal/db"
 	"github.com/jefflinse/toasters/internal/gateway"
 	"github.com/jefflinse/toasters/internal/job"
 	"github.com/jefflinse/toasters/internal/llm"
 	"github.com/jefflinse/toasters/internal/llm/tools"
+	"github.com/jefflinse/toasters/internal/runtime"
 )
 
 const (
@@ -178,10 +180,25 @@ type Model struct {
 	// Toast notification state.
 	toasts      []toast
 	nextToastID int
+
+	// Phase 1 integration: persistence and provider runtime.
+	store           db.Store                // may be nil — graceful degradation
+	runtime         *runtime.Runtime        // may be nil
+	runtimeSessions map[string]*runtimeSlot // keyed by session ID
+}
+
+// runtimeSlot tracks a runtime agent session for TUI display.
+type runtimeSlot struct {
+	sessionID string
+	agentName string
+	jobID     string
+	status    string // "active", "completed", "failed", "cancelled"
+	output    strings.Builder
+	startTime time.Time
 }
 
 // NewModel returns an initialized root model.
-func NewModel(client llm.Provider, claudeCfg config.ClaudeConfig, workspaceDir string, gw *gateway.Gateway, repoRoot string, teamsDir string, teams []agents.Team, awareness string, toolExec *tools.ToolExecutor) Model {
+func NewModel(client llm.Provider, claudeCfg config.ClaudeConfig, workspaceDir string, gw *gateway.Gateway, repoRoot string, teamsDir string, teams []agents.Team, awareness string, toolExec *tools.ToolExecutor, store db.Store, rt *runtime.Runtime) Model {
 	ta := textarea.New()
 	ta.Placeholder = "Type your message here..."
 	ta.Prompt = ""
@@ -220,6 +237,8 @@ func NewModel(client llm.Provider, claudeCfg config.ClaudeConfig, workspaceDir s
 		chatViewport: vp,
 		input:        ta,
 		toolExec:     toolExec,
+		store:        store,
+		runtime:      rt,
 		stats: SessionStats{
 			Endpoint:  client.BaseURL(),
 			Connected: false,
@@ -254,6 +273,7 @@ func NewModel(client llm.Provider, claudeCfg config.ClaudeConfig, workspaceDir s
 	m.selectedMsgIdx = -1
 	m.expandedReasoning = make(map[int]bool)
 	m.collapsedTools = make(map[int]bool)
+	m.runtimeSessions = make(map[string]*runtimeSlot)
 
 	agentVP := viewport.New()
 	agentVP.MouseWheelEnabled = true
@@ -1145,6 +1165,84 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case RuntimeSessionStartedMsg:
+		m.runtimeSessions[msg.SessionID] = &runtimeSlot{
+			sessionID: msg.SessionID,
+			agentName: msg.AgentName,
+			jobID:     msg.JobID,
+			status:    "active",
+			startTime: time.Now(),
+		}
+		cmds = append(cmds, m.addToast("🤖 "+msg.AgentName+" started (runtime)", toastInfo))
+		return m, tea.Batch(cmds...)
+
+	case RuntimeSessionEventMsg:
+		ev := msg.Event
+		slot, ok := m.runtimeSessions[ev.SessionID]
+		if !ok {
+			return m, nil // unknown session, ignore
+		}
+		switch ev.Type {
+		case runtime.SessionEventText:
+			slot.output.WriteString(ev.Text)
+		case runtime.SessionEventToolCall:
+			if ev.ToolCall != nil {
+				fmt.Fprintf(&slot.output, "\n⚙ %s\n", ev.ToolCall.Name)
+			}
+		case runtime.SessionEventToolResult:
+			if ev.ToolResult != nil {
+				result := ev.ToolResult.Result
+				if len(result) > 200 {
+					result = result[:200] + "..."
+				}
+				fmt.Fprintf(&slot.output, "→ %s\n", result)
+			}
+		}
+		return m, nil
+
+	case RuntimeSessionDoneMsg:
+		slot, ok := m.runtimeSessions[msg.SessionID]
+		if !ok {
+			return m, nil
+		}
+		slot.status = msg.Status
+
+		// Clean up the session entry to prevent unbounded growth.
+		defer delete(m.runtimeSessions, msg.SessionID)
+
+		// Build completion notification for the operator (same pattern as gateway).
+		outputTail := slot.output.String()
+		const maxTail = 2000
+		if len(outputTail) > maxTail {
+			outputTail = "…" + outputTail[len(outputTail)-maxTail:]
+		}
+		notification := fmt.Sprintf(
+			"Agent '%s' (runtime session) has completed (job: %s, status: %s).\n\nOutput (last 2000 chars):\n%s",
+			msg.AgentName, msg.JobID, msg.Status, outputTail,
+		)
+
+		cmds = append(cmds, m.addToast("🍞 "+msg.AgentName+" is done (runtime).", toastSuccess))
+
+		if m.streaming {
+			m.pendingCompletions = append(m.pendingCompletions, pendingCompletion{
+				notification: notification,
+			})
+		} else {
+			m.appendEntry(ChatEntry{
+				Message:   llm.Message{Role: "user", Content: notification},
+				Timestamp: time.Now(),
+			})
+			completionIdx := len(m.entries) - 1
+			m.completionMsgIdx[completionIdx] = true
+			m.selectedMsgIdx = completionIdx
+			m.updateViewportContent()
+			if !m.userScrolled {
+				m.chatViewport.GotoBottom()
+			}
+			cmds = append(cmds, m.startStream(m.messagesFromEntries()))
+		}
+		return m, tea.Batch(cmds...)
+
 	case AgentOutputMsg:
 		return m.handleAgentOutput(msg)
 
@@ -1228,6 +1326,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !needTick && m.gateway != nil {
 			for _, snap := range m.gateway.Slots() {
 				if snap.Status == gateway.SlotRunning {
+					needTick = true
+					break
+				}
+			}
+		}
+		if !needTick {
+			for _, rs := range m.runtimeSessions {
+				if rs.status == "active" {
 					needTick = true
 					break
 				}

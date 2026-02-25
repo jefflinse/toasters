@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -8,13 +9,17 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/jefflinse/toasters/internal/agents"
+	"github.com/jefflinse/toasters/internal/db"
 	"github.com/jefflinse/toasters/internal/job"
 	"github.com/jefflinse/toasters/internal/llm"
 	"github.com/jefflinse/toasters/internal/orchestration"
+	"github.com/jefflinse/toasters/internal/provider"
+	"github.com/jefflinse/toasters/internal/runtime"
 )
 
 // makeJobDir creates a minimal job directory under configDir/jobs/<jobID> with
@@ -104,7 +109,7 @@ func newTestExecutor(t *testing.T) (*ToolExecutor, string) {
 		t.Fatalf("creating config dir: %v", err)
 	}
 
-	te := NewToolExecutor(nil, nil, configDir)
+	te := NewToolExecutor(nil, nil, configDir, nil, nil)
 	return te, configDir
 }
 
@@ -1491,7 +1496,7 @@ func TestNewToolExecutor_SetsFields(t *testing.T) {
 	spawner := &mockSpawner{}
 	teams := []agents.Team{{Name: "test-team"}}
 
-	te := NewToolExecutor(spawner, teams, "/tmp/workspace")
+	te := NewToolExecutor(spawner, teams, "/tmp/workspace", nil, nil)
 
 	if te.Gateway != spawner {
 		t.Error("expected Gateway to be set")
@@ -1504,5 +1509,409 @@ func TestNewToolExecutor_SetsFields(t *testing.T) {
 	}
 	if len(te.Tools) == 0 {
 		t.Error("expected Tools to be populated with static tools")
+	}
+}
+
+// ============================================================================
+// Phase 1 Integration Tests
+// ============================================================================
+
+// --- Mock provider for runtime tests ---
+
+type mockProvider struct {
+	name string
+}
+
+func (m *mockProvider) Name() string { return m.name }
+func (m *mockProvider) Models(_ context.Context) ([]provider.ModelInfo, error) {
+	return nil, nil
+}
+func (m *mockProvider) ChatStream(_ context.Context, _ provider.ChatRequest) (<-chan provider.StreamEvent, error) {
+	ch := make(chan provider.StreamEvent, 3)
+	ch <- provider.StreamEvent{Type: provider.EventText, Text: "Hello from mock"}
+	ch <- provider.StreamEvent{Type: provider.EventDone}
+	close(ch)
+	return ch, nil
+}
+
+// openTestStore creates a SQLite store in a temp directory and registers cleanup.
+func openTestStore(t *testing.T) db.Store {
+	t.Helper()
+	store, err := db.Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatalf("opening test store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	return store
+}
+
+// ============================================================================
+// Test 1: job_create dual-write to SQLite
+// ============================================================================
+
+func TestJobCreate_DualWriteToSQLite(t *testing.T) {
+	te, configDir := newTestExecutor(t)
+	store := openTestStore(t)
+	te.Store = store
+
+	call := makeToolCall("job_create", map[string]string{
+		"id":          "dual-write-job",
+		"name":        "Dual Write Job",
+		"description": "Testing dual-write to SQLite.",
+	})
+
+	result, err := te.ExecuteTool(call)
+	if err != nil {
+		t.Fatalf("ExecuteTool returned error: %v", err)
+	}
+	if !strings.Contains(result, "dual-write-job") {
+		t.Errorf("expected result to contain job ID, got %q", result)
+	}
+
+	// Verify markdown job directory was created.
+	jobDir := filepath.Join(configDir, "jobs", "dual-write-job")
+	if _, err := os.Stat(filepath.Join(jobDir, "OVERVIEW.md")); err != nil {
+		t.Errorf("OVERVIEW.md not created: %v", err)
+	}
+
+	// Verify the job exists in SQLite with correct fields.
+	ctx := context.Background()
+	dbJob, err := store.GetJob(ctx, "dual-write-job")
+	if err != nil {
+		t.Fatalf("GetJob from SQLite failed: %v", err)
+	}
+	if dbJob.Title != "Dual Write Job" {
+		t.Errorf("SQLite job title: got %q, want %q", dbJob.Title, "Dual Write Job")
+	}
+	if dbJob.Status != db.JobStatusPending {
+		t.Errorf("SQLite job status: got %q, want %q", dbJob.Status, db.JobStatusPending)
+	}
+}
+
+// ============================================================================
+// Test 2: job_set_status dual-write to SQLite
+// ============================================================================
+
+func TestJobSetStatus_DualWriteToSQLite(t *testing.T) {
+	te, configDir := newTestExecutor(t)
+	store := openTestStore(t)
+	te.Store = store
+
+	// Create a job in both markdown and SQLite.
+	createCall := makeToolCall("job_create", map[string]string{
+		"id":          "status-dual-job",
+		"name":        "Status Dual Job",
+		"description": "Testing status dual-write.",
+	})
+	_, err := te.ExecuteTool(createCall)
+	if err != nil {
+		t.Fatalf("job_create failed: %v", err)
+	}
+
+	// Set status to "done".
+	statusCall := jobSetStatusCall("status-dual-job", "done")
+	result, err := te.ExecuteTool(statusCall)
+	if err != nil {
+		t.Fatalf("job_set_status returned error: %v", err)
+	}
+	if !strings.Contains(result, "done") {
+		t.Errorf("expected result to contain 'done', got %q", result)
+	}
+
+	// Verify markdown status was updated.
+	jobDir := filepath.Join(configDir, "jobs", "status-dual-job")
+	fm := loadFrontmatter(t, jobDir)
+	if fm.Status != job.StatusDone {
+		t.Errorf("markdown status: got %q, want %q", fm.Status, job.StatusDone)
+	}
+
+	// Verify SQLite status was updated.
+	ctx := context.Background()
+	dbJob, err := store.GetJob(ctx, "status-dual-job")
+	if err != nil {
+		t.Fatalf("GetJob from SQLite failed: %v", err)
+	}
+	if dbJob.Status != db.JobStatusCompleted {
+		t.Errorf("SQLite job status: got %q, want %q", dbJob.Status, db.JobStatusCompleted)
+	}
+}
+
+// ============================================================================
+// Test 3: job_create with nil store (graceful degradation)
+// ============================================================================
+
+func TestJobCreate_NilStoreGracefulDegradation(t *testing.T) {
+	te, configDir := newTestExecutor(t)
+	// te.Store is nil by default from newTestExecutor.
+
+	call := makeToolCall("job_create", map[string]string{
+		"id":          "nil-store-job",
+		"name":        "Nil Store Job",
+		"description": "Should succeed without SQLite.",
+	})
+
+	result, err := te.ExecuteTool(call)
+	if err != nil {
+		t.Fatalf("ExecuteTool returned error: %v", err)
+	}
+	if !strings.Contains(result, "nil-store-job") {
+		t.Errorf("expected result to contain job ID, got %q", result)
+	}
+
+	// Verify markdown job was created.
+	jobDir := filepath.Join(configDir, "jobs", "nil-store-job")
+	if _, err := os.Stat(filepath.Join(jobDir, "OVERVIEW.md")); err != nil {
+		t.Errorf("OVERVIEW.md not created: %v", err)
+	}
+}
+
+// ============================================================================
+// Test 4: assign_team uses runtime when provider configured
+// ============================================================================
+
+func TestAssignTeam_UsesRuntimeWhenProviderConfigured(t *testing.T) {
+	te, configDir := newTestExecutor(t)
+
+	// Set up a mock provider in a registry.
+	mock := &mockProvider{name: "test-provider"}
+	registry := provider.NewRegistry()
+	registry.Register("test-provider", mock)
+
+	// Create a runtime with the registry.
+	rt := runtime.New(nil, registry)
+	te.Runtime = rt
+	te.DefaultProvider = "test-provider"
+	te.DefaultModel = "test-model"
+	te.RepoRoot = t.TempDir()
+
+	// Track session starts.
+	var sessionStarted bool
+	var mu sync.Mutex
+	te.OnSessionStarted = func(sess *runtime.Session) {
+		mu.Lock()
+		sessionStarted = true
+		mu.Unlock()
+	}
+
+	// Set up a gateway mock that should NOT be called.
+	gatewayCalled := false
+	te.Gateway = &mockSpawner{
+		spawnTeamFn: func(_, _, _ string, _ agents.Team) (int, bool, error) {
+			gatewayCalled = true
+			return 0, false, nil
+		},
+	}
+	te.Teams = []agents.Team{{Name: "coding"}}
+
+	// Create a job directory.
+	makeJobDir(t, configDir, "runtime-job", "active", "")
+
+	call := makeToolCall("assign_team", map[string]string{
+		"team_name": "coding",
+		"job_id":    "runtime-job",
+		"task":      "Implement feature via runtime",
+	})
+
+	result, err := te.ExecuteTool(call)
+	if err != nil {
+		t.Fatalf("ExecuteTool returned error: %v", err)
+	}
+
+	// Verify runtime path was used.
+	if !strings.Contains(result, "started runtime session") {
+		t.Errorf("expected 'started runtime session' in result, got %q", result)
+	}
+
+	mu.Lock()
+	started := sessionStarted
+	mu.Unlock()
+	if !started {
+		t.Error("expected OnSessionStarted callback to be called")
+	}
+
+	// Verify gateway was NOT called.
+	if gatewayCalled {
+		t.Error("expected gateway NOT to be called when runtime path succeeds")
+	}
+}
+
+// ============================================================================
+// Test 5: assign_team falls back to gateway when no provider configured
+// ============================================================================
+
+func TestAssignTeam_FallsBackToGatewayWhenNoProvider(t *testing.T) {
+	te, configDir := newTestExecutor(t)
+
+	// Set up runtime but leave DefaultProvider empty.
+	registry := provider.NewRegistry()
+	rt := runtime.New(nil, registry)
+	te.Runtime = rt
+	// te.DefaultProvider is "" — runtime path should be skipped.
+
+	gatewayCalled := false
+	te.Gateway = &mockSpawner{
+		spawnTeamFn: func(teamName, jobID, task string, _ agents.Team) (int, bool, error) {
+			gatewayCalled = true
+			if teamName != "coding" {
+				t.Errorf("expected team 'coding', got %q", teamName)
+			}
+			return 2, false, nil
+		},
+	}
+	te.Teams = []agents.Team{{Name: "coding"}}
+
+	makeJobDir(t, configDir, "gateway-fallback-job", "active", "")
+
+	call := makeToolCall("assign_team", map[string]string{
+		"team_name": "coding",
+		"job_id":    "gateway-fallback-job",
+		"task":      "Do work via gateway",
+	})
+
+	result, err := te.ExecuteTool(call)
+	if err != nil {
+		t.Fatalf("ExecuteTool returned error: %v", err)
+	}
+
+	if !gatewayCalled {
+		t.Error("expected gateway SpawnTeam to be called")
+	}
+	if !strings.Contains(result, "started: slot 2") {
+		t.Errorf("expected 'started: slot 2', got %q", result)
+	}
+}
+
+// ============================================================================
+// Test 6: assign_team falls back to gateway when runtime spawn fails
+// ============================================================================
+
+func TestAssignTeam_FallsBackToGatewayOnRuntimeError(t *testing.T) {
+	te, configDir := newTestExecutor(t)
+
+	// Set up runtime with a provider that doesn't exist in the registry.
+	registry := provider.NewRegistry()
+	// Do NOT register "nonexistent" — SpawnAgent will fail with "provider not found".
+	rt := runtime.New(nil, registry)
+	te.Runtime = rt
+	te.DefaultProvider = "nonexistent"
+	te.DefaultModel = "some-model"
+
+	gatewayCalled := false
+	te.Gateway = &mockSpawner{
+		spawnTeamFn: func(_, _, _ string, _ agents.Team) (int, bool, error) {
+			gatewayCalled = true
+			return 5, false, nil
+		},
+	}
+	te.Teams = []agents.Team{{Name: "coding"}}
+
+	makeJobDir(t, configDir, "runtime-fail-job", "active", "")
+
+	call := makeToolCall("assign_team", map[string]string{
+		"team_name": "coding",
+		"job_id":    "runtime-fail-job",
+		"task":      "Do work with fallback",
+	})
+
+	result, err := te.ExecuteTool(call)
+	if err != nil {
+		t.Fatalf("ExecuteTool returned error: %v", err)
+	}
+
+	if !gatewayCalled {
+		t.Error("expected gateway SpawnTeam to be called as fallback")
+	}
+	if !strings.Contains(result, "started: slot 5") {
+		t.Errorf("expected 'started: slot 5', got %q", result)
+	}
+}
+
+// ============================================================================
+// Test 7: list_sessions with nil runtime
+// ============================================================================
+
+func TestListSessions_NilRuntime(t *testing.T) {
+	te, _ := newTestExecutor(t)
+	// te.Runtime is nil by default.
+
+	call := makeToolCall("list_sessions", map[string]any{})
+	result, err := te.ExecuteTool(call)
+	if err != nil {
+		t.Fatalf("ExecuteTool returned error: %v", err)
+	}
+	if result != "runtime not initialized" {
+		t.Errorf("expected 'runtime not initialized', got %q", result)
+	}
+}
+
+// ============================================================================
+// Test 8: list_sessions with no active sessions
+// ============================================================================
+
+func TestListSessions_NoActiveSessions(t *testing.T) {
+	te, _ := newTestExecutor(t)
+	te.Runtime = runtime.New(nil, provider.NewRegistry())
+
+	call := makeToolCall("list_sessions", map[string]any{})
+	result, err := te.ExecuteTool(call)
+	if err != nil {
+		t.Fatalf("ExecuteTool returned error: %v", err)
+	}
+	if result != "no active runtime sessions" {
+		t.Errorf("expected 'no active runtime sessions', got %q", result)
+	}
+}
+
+// ============================================================================
+// Test 9: cancel_session with nil runtime
+// ============================================================================
+
+func TestCancelSession_NilRuntime(t *testing.T) {
+	te, _ := newTestExecutor(t)
+	// te.Runtime is nil by default.
+
+	call := makeToolCall("cancel_session", map[string]string{"session_id": "abc"})
+	result, err := te.ExecuteTool(call)
+	if err != nil {
+		t.Fatalf("ExecuteTool returned error: %v", err)
+	}
+	if result != "runtime not initialized" {
+		t.Errorf("expected 'runtime not initialized', got %q", result)
+	}
+}
+
+// ============================================================================
+// Test 10: cancel_session with nonexistent session
+// ============================================================================
+
+func TestCancelSession_NonexistentSession(t *testing.T) {
+	te, _ := newTestExecutor(t)
+	te.Runtime = runtime.New(nil, provider.NewRegistry())
+
+	call := makeToolCall("cancel_session", map[string]string{"session_id": "nonexistent"})
+	result, err := te.ExecuteTool(call)
+	if err != nil {
+		t.Fatalf("ExecuteTool returned error: %v", err)
+	}
+	if !strings.Contains(result, "not found") {
+		t.Errorf("expected 'not found' in result, got %q", result)
+	}
+}
+
+// ============================================================================
+// Test 11: cancel_session bad JSON
+// ============================================================================
+
+func TestCancelSession_BadJSON(t *testing.T) {
+	te, _ := newTestExecutor(t)
+	te.Runtime = runtime.New(nil, provider.NewRegistry())
+
+	call := makeToolCallRaw("cancel_session", "bad")
+	_, err := te.ExecuteTool(call)
+	if err == nil {
+		t.Fatal("expected error for bad JSON, got nil")
+	}
+	if !strings.Contains(err.Error(), "parsing cancel_session args") {
+		t.Errorf("expected error about parsing args, got: %v", err)
 	}
 }

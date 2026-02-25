@@ -37,6 +37,7 @@ type ToolDef struct {
 type SessionSnapshot struct {
 	ID        string
 	AgentID   string
+	JobID     string
 	Status    string
 	Model     string
 	Provider  string
