@@ -581,6 +581,318 @@ func TestManager_Tools_MultipleServers(t *testing.T) {
 	}
 }
 
+// --- Servers ---
+
+func TestManager_Servers_NilReceiver(t *testing.T) {
+	t.Parallel()
+
+	var m *Manager
+	statuses := m.Servers()
+	if statuses != nil {
+		t.Errorf("expected nil from nil receiver, got %v", statuses)
+	}
+}
+
+func TestManager_Servers_Empty(t *testing.T) {
+	t.Parallel()
+
+	m := NewManager()
+	statuses := m.Servers()
+	if statuses != nil {
+		t.Errorf("expected nil on empty manager, got %v", statuses)
+	}
+}
+
+func TestManager_Servers_ReturnsCopy(t *testing.T) {
+	t.Parallel()
+
+	m := NewManager()
+	m.mu.Lock()
+	m.statuses = []ServerStatus{
+		{Name: "srv1", Transport: "stdio", State: ServerConnected, ToolCount: 2},
+		{Name: "srv2", Transport: "sse", State: ServerFailed, Error: "connection refused"},
+	}
+	m.mu.Unlock()
+
+	statuses := m.Servers()
+	if len(statuses) != 2 {
+		t.Fatalf("expected 2 statuses, got %d", len(statuses))
+	}
+
+	// Mutate the returned slice and verify internal state is unaffected.
+	statuses[0].Name = "mutated"
+	internal := m.Servers()
+	if internal[0].Name != "srv1" {
+		t.Errorf("Servers() did not return a copy; internal state was mutated to %q", internal[0].Name)
+	}
+}
+
+func TestManager_Servers_ConnectedServer(t *testing.T) {
+	t.Parallel()
+
+	m := NewManager()
+	m.mu.Lock()
+	m.statuses = []ServerStatus{
+		{
+			Name:      "myserver",
+			Transport: "stdio",
+			State:     ServerConnected,
+			ToolCount: 3,
+			Tools: []ToolInfo{
+				{NamespacedName: "myserver__a", OriginalName: "a", ServerName: "myserver"},
+				{NamespacedName: "myserver__b", OriginalName: "b", ServerName: "myserver"},
+				{NamespacedName: "myserver__c", OriginalName: "c", ServerName: "myserver"},
+			},
+			Config: config.MCPServerConfig{Name: "myserver", Transport: "stdio", Command: "/usr/bin/server"},
+		},
+	}
+	m.mu.Unlock()
+
+	statuses := m.Servers()
+	if len(statuses) != 1 {
+		t.Fatalf("expected 1 status, got %d", len(statuses))
+	}
+	s := statuses[0]
+	if s.Name != "myserver" {
+		t.Errorf("expected Name 'myserver', got %q", s.Name)
+	}
+	if s.Transport != "stdio" {
+		t.Errorf("expected Transport 'stdio', got %q", s.Transport)
+	}
+	if s.State != ServerConnected {
+		t.Errorf("expected State ServerConnected, got %q", s.State)
+	}
+	if s.Error != "" {
+		t.Errorf("expected empty Error, got %q", s.Error)
+	}
+	if s.ToolCount != 3 {
+		t.Errorf("expected ToolCount 3, got %d", s.ToolCount)
+	}
+	if len(s.Tools) != 3 {
+		t.Errorf("expected 3 Tools, got %d", len(s.Tools))
+	}
+	if s.Config.Command != "/usr/bin/server" {
+		t.Errorf("expected Config.Command '/usr/bin/server', got %q", s.Config.Command)
+	}
+}
+
+func TestManager_Servers_FailedServer(t *testing.T) {
+	t.Parallel()
+
+	m := NewManager()
+	m.mu.Lock()
+	m.statuses = []ServerStatus{
+		{
+			Name:      "badsrv",
+			Transport: "sse",
+			State:     ServerFailed,
+			Error:     "connection refused",
+			Config:    config.MCPServerConfig{Name: "badsrv", Transport: "sse", URL: "http://localhost:9999"},
+		},
+	}
+	m.mu.Unlock()
+
+	statuses := m.Servers()
+	if len(statuses) != 1 {
+		t.Fatalf("expected 1 status, got %d", len(statuses))
+	}
+	s := statuses[0]
+	if s.State != ServerFailed {
+		t.Errorf("expected State ServerFailed, got %q", s.State)
+	}
+	if s.Error != "connection refused" {
+		t.Errorf("expected Error 'connection refused', got %q", s.Error)
+	}
+	if s.ToolCount != 0 {
+		t.Errorf("expected ToolCount 0 for failed server, got %d", s.ToolCount)
+	}
+	if len(s.Tools) != 0 {
+		t.Errorf("expected 0 Tools for failed server, got %d", len(s.Tools))
+	}
+}
+
+func TestManager_Servers_MixedConnectedAndFailed(t *testing.T) {
+	t.Parallel()
+
+	m := NewManager()
+	m.mu.Lock()
+	m.statuses = []ServerStatus{
+		{Name: "good", Transport: "stdio", State: ServerConnected, ToolCount: 1},
+		{Name: "bad", Transport: "http", State: ServerFailed, Error: "timeout"},
+		{Name: "also_good", Transport: "sse", State: ServerConnected, ToolCount: 5},
+	}
+	m.mu.Unlock()
+
+	statuses := m.Servers()
+	if len(statuses) != 3 {
+		t.Fatalf("expected 3 statuses, got %d", len(statuses))
+	}
+
+	connected := 0
+	failed := 0
+	for _, s := range statuses {
+		switch s.State {
+		case ServerConnected:
+			connected++
+		case ServerFailed:
+			failed++
+		}
+	}
+	if connected != 2 {
+		t.Errorf("expected 2 connected, got %d", connected)
+	}
+	if failed != 1 {
+		t.Errorf("expected 1 failed, got %d", failed)
+	}
+}
+
+// TestManager_Servers_RealStdioServer verifies that Connect populates statuses
+// for a real stdio MCP server.
+func TestManager_Servers_RealStdioServer(t *testing.T) {
+	if testMCPServerBin == "" {
+		t.Skip("test MCP server binary not available")
+	}
+
+	m := NewManager()
+	err := m.Connect(context.Background(), []config.MCPServerConfig{
+		{
+			Name:      "testserver",
+			Transport: "stdio",
+			Command:   testMCPServerBin,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Connect returned error: %v", err)
+	}
+	defer func() { _ = m.Close() }()
+
+	statuses := m.Servers()
+	if len(statuses) != 1 {
+		t.Fatalf("expected 1 status, got %d", len(statuses))
+	}
+	s := statuses[0]
+	if s.Name != "testserver" {
+		t.Errorf("expected Name 'testserver', got %q", s.Name)
+	}
+	if s.State != ServerConnected {
+		t.Errorf("expected State ServerConnected, got %q", s.State)
+	}
+	if s.ToolCount == 0 {
+		t.Error("expected ToolCount > 0")
+	}
+	if len(s.Tools) != s.ToolCount {
+		t.Errorf("expected len(Tools) == ToolCount (%d), got %d", s.ToolCount, len(s.Tools))
+	}
+	if s.Transport != "stdio" {
+		t.Errorf("expected Transport 'stdio', got %q", s.Transport)
+	}
+}
+
+// TestManager_Servers_FailedServerTracked verifies that Connect tracks failed
+// servers in statuses.
+func TestManager_Servers_FailedServerTracked(t *testing.T) {
+	t.Parallel()
+
+	m := NewManager()
+	err := m.Connect(context.Background(), []config.MCPServerConfig{
+		{Name: "badsrv", Transport: "grpc"}, // unsupported transport → createClient fails
+	})
+	if err != nil {
+		t.Fatalf("Connect returned error: %v", err)
+	}
+
+	statuses := m.Servers()
+	if len(statuses) != 1 {
+		t.Fatalf("expected 1 status for failed server, got %d", len(statuses))
+	}
+	s := statuses[0]
+	if s.Name != "badsrv" {
+		t.Errorf("expected Name 'badsrv', got %q", s.Name)
+	}
+	if s.State != ServerFailed {
+		t.Errorf("expected State ServerFailed, got %q", s.State)
+	}
+	if s.Error == "" {
+		t.Error("expected non-empty Error for failed server")
+	}
+	if s.ToolCount != 0 {
+		t.Errorf("expected ToolCount 0, got %d", s.ToolCount)
+	}
+}
+
+// TestManager_Servers_MixedRealServers verifies that Connect tracks both
+// successful and failed servers in statuses.
+func TestManager_Servers_MixedRealServers(t *testing.T) {
+	if testMCPServerBin == "" {
+		t.Skip("test MCP server binary not available")
+	}
+
+	m := NewManager()
+	err := m.Connect(context.Background(), []config.MCPServerConfig{
+		{Name: "good", Transport: "stdio", Command: testMCPServerBin},
+		{Name: "bad", Transport: "stdio", Command: ""}, // missing command → createClient fails
+	})
+	if err != nil {
+		t.Fatalf("Connect returned error: %v", err)
+	}
+	defer func() { _ = m.Close() }()
+
+	statuses := m.Servers()
+	if len(statuses) != 2 {
+		t.Fatalf("expected 2 statuses, got %d", len(statuses))
+	}
+
+	// First should be connected.
+	if statuses[0].State != ServerConnected {
+		t.Errorf("expected first server connected, got %q", statuses[0].State)
+	}
+	if statuses[0].Name != "good" {
+		t.Errorf("expected first server name 'good', got %q", statuses[0].Name)
+	}
+
+	// Second should be failed.
+	if statuses[1].State != ServerFailed {
+		t.Errorf("expected second server failed, got %q", statuses[1].State)
+	}
+	if statuses[1].Name != "bad" {
+		t.Errorf("expected second server name 'bad', got %q", statuses[1].Name)
+	}
+}
+
+// TestManager_Servers_ConcurrentAccess verifies Servers() is safe to call
+// concurrently with other operations.
+func TestManager_Servers_ConcurrentAccess(t *testing.T) {
+	t.Parallel()
+
+	m := NewManager()
+	m.mu.Lock()
+	m.statuses = []ServerStatus{
+		{Name: "srv", State: ServerConnected, ToolCount: 1},
+	}
+	m.mu.Unlock()
+
+	var wg sync.WaitGroup
+	const goroutines = 10
+
+	for range goroutines {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_ = m.Servers()
+		}()
+	}
+
+	for range goroutines {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_ = m.Tools()
+		}()
+	}
+
+	wg.Wait()
+}
+
 // --- Close ---
 
 func TestManager_Close_Empty(t *testing.T) {

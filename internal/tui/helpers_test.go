@@ -372,6 +372,113 @@ func TestExtractToolName(t *testing.T) {
 	}
 }
 
+func TestFormatToolName(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{
+			name: "built-in tool unchanged",
+			in:   "read_file",
+			want: "read_file",
+		},
+		{
+			name: "MCP namespaced tool formatted",
+			in:   "github__search_repositories",
+			want: "search_repositories (via github)",
+		},
+		{
+			name: "MCP tool with multiple underscores in tool name",
+			in:   "linear__list_my_issues",
+			want: "list_my_issues (via linear)",
+		},
+		{
+			name: "multiple double underscores uses first split",
+			in:   "server__ns__tool",
+			want: "ns__tool (via server)",
+		},
+		{
+			name: "empty string unchanged",
+			in:   "",
+			want: "",
+		},
+		{
+			name: "single underscore unchanged",
+			in:   "read_file",
+			want: "read_file",
+		},
+		{
+			name: "double underscore at start",
+			in:   "__tool_name",
+			want: "tool_name (via )",
+		},
+		{
+			name: "double underscore at end",
+			in:   "server__",
+			want: " (via server)",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := formatToolName(tt.in)
+			if got != tt.want {
+				t.Errorf("formatToolName(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestFormatToolCallContent(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		content string
+		want    string
+	}{
+		{
+			name:    "MCP tool in standard format",
+			content: "⚙ calling `github__search_repositories`…",
+			want:    "⚙ calling `search_repositories (via github)`…",
+		},
+		{
+			name:    "built-in tool unchanged",
+			content: "⚙ calling `read_file`…",
+			want:    "⚙ calling `read_file`…",
+		},
+		{
+			name:    "no backticks unchanged",
+			content: "some random content",
+			want:    "some random content",
+		},
+		{
+			name:    "single backtick no closing unchanged",
+			content: "calling `github__tool without closing",
+			want:    "calling `github__tool without closing",
+		},
+		{
+			name:    "empty content unchanged",
+			content: "",
+			want:    "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := formatToolCallContent(tt.content)
+			if got != tt.want {
+				t.Errorf("formatToolCallContent(%q) = %q, want %q", tt.content, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestRenderCompletionBlock(t *testing.T) {
 	t.Parallel()
 

@@ -2,6 +2,7 @@
 package tui
 
 import (
+	"fmt"
 	"slices"
 	"strings"
 	"time"
@@ -129,6 +130,36 @@ func extractToolName(content string) string {
 		}
 	}
 	return "tool call"
+}
+
+// formatToolName formats a tool name for display. MCP-namespaced tools
+// (containing "__") are rendered as "tool_name (via server)" instead of
+// "server__tool_name". Built-in tool names are returned unchanged.
+func formatToolName(name string) string {
+	if parts := strings.SplitN(name, "__", 2); len(parts) == 2 {
+		return fmt.Sprintf("%s (via %s)", parts[1], parts[0])
+	}
+	return name
+}
+
+// formatToolCallContent transforms the content of a tool-call indicator message
+// so that any MCP-namespaced tool name inside backticks is displayed in the
+// "tool_name (via server)" format. Non-MCP content is returned unchanged.
+func formatToolCallContent(content string) string {
+	start := strings.Index(content, "`")
+	if start < 0 {
+		return content
+	}
+	end := strings.Index(content[start+1:], "`")
+	if end < 0 {
+		return content
+	}
+	name := content[start+1 : start+1+end]
+	formatted := formatToolName(name)
+	if formatted == name {
+		return content
+	}
+	return content[:start+1] + formatted + content[start+1+end:]
 }
 
 // renderScrollbar builds a vertical scrollbar string of the given height.

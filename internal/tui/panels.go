@@ -11,6 +11,7 @@ import (
 	"github.com/jefflinse/toasters/internal/db"
 	"github.com/jefflinse/toasters/internal/gateway"
 	"github.com/jefflinse/toasters/internal/job"
+	"github.com/jefflinse/toasters/internal/mcp"
 )
 
 func leftPanelWidth(termWidth int) int {
@@ -337,7 +338,7 @@ func (m Model) renderSidebar(sbWidth int) string {
 	liveReasoningTokens := m.stats.ReasoningTokens + m.stats.ReasoningTokensLive
 
 	sb.WriteString(sidebarRow("Messages", fmt.Sprintf("%d", m.stats.MessageCount)))
-	sb.WriteString(sidebarRow("Tokens in", fmt.Sprintf("%d", m.stats.PromptTokens)))
+	sb.WriteString(sidebarRow("Prompt ctx", fmt.Sprintf("%d", m.stats.PromptTokens)))
 	sb.WriteString(sidebarRow("Tokens out", fmt.Sprintf("%d", liveCompletionTokens)))
 	sb.WriteString(sidebarRow("Reasoning", fmt.Sprintf("%d", liveReasoningTokens)))
 
@@ -351,7 +352,7 @@ func (m Model) renderSidebar(sbWidth int) string {
 	}
 	sb.WriteString(sidebarRow("Speed", tokPerSec))
 
-	totalTokens := m.stats.PromptTokens + liveCompletionTokens + liveReasoningTokens
+	totalTokens := m.stats.PromptTokens + m.stats.CompletionTokensLive + m.stats.ReasoningTokensLive
 	sb.WriteString(SidebarLabelStyle.Render("Context"))
 	sb.WriteString("\n")
 	sb.WriteString(renderContextBar(totalTokens, m.stats.SystemPromptTokens, m.stats.ContextLength, contentWidth, m.streaming, m.spinnerFrame))
@@ -368,6 +369,49 @@ func (m Model) renderSidebar(sbWidth int) string {
 	}
 	sb.WriteString(sidebarRow("Last resp", lastResp))
 	sb.WriteString(sidebarRow("Avg resp", avgResp))
+
+	// --- MCP servers section ---
+	if m.mcpManager != nil {
+		servers := m.mcpManager.Servers()
+		if len(servers) > 0 {
+			sb.WriteString("\n")
+			sb.WriteString(gradientText("MCP", [3]uint8{50, 130, 255}, [3]uint8{175, 50, 200}))
+			sb.WriteString("\n")
+
+			var totalTools int
+			for _, s := range servers {
+				var icon string
+				var style lipgloss.Style
+				switch s.State {
+				case mcp.ServerConnected:
+					icon = "✓"
+					style = ConnectedStyle
+				case mcp.ServerFailed:
+					icon = "✗"
+					style = ErrorStyle
+				default:
+					icon = "○"
+					style = DimStyle
+				}
+				totalTools += s.ToolCount
+
+				label := s.Name
+				toolInfo := fmt.Sprintf("(%d tools)", s.ToolCount)
+				if s.State == mcp.ServerFailed {
+					toolInfo = "(failed)"
+				}
+
+				line := style.Render(icon) + " " + truncateStr(label, contentWidth-len(icon)-len(toolInfo)-3) + " " + DimStyle.Render(toolInfo)
+				sb.WriteString(line)
+				sb.WriteString("\n")
+			}
+
+			// Summary line
+			summary := fmt.Sprintf("%d servers, %d tools", len(servers), totalTools)
+			sb.WriteString(DimStyle.Render(summary))
+			sb.WriteString("\n")
+		}
+	}
 
 	// --- Bottom pane: Agents (auto-sized to content) ---
 	var agentsSB strings.Builder

@@ -21,6 +21,7 @@ import (
 	"github.com/jefflinse/toasters/internal/db"
 	"github.com/jefflinse/toasters/internal/job"
 	"github.com/jefflinse/toasters/internal/llm"
+	"github.com/jefflinse/toasters/internal/mcp"
 	"github.com/jefflinse/toasters/internal/orchestration"
 	"github.com/jefflinse/toasters/internal/runtime"
 )
@@ -745,7 +746,7 @@ func (te *ToolExecutor) ExecuteTool(ctx context.Context, call llm.ToolCall) (str
 			if err != nil {
 				return "", fmt.Errorf("MCP tool %s: %w", call.Function.Name, err)
 			}
-			return result, nil
+			return mcp.TruncateResult(result, mcp.DefaultMaxResultLen), nil
 		}
 		return "", fmt.Errorf("unknown tool: %s", call.Function.Name)
 	}

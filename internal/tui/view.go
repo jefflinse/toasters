@@ -140,6 +140,15 @@ func (m *Model) View() tea.View {
 		return v
 	}
 
+	// MCP modal takes over the full terminal as a centered overlay.
+	if m.mcpModal.show {
+		mcpView := m.renderMCPModal()
+		v := tea.NewView(mcpView)
+		v.AltScreen = true
+		v.MouseMode = tea.MouseModeCellMotion
+		return v
+	}
+
 	// Blocker modal takes over the full terminal as a centered overlay.
 	if m.blockerModal.show {
 		blockerView := m.renderBlockerModal()
@@ -866,15 +875,15 @@ func (m *Model) updateViewportContent() {
 			// Tool-call indicator messages render as collapsible tool blocks.
 			if entry.ClaudeMeta == "tool-call-indicator" {
 				if m.collapsedTools[i] {
-					// Expanded: show full content.
+					// Expanded: show full content with MCP tool names formatted.
 					hint := ""
 					if i == m.selectedMsgIdx {
 						hint = DimStyle.Render(" [ctrl+x to collapse]")
 					}
-					sb.WriteString(aIndent + DimStyle.Render(msg.Content) + hint + "\n\n")
+					sb.WriteString(aIndent + DimStyle.Render(formatToolCallContent(msg.Content)) + hint + "\n\n")
 				} else {
-					// Collapsed (default): show summary line.
-					toolName := extractToolName(msg.Content)
+					// Collapsed (default): show summary line with MCP tool names formatted.
+					toolName := formatToolName(extractToolName(msg.Content))
 					hint := ""
 					if i == m.selectedMsgIdx {
 						hint = DimStyle.Render(" [ctrl+x to expand]")

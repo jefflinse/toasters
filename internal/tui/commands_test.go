@@ -79,6 +79,33 @@ func TestFilterCommands(t *testing.T) {
 				}
 			},
 		},
+		{
+			name:   "/mcp matches",
+			prefix: "/mc",
+			check: func(t *testing.T, result []SlashCommand) {
+				if len(result) != 1 {
+					t.Fatalf("expected 1 command for /mc, got %d", len(result))
+				}
+				if result[0].Name != "/mcp" {
+					t.Errorf("expected /mcp, got %q", result[0].Name)
+				}
+			},
+		},
+		{
+			name:   "/mcp exact match",
+			prefix: "/mcp",
+			check: func(t *testing.T, result []SlashCommand) {
+				if len(result) != 1 {
+					t.Fatalf("expected 1 command for /mcp, got %d", len(result))
+				}
+				if result[0].Name != "/mcp" {
+					t.Errorf("expected /mcp, got %q", result[0].Name)
+				}
+				if result[0].Description == "" {
+					t.Error("expected /mcp to have a description")
+				}
+			},
+		},
 	}
 
 	for _, tt := range tests {

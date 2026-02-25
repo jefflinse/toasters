@@ -18,6 +18,7 @@ var allCommands = []SlashCommand{
 	{Name: "/new", Description: "Start a new session"},
 	{Name: "/kill", Description: "Kill a running background agent"},
 	{Name: "/teams", Description: "Browse and manage agent teams"},
+	{Name: "/mcp", Description: "View MCP server status and tools"},
 	{Name: "/job", Description: "Create a new job"},
 }
 

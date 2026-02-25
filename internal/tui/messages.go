@@ -10,6 +10,7 @@ import (
 	"github.com/jefflinse/toasters/internal/db"
 	"github.com/jefflinse/toasters/internal/job"
 	"github.com/jefflinse/toasters/internal/llm"
+	"github.com/jefflinse/toasters/internal/mcp"
 	"github.com/jefflinse/toasters/internal/runtime"
 )
 
@@ -74,8 +75,8 @@ type SessionStats struct {
 	Connected            bool
 	ContextLength        int // max context window in tokens (0 if unknown)
 	MessageCount         int
-	PromptTokens         int
-	CompletionTokens     int
+	PromptTokens         int // current context size in tokens (latest API-reported value)
+	CompletionTokens     int // total completion tokens generated across all responses
 	ReasoningTokens      int // accumulated reasoning tokens across all turns
 	CompletionTokensLive int // estimated completion tokens for the in-progress response
 	ReasoningTokensLive  int // estimated reasoning tokens for the in-progress response
@@ -271,6 +272,11 @@ type TeamsAutoDetectDoneMsg struct {
 type blockerAnswersSubmittedMsg struct {
 	jobID   string
 	blocker *job.Blocker
+}
+
+// MCPStatusMsg is sent after MCP connection completes to trigger startup toasts.
+type MCPStatusMsg struct {
+	Servers []mcp.ServerStatus
 }
 
 // ChatEntry consolidates the per-message data that was previously spread

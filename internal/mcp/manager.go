@@ -21,6 +21,25 @@ type MCPCaller interface {
 	Call(ctx context.Context, namespacedName string, args json.RawMessage) (string, error)
 }
 
+// ServerConnectionState represents the connection state of an MCP server.
+type ServerConnectionState string
+
+const (
+	ServerConnected ServerConnectionState = "connected"
+	ServerFailed    ServerConnectionState = "failed"
+)
+
+// ServerStatus holds the connection status and metadata for a configured MCP server.
+type ServerStatus struct {
+	Name      string
+	Transport string // "stdio", "sse", "http"
+	State     ServerConnectionState
+	Error     string // empty if connected
+	ToolCount int
+	Tools     []ToolInfo             // the discovered tools for this server
+	Config    config.MCPServerConfig // the original config
+}
+
 // ToolInfo holds metadata about a discovered MCP tool.
 type ToolInfo struct {
 	NamespacedName string // "{server_name}__{tool_name}"
@@ -49,6 +68,7 @@ type Manager struct {
 	mu        sync.RWMutex
 	servers   []serverEntry
 	toolIndex map[string]toolIndexEntry // namespaced tool name → server + original name
+	statuses  []ServerStatus            // per-server connection status (includes failed servers)
 }
 
 // NewManager creates a new Manager.
@@ -62,6 +82,7 @@ func NewManager() *Manager {
 // and builds the tool index. Failed servers are logged and skipped.
 func (m *Manager) Connect(ctx context.Context, servers []config.MCPServerConfig) error {
 	var newServers []serverEntry
+	var newStatuses []ServerStatus
 	newToolIndex := make(map[string]toolIndexEntry)
 
 	for _, cfg := range servers {
@@ -77,6 +98,13 @@ func (m *Manager) Connect(ctx context.Context, servers []config.MCPServerConfig)
 		c, err := createClient(cfg)
 		if err != nil {
 			log.Printf("mcp: failed to create client for server %q: %v", cfg.Name, err)
+			newStatuses = append(newStatuses, ServerStatus{
+				Name:      cfg.Name,
+				Transport: cfg.Transport,
+				State:     ServerFailed,
+				Error:     fmt.Sprintf("creating client: %v", err),
+				Config:    cfg,
+			})
 			continue
 		}
 
@@ -84,6 +112,13 @@ func (m *Manager) Connect(ctx context.Context, servers []config.MCPServerConfig)
 		if err := c.Start(ctx); err != nil {
 			log.Printf("mcp: failed to start client for server %q: %v", cfg.Name, err)
 			_ = c.Close()
+			newStatuses = append(newStatuses, ServerStatus{
+				Name:      cfg.Name,
+				Transport: cfg.Transport,
+				State:     ServerFailed,
+				Error:     fmt.Sprintf("starting client: %v", err),
+				Config:    cfg,
+			})
 			continue
 		}
 
@@ -100,6 +135,13 @@ func (m *Manager) Connect(ctx context.Context, servers []config.MCPServerConfig)
 		if err != nil {
 			log.Printf("mcp: failed to initialize server %q: %v", cfg.Name, err)
 			_ = c.Close()
+			newStatuses = append(newStatuses, ServerStatus{
+				Name:      cfg.Name,
+				Transport: cfg.Transport,
+				State:     ServerFailed,
+				Error:     fmt.Sprintf("initializing: %v", err),
+				Config:    cfg,
+			})
 			continue
 		}
 
@@ -108,6 +150,13 @@ func (m *Manager) Connect(ctx context.Context, servers []config.MCPServerConfig)
 		if err != nil {
 			log.Printf("mcp: failed to list tools for server %q: %v", cfg.Name, err)
 			_ = c.Close()
+			newStatuses = append(newStatuses, ServerStatus{
+				Name:      cfg.Name,
+				Transport: cfg.Transport,
+				State:     ServerFailed,
+				Error:     fmt.Sprintf("listing tools: %v", err),
+				Config:    cfg,
+			})
 			continue
 		}
 
@@ -161,12 +210,22 @@ func (m *Manager) Connect(ctx context.Context, servers []config.MCPServerConfig)
 			}
 		}
 
+		newStatuses = append(newStatuses, ServerStatus{
+			Name:      cfg.Name,
+			Transport: cfg.Transport,
+			State:     ServerConnected,
+			ToolCount: len(tools),
+			Tools:     tools,
+			Config:    cfg,
+		})
+
 		log.Printf("mcp: connected to server %q, discovered %d tools", cfg.Name, len(tools))
 	}
 
 	m.mu.Lock()
 	m.servers = newServers
 	m.toolIndex = newToolIndex
+	m.statuses = newStatuses
 	m.mu.Unlock()
 
 	return nil
@@ -242,6 +301,23 @@ func (m *Manager) Tools() []ToolInfo {
 	return all
 }
 
+// Servers returns the connection status of all configured MCP servers.
+// Safe to call on a nil receiver (returns nil).
+// Returns a copy of the internal state.
+func (m *Manager) Servers() []ServerStatus {
+	if m == nil {
+		return nil
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if len(m.statuses) == 0 {
+		return nil
+	}
+	result := make([]ServerStatus, len(m.statuses))
+	copy(result, m.statuses)
+	return result
+}
+
 // Close closes all MCP server connections.
 // Servers and the tool index are zeroed under the lock before closing clients,
 // so new Call() invocations will get "tool not found" rather than calling into
@@ -252,6 +328,7 @@ func (m *Manager) Close() error {
 	servers := m.servers
 	m.servers = nil
 	m.toolIndex = make(map[string]toolIndexEntry)
+	m.statuses = nil
 	m.mu.Unlock()
 
 	var firstErr error

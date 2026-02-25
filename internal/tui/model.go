@@ -22,6 +22,7 @@ import (
 	"github.com/jefflinse/toasters/internal/job"
 	"github.com/jefflinse/toasters/internal/llm"
 	"github.com/jefflinse/toasters/internal/llm/tools"
+	"github.com/jefflinse/toasters/internal/mcp"
 	"github.com/jefflinse/toasters/internal/runtime"
 )
 
@@ -79,6 +80,9 @@ type Model struct {
 
 	// Teams modal state.
 	teamsModal teamsModalState
+
+	// MCP modal state.
+	mcpModal mcpModalState
 
 	// Blocker modal state.
 	blockerModal struct {
@@ -181,6 +185,9 @@ type Model struct {
 	toasts      []toast
 	nextToastID int
 
+	// MCP server manager — may be nil if no MCP servers are configured.
+	mcpManager *mcp.Manager
+
 	// Phase 1 integration: persistence and provider runtime.
 	store           db.Store                // may be nil — graceful degradation
 	runtime         *runtime.Runtime        // may be nil
@@ -207,7 +214,7 @@ type runtimeSlot struct {
 }
 
 // NewModel returns an initialized root model.
-func NewModel(client llm.Provider, claudeCfg config.ClaudeConfig, workspaceDir string, gw *gateway.Gateway, teamsDir string, teams []agents.Team, awareness string, toolExec *tools.ToolExecutor, store db.Store, rt *runtime.Runtime) Model {
+func NewModel(client llm.Provider, claudeCfg config.ClaudeConfig, workspaceDir string, gw *gateway.Gateway, teamsDir string, teams []agents.Team, awareness string, toolExec *tools.ToolExecutor, store db.Store, rt *runtime.Runtime, mcpMgr *mcp.Manager) Model {
 	ta := textarea.New()
 	ta.Placeholder = "Type your message here..."
 	ta.Prompt = ""
@@ -248,6 +255,7 @@ func NewModel(client llm.Provider, claudeCfg config.ClaudeConfig, workspaceDir s
 		toolExec:     toolExec,
 		store:        store,
 		runtime:      rt,
+		mcpManager:   mcpMgr,
 		stats: SessionStats{
 			Endpoint:  client.BaseURL(),
 			Connected: false,
@@ -314,6 +322,14 @@ func (m *Model) Init() tea.Cmd {
 	if m.store != nil {
 		cmds = append(cmds, scheduleProgressPoll())
 	}
+	// Fire MCP status toasts if servers are configured.
+	if m.mcpManager != nil {
+		if servers := m.mcpManager.Servers(); len(servers) > 0 {
+			cmds = append(cmds, func() tea.Msg {
+				return MCPStatusMsg{Servers: servers}
+			})
+		}
+	}
 	return tea.Batch(cmds...)
 }
 
@@ -322,6 +338,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case tea.KeyPressMsg:
+		// MCP modal key handling — intercept all keys when modal is open.
+		if m.mcpModal.show {
+			return m.updateMCPModal(msg)
+		}
+
 		// Teams modal key handling — intercept all keys when modal is open.
 		if m.teamsModal.show {
 			return m.updateTeamsModal(msg)
@@ -785,6 +806,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						teamCmd = m.maybeAutoDetectCoordinator(m.teamsModal.teams[0])
 					}
 					return m, teamCmd
+				case "/mcp":
+					m.input.Reset()
+					m.showCmdPopup = false
+					m.mcpModal = mcpModalState{
+						show:    true,
+						servers: m.mcpManager.Servers(), // nil-receiver safe
+					}
+					return m, nil
 				}
 				// /job <prompt> — create a new job via the operator LLM.
 				if strings.HasPrefix(text, "/job ") {
@@ -880,7 +909,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.stats.ModelName = msg.Model
 		}
 		if msg.Usage != nil {
-			m.stats.PromptTokens += msg.Usage.PromptTokens
+			m.stats.PromptTokens = msg.Usage.PromptTokens
 			m.stats.CompletionTokens += msg.Usage.CompletionTokens
 		}
 		// Accumulate reasoning tokens from live estimate (server doesn't report them separately).
@@ -1275,7 +1304,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.MouseClickMsg:
 		// Click-to-focus: route clicks to the appropriate panel.
 		// Don't steal clicks when any overlay is active.
-		if !m.teamsModal.show && !m.blockerModal.show && !m.showGrid &&
+		if !m.teamsModal.show && !m.mcpModal.show && !m.blockerModal.show && !m.showGrid &&
 			!m.showKillModal && !m.showPromptModal && !m.showOutputModal && !m.loading {
 			showLeftPanel := m.width >= minWidthForLeftPanel && !m.leftPanelHidden
 			showSidebar := m.width >= minWidthForBar && !m.sidebarHidden
@@ -1382,6 +1411,38 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		return m, nil
+
+	case MCPStatusMsg:
+		var toastCmds []tea.Cmd
+		var connectedCount, totalTools int
+		for _, s := range msg.Servers {
+			switch s.State {
+			case mcp.ServerConnected:
+				connectedCount++
+				totalTools += s.ToolCount
+			case mcp.ServerFailed:
+				toastCmds = append(toastCmds, m.addToast(
+					fmt.Sprintf("⚠ MCP: %s failed", s.Name),
+					toastWarning,
+				))
+			}
+		}
+		if connectedCount > 0 {
+			serverWord := "servers"
+			if connectedCount == 1 {
+				serverWord = "server"
+			}
+			toolWord := "tools"
+			if totalTools == 1 {
+				toolWord = "tool"
+			}
+			toastCmds = append(toastCmds, m.addToast(
+				fmt.Sprintf("🔌 MCP: %d %s, %d %s", connectedCount, serverWord, totalTools, toolWord),
+				toastInfo,
+			))
+		}
+		cmds = append(cmds, toastCmds...)
+		return m, tea.Batch(cmds...)
 
 	case progressPollTickMsg:
 		if m.store != nil {

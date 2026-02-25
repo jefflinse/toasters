@@ -132,9 +132,10 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 	}
 	defer func() { _ = mcpManager.Close() }()
 
-	// Wire MCP tools into agent runtime.
+	// Wire MCP tools into agent runtime with result truncation.
 	if len(mcpManager.Tools()) > 0 {
-		rt.SetMCPCaller(mcpManager, mcp.ToRuntimeToolDefs(mcpManager.Tools()))
+		truncatingCaller := mcp.NewTruncatingCaller(mcpManager, mcp.DefaultMaxResultLen)
+		rt.SetMCPCaller(truncatingCaller, mcp.ToRuntimeToolDefs(mcpManager.Tools()))
 	}
 
 	// Create the gateway with a no-op notify for now.
@@ -159,7 +160,7 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 		client = llmclient.NewClient(cfg.Operator.Endpoint, cfg.Operator.Model)
 	}
 
-	m := tui.NewModel(client, cfg.Claude, workspaceDir, gw, teamsDir, teams, "", toolExec, store, rt)
+	m := tui.NewModel(client, cfg.Claude, workspaceDir, gw, teamsDir, teams, "", toolExec, store, rt, mcpManager)
 
 	p := tea.NewProgram(&m)
 
