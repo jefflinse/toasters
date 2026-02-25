@@ -17,13 +17,13 @@ type SpawnOpts struct {
 	InitialMessage string
 	WorkDir        string
 	MaxTurns       int // 0 = use default (50)
-	MaxDepth       int // 0 = use default (3); for spawn_agent recursion
+	MaxDepth       int // 0 = use default (1); coordinators may spawn workers, workers may not spawn further
 	Depth          int // current spawn depth (set by parent)
 }
 
 const (
 	defaultMaxTurns = 50
-	defaultMaxDepth = 3
+	defaultMaxDepth = 1
 )
 
 // ToolDef defines a tool available to an agent.

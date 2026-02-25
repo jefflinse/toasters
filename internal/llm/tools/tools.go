@@ -565,6 +565,7 @@ func (te *ToolExecutor) ExecuteTool(ctx context.Context, call llm.ToolCall) (str
 				JobID:          args.JobID,
 				InitialMessage: args.Task,
 				WorkDir:        jobDir,
+				MaxDepth:       1, // coordinators may spawn workers; workers may not spawn further
 			}
 			sess, err := te.Runtime.SpawnAgent(context.Background(), opts)
 			if err != nil {
