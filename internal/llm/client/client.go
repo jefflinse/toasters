@@ -1,7 +1,6 @@
 package client
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -14,6 +13,7 @@ import (
 	"time"
 
 	"github.com/jefflinse/toasters/internal/llm"
+	"github.com/jefflinse/toasters/internal/sse"
 )
 
 // Compile-time check that Client satisfies llm.Provider.
@@ -148,37 +148,20 @@ func (c *Client) doStream(ctx context.Context, reqBody llm.ChatRequest, ch chan<
 		accumulated = make(map[int]*llm.ToolCall)
 	}
 
-	scanner := bufio.NewScanner(resp.Body)
-	for scanner.Scan() {
-		// Check for context cancellation between lines.
-		if ctx.Err() != nil {
-			ch <- llm.StreamResponse{Error: ctx.Err()}
-			return
+	reader := sse.NewReader(resp.Body)
+	for {
+		ev, ok := reader.Next(ctx)
+		if !ok {
+			break
 		}
 
-		line := scanner.Text()
-
-		// Skip blank lines (SSE event separators).
-		if line == "" {
-			continue
-		}
-
-		// We only care about data lines.
-		if !strings.HasPrefix(line, "data:") {
-			continue
-		}
-
-		// Strip the "data:" prefix. Handle both "data: " and "data:" (no space).
-		data := strings.TrimPrefix(line, "data:")
-		data = strings.TrimSpace(data)
-
-		if data == "[DONE]" {
+		if ev.Data == "[DONE]" {
 			ch <- llm.StreamResponse{Done: true, Model: lastModel, Usage: lastUsage}
 			return
 		}
 
 		var chunk llm.ChatCompletionChunk
-		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
+		if err := json.Unmarshal([]byte(ev.Data), &chunk); err != nil {
 			ch <- llm.StreamResponse{Error: fmt.Errorf("parsing chunk: %w", err)}
 			return
 		}
@@ -256,7 +239,13 @@ func (c *Client) doStream(ctx context.Context, reqBody llm.ChatRequest, ch chan<
 		// by the Usage capture above; keep reading for [DONE].
 	}
 
-	if err := scanner.Err(); err != nil {
+	// Check context cancellation first.
+	if ctx.Err() != nil {
+		ch <- llm.StreamResponse{Error: ctx.Err()}
+		return
+	}
+
+	if err := reader.Err(); err != nil {
 		ch <- llm.StreamResponse{Error: fmt.Errorf("reading stream: %w", err)}
 		return
 	}

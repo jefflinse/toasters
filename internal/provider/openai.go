@@ -1,7 +1,6 @@
 package provider
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -11,6 +10,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/jefflinse/toasters/internal/sse"
 )
 
 // OpenAIProvider implements Provider for OpenAI-compatible APIs
@@ -146,32 +147,21 @@ func (p *OpenAIProvider) streamResponse(ctx context.Context, req *http.Request, 
 		return
 	}
 
-	var accumulated map[int]*openAIToolCallAccum
+	var accumulated map[int]*sse.OpenAIToolAccumulator
 	if hasTools {
-		accumulated = make(map[int]*openAIToolCallAccum)
+		accumulated = make(map[int]*sse.OpenAIToolAccumulator)
 	}
 
 	var lastUsage *Usage
 
-	scanner := bufio.NewScanner(resp.Body)
-	for scanner.Scan() {
-		if ctx.Err() != nil {
-			ch <- StreamEvent{Type: EventError, Error: ctx.Err()}
-			return
+	reader := sse.NewReader(resp.Body)
+	for {
+		ev, ok := reader.Next(ctx)
+		if !ok {
+			break
 		}
 
-		line := scanner.Text()
-		if line == "" {
-			continue
-		}
-		if !strings.HasPrefix(line, "data:") {
-			continue
-		}
-
-		data := strings.TrimPrefix(line, "data:")
-		data = strings.TrimSpace(data)
-
-		if data == "[DONE]" {
+		if ev.Data == "[DONE]" {
 			// Emit any accumulated tool calls.
 			if hasTools && len(accumulated) > 0 {
 				p.emitToolCalls(accumulated, ch)
@@ -184,7 +174,7 @@ func (p *OpenAIProvider) streamResponse(ctx context.Context, req *http.Request, 
 		}
 
 		var chunk openAIChunk
-		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
+		if err := json.Unmarshal([]byte(ev.Data), &chunk); err != nil {
 			ch <- StreamEvent{Type: EventError, Error: fmt.Errorf("parsing chunk: %w", err)}
 			return
 		}
@@ -204,18 +194,18 @@ func (p *OpenAIProvider) streamResponse(ctx context.Context, req *http.Request, 
 				for _, partial := range choice.Delta.ToolCalls {
 					idx := partial.Index
 					if _, ok := accumulated[idx]; !ok {
-						accumulated[idx] = &openAIToolCallAccum{
-							id:   partial.ID,
-							name: partial.Function.Name,
+						accumulated[idx] = &sse.OpenAIToolAccumulator{
+							ID:   partial.ID,
+							Name: partial.Function.Name,
 						}
 					}
 					entry := accumulated[idx]
-					entry.args.WriteString(partial.Function.Arguments)
-					if partial.ID != "" && entry.id == "" {
-						entry.id = partial.ID
+					entry.Args.WriteString(partial.Function.Arguments)
+					if partial.ID != "" && entry.ID == "" {
+						entry.ID = partial.ID
 					}
-					if partial.Function.Name != "" && entry.name == "" {
-						entry.name = partial.Function.Name
+					if partial.Function.Name != "" && entry.Name == "" {
+						entry.Name = partial.Function.Name
 					}
 				}
 
@@ -235,7 +225,13 @@ func (p *OpenAIProvider) streamResponse(ctx context.Context, req *http.Request, 
 		}
 	}
 
-	if err := scanner.Err(); err != nil {
+	// Check context cancellation first.
+	if ctx.Err() != nil {
+		ch <- StreamEvent{Type: EventError, Error: ctx.Err()}
+		return
+	}
+
+	if err := reader.Err(); err != nil {
 		ch <- StreamEvent{Type: EventError, Error: fmt.Errorf("reading stream: %w", err)}
 		return
 	}
@@ -250,7 +246,7 @@ func (p *OpenAIProvider) streamResponse(ctx context.Context, req *http.Request, 
 	ch <- StreamEvent{Type: EventDone}
 }
 
-func (p *OpenAIProvider) emitToolCalls(accumulated map[int]*openAIToolCallAccum, ch chan<- StreamEvent) {
+func (p *OpenAIProvider) emitToolCalls(accumulated map[int]*sse.OpenAIToolAccumulator, ch chan<- StreamEvent) {
 	indices := make([]int, 0, len(accumulated))
 	for idx := range accumulated {
 		indices = append(indices, idx)
@@ -262,9 +258,9 @@ func (p *OpenAIProvider) emitToolCalls(accumulated map[int]*openAIToolCallAccum,
 		ch <- StreamEvent{
 			Type: EventToolCall,
 			ToolCall: &ToolCall{
-				ID:        acc.id,
-				Name:      acc.name,
-				Arguments: json.RawMessage(acc.args.String()),
+				ID:        acc.ID,
+				Name:      acc.Name,
+				Arguments: json.RawMessage(acc.Args.String()),
 			},
 		}
 	}
@@ -429,11 +425,4 @@ type openAIUsage struct {
 	PromptTokens     int `json:"prompt_tokens"`
 	CompletionTokens int `json:"completion_tokens"`
 	TotalTokens      int `json:"total_tokens"`
-}
-
-// openAIToolCallAccum accumulates incremental tool call data.
-type openAIToolCallAccum struct {
-	id   string
-	name string
-	args strings.Builder
 }

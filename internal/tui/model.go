@@ -35,32 +35,154 @@ const (
 	minWidthForLeftPanel = 100
 )
 
-// Model is the root Bubble Tea model for the toasters TUI.
-type Model struct {
-	width  int
-	height int
+// ModelConfig holds all dependencies and configuration needed to create a Model.
+// It replaces the 11-parameter NewModel constructor signature.
+type ModelConfig struct {
+	Client       llm.Provider
+	ClaudeCfg    config.ClaudeConfig
+	WorkspaceDir string
+	Gateway      *gateway.Gateway
+	TeamsDir     string
+	Teams        []agents.Team
+	Awareness    string
+	ToolExec     *tools.ToolExecutor
+	Store        db.Store
+	Runtime      *runtime.Runtime
+	MCPManager   *mcp.Manager
+}
 
-	llmClient        llm.Provider
-	claudeCfg        config.ClaudeConfig
-	entries          []ChatEntry // consolidated chat history (messages, timestamps, reasoning, metadata)
-	chatViewport     viewport.Model
-	input            textarea.Model
+// streamingState holds all state related to the active LLM stream.
+type streamingState struct {
 	streaming        bool
 	currentResponse  string
 	currentReasoning string
 	streamCh         <-chan llm.StreamResponse
 	cancelStream     context.CancelFunc
-	stats            SessionStats
-	err              error
-	mdRender         *glamour.TermRenderer
-
-	// Claude CLI metadata.
 	claudeActiveMeta string // formatted byline for the in-progress claude stream; cleared when done
+}
 
-	// Slash command autocomplete popup state.
-	showCmdPopup   bool
-	filteredCmds   []SlashCommand
-	selectedCmdIdx int
+// gridState holds all state for the 2×2 agent grid screen.
+type gridState struct {
+	showGrid      bool
+	gridFocusCell int // 0-3 within current page
+	gridPage      int // 0-3 (each page shows 4 slots)
+}
+
+// promptModeState holds all state for the interactive prompt mode
+// (active when the operator calls ask_user, kill_slot, assign_team, etc.).
+type promptModeState struct {
+	promptMode        bool
+	promptQuestion    string
+	promptOptions     []string     // LLM-provided options; "Custom response..." appended at render time
+	promptSelected    int          // cursor index
+	promptCustom      bool         // true when user selected "Custom response..." and is typing
+	promptPendingCall llm.ToolCall // the tool call to resume after input
+
+	confirmDispatch bool         // true when promptMode is a dispatch confirmation
+	changingTeam    bool         // true when promptMode is the "change team" sub-prompt
+	pendingDispatch llm.ToolCall // the assign_team call awaiting confirmation
+
+	confirmKill     bool // true when promptMode is a kill confirmation
+	pendingKillSlot int  // slot index awaiting kill confirmation
+
+	confirmTimeout     bool // true when promptMode is a slot-timeout confirmation
+	pendingTimeoutSlot int  // slot index awaiting timeout confirmation
+}
+
+// killModalState holds all state for the /kill confirmation modal.
+type killModalState struct {
+	show        bool
+	slots       []int // actual slot indices (0-3) of running slots
+	selectedIdx int   // index into slots
+}
+
+// promptModalState holds all state for the prompt-viewing modal overlay.
+type promptModalState struct {
+	show    bool
+	content string // the full prompt text being displayed
+	scroll  int    // scroll offset in lines
+}
+
+// outputModalState holds all state for the output-viewing modal overlay.
+type outputModalState struct {
+	show      bool
+	content   string // the full output text being displayed
+	scroll    int    // scroll offset in lines
+	sessionID string // runtime session ID being viewed (empty = gateway slot)
+}
+
+// blockerModalState holds all state for the blocker Q&A modal.
+type blockerModalState struct {
+	show        bool
+	jobID       string
+	blocker     *job.Blocker
+	questionIdx int
+	inputText   string
+}
+
+// cmdPopupState holds all state for the slash command autocomplete popup.
+type cmdPopupState struct {
+	show         bool
+	filteredCmds []SlashCommand
+	selectedIdx  int
+}
+
+// scrollState holds all state related to chat viewport scrolling.
+type scrollState struct {
+	userScrolled     bool      // true when user has manually scrolled up; suppresses auto-scroll
+	hasNewMessages   bool      // true when new content arrived while user was scrolled up
+	scrollbarVisible bool      // true when scrollbar should be rendered (auto-hides after inactivity)
+	lastScrollTime   time.Time // when the last scroll event occurred
+}
+
+// progressState holds all state populated by the SQLite progress polling loop.
+type progressState struct {
+	jobs             []*db.Job
+	tasks            map[string][]*db.Task
+	reports          map[string][]*db.ProgressReport
+	activeSessions   []*db.AgentSession
+	runtimeSnapshots []runtime.SessionSnapshot // live snapshots with real token counts
+}
+
+// chatState holds all state related to the chat conversation history and
+// collapsible message display.
+type chatState struct {
+	entries           []ChatEntry  // consolidated chat history (messages, timestamps, reasoning, metadata)
+	completionMsgIdx  map[int]bool // indices of team-completion messages in entries
+	expandedMsgs      map[int]bool // which completion messages are currently expanded
+	selectedMsgIdx    int          // currently selected message index (-1 = none)
+	expandedReasoning map[int]bool // which entry indices have reasoning expanded
+	collapsedTools    map[int]bool // true = expanded; absent/false = collapsed (default)
+
+	// pendingCompletions buffers agent-completion notifications that arrive while
+	// the operator stream is active. They are drained after the stream ends.
+	pendingCompletions []pendingCompletion
+}
+
+// Model is the root Bubble Tea model for the toasters TUI.
+type Model struct {
+	width  int
+	height int
+
+	llmClient    llm.Provider
+	claudeCfg    config.ClaudeConfig
+	chatViewport viewport.Model
+	input        textarea.Model
+	stats        SessionStats
+	err          error
+	mdRender     *glamour.TermRenderer
+
+	// Sub-models grouping related state.
+	stream      streamingState
+	grid        gridState
+	prompt      promptModeState
+	killModal   killModalState
+	promptModal promptModalState
+	outputModal outputModalState
+	cmdPopup    cmdPopupState
+	scroll      scrollState
+	progress    progressState
+	chat        chatState
 
 	jobs         []job.Job
 	blockers     map[string]*job.Blocker // keyed by job ID
@@ -85,13 +207,7 @@ type Model struct {
 	mcpModal mcpModalState
 
 	// Blocker modal state.
-	blockerModal struct {
-		show        bool
-		jobID       string
-		blocker     *job.Blocker
-		questionIdx int
-		inputText   string
-	}
+	blockerModal blockerModalState
 
 	// Gateway notify channel — gateway writes to this; TUI polls it.
 	agentNotifyCh chan struct{}
@@ -100,45 +216,6 @@ type Model struct {
 	selectedAgentSlot int            // which slot is highlighted in the agents pane (0-3)
 	attachedSlot      int            // -1 = not attached; 0-3 = viewing this slot's output
 	agentViewport     viewport.Model // viewport for attached slot output
-
-	// Grid screen state.
-	showGrid      bool
-	gridFocusCell int // 0-3 within current page
-	gridPage      int // 0-3 (each page shows 4 slots)
-
-	// Kill modal state.
-	showKillModal   bool
-	killModalSlots  []int // actual slot indices (0-3) of running slots
-	selectedKillIdx int   // index into killModalSlots
-
-	// Prompt modal state.
-	showPromptModal    bool
-	promptModalContent string // the full prompt text being displayed
-	promptModalScroll  int    // scroll offset in lines
-
-	// Output modal state.
-	showOutputModal      bool
-	outputModalContent   string // the full output text being displayed
-	outputModalScroll    int    // scroll offset in lines
-	outputModalSessionID string // runtime session ID being viewed (empty = gateway slot)
-
-	// Prompt mode — active when the operator calls ask_user
-	promptMode        bool
-	promptQuestion    string
-	promptOptions     []string     // LLM-provided options; "Custom response..." appended at render time
-	promptSelected    int          // cursor index
-	promptCustom      bool         // true when user selected "Custom response..." and is typing
-	promptPendingCall llm.ToolCall // the tool call to resume after input
-
-	confirmDispatch bool         // true when promptMode is a dispatch confirmation
-	changingTeam    bool         // true when promptMode is the "change team" sub-prompt
-	pendingDispatch llm.ToolCall // the assign_team call awaiting confirmation
-
-	confirmKill     bool // true when promptMode is a kill confirmation
-	pendingKillSlot int  // slot index awaiting kill confirmation
-
-	confirmTimeout     bool // true when promptMode is a slot-timeout confirmation
-	pendingTimeoutSlot int  // slot index awaiting timeout confirmation
 
 	loading      bool // true while waiting for AppReadyMsg before initializing the conversation
 	loadingFrame int  // current animation frame index (0..numLoadingFrames-1)
@@ -153,30 +230,10 @@ type Model struct {
 	sidebarHidden          bool // true when user has toggled the sidebar off via ctrl+b
 	leftPanelWidthOverride int  // 0 = use default computed width; >0 = user-resized width
 
-	userScrolled     bool      // true when user has manually scrolled up; suppresses auto-scroll
-	hasNewMessages   bool      // true when new content arrived while user was scrolled up
-	scrollbarVisible bool      // true when scrollbar should be rendered (auto-hides after inactivity)
-	lastScrollTime   time.Time // when the last scroll event occurred
-
 	// prevSlotActive/Status track the last-seen state of each gateway slot so
 	// AgentOutputMsg can detect Running→Done transitions and notify the operator.
 	prevSlotActive [gateway.MaxSlots]bool
 	prevSlotStatus [gateway.MaxSlots]gateway.SlotStatus
-
-	// pendingCompletions buffers agent-completion notifications that arrive while
-	// the operator stream is active. They are drained after the stream ends.
-	pendingCompletions []pendingCompletion
-
-	// Collapsible completion message state.
-	completionMsgIdx map[int]bool // indices of team-completion messages in m.entries
-	expandedMsgs     map[int]bool // which completion messages are currently expanded
-	selectedMsgIdx   int          // currently selected message index (-1 = none)
-
-	// Collapsible reasoning (thinking) state.
-	expandedReasoning map[int]bool // which entry indices have reasoning expanded
-
-	// Collapsible tool call/result state — keyed by message index.
-	collapsedTools map[int]bool // true = expanded; absent/false = collapsed (default)
 
 	// Shared spinner animation frame counter.
 	spinnerFrame int
@@ -192,13 +249,6 @@ type Model struct {
 	store           db.Store                // may be nil — graceful degradation
 	runtime         *runtime.Runtime        // may be nil
 	runtimeSessions map[string]*runtimeSlot // keyed by session ID
-
-	// Progress polling state (populated every 500ms from SQLite and the runtime).
-	progressJobs            []*db.Job
-	progressTasks           map[string][]*db.Task
-	progressReports         map[string][]*db.ProgressReport
-	activeSessions          []*db.AgentSession
-	runtimeSessionSnapshots []runtime.SessionSnapshot // live snapshots with real token counts
 }
 
 // runtimeSlot tracks a runtime agent session for TUI display.
@@ -214,7 +264,18 @@ type runtimeSlot struct {
 }
 
 // NewModel returns an initialized root model.
-func NewModel(client llm.Provider, claudeCfg config.ClaudeConfig, workspaceDir string, gw *gateway.Gateway, teamsDir string, teams []agents.Team, awareness string, toolExec *tools.ToolExecutor, store db.Store, rt *runtime.Runtime, mcpMgr *mcp.Manager) Model {
+func NewModel(cfg ModelConfig) Model {
+	client := cfg.Client
+	claudeCfg := cfg.ClaudeCfg
+	workspaceDir := cfg.WorkspaceDir
+	gw := cfg.Gateway
+	teamsDir := cfg.TeamsDir
+	teams := cfg.Teams
+	awareness := cfg.Awareness
+	toolExec := cfg.ToolExec
+	store := cfg.Store
+	rt := cfg.Runtime
+	mcpMgr := cfg.MCPManager
 	ta := textarea.New()
 	ta.Placeholder = "Type your message here..."
 	ta.Prompt = ""
@@ -282,13 +343,13 @@ func NewModel(client llm.Provider, claudeCfg config.ClaudeConfig, workspaceDir s
 	m.agentNotifyCh = make(chan struct{}, 8) // buffered to avoid blocking gateway goroutines
 	m.attachedSlot = -1
 	m.selectedAgentSlot = 0
-	m.gridFocusCell = 0
+	m.grid.gridFocusCell = 0
 
-	m.completionMsgIdx = make(map[int]bool)
-	m.expandedMsgs = make(map[int]bool)
-	m.selectedMsgIdx = -1
-	m.expandedReasoning = make(map[int]bool)
-	m.collapsedTools = make(map[int]bool)
+	m.chat.completionMsgIdx = make(map[int]bool)
+	m.chat.expandedMsgs = make(map[int]bool)
+	m.chat.selectedMsgIdx = -1
+	m.chat.expandedReasoning = make(map[int]bool)
+	m.chat.collapsedTools = make(map[int]bool)
 	m.runtimeSessions = make(map[string]*runtimeSlot)
 
 	agentVP := viewport.New()
@@ -354,33 +415,33 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		// Prompt mode key handling — highest priority.
-		if m.promptMode {
+		if m.prompt.promptMode {
 			return m.updatePromptMode(msg)
 		}
 
 		// When the prompt modal is visible, intercept all keys before any other handling.
-		if m.showPromptModal {
+		if m.promptModal.show {
 			return m.updatePromptModal(msg)
 		}
 
 		// When the output modal is visible, intercept all keys before grid navigation.
-		if m.showOutputModal {
+		if m.outputModal.show {
 			return m.updateOutputModal(msg)
 		}
 
 		// When the grid screen is visible, handle navigation and dismiss it.
-		if m.showGrid {
+		if m.grid.showGrid {
 			return m.updateGrid(msg)
 		}
 
 		// When the kill modal is visible, intercept all keys before any other handling.
-		if m.showKillModal {
+		if m.killModal.show {
 			return m.updateKillModal(msg)
 		}
 
 		// When the slash command popup is visible, intercept navigation keys
 		// before any other handling so they don't fall through to the textarea.
-		if m.showCmdPopup {
+		if m.cmdPopup.show {
 			if handled, cmd := m.updateCmdPopup(msg); handled {
 				return m, cmd
 			}
@@ -425,59 +486,59 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case "pgup":
 			// Scroll chat viewport up by one page.
-			if m.focused == focusChat && !m.streaming {
+			if m.focused == focusChat && !m.stream.streaming {
 				m.chatViewport.PageUp()
-				m.userScrolled = true
+				m.scroll.userScrolled = true
 				return m, m.showScrollbar()
 			}
 
 		case "pgdown":
 			// Scroll chat viewport down by one page.
-			if m.focused == focusChat && !m.streaming {
+			if m.focused == focusChat && !m.stream.streaming {
 				m.chatViewport.PageDown()
 				if m.chatViewport.AtBottom() {
-					m.userScrolled = false
-					m.hasNewMessages = false
+					m.scroll.userScrolled = false
+					m.scroll.hasNewMessages = false
 				} else {
-					m.userScrolled = true
+					m.scroll.userScrolled = true
 				}
 				return m, m.showScrollbar()
 			}
 
 		case "home":
 			// Scroll chat viewport to top.
-			if m.focused == focusChat && !m.streaming {
+			if m.focused == focusChat && !m.stream.streaming {
 				m.chatViewport.GotoTop()
-				m.userScrolled = true
+				m.scroll.userScrolled = true
 				return m, m.showScrollbar()
 			}
 
 		case "end":
 			// Scroll chat viewport to bottom.
-			if m.focused == focusChat && !m.streaming {
+			if m.focused == focusChat && !m.stream.streaming {
 				m.chatViewport.GotoBottom()
-				m.userScrolled = false
-				m.hasNewMessages = false
+				m.scroll.userScrolled = false
+				m.scroll.hasNewMessages = false
 				return m, m.showScrollbar()
 			}
 
 		case "ctrl+u":
 			// Scroll chat viewport up half page.
-			if m.focused == focusChat && !m.streaming {
+			if m.focused == focusChat && !m.stream.streaming {
 				m.chatViewport.HalfPageUp()
-				m.userScrolled = true
+				m.scroll.userScrolled = true
 				return m, m.showScrollbar()
 			}
 
 		case "ctrl+d":
 			// Scroll chat viewport down half page.
-			if m.focused == focusChat && !m.streaming {
+			if m.focused == focusChat && !m.stream.streaming {
 				m.chatViewport.HalfPageDown()
 				if m.chatViewport.AtBottom() {
-					m.userScrolled = false
-					m.hasNewMessages = false
+					m.scroll.userScrolled = false
+					m.scroll.hasNewMessages = false
 				} else {
-					m.userScrolled = true
+					m.scroll.userScrolled = true
 				}
 				return m, m.showScrollbar()
 			}
@@ -530,18 +591,18 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case "ctrl+x":
 			// Toggle expand/collapse on the selected completion message when chat is focused.
-			if m.focused == focusChat && !m.streaming && m.selectedMsgIdx >= 0 && m.completionMsgIdx[m.selectedMsgIdx] {
-				m.expandedMsgs[m.selectedMsgIdx] = !m.expandedMsgs[m.selectedMsgIdx]
+			if m.focused == focusChat && !m.stream.streaming && m.chat.selectedMsgIdx >= 0 && m.chat.completionMsgIdx[m.chat.selectedMsgIdx] {
+				m.chat.expandedMsgs[m.chat.selectedMsgIdx] = !m.chat.expandedMsgs[m.chat.selectedMsgIdx]
 				m.updateViewportContent()
 				return m, nil
 			}
 			// Toggle expand/collapse on tool-call indicator or tool result messages.
-			if m.focused == focusChat && !m.streaming && m.selectedMsgIdx >= 0 && m.selectedMsgIdx < len(m.entries) {
-				msg := m.entries[m.selectedMsgIdx].Message
-				isToolIndicator := msg.Role == "assistant" && m.isToolCallIndicatorIdx(m.selectedMsgIdx)
+			if m.focused == focusChat && !m.stream.streaming && m.chat.selectedMsgIdx >= 0 && m.chat.selectedMsgIdx < len(m.chat.entries) {
+				msg := m.chat.entries[m.chat.selectedMsgIdx].Message
+				isToolIndicator := msg.Role == "assistant" && m.isToolCallIndicatorIdx(m.chat.selectedMsgIdx)
 				isToolResult := msg.Role == "tool"
 				if isToolIndicator || isToolResult {
-					m.collapsedTools[m.selectedMsgIdx] = !m.collapsedTools[m.selectedMsgIdx]
+					m.chat.collapsedTools[m.chat.selectedMsgIdx] = !m.chat.collapsedTools[m.chat.selectedMsgIdx]
 					m.updateViewportContent()
 					return m, nil
 				}
@@ -550,16 +611,16 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "ctrl+t":
 			// Toggle expand/collapse of the reasoning trace for the most recent assistant message
 			// that has a non-empty reasoning block.
-			if m.focused == focusChat && !m.streaming {
+			if m.focused == focusChat && !m.stream.streaming {
 				// Find the last entry index with reasoning.
 				lastReasoningIdx := -1
-				for i, entry := range m.entries {
+				for i, entry := range m.chat.entries {
 					if entry.Message.Role == "assistant" && entry.Reasoning != "" {
 						lastReasoningIdx = i
 					}
 				}
 				if lastReasoningIdx >= 0 {
-					m.expandedReasoning[lastReasoningIdx] = !m.expandedReasoning[lastReasoningIdx]
+					m.chat.expandedReasoning[lastReasoningIdx] = !m.chat.expandedReasoning[lastReasoningIdx]
 					m.updateViewportContent()
 					return m, nil
 				}
@@ -567,10 +628,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case "ctrl+y":
 			// Copy the last assistant message to the clipboard when chat is focused.
-			if m.focused == focusChat && !m.streaming && !m.promptMode {
-				for i := len(m.entries) - 1; i >= 0; i-- {
-					if m.entries[i].Message.Role == "assistant" {
-						_ = clipboard.WriteAll(m.entries[i].Message.Content)
+			if m.focused == focusChat && !m.stream.streaming && !m.prompt.promptMode {
+				for i := len(m.chat.entries) - 1; i >= 0; i-- {
+					if m.chat.entries[i].Message.Role == "assistant" {
+						_ = clipboard.WriteAll(m.chat.entries[i].Message.Content)
 						m.flashText = "  ✓ copied to clipboard"
 						cmds = append(cmds, clearFlash())
 						cmds = append(cmds, m.addToast("🍞 Copied to clipboard!", toastInfo))
@@ -580,7 +641,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case "ctrl+g":
-			m.showGrid = !m.showGrid
+			m.grid.showGrid = !m.grid.showGrid
 			return m, nil
 
 		case "ctrl+l":
@@ -648,7 +709,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					ClaudeMeta: "tool-call-indicator",
 				})
 				m.updateViewportContent()
-				if !m.userScrolled {
+				if !m.scroll.userScrolled {
 					m.chatViewport.GotoBottom()
 				}
 				return m, m.input.Focus()
@@ -659,26 +720,26 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			// Exit grid screen.
-			if m.showGrid {
-				m.showGrid = false
+			if m.grid.showGrid {
+				m.grid.showGrid = false
 				return m, nil
 			}
 			// Cancel an in-flight stream. (Popup esc is handled above and returns early.)
-			if m.streaming && m.cancelStream != nil {
-				m.cancelStream()
-				m.streaming = false
-				m.cancelStream = nil
-				m.streamCh = nil
-				if m.currentResponse != "" {
+			if m.stream.streaming && m.stream.cancelStream != nil {
+				m.stream.cancelStream()
+				m.stream.streaming = false
+				m.stream.cancelStream = nil
+				m.stream.streamCh = nil
+				if m.stream.currentResponse != "" {
 					m.appendEntry(ChatEntry{
-						Message:    llm.Message{Role: "assistant", Content: m.currentResponse},
+						Message:    llm.Message{Role: "assistant", Content: m.stream.currentResponse},
 						Timestamp:  time.Now(),
-						Reasoning:  m.currentReasoning,
-						ClaudeMeta: m.claudeActiveMeta,
+						Reasoning:  m.stream.currentReasoning,
+						ClaudeMeta: m.stream.claudeActiveMeta,
 					})
-					m.claudeActiveMeta = ""
-					m.currentResponse = ""
-					m.currentReasoning = ""
+					m.stream.claudeActiveMeta = ""
+					m.stream.currentResponse = ""
+					m.stream.currentReasoning = ""
 				}
 				m.stats.CompletionTokensLive = 0
 				m.stats.ReasoningTokensLive = 0
@@ -753,24 +814,24 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			// Send message on Enter when not streaming and input has content.
 			// Shift+enter inserts a newline (handled by textarea).
-			if !m.streaming && strings.TrimSpace(m.input.Value()) != "" {
+			if !m.stream.streaming && strings.TrimSpace(m.input.Value()) != "" {
 				text := strings.TrimSpace(m.input.Value())
 				switch text {
 				case "/exit", "/quit":
 					return m, tea.Quit
 				case "/help":
 					m.input.Reset()
-					m.showCmdPopup = false
+					m.cmdPopup.show = false
 					m.appendHelpMessage()
 					return m, nil
 				case "/new":
 					m.input.Reset()
-					m.showCmdPopup = false
+					m.cmdPopup.show = false
 					m.newSession()
 					return m, nil
 				case "/kill":
 					m.input.Reset()
-					m.showCmdPopup = false
+					m.cmdPopup.show = false
 					if m.gateway == nil {
 						return m, nil
 					}
@@ -787,18 +848,18 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							Timestamp: time.Now(),
 						})
 						m.updateViewportContent()
-						if !m.userScrolled {
+						if !m.scroll.userScrolled {
 							m.chatViewport.GotoBottom()
 						}
 					} else {
-						m.killModalSlots = running
-						m.selectedKillIdx = 0
-						m.showKillModal = true
+						m.killModal.slots = running
+						m.killModal.selectedIdx = 0
+						m.killModal.show = true
 					}
 					return m, nil
 				case "/teams":
 					m.input.Reset()
-					m.showCmdPopup = false
+					m.cmdPopup.show = false
 					m.teamsModal = teamsModalState{show: true, autoDetectPending: make(map[string]bool)}
 					m.reloadTeamsForModal()
 					var teamCmd tea.Cmd
@@ -808,7 +869,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, teamCmd
 				case "/mcp":
 					m.input.Reset()
-					m.showCmdPopup = false
+					m.cmdPopup.show = false
 					m.mcpModal = mcpModalState{
 						show:    true,
 						servers: m.mcpManager.Servers(), // nil-receiver safe
@@ -820,10 +881,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					prompt := strings.TrimSpace(strings.TrimPrefix(text, "/job "))
 					if prompt == "" {
 						m.input.Reset()
-						m.showCmdPopup = false
+						m.cmdPopup.show = false
 						return m, nil
 					}
-					m.showCmdPopup = false
+					m.cmdPopup.show = false
 					m.input.SetValue("[JOB REQUEST] " + prompt)
 					return m, m.sendMessage()
 				}
@@ -832,10 +893,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					prompt := strings.TrimSpace(strings.TrimPrefix(text, "/claude "))
 					if prompt == "" {
 						m.input.Reset()
-						m.showCmdPopup = false
+						m.cmdPopup.show = false
 						return m, nil
 					}
-					m.showCmdPopup = false
+					m.cmdPopup.show = false
 					m.input.Reset()
 					return m, m.sendClaudeMessage(prompt)
 				}
@@ -844,21 +905,21 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					prompt := strings.TrimSpace(strings.TrimPrefix(text, "/anthropic "))
 					if prompt == "" {
 						m.input.Reset()
-						m.showCmdPopup = false
+						m.cmdPopup.show = false
 						return m, nil
 					}
-					m.showCmdPopup = false
+					m.cmdPopup.show = false
 					m.input.Reset()
 					return m, m.sendAnthropicMessage(prompt)
 				}
 				// Not a recognized slash command — send to LLM.
-				m.showCmdPopup = false
+				m.cmdPopup.show = false
 				return m, m.sendMessage()
 			}
 		}
 
 		// Delegate to textarea when not a special key we handle.
-		if !m.streaming {
+		if !m.stream.streaming {
 			var cmd tea.Cmd
 			m.input, cmd = m.input.Update(msg)
 			cmds = append(cmds, cmd)
@@ -866,15 +927,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Update slash command popup state based on current input value.
 			inputVal := m.input.Value()
 			if strings.HasPrefix(inputVal, "/") {
-				m.filteredCmds = filterCommands(inputVal)
-				m.showCmdPopup = len(m.filteredCmds) > 0
-				if m.showCmdPopup && m.selectedCmdIdx >= len(m.filteredCmds) {
-					m.selectedCmdIdx = 0
+				m.cmdPopup.filteredCmds = filterCommands(inputVal)
+				m.cmdPopup.show = len(m.cmdPopup.filteredCmds) > 0
+				if m.cmdPopup.show && m.cmdPopup.selectedIdx >= len(m.cmdPopup.filteredCmds) {
+					m.cmdPopup.selectedIdx = 0
 				}
 			} else {
-				m.showCmdPopup = false
-				m.filteredCmds = nil
-				m.selectedCmdIdx = 0
+				m.cmdPopup.show = false
+				m.cmdPopup.filteredCmds = nil
+				m.cmdPopup.selectedIdx = 0
 			}
 		}
 
@@ -884,27 +945,27 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.resizeComponents()
 
 	case StreamChunkMsg:
-		m.currentResponse += msg.Content
-		m.currentReasoning += msg.Reasoning
+		m.stream.currentResponse += msg.Content
+		m.stream.currentReasoning += msg.Reasoning
 		// Live token estimates (~4 chars/token).
-		m.stats.CompletionTokensLive = len([]rune(m.currentResponse)) / 4
-		m.stats.ReasoningTokensLive = len([]rune(m.currentReasoning)) / 4
+		m.stats.CompletionTokensLive = len([]rune(m.stream.currentResponse)) / 4
+		m.stats.ReasoningTokensLive = len([]rune(m.stream.currentReasoning)) / 4
 		// Elapsed response time ticks up on every chunk.
 		if !m.stats.ResponseStart.IsZero() {
 			m.stats.LastResponseTime = time.Since(m.stats.ResponseStart)
 		}
 		m.updateViewportContent()
-		if !m.userScrolled {
+		if !m.scroll.userScrolled {
 			m.chatViewport.GotoBottom()
 		} else {
-			m.hasNewMessages = true
+			m.scroll.hasNewMessages = true
 		}
-		if m.streamCh != nil {
-			cmds = append(cmds, waitForChunk(m.streamCh))
+		if m.stream.streamCh != nil {
+			cmds = append(cmds, waitForChunk(m.stream.streamCh))
 		}
 
 	case StreamDoneMsg:
-		m.streaming = false
+		m.stream.streaming = false
 		if msg.Model != "" {
 			m.stats.ModelName = msg.Model
 		}
@@ -921,36 +982,36 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.stats.TotalResponseTime += m.stats.LastResponseTime
 			m.stats.TotalResponses++
 		}
-		if m.currentResponse != "" {
+		if m.stream.currentResponse != "" {
 			// For LM Studio (operator) turns, claudeActiveMeta is empty — fill in the operator byline.
-			byline := m.claudeActiveMeta
+			byline := m.stream.claudeActiveMeta
 			if byline == "" && m.stats.ModelName != "" {
 				byline = "operator · " + m.stats.ModelName
 			}
 			m.appendEntry(ChatEntry{
-				Message:    llm.Message{Role: "assistant", Content: m.currentResponse},
+				Message:    llm.Message{Role: "assistant", Content: m.stream.currentResponse},
 				Timestamp:  time.Now(),
-				Reasoning:  m.currentReasoning,
+				Reasoning:  m.stream.currentReasoning,
 				ClaudeMeta: byline,
 			})
-			m.claudeActiveMeta = ""
+			m.stream.claudeActiveMeta = ""
 		}
-		m.currentResponse = ""
-		m.currentReasoning = ""
-		m.streamCh = nil
-		m.cancelStream = nil
+		m.stream.currentResponse = ""
+		m.stream.currentReasoning = ""
+		m.stream.streamCh = nil
+		m.stream.cancelStream = nil
 		m.updateViewportContent()
-		if !m.userScrolled {
+		if !m.scroll.userScrolled {
 			m.chatViewport.GotoBottom()
 		} else {
-			m.hasNewMessages = true
+			m.scroll.hasNewMessages = true
 		}
 		// Drain any completion notifications that arrived while we were streaming.
 		// If there are pending completions, inject them and start a new stream instead
 		// of returning focus to the input.
 		if msgs, ok := m.drainPendingCompletions(); ok {
 			m.updateViewportContent()
-			if !m.userScrolled {
+			if !m.scroll.userScrolled {
 				m.chatViewport.GotoBottom()
 			}
 			cmds = append(cmds, m.startStream(msgs))
@@ -988,7 +1049,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// Update the viewport.
 		m.updateViewportContent()
-		if !m.userScrolled {
+		if !m.scroll.userScrolled {
 			m.chatViewport.GotoBottom()
 		}
 
@@ -1002,25 +1063,25 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleAskUserResponse(msg)
 
 	case StreamErrMsg:
-		m.streaming = false
+		m.stream.streaming = false
 		m.err = msg.Err
 		m.stats.Connected = false
-		m.streamCh = nil
-		m.cancelStream = nil
-		if m.currentResponse != "" {
-			byline := m.claudeActiveMeta
+		m.stream.streamCh = nil
+		m.stream.cancelStream = nil
+		if m.stream.currentResponse != "" {
+			byline := m.stream.claudeActiveMeta
 			if byline == "" && m.stats.ModelName != "" {
 				byline = "operator · " + m.stats.ModelName
 			}
 			m.appendEntry(ChatEntry{
-				Message:    llm.Message{Role: "assistant", Content: m.currentResponse},
+				Message:    llm.Message{Role: "assistant", Content: m.stream.currentResponse},
 				Timestamp:  time.Now(),
-				Reasoning:  m.currentReasoning,
+				Reasoning:  m.stream.currentReasoning,
 				ClaudeMeta: byline,
 			})
-			m.claudeActiveMeta = ""
-			m.currentResponse = ""
-			m.currentReasoning = ""
+			m.stream.claudeActiveMeta = ""
+			m.stream.currentResponse = ""
+			m.stream.currentReasoning = ""
 		}
 		m.stats.CompletionTokensLive = 0
 		m.stats.ReasoningTokensLive = 0
@@ -1050,12 +1111,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.updateViewportContent()
 
 	case streamStartedMsg:
-		m.streamCh = msg.ch
-		cmds = append(cmds, waitForChunk(m.streamCh))
+		m.stream.streamCh = msg.ch
+		cmds = append(cmds, waitForChunk(m.stream.streamCh))
 
 	case claudeMetaMsg:
-		m.claudeActiveMeta = formatClaudeMeta(msg)
-		return m, waitForChunk(m.streamCh)
+		m.stream.claudeActiveMeta = formatClaudeMeta(msg)
+		return m, waitForChunk(m.stream.streamCh)
 
 	case TeamsReloadedMsg:
 		m.teams = msg.Teams
@@ -1069,7 +1130,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.stats.SystemPromptTokens = estimateTokens(m.systemPrompt)
 		m.toolExec.SetTeams(m.teams)
 		if m.hasConversation() {
-			m.entries[0].Message.Content = m.systemPrompt
+			m.chat.entries[0].Message.Content = m.systemPrompt
 		} else {
 			m.initMessages()
 		}
@@ -1125,31 +1186,31 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			ClaudeMeta: "ask-user-prompt",
 		})
 		// Enter prompt mode.
-		m.promptMode = true
-		m.confirmTimeout = true
-		m.pendingTimeoutSlot = msg.SlotID
-		m.promptOptions = []string{"Continue (+15m)", "Kill"}
-		m.promptSelected = 0
+		m.prompt.promptMode = true
+		m.prompt.confirmTimeout = true
+		m.prompt.pendingTimeoutSlot = msg.SlotID
+		m.prompt.promptOptions = []string{"Continue (+15m)", "Kill"}
+		m.prompt.promptSelected = 0
 		// Zero out the pending tool call so the AskUserResponseMsg handler
 		// doesn't try to execute a real tool.
-		m.promptPendingCall = llm.ToolCall{}
+		m.prompt.promptPendingCall = llm.ToolCall{}
 		m.updateViewportContent()
-		if !m.userScrolled {
+		if !m.scroll.userScrolled {
 			m.chatViewport.GotoBottom()
 		}
 		return m, tea.Batch(m.input.Focus(), slotTimeoutPromptCmd(msg.SlotID))
 
 	case SlotTimeoutPromptExpiredMsg:
 		// Only act if this prompt is still active for this slot.
-		if !m.confirmTimeout || m.pendingTimeoutSlot != msg.SlotID {
+		if !m.prompt.confirmTimeout || m.prompt.pendingTimeoutSlot != msg.SlotID {
 			return m, nil
 		}
 		// Auto-continue: extend the slot.
-		m.confirmTimeout = false
-		m.promptMode = false
-		m.promptOptions = nil
-		m.promptSelected = 0
-		m.promptPendingCall = llm.ToolCall{}
+		m.prompt.confirmTimeout = false
+		m.prompt.promptMode = false
+		m.prompt.promptOptions = nil
+		m.prompt.promptSelected = 0
+		m.prompt.promptPendingCall = llm.ToolCall{}
 		_ = m.gateway.ExtendSlot(msg.SlotID)
 		m.appendEntry(ChatEntry{
 			Message:    llm.Message{Role: "assistant", Content: fmt.Sprintf("Slot %d auto-continued (no response within 1m).", msg.SlotID)},
@@ -1157,7 +1218,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			ClaudeMeta: "tool-call-indicator",
 		})
 		m.updateViewportContent()
-		if !m.userScrolled {
+		if !m.scroll.userScrolled {
 			m.chatViewport.GotoBottom()
 		}
 		return m, m.input.Focus()
@@ -1242,17 +1303,17 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		// Live-update the output modal if it's showing this session.
-		if m.showOutputModal && m.outputModalSessionID == ev.SessionID {
-			m.outputModalContent = slot.output.String()
+		if m.outputModal.show && m.outputModal.sessionID == ev.SessionID {
+			m.outputModal.content = slot.output.String()
 			// Auto-tail: keep scroll at bottom if user hasn't scrolled up.
-			allLines := strings.Split(m.outputModalContent, "\n")
+			allLines := strings.Split(m.outputModal.content, "\n")
 			modalH := m.height * 3 / 4
 			maxScroll := len(allLines) - modalH + 4
 			if maxScroll < 0 {
 				maxScroll = 0
 			}
-			if m.outputModalScroll >= maxScroll-2 {
-				m.outputModalScroll = maxScroll
+			if m.outputModal.scroll >= maxScroll-2 {
+				m.outputModal.scroll = maxScroll
 			}
 		}
 
@@ -1278,8 +1339,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		cmds = append(cmds, m.addToast("🍞 "+msg.AgentName+" is done (runtime).", toastSuccess))
 
-		if m.streaming {
-			m.pendingCompletions = append(m.pendingCompletions, pendingCompletion{
+		if m.stream.streaming {
+			m.chat.pendingCompletions = append(m.chat.pendingCompletions, pendingCompletion{
 				notification: notification,
 			})
 		} else {
@@ -1287,11 +1348,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				Message:   llm.Message{Role: "user", Content: notification},
 				Timestamp: time.Now(),
 			})
-			completionIdx := len(m.entries) - 1
-			m.completionMsgIdx[completionIdx] = true
-			m.selectedMsgIdx = completionIdx
+			completionIdx := len(m.chat.entries) - 1
+			m.chat.completionMsgIdx[completionIdx] = true
+			m.chat.selectedMsgIdx = completionIdx
 			m.updateViewportContent()
-			if !m.userScrolled {
+			if !m.scroll.userScrolled {
 				m.chatViewport.GotoBottom()
 			}
 			cmds = append(cmds, m.startStream(m.messagesFromEntries()))
@@ -1304,8 +1365,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.MouseClickMsg:
 		// Click-to-focus: route clicks to the appropriate panel.
 		// Don't steal clicks when any overlay is active.
-		if !m.teamsModal.show && !m.mcpModal.show && !m.blockerModal.show && !m.showGrid &&
-			!m.showKillModal && !m.showPromptModal && !m.showOutputModal && !m.loading {
+		if !m.teamsModal.show && !m.mcpModal.show && !m.blockerModal.show && !m.grid.showGrid &&
+			!m.killModal.show && !m.promptModal.show && !m.outputModal.show && !m.loading {
 			showLeftPanel := m.width >= minWidthForLeftPanel && !m.leftPanelHidden
 			showSidebar := m.width >= minWidthForBar && !m.sidebarHidden
 			sidebarStartX := m.width - m.sbWidth
@@ -1355,16 +1416,16 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, m.showScrollbar())
 		// Track whether user has scrolled away from the bottom.
 		if m.chatViewport.AtBottom() {
-			m.userScrolled = false
-			m.hasNewMessages = false
+			m.scroll.userScrolled = false
+			m.scroll.hasNewMessages = false
 		} else {
-			m.userScrolled = true
+			m.scroll.userScrolled = true
 		}
 
 	case scrollbarHideMsg:
 		// Hide the scrollbar if enough time has passed since the last scroll event.
-		if time.Since(m.lastScrollTime) >= scrollbarHideDuration {
-			m.scrollbarVisible = false
+		if time.Since(m.scroll.lastScrollTime) >= scrollbarHideDuration {
+			m.scroll.scrollbarVisible = false
 		}
 
 	case loadingTickMsg:
@@ -1377,7 +1438,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case spinnerTickMsg:
 		m.spinnerFrame++
 		// Re-arm only if something is animating: operator streaming, tools in flight, or any agent running.
-		needTick := m.streaming || m.toolsInFlight
+		needTick := m.stream.streaming || m.toolsInFlight
 		if !needTick && m.gateway != nil {
 			for _, snap := range m.gateway.Slots() {
 				if snap.Status == gateway.SlotRunning {
@@ -1451,11 +1512,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case progressPollMsg:
-		m.progressJobs = msg.Jobs
-		m.progressTasks = msg.Tasks
-		m.progressReports = msg.Progress
-		m.activeSessions = msg.Sessions
-		m.runtimeSessionSnapshots = msg.RuntimeSessions
+		m.progress.jobs = msg.Jobs
+		m.progress.tasks = msg.Tasks
+		m.progress.reports = msg.Progress
+		m.progress.activeSessions = msg.Sessions
+		m.progress.runtimeSnapshots = msg.RuntimeSessions
 		return m, scheduleProgressPoll()
 	}
 

@@ -995,7 +995,7 @@ func TestHasConversation(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			m := newMinimalModel(t)
-			m.entries = tt.entries
+			m.chat.entries = tt.entries
 
 			got := m.hasConversation()
 			if got != tt.want {
@@ -1011,7 +1011,7 @@ func TestMessagesFromEntries(t *testing.T) {
 	t.Run("empty entries returns empty slice", func(t *testing.T) {
 		t.Parallel()
 		m := newMinimalModel(t)
-		m.entries = nil
+		m.chat.entries = nil
 
 		msgs := m.messagesFromEntries()
 		if len(msgs) != 0 {
@@ -1022,7 +1022,7 @@ func TestMessagesFromEntries(t *testing.T) {
 	t.Run("single entry returns single message", func(t *testing.T) {
 		t.Parallel()
 		m := newMinimalModel(t)
-		m.entries = []ChatEntry{
+		m.chat.entries = []ChatEntry{
 			{
 				Message:   llm.Message{Role: "user", Content: "hello"},
 				Timestamp: time.Now(),
@@ -1044,7 +1044,7 @@ func TestMessagesFromEntries(t *testing.T) {
 	t.Run("multiple entries preserve order and content", func(t *testing.T) {
 		t.Parallel()
 		m := newMinimalModel(t)
-		m.entries = []ChatEntry{
+		m.chat.entries = []ChatEntry{
 			{Message: llm.Message{Role: "system", Content: "system prompt"}},
 			{Message: llm.Message{Role: "user", Content: "question"}},
 			{Message: llm.Message{Role: "assistant", Content: "answer"}},
@@ -1070,7 +1070,7 @@ func TestMessagesFromEntries(t *testing.T) {
 	t.Run("extra ChatEntry fields are not included in messages", func(t *testing.T) {
 		t.Parallel()
 		m := newMinimalModel(t)
-		m.entries = []ChatEntry{
+		m.chat.entries = []ChatEntry{
 			{
 				Message:    llm.Message{Role: "assistant", Content: "response"},
 				Timestamp:  time.Now(),
@@ -1095,7 +1095,7 @@ func TestMessagesFromEntries(t *testing.T) {
 	t.Run("tool call messages preserve tool call ID", func(t *testing.T) {
 		t.Parallel()
 		m := newMinimalModel(t)
-		m.entries = []ChatEntry{
+		m.chat.entries = []ChatEntry{
 			{Message: llm.Message{Role: "tool", Content: "result", ToolCallID: "call_123"}},
 		}
 
@@ -1154,7 +1154,7 @@ func TestIsToolCallIndicatorIdx(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			m := newMinimalModel(t)
-			m.entries = tt.entries
+			m.chat.entries = tt.entries
 
 			got := m.isToolCallIndicatorIdx(tt.idx)
 			if got != tt.want {

@@ -1,7 +1,6 @@
 package provider
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -14,6 +13,7 @@ import (
 	"time"
 
 	"github.com/jefflinse/toasters/internal/anthropic"
+	"github.com/jefflinse/toasters/internal/sse"
 )
 
 // anthropicProviderHTTPClient is a shared HTTP client with proper timeouts for
@@ -275,94 +275,75 @@ func (p *AnthropicProvider) streamResponse(ctx context.Context, req *http.Reques
 	}
 
 	var (
-		eventType  string
-		toolBlocks map[int]*anthropicToolAccum
+		toolBlocks map[int]*sse.AnthropicToolAccumulator
 		inputUsage int
 	)
 
-	scanner := bufio.NewScanner(resp.Body)
-	for scanner.Scan() {
-		if ctx.Err() != nil {
-			ch <- StreamEvent{Type: EventError, Error: ctx.Err()}
-			return
+	reader := sse.NewReader(resp.Body)
+	for {
+		ev, ok := reader.Next(ctx)
+		if !ok {
+			break
 		}
 
-		line := scanner.Text()
-
-		if line == "" {
-			eventType = ""
-			continue
-		}
-
-		if strings.HasPrefix(line, "event: ") {
-			eventType = strings.TrimPrefix(line, "event: ")
-			continue
-		}
-
-		if !strings.HasPrefix(line, "data: ") {
-			continue
-		}
-
-		data := strings.TrimPrefix(line, "data: ")
-
-		switch eventType {
-		case "message_start":
-			var ev anthropicMessageStartEvent
-			if err := json.Unmarshal([]byte(data), &ev); err != nil {
+		switch ev.Type {
+		case sse.AnthropicMessageStart:
+			var parsed sse.AnthropicMessageStartEvent
+			if err := json.Unmarshal([]byte(ev.Data), &parsed); err != nil {
 				ch <- StreamEvent{Type: EventError, Error: fmt.Errorf("parsing message_start: %w", err)}
 				return
 			}
-			inputUsage = ev.Message.Usage.InputTokens
+			inputUsage = parsed.Message.Usage.InputTokens
 
-		case "content_block_start":
-			var ev anthropicContentBlockStartEvent
-			if err := json.Unmarshal([]byte(data), &ev); err != nil {
+		case sse.AnthropicContentBlockStart:
+			var parsed sse.AnthropicContentBlockStartEvent
+			if err := json.Unmarshal([]byte(ev.Data), &parsed); err != nil {
 				ch <- StreamEvent{Type: EventError, Error: fmt.Errorf("parsing content_block_start: %w", err)}
 				return
 			}
-			if ev.ContentBlock.Type == "tool_use" {
+			if parsed.ContentBlock.Type == "tool_use" {
 				if toolBlocks == nil {
-					toolBlocks = make(map[int]*anthropicToolAccum)
+					toolBlocks = make(map[int]*sse.AnthropicToolAccumulator)
 				}
-				toolBlocks[ev.Index] = &anthropicToolAccum{
-					id:   ev.ContentBlock.ID,
-					name: ev.ContentBlock.Name,
+				toolBlocks[parsed.Index] = &sse.AnthropicToolAccumulator{
+					ID:   parsed.ContentBlock.ID,
+					Name: parsed.ContentBlock.Name,
 				}
 			}
 
-		case "content_block_delta":
-			var ev anthropicContentBlockDeltaEvent
-			if err := json.Unmarshal([]byte(data), &ev); err != nil {
+		case sse.AnthropicContentBlockDelta:
+			var parsed sse.AnthropicContentBlockDeltaEvent
+			if err := json.Unmarshal([]byte(ev.Data), &parsed); err != nil {
 				ch <- StreamEvent{Type: EventError, Error: fmt.Errorf("parsing content_block_delta: %w", err)}
 				return
 			}
-			switch ev.Delta.Type {
+			switch parsed.Delta.Type {
 			case "text_delta":
-				if ev.Delta.Text != "" {
-					ch <- StreamEvent{Type: EventText, Text: ev.Delta.Text}
+				if parsed.Delta.Text != "" {
+					ch <- StreamEvent{Type: EventText, Text: parsed.Delta.Text}
 				}
 			case "input_json_delta":
-				if acc, ok := toolBlocks[ev.Index]; ok {
-					acc.inputBuf.WriteString(ev.Delta.PartialJSON)
+				if acc, ok := toolBlocks[parsed.Index]; ok {
+					acc.InputBuf.WriteString(parsed.Delta.PartialJSON)
 				}
 			}
 
-		case "content_block_stop":
+		case sse.AnthropicContentBlockStop:
 			// Nothing special needed here.
 
-		case "message_delta":
-			var ev anthropicMessageDeltaEvent
-			if err := json.Unmarshal([]byte(data), &ev); err != nil {
+		case sse.AnthropicMessageDelta:
+			var parsed sse.AnthropicMessageDeltaEvent
+			if err := json.Unmarshal([]byte(ev.Data), &parsed); err != nil {
 				ch <- StreamEvent{Type: EventError, Error: fmt.Errorf("parsing message_delta: %w", err)}
 				return
 			}
 
 			usage := &Usage{
 				InputTokens:  inputUsage,
-				OutputTokens: ev.Usage.OutputTokens,
+				OutputTokens: parsed.Usage.OutputTokens,
 			}
 
-			if ev.Delta.StopReason == "tool_use" && len(toolBlocks) > 0 {
+			if parsed.Delta.StopReason == "tool_use" && len(toolBlocks) > 0 {
 				// Emit tool calls sorted by index.
 				indices := make([]int, 0, len(toolBlocks))
 				for idx := range toolBlocks {
@@ -375,9 +356,9 @@ func (p *AnthropicProvider) streamResponse(ctx context.Context, req *http.Reques
 					ch <- StreamEvent{
 						Type: EventToolCall,
 						ToolCall: &ToolCall{
-							ID:        acc.id,
-							Name:      acc.name,
-							Arguments: json.RawMessage(acc.inputBuf.String()),
+							ID:        acc.ID,
+							Name:      acc.Name,
+							Arguments: json.RawMessage(acc.InputBuf.String()),
 						},
 					}
 				}
@@ -388,25 +369,31 @@ func (p *AnthropicProvider) streamResponse(ctx context.Context, req *http.Reques
 
 			ch <- StreamEvent{Type: EventUsage, Usage: usage}
 
-		case "message_stop":
+		case sse.AnthropicMessageStop:
 			ch <- StreamEvent{Type: EventDone}
 			return
 
-		case "error":
-			var ev anthropicErrorEvent
-			if err := json.Unmarshal([]byte(data), &ev); err != nil {
+		case sse.AnthropicError:
+			var parsed sse.AnthropicErrorEvent
+			if err := json.Unmarshal([]byte(ev.Data), &parsed); err != nil {
 				ch <- StreamEvent{Type: EventError, Error: fmt.Errorf("parsing error event: %w", err)}
 				return
 			}
-			ch <- StreamEvent{Type: EventError, Error: fmt.Errorf("anthropic API error: %s: %s", ev.Error.Type, ev.Error.Message)}
+			ch <- StreamEvent{Type: EventError, Error: fmt.Errorf("anthropic API error: %s: %s", parsed.Error.Type, parsed.Error.Message)}
 			return
 
-		case "ping":
+		case sse.AnthropicPing:
 			// Ignored.
 		}
 	}
 
-	if err := scanner.Err(); err != nil {
+	// Check context cancellation first — it may have caused Next() to return false.
+	if ctx.Err() != nil {
+		ch <- StreamEvent{Type: EventError, Error: ctx.Err()}
+		return
+	}
+
+	if err := reader.Err(); err != nil {
 		ch <- StreamEvent{Type: EventError, Error: fmt.Errorf("reading stream: %w", err)}
 		return
 	}
@@ -445,53 +432,4 @@ type anthropicToolDef struct {
 	Name        string          `json:"name"`
 	Description string          `json:"description,omitempty"`
 	InputSchema json.RawMessage `json:"input_schema,omitempty"`
-}
-
-type anthropicToolAccum struct {
-	id       string
-	name     string
-	inputBuf strings.Builder
-}
-
-type anthropicMessageStartEvent struct {
-	Message struct {
-		Model string `json:"model"`
-		Usage struct {
-			InputTokens int `json:"input_tokens"`
-		} `json:"usage"`
-	} `json:"message"`
-}
-
-type anthropicContentBlockStartEvent struct {
-	Index        int `json:"index"`
-	ContentBlock struct {
-		Type string `json:"type"`
-		ID   string `json:"id,omitempty"`
-		Name string `json:"name,omitempty"`
-	} `json:"content_block"`
-}
-
-type anthropicContentBlockDeltaEvent struct {
-	Index int `json:"index"`
-	Delta struct {
-		Type        string `json:"type"`
-		Text        string `json:"text,omitempty"`
-		PartialJSON string `json:"partial_json,omitempty"`
-	} `json:"delta"`
-}
-
-type anthropicMessageDeltaEvent struct {
-	Delta struct {
-		StopReason string `json:"stop_reason"`
-	} `json:"delta"`
-	Usage struct {
-		OutputTokens int `json:"output_tokens"`
-	} `json:"usage"`
-}
-
-type anthropicErrorEvent struct {
-	Error struct {
-		Type    string `json:"type"`
-		Message string `json:"message"`
-	} `json:"error"`
 }

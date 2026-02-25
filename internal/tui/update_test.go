@@ -42,14 +42,14 @@ func TestUpdatePromptModal_Dismiss(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			m := newMinimalModel(t)
-			m.showPromptModal = true
-			m.promptModalContent = "some prompt"
-			m.promptModalScroll = 5
+			m.promptModal.show = true
+			m.promptModal.content = "some prompt"
+			m.promptModal.scroll = 5
 
 			result, cmd := m.updatePromptModal(tt.key)
 			got := result.(*Model)
 
-			if got.showPromptModal {
+			if got.promptModal.show {
 				t.Error("showPromptModal should be false after dismiss")
 			}
 			if cmd != nil {
@@ -74,14 +74,14 @@ func TestUpdatePromptModal_ScrollDown(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			m := newMinimalModel(t)
-			m.showPromptModal = true
-			m.promptModalScroll = 3
+			m.promptModal.show = true
+			m.promptModal.scroll = 3
 
 			result, _ := m.updatePromptModal(tt.key)
 			got := result.(*Model)
 
-			if got.promptModalScroll != 4 {
-				t.Errorf("promptModalScroll = %d, want 4", got.promptModalScroll)
+			if got.promptModal.scroll != 4 {
+				t.Errorf("promptModalScroll = %d, want 4", got.promptModal.scroll)
 			}
 		})
 	}
@@ -106,14 +106,14 @@ func TestUpdatePromptModal_ScrollUp(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			m := newMinimalModel(t)
-			m.showPromptModal = true
-			m.promptModalScroll = tt.startAt
+			m.promptModal.show = true
+			m.promptModal.scroll = tt.startAt
 
 			result, _ := m.updatePromptModal(tt.key)
 			got := result.(*Model)
 
-			if got.promptModalScroll != tt.wantScroll {
-				t.Errorf("promptModalScroll = %d, want %d", got.promptModalScroll, tt.wantScroll)
+			if got.promptModal.scroll != tt.wantScroll {
+				t.Errorf("promptModalScroll = %d, want %d", got.promptModal.scroll, tt.wantScroll)
 			}
 		})
 	}
@@ -138,14 +138,14 @@ func TestUpdatePromptModal_HalfPageScroll(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			m := newMinimalModel(t)
-			m.showPromptModal = true
-			m.promptModalScroll = tt.startAt
+			m.promptModal.show = true
+			m.promptModal.scroll = tt.startAt
 
 			result, _ := m.updatePromptModal(tt.key)
 			got := result.(*Model)
 
-			if got.promptModalScroll != tt.wantScroll {
-				t.Errorf("promptModalScroll = %d, want %d", got.promptModalScroll, tt.wantScroll)
+			if got.promptModal.scroll != tt.wantScroll {
+				t.Errorf("promptModalScroll = %d, want %d", got.promptModal.scroll, tt.wantScroll)
 			}
 		})
 	}
@@ -155,17 +155,17 @@ func TestUpdatePromptModal_UnhandledKey(t *testing.T) {
 	t.Parallel()
 
 	m := newMinimalModel(t)
-	m.showPromptModal = true
-	m.promptModalScroll = 5
+	m.promptModal.show = true
+	m.promptModal.scroll = 5
 
 	result, cmd := m.updatePromptModal(keyPress('x'))
 	got := result.(*Model)
 
 	// Unhandled key should not change state.
-	if got.promptModalScroll != 5 {
-		t.Errorf("promptModalScroll = %d, want 5 (unchanged)", got.promptModalScroll)
+	if got.promptModal.scroll != 5 {
+		t.Errorf("promptModalScroll = %d, want 5 (unchanged)", got.promptModal.scroll)
 	}
-	if !got.showPromptModal {
+	if !got.promptModal.show {
 		t.Error("showPromptModal should remain true for unhandled key")
 	}
 	if cmd != nil {
@@ -193,14 +193,14 @@ func TestUpdateOutputModal_Dismiss(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			m := newMinimalModel(t)
-			m.showOutputModal = true
-			m.outputModalContent = "some output"
-			m.outputModalScroll = 5
+			m.outputModal.show = true
+			m.outputModal.content = "some output"
+			m.outputModal.scroll = 5
 
 			result, cmd := m.updateOutputModal(tt.key)
 			got := result.(*Model)
 
-			if got.showOutputModal {
+			if got.outputModal.show {
 				t.Error("showOutputModal should be false after dismiss")
 			}
 			if cmd != nil {
@@ -225,14 +225,14 @@ func TestUpdateOutputModal_ScrollDown(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			m := newMinimalModel(t)
-			m.showOutputModal = true
-			m.outputModalScroll = 3
+			m.outputModal.show = true
+			m.outputModal.scroll = 3
 
 			result, _ := m.updateOutputModal(tt.key)
 			got := result.(*Model)
 
-			if got.outputModalScroll != 4 {
-				t.Errorf("outputModalScroll = %d, want 4", got.outputModalScroll)
+			if got.outputModal.scroll != 4 {
+				t.Errorf("outputModalScroll = %d, want 4", got.outputModal.scroll)
 			}
 		})
 	}
@@ -257,14 +257,14 @@ func TestUpdateOutputModal_ScrollUp(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			m := newMinimalModel(t)
-			m.showOutputModal = true
-			m.outputModalScroll = tt.startAt
+			m.outputModal.show = true
+			m.outputModal.scroll = tt.startAt
 
 			result, _ := m.updateOutputModal(tt.key)
 			got := result.(*Model)
 
-			if got.outputModalScroll != tt.wantScroll {
-				t.Errorf("outputModalScroll = %d, want %d", got.outputModalScroll, tt.wantScroll)
+			if got.outputModal.scroll != tt.wantScroll {
+				t.Errorf("outputModalScroll = %d, want %d", got.outputModal.scroll, tt.wantScroll)
 			}
 		})
 	}
@@ -289,14 +289,14 @@ func TestUpdateOutputModal_HalfPageScroll(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			m := newMinimalModel(t)
-			m.showOutputModal = true
-			m.outputModalScroll = tt.startAt
+			m.outputModal.show = true
+			m.outputModal.scroll = tt.startAt
 
 			result, _ := m.updateOutputModal(tt.key)
 			got := result.(*Model)
 
-			if got.outputModalScroll != tt.wantScroll {
-				t.Errorf("outputModalScroll = %d, want %d", got.outputModalScroll, tt.wantScroll)
+			if got.outputModal.scroll != tt.wantScroll {
+				t.Errorf("outputModalScroll = %d, want %d", got.outputModal.scroll, tt.wantScroll)
 			}
 		})
 	}
@@ -306,16 +306,16 @@ func TestUpdateOutputModal_UnhandledKey(t *testing.T) {
 	t.Parallel()
 
 	m := newMinimalModel(t)
-	m.showOutputModal = true
-	m.outputModalScroll = 5
+	m.outputModal.show = true
+	m.outputModal.scroll = 5
 
 	result, cmd := m.updateOutputModal(keyPress('x'))
 	got := result.(*Model)
 
-	if got.outputModalScroll != 5 {
-		t.Errorf("outputModalScroll = %d, want 5 (unchanged)", got.outputModalScroll)
+	if got.outputModal.scroll != 5 {
+		t.Errorf("outputModalScroll = %d, want 5 (unchanged)", got.outputModal.scroll)
 	}
-	if !got.showOutputModal {
+	if !got.outputModal.show {
 		t.Error("showOutputModal should remain true for unhandled key")
 	}
 	if cmd != nil {
@@ -342,14 +342,14 @@ func TestUpdateGrid_Dismiss(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			m := newMinimalModel(t)
-			m.showGrid = true
-			m.gridFocusCell = 2
-			m.gridPage = 1
+			m.grid.showGrid = true
+			m.grid.gridFocusCell = 2
+			m.grid.gridPage = 1
 
 			result, cmd := m.updateGrid(tt.key)
 			got := result.(*Model)
 
-			if got.showGrid {
+			if got.grid.showGrid {
 				t.Error("showGrid should be false after dismiss")
 			}
 			if cmd != nil {
@@ -397,16 +397,16 @@ func TestUpdateGrid_ArrowNavigation(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			m := newMinimalModel(t)
-			m.showGrid = true
-			m.gridFocusCell = tt.startCell
+			m.grid.showGrid = true
+			m.grid.gridFocusCell = tt.startCell
 
 			result, _ := m.updateGrid(tt.key)
 			got := result.(*Model)
 
-			if got.gridFocusCell != tt.wantCell {
-				t.Errorf("gridFocusCell = %d, want %d", got.gridFocusCell, tt.wantCell)
+			if got.grid.gridFocusCell != tt.wantCell {
+				t.Errorf("gridFocusCell = %d, want %d", got.grid.gridFocusCell, tt.wantCell)
 			}
-			if !got.showGrid {
+			if !got.grid.showGrid {
 				t.Error("showGrid should remain true during navigation")
 			}
 		})
@@ -436,18 +436,18 @@ func TestUpdateGrid_PageNavigation(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			m := newMinimalModel(t)
-			m.showGrid = true
-			m.gridPage = tt.startPage
-			m.gridFocusCell = tt.startCell
+			m.grid.showGrid = true
+			m.grid.gridPage = tt.startPage
+			m.grid.gridFocusCell = tt.startCell
 
 			result, _ := m.updateGrid(tt.key)
 			got := result.(*Model)
 
-			if got.gridPage != tt.wantPage {
-				t.Errorf("gridPage = %d, want %d", got.gridPage, tt.wantPage)
+			if got.grid.gridPage != tt.wantPage {
+				t.Errorf("gridPage = %d, want %d", got.grid.gridPage, tt.wantPage)
 			}
-			if got.gridFocusCell != tt.wantCell {
-				t.Errorf("gridFocusCell = %d, want %d (should reset on page change)", got.gridFocusCell, tt.wantCell)
+			if got.grid.gridFocusCell != tt.wantCell {
+				t.Errorf("gridFocusCell = %d, want %d (should reset on page change)", got.grid.gridFocusCell, tt.wantCell)
 			}
 		})
 	}
@@ -457,15 +457,15 @@ func TestUpdateGrid_EnterWithNilGateway(t *testing.T) {
 	t.Parallel()
 
 	m := newMinimalModel(t)
-	m.showGrid = true
+	m.grid.showGrid = true
 	m.gateway = nil
-	m.gridFocusCell = 0
+	m.grid.gridFocusCell = 0
 
 	result, cmd := m.updateGrid(specialKey(tea.KeyEnter))
 	got := result.(*Model)
 
 	// Should not panic with nil gateway, and should not open output modal.
-	if got.showOutputModal {
+	if got.outputModal.show {
 		t.Error("showOutputModal should be false when gateway is nil")
 	}
 	if cmd != nil {
@@ -477,15 +477,15 @@ func TestUpdateGrid_PromptWithNilGateway(t *testing.T) {
 	t.Parallel()
 
 	m := newMinimalModel(t)
-	m.showGrid = true
+	m.grid.showGrid = true
 	m.gateway = nil
-	m.gridFocusCell = 0
+	m.grid.gridFocusCell = 0
 
 	result, cmd := m.updateGrid(keyPress('p'))
 	got := result.(*Model)
 
 	// Should not panic with nil gateway, and should not open prompt modal.
-	if got.showPromptModal {
+	if got.promptModal.show {
 		t.Error("showPromptModal should be false when gateway is nil")
 	}
 	if cmd != nil {
@@ -497,16 +497,16 @@ func TestUpdateGrid_KillWithNilGateway(t *testing.T) {
 	t.Parallel()
 
 	m := newMinimalModel(t)
-	m.showGrid = true
+	m.grid.showGrid = true
 	m.gateway = nil
-	m.gridFocusCell = 0
+	m.grid.gridFocusCell = 0
 
 	// 'k' and 'ctrl+k' are kill keys in grid mode.
 	result, cmd := m.updateGrid(keyPress('k'))
 	got := result.(*Model)
 
 	// Should not panic with nil gateway.
-	if !got.showGrid {
+	if !got.grid.showGrid {
 		t.Error("showGrid should remain true after kill with nil gateway")
 	}
 	if cmd != nil {
@@ -518,20 +518,20 @@ func TestUpdateGrid_UnhandledKey(t *testing.T) {
 	t.Parallel()
 
 	m := newMinimalModel(t)
-	m.showGrid = true
-	m.gridFocusCell = 1
-	m.gridPage = 2
+	m.grid.showGrid = true
+	m.grid.gridFocusCell = 1
+	m.grid.gridPage = 2
 
 	result, cmd := m.updateGrid(keyPress('x'))
 	got := result.(*Model)
 
-	if got.gridFocusCell != 1 {
-		t.Errorf("gridFocusCell = %d, want 1 (unchanged)", got.gridFocusCell)
+	if got.grid.gridFocusCell != 1 {
+		t.Errorf("gridFocusCell = %d, want 1 (unchanged)", got.grid.gridFocusCell)
 	}
-	if got.gridPage != 2 {
-		t.Errorf("gridPage = %d, want 2 (unchanged)", got.gridPage)
+	if got.grid.gridPage != 2 {
+		t.Errorf("gridPage = %d, want 2 (unchanged)", got.grid.gridPage)
 	}
-	if !got.showGrid {
+	if !got.grid.showGrid {
 		t.Error("showGrid should remain true for unhandled key")
 	}
 	if cmd != nil {
@@ -547,14 +547,14 @@ func TestUpdateKillModal_Dismiss(t *testing.T) {
 	t.Parallel()
 
 	m := newMinimalModel(t)
-	m.showKillModal = true
-	m.killModalSlots = []int{0, 2}
-	m.selectedKillIdx = 1
+	m.killModal.show = true
+	m.killModal.slots = []int{0, 2}
+	m.killModal.selectedIdx = 1
 
 	result, cmd := m.updateKillModal(specialKey(tea.KeyEscape))
 	got := result.(*Model)
 
-	if got.showKillModal {
+	if got.killModal.show {
 		t.Error("showKillModal should be false after esc")
 	}
 	if cmd != nil {
@@ -586,17 +586,17 @@ func TestUpdateKillModal_Navigation(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			m := newMinimalModel(t)
-			m.showKillModal = true
-			m.killModalSlots = tt.slots
-			m.selectedKillIdx = tt.startIdx
+			m.killModal.show = true
+			m.killModal.slots = tt.slots
+			m.killModal.selectedIdx = tt.startIdx
 
 			result, _ := m.updateKillModal(tt.key)
 			got := result.(*Model)
 
-			if got.selectedKillIdx != tt.wantIdx {
-				t.Errorf("selectedKillIdx = %d, want %d", got.selectedKillIdx, tt.wantIdx)
+			if got.killModal.selectedIdx != tt.wantIdx {
+				t.Errorf("selectedKillIdx = %d, want %d", got.killModal.selectedIdx, tt.wantIdx)
 			}
-			if !got.showKillModal {
+			if !got.killModal.show {
 				t.Error("showKillModal should remain true during navigation")
 			}
 		})
@@ -618,15 +618,15 @@ func TestUpdateKillModal_NavigationEmptySlots(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			m := newMinimalModel(t)
-			m.showKillModal = true
-			m.killModalSlots = nil
-			m.selectedKillIdx = 0
+			m.killModal.show = true
+			m.killModal.slots = nil
+			m.killModal.selectedIdx = 0
 
 			result, _ := m.updateKillModal(tt.key)
 			got := result.(*Model)
 
-			if got.selectedKillIdx != 0 {
-				t.Errorf("selectedKillIdx = %d, want 0 (unchanged for empty slots)", got.selectedKillIdx)
+			if got.killModal.selectedIdx != 0 {
+				t.Errorf("selectedKillIdx = %d, want 0 (unchanged for empty slots)", got.killModal.selectedIdx)
 			}
 		})
 	}
@@ -637,15 +637,15 @@ func TestUpdateKillModal_EnterDismisses(t *testing.T) {
 
 	// With nil gateway, enter should still dismiss the modal.
 	m := newMinimalModel(t)
-	m.showKillModal = true
-	m.killModalSlots = []int{0, 2}
-	m.selectedKillIdx = 1
+	m.killModal.show = true
+	m.killModal.slots = []int{0, 2}
+	m.killModal.selectedIdx = 1
 	m.gateway = nil
 
 	result, cmd := m.updateKillModal(specialKey(tea.KeyEnter))
 	got := result.(*Model)
 
-	if got.showKillModal {
+	if got.killModal.show {
 		t.Error("showKillModal should be false after enter")
 	}
 	if cmd != nil {
@@ -657,16 +657,16 @@ func TestUpdateKillModal_EnterWithEmptySlots(t *testing.T) {
 	t.Parallel()
 
 	m := newMinimalModel(t)
-	m.showKillModal = true
-	m.killModalSlots = nil
-	m.selectedKillIdx = 0
+	m.killModal.show = true
+	m.killModal.slots = nil
+	m.killModal.selectedIdx = 0
 	m.gateway = nil
 
 	result, _ := m.updateKillModal(specialKey(tea.KeyEnter))
 	got := result.(*Model)
 
 	// Should dismiss even with empty slots.
-	if got.showKillModal {
+	if got.killModal.show {
 		t.Error("showKillModal should be false after enter with empty slots")
 	}
 }
@@ -675,18 +675,18 @@ func TestUpdateKillModal_UnhandledKey(t *testing.T) {
 	t.Parallel()
 
 	m := newMinimalModel(t)
-	m.showKillModal = true
-	m.killModalSlots = []int{0, 1}
-	m.selectedKillIdx = 0
+	m.killModal.show = true
+	m.killModal.slots = []int{0, 1}
+	m.killModal.selectedIdx = 0
 
 	result, cmd := m.updateKillModal(keyPress('x'))
 	got := result.(*Model)
 
-	if !got.showKillModal {
+	if !got.killModal.show {
 		t.Error("showKillModal should remain true for unhandled key")
 	}
-	if got.selectedKillIdx != 0 {
-		t.Errorf("selectedKillIdx = %d, want 0 (unchanged)", got.selectedKillIdx)
+	if got.killModal.selectedIdx != 0 {
+		t.Errorf("selectedKillIdx = %d, want 0 (unchanged)", got.killModal.selectedIdx)
 	}
 	if cmd != nil {
 		t.Error("expected nil cmd for unhandled key")
@@ -701,16 +701,16 @@ func TestUpdateCmdPopup_Dismiss(t *testing.T) {
 	t.Parallel()
 
 	m := newMinimalModel(t)
-	m.showCmdPopup = true
-	m.filteredCmds = allCommands
-	m.selectedCmdIdx = 2
+	m.cmdPopup.show = true
+	m.cmdPopup.filteredCmds = allCommands
+	m.cmdPopup.selectedIdx = 2
 
 	handled, cmd := m.updateCmdPopup(specialKey(tea.KeyEscape))
 
 	if !handled {
 		t.Error("esc should be handled (consumed)")
 	}
-	if m.showCmdPopup {
+	if m.cmdPopup.show {
 		t.Error("showCmdPopup should be false after esc")
 	}
 	if cmd != nil {
@@ -743,17 +743,17 @@ func TestUpdateCmdPopup_Navigation(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			m := newMinimalModel(t)
-			m.showCmdPopup = true
-			m.filteredCmds = cmds
-			m.selectedCmdIdx = tt.startIdx
+			m.cmdPopup.show = true
+			m.cmdPopup.filteredCmds = cmds
+			m.cmdPopup.selectedIdx = tt.startIdx
 
 			handled, _ := m.updateCmdPopup(tt.key)
 
 			if !handled {
 				t.Error("navigation key should be handled")
 			}
-			if m.selectedCmdIdx != tt.wantIdx {
-				t.Errorf("selectedCmdIdx = %d, want %d", m.selectedCmdIdx, tt.wantIdx)
+			if m.cmdPopup.selectedIdx != tt.wantIdx {
+				t.Errorf("selectedCmdIdx = %d, want %d", m.cmdPopup.selectedIdx, tt.wantIdx)
 			}
 		})
 	}
@@ -774,17 +774,17 @@ func TestUpdateCmdPopup_NavigationEmptyCommands(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			m := newMinimalModel(t)
-			m.showCmdPopup = true
-			m.filteredCmds = nil
-			m.selectedCmdIdx = 0
+			m.cmdPopup.show = true
+			m.cmdPopup.filteredCmds = nil
+			m.cmdPopup.selectedIdx = 0
 
 			handled, _ := m.updateCmdPopup(tt.key)
 
 			if !handled {
 				t.Error("navigation key should be handled even with empty commands")
 			}
-			if m.selectedCmdIdx != 0 {
-				t.Errorf("selectedCmdIdx = %d, want 0 (unchanged for empty commands)", m.selectedCmdIdx)
+			if m.cmdPopup.selectedIdx != 0 {
+				t.Errorf("selectedCmdIdx = %d, want 0 (unchanged for empty commands)", m.cmdPopup.selectedIdx)
 			}
 		})
 	}
@@ -800,16 +800,16 @@ func TestUpdateCmdPopup_SelectionEnter(t *testing.T) {
 	}
 
 	m := newMinimalModel(t)
-	m.showCmdPopup = true
-	m.filteredCmds = cmds
-	m.selectedCmdIdx = 1
+	m.cmdPopup.show = true
+	m.cmdPopup.filteredCmds = cmds
+	m.cmdPopup.selectedIdx = 1
 
 	handled, _ := m.updateCmdPopup(specialKey(tea.KeyEnter))
 
 	if !handled {
 		t.Error("enter should be handled")
 	}
-	if m.showCmdPopup {
+	if m.cmdPopup.show {
 		t.Error("showCmdPopup should be false after selection")
 	}
 	// Input should be set to the selected command name + space.
@@ -827,16 +827,16 @@ func TestUpdateCmdPopup_SelectionTab(t *testing.T) {
 	}
 
 	m := newMinimalModel(t)
-	m.showCmdPopup = true
-	m.filteredCmds = cmds
-	m.selectedCmdIdx = 0
+	m.cmdPopup.show = true
+	m.cmdPopup.filteredCmds = cmds
+	m.cmdPopup.selectedIdx = 0
 
 	handled, _ := m.updateCmdPopup(specialKey(tea.KeyTab))
 
 	if !handled {
 		t.Error("tab should be handled")
 	}
-	if m.showCmdPopup {
+	if m.cmdPopup.show {
 		t.Error("showCmdPopup should be false after tab selection")
 	}
 	if m.input.Value() != "/help " {
@@ -848,16 +848,16 @@ func TestUpdateCmdPopup_SelectionWithEmptyCommands(t *testing.T) {
 	t.Parallel()
 
 	m := newMinimalModel(t)
-	m.showCmdPopup = true
-	m.filteredCmds = nil
-	m.selectedCmdIdx = 0
+	m.cmdPopup.show = true
+	m.cmdPopup.filteredCmds = nil
+	m.cmdPopup.selectedIdx = 0
 
 	handled, _ := m.updateCmdPopup(specialKey(tea.KeyEnter))
 
 	if !handled {
 		t.Error("enter should be handled even with empty commands")
 	}
-	if m.showCmdPopup {
+	if m.cmdPopup.show {
 		t.Error("showCmdPopup should be false after enter with empty commands")
 	}
 	// Input should remain empty since there are no commands to select.
@@ -870,16 +870,16 @@ func TestUpdateCmdPopup_UnhandledKeyFallsThrough(t *testing.T) {
 	t.Parallel()
 
 	m := newMinimalModel(t)
-	m.showCmdPopup = true
-	m.filteredCmds = allCommands
-	m.selectedCmdIdx = 0
+	m.cmdPopup.show = true
+	m.cmdPopup.filteredCmds = allCommands
+	m.cmdPopup.selectedIdx = 0
 
 	handled, cmd := m.updateCmdPopup(keyPress('a'))
 
 	if handled {
 		t.Error("regular character should not be handled (should fall through)")
 	}
-	if m.showCmdPopup != true {
+	if m.cmdPopup.show != true {
 		t.Error("showCmdPopup should remain true for unhandled key")
 	}
 	if cmd != nil {

@@ -112,10 +112,10 @@ func renderCompletionBlock(content string) string {
 
 // isToolCallIndicatorIdx reports whether the entry at index i is a tool-call indicator.
 func (m *Model) isToolCallIndicatorIdx(i int) bool {
-	if i < 0 || i >= len(m.entries) {
+	if i < 0 || i >= len(m.chat.entries) {
 		return false
 	}
-	return m.entries[i].ClaudeMeta == "tool-call-indicator"
+	return m.chat.entries[i].ClaudeMeta == "tool-call-indicator"
 }
 
 // extractToolName extracts the tool/function name from a tool-call indicator
@@ -322,16 +322,16 @@ func (m *Model) appendHelpMessage() {
 	})
 	m.stats.MessageCount++
 	m.updateViewportContent()
-	if !m.userScrolled {
+	if !m.scroll.userScrolled {
 		m.chatViewport.GotoBottom()
 	}
 }
 
 // newSession resets the conversation and all session statistics.
-// initMessages resets m.entries and seeds it with the system prompt as entries[0]
+// initMessages resets m.chat.entries and seeds it with the system prompt as entries[0]
 // (if a system prompt is set). Call this at startup and on /new.
 func (m *Model) initMessages() {
-	m.entries = nil
+	m.chat.entries = nil
 	if m.systemPrompt != "" {
 		m.appendEntry(ChatEntry{
 			Message:   llm.Message{Role: "system", Content: m.systemPrompt},
@@ -341,23 +341,23 @@ func (m *Model) initMessages() {
 	} else {
 		m.stats.SystemPromptTokens = 0
 	}
-	m.completionMsgIdx = make(map[int]bool)
-	m.expandedMsgs = make(map[int]bool)
-	m.selectedMsgIdx = -1
-	m.expandedReasoning = make(map[int]bool)
-	m.collapsedTools = make(map[int]bool)
-	m.confirmDispatch = false
-	m.changingTeam = false
-	m.pendingDispatch = llm.ToolCall{}
-	m.confirmKill = false
-	m.pendingKillSlot = 0
-	m.confirmTimeout = false
-	m.pendingTimeoutSlot = 0
+	m.chat.completionMsgIdx = make(map[int]bool)
+	m.chat.expandedMsgs = make(map[int]bool)
+	m.chat.selectedMsgIdx = -1
+	m.chat.expandedReasoning = make(map[int]bool)
+	m.chat.collapsedTools = make(map[int]bool)
+	m.prompt.confirmDispatch = false
+	m.prompt.changingTeam = false
+	m.prompt.pendingDispatch = llm.ToolCall{}
+	m.prompt.confirmKill = false
+	m.prompt.pendingKillSlot = 0
+	m.prompt.confirmTimeout = false
+	m.prompt.pendingTimeoutSlot = 0
 }
 
 // appendEntry adds a new chat entry to the conversation history.
 func (m *Model) appendEntry(e ChatEntry) {
-	m.entries = append(m.entries, e)
+	m.chat.entries = append(m.chat.entries, e)
 }
 
 // isDisplayOnly reports whether an entry is UI-only chrome that must never be
@@ -385,8 +385,8 @@ func isDisplayOnly(e ChatEntry) bool {
 // messagesFromEntries extracts the llm.Message slice from entries for passing to the LLM client.
 // Display-only entries (visual indicators, confirmation prompts) are filtered out.
 func (m *Model) messagesFromEntries() []llm.Message {
-	msgs := make([]llm.Message, 0, len(m.entries))
-	for _, e := range m.entries {
+	msgs := make([]llm.Message, 0, len(m.chat.entries))
+	for _, e := range m.chat.entries {
 		if isDisplayOnly(e) {
 			continue
 		}
@@ -399,7 +399,7 @@ func (m *Model) messagesFromEntries() []llm.Message {
 // message (i.e. the welcome art should be hidden). Assistant-only messages
 // (e.g. the startup greeting) are shown alongside the art.
 func (m *Model) hasConversation() bool {
-	for _, entry := range m.entries {
+	for _, entry := range m.chat.entries {
 		if entry.Message.Role == "user" {
 			return true
 		}
@@ -411,9 +411,9 @@ func (m *Model) newSession() {
 	m.systemPrompt = agents.BuildOperatorPrompt(m.teams, m.awareness)
 	m.initMessages()
 	// entries is already reset by initMessages.
-	m.claudeActiveMeta = ""
-	m.currentResponse = ""
-	m.currentReasoning = ""
+	m.stream.claudeActiveMeta = ""
+	m.stream.currentResponse = ""
+	m.stream.currentReasoning = ""
 	m.stats.MessageCount = 0
 	m.stats.PromptTokens = 0
 	m.stats.CompletionTokens = 0
@@ -422,7 +422,7 @@ func (m *Model) newSession() {
 	m.stats.TotalResponseTime = 0
 	m.stats.LastResponseTime = 0
 	m.err = nil
-	m.userScrolled = false
+	m.scroll.userScrolled = false
 	m.updateViewportContent()
 	m.chatViewport.GotoBottom()
 	m.input.Focus()
@@ -498,7 +498,7 @@ func (m *Model) runtimeSessionForGridCell(cellIdx int) *runtimeSlot {
 
 	sortedRT := m.sortedRuntimeSessions()
 	rtIdx := 0
-	pageOffset := m.gridPage * 4
+	pageOffset := m.grid.gridPage * 4
 
 	for i := range 4 {
 		absIdx := pageOffset + i

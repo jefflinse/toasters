@@ -18,24 +18,24 @@ import (
 func (m *Model) updatePromptModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc", "p", "q":
-		m.showPromptModal = false
+		m.promptModal.show = false
 		return m, nil
 	case "up", "k":
-		if m.promptModalScroll > 0 {
-			m.promptModalScroll--
+		if m.promptModal.scroll > 0 {
+			m.promptModal.scroll--
 		}
 		return m, nil
 	case "down", "j":
-		m.promptModalScroll++
+		m.promptModal.scroll++
 		return m, nil
 	case "ctrl+u":
-		m.promptModalScroll -= 10
-		if m.promptModalScroll < 0 {
-			m.promptModalScroll = 0
+		m.promptModal.scroll -= 10
+		if m.promptModal.scroll < 0 {
+			m.promptModal.scroll = 0
 		}
 		return m, nil
 	case "ctrl+d":
-		m.promptModalScroll += 10
+		m.promptModal.scroll += 10
 		return m, nil
 	}
 	return m, nil
@@ -45,31 +45,31 @@ func (m *Model) updatePromptModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 func (m *Model) updateOutputModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc", "o", "q":
-		m.showOutputModal = false
-		m.outputModalSessionID = ""
+		m.outputModal.show = false
+		m.outputModal.sessionID = ""
 	case "up", "k":
-		if m.outputModalScroll > 0 {
-			m.outputModalScroll--
+		if m.outputModal.scroll > 0 {
+			m.outputModal.scroll--
 		}
 	case "down", "j":
-		m.outputModalScroll++
+		m.outputModal.scroll++
 	case "ctrl+u":
-		m.outputModalScroll -= 10
-		if m.outputModalScroll < 0 {
-			m.outputModalScroll = 0
+		m.outputModal.scroll -= 10
+		if m.outputModal.scroll < 0 {
+			m.outputModal.scroll = 0
 		}
 	case "ctrl+d":
-		m.outputModalScroll += 10
+		m.outputModal.scroll += 10
 	}
 	return m, nil
 }
 
 // updateGrid handles key events when the grid screen is visible.
 func (m *Model) updateGrid(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	absSlot := m.gridPage*4 + m.gridFocusCell
+	absSlot := m.grid.gridPage*4 + m.grid.gridFocusCell
 	switch msg.String() {
 	case "ctrl+g", "esc":
-		m.showGrid = false
+		m.grid.showGrid = false
 		return m, nil
 	case "k", "ctrl+k":
 		if m.gateway != nil {
@@ -81,21 +81,21 @@ func (m *Model) updateGrid(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			slots := m.gateway.Slots()
 			snap := slots[absSlot]
 			if snap.Active && snap.Output != "" {
-				m.showOutputModal = true
-				m.outputModalContent = snap.Output
-				m.outputModalScroll = len(strings.Split(snap.Output, "\n")) // auto-tail: start at bottom
-				m.outputModalSessionID = ""
+				m.outputModal.show = true
+				m.outputModal.content = snap.Output
+				m.outputModal.scroll = len(strings.Split(snap.Output, "\n")) // auto-tail: start at bottom
+				m.outputModal.sessionID = ""
 				return m, nil
 			}
 		}
 		// Check for runtime session in this cell.
-		if rs := m.runtimeSessionForGridCell(m.gridFocusCell); rs != nil {
+		if rs := m.runtimeSessionForGridCell(m.grid.gridFocusCell); rs != nil {
 			output := rs.output.String()
 			if output != "" {
-				m.showOutputModal = true
-				m.outputModalContent = output
-				m.outputModalScroll = len(strings.Split(output, "\n")) // auto-tail: start at bottom
-				m.outputModalSessionID = rs.sessionID
+				m.outputModal.show = true
+				m.outputModal.content = output
+				m.outputModal.scroll = len(strings.Split(output, "\n")) // auto-tail: start at bottom
+				m.outputModal.sessionID = rs.sessionID
 			}
 		}
 		return m, nil
@@ -104,14 +104,14 @@ func (m *Model) updateGrid(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			slots := m.gateway.Slots()
 			snap := slots[absSlot]
 			if snap.Active && snap.Prompt != "" {
-				m.showPromptModal = true
-				m.promptModalContent = snap.Prompt
-				m.promptModalScroll = 0
+				m.promptModal.show = true
+				m.promptModal.content = snap.Prompt
+				m.promptModal.scroll = 0
 				return m, nil
 			}
 		}
 		// Check for runtime session in this cell.
-		if rs := m.runtimeSessionForGridCell(m.gridFocusCell); rs != nil {
+		if rs := m.runtimeSessionForGridCell(m.grid.gridFocusCell); rs != nil {
 			// Build a combined prompt view: system prompt + initial message.
 			var promptContent strings.Builder
 			if rs.systemPrompt != "" {
@@ -125,42 +125,42 @@ func (m *Model) updateGrid(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 			content := promptContent.String()
 			if content != "" {
-				m.showPromptModal = true
-				m.promptModalContent = content
-				m.promptModalScroll = 0
+				m.promptModal.show = true
+				m.promptModal.content = content
+				m.promptModal.scroll = 0
 			}
 		}
 		return m, nil
 	case "[":
-		if m.gridPage > 0 {
-			m.gridPage--
+		if m.grid.gridPage > 0 {
+			m.grid.gridPage--
 		}
-		m.gridFocusCell = 0
+		m.grid.gridFocusCell = 0
 		return m, nil
 	case "]":
-		if m.gridPage < 3 {
-			m.gridPage++
+		if m.grid.gridPage < 3 {
+			m.grid.gridPage++
 		}
-		m.gridFocusCell = 0
+		m.grid.gridFocusCell = 0
 		return m, nil
 	case "left":
-		if m.gridFocusCell%2 == 1 {
-			m.gridFocusCell--
+		if m.grid.gridFocusCell%2 == 1 {
+			m.grid.gridFocusCell--
 		}
 		return m, nil
 	case "right":
-		if m.gridFocusCell%2 == 0 {
-			m.gridFocusCell++
+		if m.grid.gridFocusCell%2 == 0 {
+			m.grid.gridFocusCell++
 		}
 		return m, nil
 	case "up":
-		if m.gridFocusCell >= 2 {
-			m.gridFocusCell -= 2
+		if m.grid.gridFocusCell >= 2 {
+			m.grid.gridFocusCell -= 2
 		}
 		return m, nil
 	case "down":
-		if m.gridFocusCell < 2 {
-			m.gridFocusCell += 2
+		if m.grid.gridFocusCell < 2 {
+			m.grid.gridFocusCell += 2
 		}
 		return m, nil
 	}
@@ -171,23 +171,23 @@ func (m *Model) updateGrid(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 func (m *Model) updateKillModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "up":
-		if len(m.killModalSlots) > 0 {
-			m.selectedKillIdx = (m.selectedKillIdx - 1 + len(m.killModalSlots)) % len(m.killModalSlots)
+		if len(m.killModal.slots) > 0 {
+			m.killModal.selectedIdx = (m.killModal.selectedIdx - 1 + len(m.killModal.slots)) % len(m.killModal.slots)
 		}
 		return m, nil
 	case "down":
-		if len(m.killModalSlots) > 0 {
-			m.selectedKillIdx = (m.selectedKillIdx + 1) % len(m.killModalSlots)
+		if len(m.killModal.slots) > 0 {
+			m.killModal.selectedIdx = (m.killModal.selectedIdx + 1) % len(m.killModal.slots)
 		}
 		return m, nil
 	case "enter":
-		if m.gateway != nil && len(m.killModalSlots) > 0 {
-			_ = m.gateway.Kill(m.killModalSlots[m.selectedKillIdx])
+		if m.gateway != nil && len(m.killModal.slots) > 0 {
+			_ = m.gateway.Kill(m.killModal.slots[m.killModal.selectedIdx])
 		}
-		m.showKillModal = false
+		m.killModal.show = false
 		return m, nil
 	case "esc":
-		m.showKillModal = false
+		m.killModal.show = false
 		return m, nil
 	}
 	return m, nil
@@ -198,23 +198,23 @@ func (m *Model) updateKillModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 func (m *Model) updateCmdPopup(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	switch msg.String() {
 	case "up":
-		if len(m.filteredCmds) > 0 {
-			m.selectedCmdIdx = (m.selectedCmdIdx - 1 + len(m.filteredCmds)) % len(m.filteredCmds)
+		if len(m.cmdPopup.filteredCmds) > 0 {
+			m.cmdPopup.selectedIdx = (m.cmdPopup.selectedIdx - 1 + len(m.cmdPopup.filteredCmds)) % len(m.cmdPopup.filteredCmds)
 		}
 		return true, nil
 	case "down":
-		if len(m.filteredCmds) > 0 {
-			m.selectedCmdIdx = (m.selectedCmdIdx + 1) % len(m.filteredCmds)
+		if len(m.cmdPopup.filteredCmds) > 0 {
+			m.cmdPopup.selectedIdx = (m.cmdPopup.selectedIdx + 1) % len(m.cmdPopup.filteredCmds)
 		}
 		return true, nil
 	case "tab", "enter":
-		if len(m.filteredCmds) > 0 {
-			m.input.SetValue(m.filteredCmds[m.selectedCmdIdx].Name + " ")
+		if len(m.cmdPopup.filteredCmds) > 0 {
+			m.input.SetValue(m.cmdPopup.filteredCmds[m.cmdPopup.selectedIdx].Name + " ")
 		}
-		m.showCmdPopup = false
+		m.cmdPopup.show = false
 		return true, nil
 	case "esc":
-		m.showCmdPopup = false
+		m.cmdPopup.show = false
 		return true, nil
 	}
 	return false, nil
@@ -260,9 +260,9 @@ func (m *Model) handleAgentOutput(msg AgentOutputMsg) (tea.Model, tea.Cmd) {
 				// Toast: agent completed.
 				cmds = append(cmds, m.addToast("🍞 "+snap.AgentName+" is done. Extra crispy.", toastSuccess))
 
-				if m.streaming {
+				if m.stream.streaming {
 					// Buffer the notification — drain it after the current stream ends.
-					m.pendingCompletions = append(m.pendingCompletions, pendingCompletion{
+					m.chat.pendingCompletions = append(m.chat.pendingCompletions, pendingCompletion{
 						notification: notification,
 					})
 				} else {
@@ -272,11 +272,11 @@ func (m *Model) handleAgentOutput(msg AgentOutputMsg) (tea.Model, tea.Cmd) {
 						Timestamp: time.Now(),
 					})
 					// Tag this message as a collapsible completion entry and auto-select it.
-					completionIdx := len(m.entries) - 1
-					m.completionMsgIdx[completionIdx] = true
-					m.selectedMsgIdx = completionIdx
+					completionIdx := len(m.chat.entries) - 1
+					m.chat.completionMsgIdx[completionIdx] = true
+					m.chat.selectedMsgIdx = completionIdx
 					m.updateViewportContent()
-					if !m.userScrolled {
+					if !m.scroll.userScrolled {
 						m.chatViewport.GotoBottom()
 					}
 					cmds = append(cmds, m.startStream(m.messagesFromEntries()))

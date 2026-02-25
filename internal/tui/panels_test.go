@@ -275,11 +275,11 @@ func TestRenderPromptWidget(t *testing.T) {
 		m := newMinimalModel(t)
 		m.width = 120
 		m.height = 40
-		m.promptMode = true
-		m.promptCustom = false
-		m.promptQuestion = "Which team should handle this?"
-		m.promptOptions = []string{"Team Alpha", "Team Beta"}
-		m.promptSelected = 0
+		m.prompt.promptMode = true
+		m.prompt.promptCustom = false
+		m.prompt.promptQuestion = "Which team should handle this?"
+		m.prompt.promptOptions = []string{"Team Alpha", "Team Beta"}
+		m.prompt.promptSelected = 0
 
 		result := m.renderPromptWidget(80, lipgloss.NewStyle())
 
@@ -315,11 +315,11 @@ func TestRenderPromptWidget(t *testing.T) {
 		m := newMinimalModel(t)
 		m.width = 120
 		m.height = 40
-		m.promptMode = true
-		m.promptCustom = false
-		m.promptQuestion = "Pick one"
-		m.promptOptions = []string{"Option A", "Option B"}
-		m.promptSelected = 1
+		m.prompt.promptMode = true
+		m.prompt.promptCustom = false
+		m.prompt.promptQuestion = "Pick one"
+		m.prompt.promptOptions = []string{"Option A", "Option B"}
+		m.prompt.promptSelected = 1
 
 		result := m.renderPromptWidget(80, lipgloss.NewStyle())
 
@@ -337,9 +337,9 @@ func TestRenderPromptWidget(t *testing.T) {
 		m := newMinimalModel(t)
 		m.width = 120
 		m.height = 40
-		m.promptMode = true
-		m.promptCustom = true
-		m.promptQuestion = "Enter your custom response"
+		m.prompt.promptMode = true
+		m.prompt.promptCustom = true
+		m.prompt.promptQuestion = "Enter your custom response"
 
 		result := m.renderPromptWidget(80, InputAreaStyle)
 
@@ -358,11 +358,11 @@ func TestRenderPromptWidget(t *testing.T) {
 		m := newMinimalModel(t)
 		m.width = 120
 		m.height = 40
-		m.promptMode = true
-		m.promptCustom = false
-		m.promptQuestion = "No options"
-		m.promptOptions = nil
-		m.promptSelected = 0
+		m.prompt.promptMode = true
+		m.prompt.promptCustom = false
+		m.prompt.promptQuestion = "No options"
+		m.prompt.promptOptions = nil
+		m.prompt.promptSelected = 0
 
 		result := m.renderPromptWidget(80, lipgloss.NewStyle())
 

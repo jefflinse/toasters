@@ -553,11 +553,13 @@ func TestDrainPendingCompletions_NoPending(t *testing.T) {
 	t.Parallel()
 
 	m := &Model{
-		entries: []ChatEntry{
-			{Message: llm.Message{Role: "system", Content: "system prompt"}},
-			{Message: llm.Message{Role: "user", Content: "hello"}},
+		chat: chatState{
+			entries: []ChatEntry{
+				{Message: llm.Message{Role: "system", Content: "system prompt"}},
+				{Message: llm.Message{Role: "user", Content: "hello"}},
+			},
+			pendingCompletions: nil,
 		},
-		pendingCompletions: nil,
 	}
 
 	msgs, drained := m.drainPendingCompletions()
@@ -579,11 +581,13 @@ func TestDrainPendingCompletions_OnePending(t *testing.T) {
 	t.Parallel()
 
 	m := &Model{
-		entries: []ChatEntry{
-			{Message: llm.Message{Role: "system", Content: "system prompt"}},
-		},
-		pendingCompletions: []pendingCompletion{
-			{notification: "Agent completed task X"},
+		chat: chatState{
+			entries: []ChatEntry{
+				{Message: llm.Message{Role: "system", Content: "system prompt"}},
+			},
+			pendingCompletions: []pendingCompletion{
+				{notification: "Agent completed task X"},
+			},
 		},
 	}
 
@@ -602,8 +606,8 @@ func TestDrainPendingCompletions_OnePending(t *testing.T) {
 		t.Errorf("drained message content = %q, want %q", msgs[1].Content, "Agent completed task X")
 	}
 	// pendingCompletions should be cleared.
-	if len(m.pendingCompletions) != 0 {
-		t.Errorf("pendingCompletions should be nil after drain, got %d", len(m.pendingCompletions))
+	if len(m.chat.pendingCompletions) != 0 {
+		t.Errorf("pendingCompletions should be nil after drain, got %d", len(m.chat.pendingCompletions))
 	}
 }
 
@@ -611,13 +615,15 @@ func TestDrainPendingCompletions_MultiplePending(t *testing.T) {
 	t.Parallel()
 
 	m := &Model{
-		entries: []ChatEntry{
-			{Message: llm.Message{Role: "system", Content: "system prompt"}},
-		},
-		pendingCompletions: []pendingCompletion{
-			{notification: "Agent A done"},
-			{notification: "Agent B done"},
-			{notification: "Agent C done"},
+		chat: chatState{
+			entries: []ChatEntry{
+				{Message: llm.Message{Role: "system", Content: "system prompt"}},
+			},
+			pendingCompletions: []pendingCompletion{
+				{notification: "Agent A done"},
+				{notification: "Agent B done"},
+				{notification: "Agent C done"},
+			},
 		},
 	}
 
@@ -639,8 +645,8 @@ func TestDrainPendingCompletions_MultiplePending(t *testing.T) {
 			t.Errorf("drained msg[%d] content = %q, want %q", i, msg.Content, want)
 		}
 	}
-	if len(m.pendingCompletions) != 0 {
-		t.Errorf("pendingCompletions should be nil after drain, got %d", len(m.pendingCompletions))
+	if len(m.chat.pendingCompletions) != 0 {
+		t.Errorf("pendingCompletions should be nil after drain, got %d", len(m.chat.pendingCompletions))
 	}
 }
 
@@ -648,8 +654,10 @@ func TestDrainPendingCompletions_EmptySlice(t *testing.T) {
 	t.Parallel()
 
 	m := &Model{
-		entries:            []ChatEntry{},
-		pendingCompletions: []pendingCompletion{},
+		chat: chatState{
+			entries:            []ChatEntry{},
+			pendingCompletions: []pendingCompletion{},
+		},
 	}
 
 	msgs, drained := m.drainPendingCompletions()
@@ -665,23 +673,25 @@ func TestDrainPendingCompletions_EntriesUpdated(t *testing.T) {
 	t.Parallel()
 
 	m := &Model{
-		entries: []ChatEntry{
-			{Message: llm.Message{Role: "system", Content: "sys"}},
-		},
-		pendingCompletions: []pendingCompletion{
-			{notification: "notification 1"},
+		chat: chatState{
+			entries: []ChatEntry{
+				{Message: llm.Message{Role: "system", Content: "sys"}},
+			},
+			pendingCompletions: []pendingCompletion{
+				{notification: "notification 1"},
+			},
 		},
 	}
 
-	before := len(m.entries)
+	before := len(m.chat.entries)
 	_, _ = m.drainPendingCompletions()
-	after := len(m.entries)
+	after := len(m.chat.entries)
 
 	if after != before+1 {
 		t.Errorf("expected entries to grow by 1 (from %d to %d), got %d", before, before+1, after)
 	}
 	// Verify the appended entry has a reasonable timestamp.
-	lastEntry := m.entries[len(m.entries)-1]
+	lastEntry := m.chat.entries[len(m.chat.entries)-1]
 	if lastEntry.Timestamp.IsZero() {
 		t.Error("expected non-zero timestamp on drained entry")
 	}

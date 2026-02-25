@@ -221,8 +221,8 @@ func scrollbarHide() tea.Cmd {
 // showScrollbar marks the scrollbar as visible and returns a command to hide it
 // after the configured duration. Call this from every scroll-event handler.
 func (m *Model) showScrollbar() tea.Cmd {
-	m.scrollbarVisible = true
-	m.lastScrollTime = time.Now()
+	m.scroll.scrollbarVisible = true
+	m.scroll.lastScrollTime = time.Now()
 	return scrollbarHide()
 }
 

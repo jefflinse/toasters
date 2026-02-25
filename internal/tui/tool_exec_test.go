@@ -228,7 +228,7 @@ func TestToolResultMsg_HandlerAppendsEntries(t *testing.T) {
 	})
 	m.toolsInFlight = true // must be true for handler to process results
 
-	initialEntries := len(m.entries)
+	initialEntries := len(m.chat.entries)
 
 	msg := ToolResultMsg{
 		Results: []ToolResult{
@@ -242,13 +242,13 @@ func TestToolResultMsg_HandlerAppendsEntries(t *testing.T) {
 
 	// Should have appended 2 tool result entries.
 	expectedEntries := initialEntries + 2
-	if len(got.entries) != expectedEntries {
-		t.Errorf("entries count = %d, want %d", len(got.entries), expectedEntries)
+	if len(got.chat.entries) != expectedEntries {
+		t.Errorf("entries count = %d, want %d", len(got.chat.entries), expectedEntries)
 	}
 
 	// Verify the tool result entries.
 	for i, tr := range msg.Results {
-		entry := got.entries[initialEntries+i]
+		entry := got.chat.entries[initialEntries+i]
 		if entry.Message.Role != "tool" {
 			t.Errorf("entry[%d].Role = %q, want %q", i, entry.Message.Role, "tool")
 		}
@@ -276,7 +276,7 @@ func TestToolResultMsg_HandlerFormatsErrors(t *testing.T) {
 	})
 	m.toolsInFlight = true // must be true for handler to process results
 
-	initialEntries := len(m.entries)
+	initialEntries := len(m.chat.entries)
 
 	msg := ToolResultMsg{
 		Results: []ToolResult{
@@ -287,11 +287,11 @@ func TestToolResultMsg_HandlerFormatsErrors(t *testing.T) {
 	result, _ := m.Update(msg)
 	got := result.(*Model)
 
-	if len(got.entries) != initialEntries+1 {
-		t.Fatalf("entries count = %d, want %d", len(got.entries), initialEntries+1)
+	if len(got.chat.entries) != initialEntries+1 {
+		t.Fatalf("entries count = %d, want %d", len(got.chat.entries), initialEntries+1)
 	}
 
-	entry := got.entries[initialEntries]
+	entry := got.chat.entries[initialEntries]
 	if entry.Message.Role != "tool" {
 		t.Errorf("Role = %q, want %q", entry.Message.Role, "tool")
 	}
@@ -315,7 +315,7 @@ func TestEscCancelsToolsInFlight(t *testing.T) {
 	m.toolsInFlight = true
 	m.toolCancelFunc = cancel
 
-	initialEntries := len(m.entries)
+	initialEntries := len(m.chat.entries)
 
 	// Press Escape.
 	result, _ := m.Update(specialKey(tea.KeyEscape))
@@ -329,10 +329,10 @@ func TestEscCancelsToolsInFlight(t *testing.T) {
 	}
 
 	// Should have appended a cancellation message.
-	if len(got.entries) != initialEntries+1 {
-		t.Fatalf("entries count = %d, want %d", len(got.entries), initialEntries+1)
+	if len(got.chat.entries) != initialEntries+1 {
+		t.Fatalf("entries count = %d, want %d", len(got.chat.entries), initialEntries+1)
 	}
-	entry := got.entries[initialEntries]
+	entry := got.chat.entries[initialEntries]
 	if entry.Message.Content != "[tool calls cancelled]" {
 		t.Errorf("Content = %q, want %q", entry.Message.Content, "[tool calls cancelled]")
 	}
@@ -356,7 +356,7 @@ func TestToolResultMsg_DiscardedAfterEscapeCancellation(t *testing.T) {
 	m.toolsInFlight = false
 	m.toolCancelFunc = nil
 
-	initialEntries := len(m.entries)
+	initialEntries := len(m.chat.entries)
 
 	// A late ToolResultMsg arrives from the goroutine.
 	msg := ToolResultMsg{
@@ -369,8 +369,8 @@ func TestToolResultMsg_DiscardedAfterEscapeCancellation(t *testing.T) {
 	got := result.(*Model)
 
 	// The late result should be discarded — no entries appended.
-	if len(got.entries) != initialEntries {
-		t.Errorf("entries count = %d, want %d (late result should be discarded)", len(got.entries), initialEntries)
+	if len(got.chat.entries) != initialEntries {
+		t.Errorf("entries count = %d, want %d (late result should be discarded)", len(got.chat.entries), initialEntries)
 	}
 
 	// No command should be returned (no stream restart).

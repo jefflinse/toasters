@@ -1,7 +1,6 @@
 package anthropic
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -17,6 +16,7 @@ import (
 	"time"
 
 	"github.com/jefflinse/toasters/internal/llm"
+	"github.com/jefflinse/toasters/internal/sse"
 )
 
 // anthropicHTTPClient is a shared HTTP client with proper timeouts for
@@ -370,13 +370,6 @@ func (c *Client) streamMessages(ctx context.Context, system string, messages []a
 	parseSSEStream(ctx, resp.Body, ch)
 }
 
-// toolAccumulator tracks a tool_use content block being streamed.
-type toolAccumulator struct {
-	id       string
-	name     string
-	inputBuf strings.Builder // accumulated input_json_delta fragments
-}
-
 // parseSSEStream reads Anthropic SSE events from r and sends StreamResponse
 // messages on ch. Handles text, tool_use, and tool result content blocks.
 // Shared by both the Client methods and the standalone function.
@@ -384,102 +377,80 @@ func parseSSEStream(ctx context.Context, r io.Reader, ch chan<- llm.StreamRespon
 	var (
 		lastModel  string
 		lastUsage  *llm.Usage
-		eventType  string
-		toolBlocks map[int]*toolAccumulator // index → accumulator
+		toolBlocks map[int]*sse.AnthropicToolAccumulator // index → accumulator
 	)
 
-	scanner := bufio.NewScanner(r)
-	for scanner.Scan() {
-		if ctx.Err() != nil {
-			ch <- llm.StreamResponse{Error: ctx.Err()}
-			return
+	reader := sse.NewReader(r)
+	for {
+		ev, ok := reader.Next(ctx)
+		if !ok {
+			break
 		}
 
-		line := scanner.Text()
-
-		// Blank line = end of SSE event block.
-		if line == "" {
-			eventType = ""
-			continue
-		}
-
-		// Capture the event type.
-		if strings.HasPrefix(line, "event: ") {
-			eventType = strings.TrimPrefix(line, "event: ")
-			continue
-		}
-
-		// We only process data lines.
-		if !strings.HasPrefix(line, "data: ") {
-			continue
-		}
-
-		data := strings.TrimPrefix(line, "data: ")
-
-		switch eventType {
-		case "message_start":
-			var ev messageStartEvent
-			if err := json.Unmarshal([]byte(data), &ev); err != nil {
+		switch ev.Type {
+		case sse.AnthropicMessageStart:
+			var parsed sse.AnthropicMessageStartEvent
+			if err := json.Unmarshal([]byte(ev.Data), &parsed); err != nil {
 				ch <- llm.StreamResponse{Error: fmt.Errorf("parsing message_start: %w", err)}
 				return
 			}
-			lastModel = ev.Message.Model
+			lastModel = parsed.Message.Model
 			lastUsage = &llm.Usage{
-				PromptTokens: ev.Message.Usage.InputTokens,
+				PromptTokens: parsed.Message.Usage.InputTokens,
 			}
 
-		case "content_block_start":
-			var ev contentBlockStartEvent
-			if err := json.Unmarshal([]byte(data), &ev); err != nil {
+		case sse.AnthropicContentBlockStart:
+			var parsed sse.AnthropicContentBlockStartEvent
+			if err := json.Unmarshal([]byte(ev.Data), &parsed); err != nil {
 				ch <- llm.StreamResponse{Error: fmt.Errorf("parsing content_block_start: %w", err)}
 				return
 			}
-			if ev.ContentBlock.Type == "tool_use" {
+			if parsed.ContentBlock.Type == "tool_use" {
 				if toolBlocks == nil {
-					toolBlocks = make(map[int]*toolAccumulator)
+					toolBlocks = make(map[int]*sse.AnthropicToolAccumulator)
 				}
-				toolBlocks[ev.Index] = &toolAccumulator{
-					id:   ev.ContentBlock.ID,
-					name: ev.ContentBlock.Name,
+				toolBlocks[parsed.Index] = &sse.AnthropicToolAccumulator{
+					ID:   parsed.ContentBlock.ID,
+					Name: parsed.ContentBlock.Name,
 				}
 			}
 
-		case "content_block_delta":
-			var ev contentBlockDeltaEvent
-			if err := json.Unmarshal([]byte(data), &ev); err != nil {
+		case sse.AnthropicContentBlockDelta:
+			var parsed sse.AnthropicContentBlockDeltaEvent
+			if err := json.Unmarshal([]byte(ev.Data), &parsed); err != nil {
 				ch <- llm.StreamResponse{Error: fmt.Errorf("parsing content_block_delta: %w", err)}
 				return
 			}
-			switch ev.Delta.Type {
+			switch parsed.Delta.Type {
 			case "text_delta":
-				if ev.Delta.Text != "" {
+				if parsed.Delta.Text != "" {
 					ch <- llm.StreamResponse{
-						Content: ev.Delta.Text,
+						Content: parsed.Delta.Text,
 						Model:   lastModel,
 					}
 				}
 			case "input_json_delta":
-				if acc, ok := toolBlocks[ev.Index]; ok {
-					acc.inputBuf.WriteString(ev.Delta.PartialJSON)
+				if acc, ok := toolBlocks[parsed.Index]; ok {
+					acc.InputBuf.WriteString(parsed.Delta.PartialJSON)
 				}
 			}
 
-		case "content_block_stop":
+		case sse.AnthropicContentBlockStop:
 			// Nothing special needed — tool blocks are emitted on message_delta.
 
-		case "message_delta":
-			var ev messageDeltaEvent
-			if err := json.Unmarshal([]byte(data), &ev); err != nil {
+		case sse.AnthropicMessageDelta:
+			var parsed sse.AnthropicMessageDeltaEvent
+			if err := json.Unmarshal([]byte(ev.Data), &parsed); err != nil {
 				ch <- llm.StreamResponse{Error: fmt.Errorf("parsing message_delta: %w", err)}
 				return
 			}
 			lastUsage = &llm.Usage{
 				PromptTokens:     lastUsage.PromptTokens,
-				CompletionTokens: ev.Usage.OutputTokens,
-				TotalTokens:      lastUsage.PromptTokens + ev.Usage.OutputTokens,
+				CompletionTokens: parsed.Usage.OutputTokens,
+				TotalTokens:      lastUsage.PromptTokens + parsed.Usage.OutputTokens,
 			}
 
-			if ev.Delta.StopReason == "tool_use" && len(toolBlocks) > 0 {
+			if parsed.Delta.StopReason == "tool_use" && len(toolBlocks) > 0 {
 				// Collect accumulated tool calls sorted by index.
 				indices := make([]int, 0, len(toolBlocks))
 				for idx := range toolBlocks {
@@ -491,11 +462,11 @@ func parseSSEStream(ctx context.Context, r io.Reader, ch chan<- llm.StreamRespon
 					acc := toolBlocks[idx]
 					calls = append(calls, llm.ToolCall{
 						Index: idx,
-						ID:    acc.id,
+						ID:    acc.ID,
 						Type:  "function",
 						Function: llm.ToolCallFunction{
-							Name:      acc.name,
-							Arguments: acc.inputBuf.String(),
+							Name:      acc.Name,
+							Arguments: acc.InputBuf.String(),
 						},
 					})
 				}
@@ -510,10 +481,10 @@ func parseSSEStream(ctx context.Context, r io.Reader, ch chan<- llm.StreamRespon
 
 			ch <- llm.StreamResponse{
 				Usage:      lastUsage,
-				StopReason: ev.Delta.StopReason,
+				StopReason: parsed.Delta.StopReason,
 			}
 
-		case "message_stop":
+		case sse.AnthropicMessageStop:
 			ch <- llm.StreamResponse{
 				Done:  true,
 				Model: lastModel,
@@ -521,21 +492,27 @@ func parseSSEStream(ctx context.Context, r io.Reader, ch chan<- llm.StreamRespon
 			}
 			return
 
-		case "error":
-			var ev errorEvent
-			if err := json.Unmarshal([]byte(data), &ev); err != nil {
+		case sse.AnthropicError:
+			var parsed sse.AnthropicErrorEvent
+			if err := json.Unmarshal([]byte(ev.Data), &parsed); err != nil {
 				ch <- llm.StreamResponse{Error: fmt.Errorf("parsing error event: %w", err)}
 				return
 			}
-			ch <- llm.StreamResponse{Error: fmt.Errorf("anthropic API error: %s: %s", ev.Error.Type, ev.Error.Message)}
+			ch <- llm.StreamResponse{Error: fmt.Errorf("anthropic API error: %s: %s", parsed.Error.Type, parsed.Error.Message)}
 			return
 
-		case "ping":
+		case sse.AnthropicPing:
 			// Ignored.
 		}
 	}
 
-	if err := scanner.Err(); err != nil {
+	// Check context cancellation first — it may have caused Next() to return false.
+	if ctx.Err() != nil {
+		ch <- llm.StreamResponse{Error: ctx.Err()}
+		return
+	}
+
+	if err := reader.Err(); err != nil {
 		ch <- llm.StreamResponse{Error: fmt.Errorf("reading stream: %w", err)}
 		return
 	}
@@ -807,51 +784,7 @@ type anthropicContentBlock struct {
 	Input any    `json:"input,omitempty"`
 }
 
-// SSE event types from the Anthropic streaming API.
-type messageStartEvent struct {
-	Type    string `json:"type"`
-	Message struct {
-		Model string   `json:"model"`
-		Usage apiUsage `json:"usage"`
-	} `json:"message"`
-}
-
-type contentBlockStartEvent struct {
-	Type         string `json:"type"`
-	Index        int    `json:"index"`
-	ContentBlock struct {
-		Type string `json:"type"`
-		ID   string `json:"id,omitempty"`
-		Name string `json:"name,omitempty"`
-	} `json:"content_block"`
-}
-
-type contentBlockDeltaEvent struct {
-	Type  string `json:"type"`
-	Index int    `json:"index"`
-	Delta struct {
-		Type        string `json:"type"`
-		Text        string `json:"text,omitempty"`
-		PartialJSON string `json:"partial_json,omitempty"`
-	} `json:"delta"`
-}
-
-type messageDeltaEvent struct {
-	Type  string `json:"type"`
-	Delta struct {
-		StopReason string `json:"stop_reason"`
-	} `json:"delta"`
-	Usage apiUsage `json:"usage"`
-}
-
-type errorEvent struct {
-	Type  string `json:"type"`
-	Error struct {
-		Type    string `json:"type"`
-		Message string `json:"message"`
-	} `json:"error"`
-}
-
+// apiUsage is used by the non-streaming response only.
 type apiUsage struct {
 	InputTokens  int `json:"input_tokens"`
 	OutputTokens int `json:"output_tokens"`

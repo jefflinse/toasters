@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"net/http"
 	"os"
@@ -19,7 +18,6 @@ import (
 
 	"github.com/jefflinse/toasters/internal/agents"
 	"github.com/jefflinse/toasters/internal/db"
-	"github.com/jefflinse/toasters/internal/job"
 	"github.com/jefflinse/toasters/internal/llm"
 	"github.com/jefflinse/toasters/internal/mcp"
 	"github.com/jefflinse/toasters/internal/orchestration"
@@ -383,373 +381,50 @@ var staticTools = []llm.Tool{
 	},
 }
 
+// toolHandler is the function signature for individual tool handlers.
+// Each handler receives the request context, the executor (for access to
+// dependencies), and the full tool call.
+type toolHandler func(ctx context.Context, te *ToolExecutor, call llm.ToolCall) (string, error)
+
+// handlers maps tool names to their handler functions.
+var handlers = map[string]toolHandler{
+	"fetch_webpage":       handleFetchWebpage,
+	"list_directory":      handleListDirectory,
+	"job_list":            handleJobList,
+	"job_create":          handleJobCreate,
+	"job_read_overview":   handleJobReadOverview,
+	"job_read_todos":      handleJobReadTodos,
+	"job_update_overview": handleJobUpdateOverview,
+	"job_add_todo":        handleJobAddTodo,
+	"job_complete_todo":   handleJobCompleteTodo,
+	"task_set_status":     handleTaskSetStatus,
+	"job_set_status":      handleJobSetStatus,
+	"assign_team":         handleAssignTeam,
+	"escalate_to_user":    handleEscalateToUser,
+	"list_slots":          handleListSlots,
+	"kill_slot":           handleKillSlot,
+	"ask_user":            handleAskUser,
+	"list_sessions":       handleListSessions,
+	"cancel_session":      handleCancelSession,
+}
+
 // ExecuteTool dispatches a tool call to the appropriate handler and returns
 // the result as plain text.
 func (te *ToolExecutor) ExecuteTool(ctx context.Context, call llm.ToolCall) (string, error) {
-	switch call.Function.Name {
-	case "fetch_webpage":
-		var args struct {
-			URL string `json:"url"`
-		}
-		if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
-			return "", fmt.Errorf("parsing fetch_webpage args: %w", err)
-		}
-		return fetchWebpage(args.URL)
-	case "list_directory":
-		var args struct {
-			Path string `json:"path"`
-		}
-		if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
-			return "", fmt.Errorf("parsing list_directory args: %w", err)
-		}
-		return listDirectory(args.Path, te.WorkspaceDir)
-	case "job_list":
-		jobs, err := job.List(te.WorkspaceDir)
-		if err != nil {
-			return "", fmt.Errorf("listing jobs: %w", err)
-		}
-		type item struct {
-			ID          string `json:"id"`
-			Name        string `json:"name"`
-			Description string `json:"description"`
-			Status      string `json:"status"`
-		}
-		items := make([]item, len(jobs))
-		for i, j := range jobs {
-			items[i] = item{ID: j.ID, Name: j.Name, Description: j.Description, Status: string(j.Status)}
-		}
-		b, _ := json.Marshal(items)
-		return string(b), nil
-
-	case "job_create":
-		var args struct {
-			ID          string `json:"id"`
-			Name        string `json:"name"`
-			Description string `json:"description"`
-		}
-		if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
-			return "", fmt.Errorf("parsing job_create args: %w", err)
-		}
-		j, err := job.Create(te.WorkspaceDir, args.ID, args.Name, args.Description)
-		if err != nil {
-			return "", fmt.Errorf("creating job: %w", err)
-		}
-		// Dual-write to SQLite if available.
-		if te.Store != nil {
-			ctx := context.Background()
-			dbJob := &db.Job{
-				ID:     j.ID,
-				Title:  args.Name,
-				Type:   "general",
-				Status: db.JobStatusPending,
-			}
-			if dbErr := te.Store.CreateJob(ctx, dbJob); dbErr != nil {
-				log.Printf("warning: failed to persist job %s to SQLite: %v", j.ID, dbErr)
-			}
-		}
-		return "created: " + j.ID, nil
-
-	case "job_read_overview":
-		var args struct {
-			ID string `json:"id"`
-		}
-		if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
-			return "", fmt.Errorf("parsing job_read_overview args: %w", err)
-		}
-		dir := filepath.Join(job.JobsDir(te.WorkspaceDir), args.ID)
-		return job.ReadOverview(dir)
-
-	case "job_read_todos":
-		var args struct {
-			ID string `json:"id"`
-		}
-		if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
-			return "", fmt.Errorf("parsing job_read_todos args: %w", err)
-		}
-		dir := filepath.Join(job.JobsDir(te.WorkspaceDir), args.ID)
-		return job.ReadTodos(dir)
-
-	case "job_update_overview":
-		var args struct {
-			ID      string `json:"id"`
-			Content string `json:"content"`
-			Mode    string `json:"mode"`
-		}
-		if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
-			return "", fmt.Errorf("parsing job_update_overview args: %w", err)
-		}
-		if args.Mode != "overwrite" && args.Mode != "append" {
-			return "", fmt.Errorf("invalid mode %q: must be 'overwrite' or 'append'", args.Mode)
-		}
-		dir := filepath.Join(job.JobsDir(te.WorkspaceDir), args.ID)
-		var overviewErr error
-		if args.Mode == "overwrite" {
-			overviewErr = job.WriteOverview(dir, args.Content)
-		} else {
-			overviewErr = job.AppendOverview(dir, args.Content)
-		}
-		if overviewErr != nil {
-			return "", overviewErr
-		}
-		return "ok", nil
-
-	case "job_add_todo":
-		var args struct {
-			ID   string `json:"id"`
-			Task string `json:"task"`
-		}
-		if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
-			return "", fmt.Errorf("parsing job_add_todo args: %w", err)
-		}
-		dir := filepath.Join(job.JobsDir(te.WorkspaceDir), args.ID)
-		if err := job.AddTodo(dir, args.Task); err != nil {
-			return "", err
-		}
-		return "ok", nil
-
-	case "job_complete_todo":
-		var args struct {
-			ID          string `json:"id"`
-			IndexOrText string `json:"index_or_text"`
-		}
-		if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
-			return "", fmt.Errorf("parsing job_complete_todo args: %w", err)
-		}
-		dir := filepath.Join(job.JobsDir(te.WorkspaceDir), args.ID)
-		if err := job.CompleteTodo(dir, args.IndexOrText); err != nil {
-			return "", err
-		}
-		return "ok", nil
-
-	case "assign_team":
-		if te.Gateway == nil {
-			return "", fmt.Errorf("gateway not initialized")
-		}
-		var args struct {
-			TeamName string `json:"team_name"`
-			JobID    string `json:"job_id"`
-			Task     string `json:"task"`
-		}
-		if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
-			return "", fmt.Errorf("parsing assign_team args: %w", err)
-		}
-		// Guard: verify the job exists before dispatching to a team.
-		jobDir := filepath.Join(job.JobsDir(te.WorkspaceDir), args.JobID)
-		if _, loadErr := job.Load(jobDir); loadErr != nil {
-			return fmt.Sprintf("job %q does not exist; call job_create first", args.JobID), nil
-		}
-		// Look up team by name.
-		var team agents.Team
-		found := false
-		for _, t := range te.getTeams() {
-			if t.Name == args.TeamName {
-				team = t
-				found = true
-				break
-			}
-		}
-		if !found {
-			return "", fmt.Errorf("team %q not found", args.TeamName)
-		}
-		// Persist team assignment to the first task.
-		if tasks, err := job.ListTasks(jobDir); err == nil && len(tasks) > 0 {
-			_ = job.SetTaskTeam(tasks[0].Dir, args.TeamName)
-		}
-		// Try runtime path first if available and configured.
-		if te.Runtime != nil && te.DefaultProvider != "" {
-			prompt := agents.BuildTeamCoordinatorPrompt(team, jobDir)
-			opts := runtime.SpawnOpts{
-				AgentID:        team.Name,
-				ProviderName:   te.DefaultProvider,
-				Model:          te.DefaultModel,
-				SystemPrompt:   prompt,
-				JobID:          args.JobID,
-				InitialMessage: args.Task,
-				WorkDir:        jobDir,
-				MaxDepth:       1, // coordinators may spawn workers; workers may not spawn further
-			}
-			sess, err := te.Runtime.SpawnAgent(context.Background(), opts)
-			if err != nil {
-				log.Printf("runtime spawn failed, falling back to gateway: %v", err)
-				// Fall through to gateway path below.
-			} else {
-				return fmt.Sprintf("started runtime session %s for team %s", sess.ID(), team.Name), nil
-			}
-		}
-		// Fall through to gateway path.
-		slotID, alreadyRunning, err := te.Gateway.SpawnTeam(args.TeamName, args.JobID, args.Task, team)
-		if err != nil {
-			return "", fmt.Errorf("spawning team: %w", err)
-		}
-		if alreadyRunning {
-			return fmt.Sprintf("already running: slot %d (do not call assign_team again for this team)", slotID), nil
-		}
-		return fmt.Sprintf("started: slot %d", slotID), nil
-
-	case "escalate_to_user":
-		// The TUI intercepts escalate_to_user before ExecuteTool is called.
-		// If we reach here, return the question as a plain string so the operator can relay it.
-		var args struct {
-			Question string `json:"question"`
-			Context  string `json:"context"`
-		}
-		if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
-			return "", fmt.Errorf("parsing escalate_to_user args: %w", err)
-		}
-		return fmt.Sprintf("__escalate__:%s\n\nContext: %s", args.Question, args.Context), nil
-
-	case "list_slots":
-		if te.Gateway == nil {
-			return "gateway not initialized", nil
-		}
-		slots := te.Gateway.SlotSummaries()
-		if len(slots) == 0 {
-			return "no active slots", nil
-		}
-		var lines []string
-		for _, s := range slots {
-			lines = append(lines, fmt.Sprintf("slot %d: %s on %s — %s (%s)", s.Index, s.Team, s.JobID, s.Status, s.Elapsed))
-		}
-		return strings.Join(lines, "\n"), nil
-
-	case "kill_slot":
-		if te.Gateway == nil {
-			return "gateway not initialized", nil
-		}
-		var args struct {
-			SlotID int `json:"slot_id"`
-		}
-		if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
-			return "", fmt.Errorf("parsing kill_slot args: %w", err)
-		}
-		if err := te.Gateway.Kill(args.SlotID); err != nil {
-			return fmt.Sprintf("error killing slot %d: %v", args.SlotID, err), nil
-		}
-		return fmt.Sprintf("killed slot %d", args.SlotID), nil
-
-	case "ask_user":
-		// ask_user is normally intercepted by the TUI before ExecuteTool is called.
-		// This case is a safety fallback.
-		return "ask_user was handled by the TUI", nil
-
-	case "task_set_status":
-		var args struct {
-			JobID  string `json:"job_id"`
-			TaskID string `json:"task_id"`
-			Status string `json:"status"`
-		}
-		if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
-			return "", fmt.Errorf("parsing task_set_status args: %w", err)
-		}
-		validStatuses := map[string]bool{"active": true, "done": true, "paused": true}
-		if !validStatuses[args.Status] {
-			return fmt.Sprintf("invalid status %q: must be one of active, done, paused", args.Status), nil
-		}
-		jobDir := filepath.Join(job.JobsDir(te.WorkspaceDir), args.JobID)
-		tasks, err := job.ListTasks(jobDir)
-		if err != nil {
-			return "", fmt.Errorf("listing tasks: %w", err)
-		}
-		for _, t := range tasks {
-			if t.ID == args.TaskID {
-				if err := job.SetTaskStatus(t.Dir, job.Status(args.Status)); err != nil {
-					return "", fmt.Errorf("setting task status: %w", err)
-				}
-				return fmt.Sprintf("task %s status set to %s", args.TaskID, args.Status), nil
-			}
-		}
-		return fmt.Sprintf("task %q not found in job %q", args.TaskID, args.JobID), nil
-
-	case "job_set_status":
-		var args struct {
-			ID     string `json:"id"`
-			Status string `json:"status"`
-		}
-		if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
-			return "", fmt.Errorf("parsing job_set_status args: %w", err)
-		}
-		validStatuses := map[string]bool{"active": true, "done": true, "cancelled": true, "paused": true}
-		if !validStatuses[args.Status] {
-			return fmt.Sprintf("invalid status %q: must be one of active, done, cancelled, paused", args.Status), nil
-		}
-		dir := filepath.Join(job.JobsDir(te.WorkspaceDir), args.ID)
-		updates := map[string]string{"status": args.Status}
-		if args.Status == "done" {
-			updates["completed"] = time.Now().UTC().Format(time.RFC3339)
-		}
-		if err := job.UpdateFrontmatter(dir, updates); err != nil {
-			return "", fmt.Errorf("updating job status: %w", err)
-		}
-		// Dual-write to SQLite if available.
-		if te.Store != nil {
-			ctx := context.Background()
-			dbStatus := mapJobStatus(args.Status)
-			if dbErr := te.Store.UpdateJobStatus(ctx, args.ID, dbStatus); dbErr != nil {
-				log.Printf("warning: failed to update job %s status in SQLite: %v", args.ID, dbErr)
-			}
-		}
-		return fmt.Sprintf("job %s status set to %s", args.ID, args.Status), nil
-
-	case "list_sessions":
-		if te.Runtime == nil {
-			return "runtime not initialized", nil
-		}
-		sessions := te.Runtime.ActiveSessions()
-		if len(sessions) == 0 {
-			return "no active runtime sessions", nil
-		}
-		var lines []string
-		for _, s := range sessions {
-			elapsed := time.Since(s.StartTime).Truncate(time.Second)
-			lines = append(lines, fmt.Sprintf("session %s: agent=%s model=%s provider=%s status=%s tokens_in=%d tokens_out=%d elapsed=%s",
-				shortID(s.ID), s.AgentID, s.Model, s.Provider, s.Status, s.TokensIn, s.TokensOut, elapsed))
-		}
-		return strings.Join(lines, "\n"), nil
-
-	case "cancel_session":
-		if te.Runtime == nil {
-			return "runtime not initialized", nil
-		}
-		var args struct {
-			SessionID string `json:"session_id"`
-		}
-		if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
-			return "", fmt.Errorf("parsing cancel_session args: %w", err)
-		}
-		// Support prefix matching — find the session whose ID starts with the given prefix.
-		sessions := te.Runtime.ActiveSessions()
-		var matchID string
-		for _, s := range sessions {
-			if strings.HasPrefix(s.ID, args.SessionID) {
-				if matchID != "" {
-					return fmt.Sprintf("ambiguous session prefix %q — matches multiple sessions", args.SessionID), nil
-				}
-				matchID = s.ID
-			}
-		}
-		if matchID == "" {
-			// Try exact match on all sessions (including non-active).
-			if err := te.Runtime.CancelSession(args.SessionID); err != nil {
-				return fmt.Sprintf("session %q not found: %v", args.SessionID, err), nil
-			}
-			return fmt.Sprintf("cancelled session %s", args.SessionID), nil
-		}
-		if err := te.Runtime.CancelSession(matchID); err != nil {
-			return fmt.Sprintf("error cancelling session: %v", err), nil
-		}
-		return fmt.Sprintf("cancelled session %s", shortID(matchID)), nil
-
-	default:
-		// Check if this is an MCP tool call (namespaced with __).
-		if te.MCPManager != nil && strings.Contains(call.Function.Name, "__") {
-			result, err := te.MCPManager.Call(ctx, call.Function.Name, json.RawMessage(call.Function.Arguments))
-			if err != nil {
-				return "", fmt.Errorf("MCP tool %s: %w", call.Function.Name, err)
-			}
-			return mcp.TruncateResult(result, mcp.DefaultMaxResultLen), nil
-		}
-		return "", fmt.Errorf("unknown tool: %s", call.Function.Name)
+	if handler, ok := handlers[call.Function.Name]; ok {
+		return handler(ctx, te, call)
 	}
+
+	// Check if this is an MCP tool call (namespaced with __).
+	if te.MCPManager != nil && strings.Contains(call.Function.Name, "__") {
+		result, err := te.MCPManager.Call(ctx, call.Function.Name, json.RawMessage(call.Function.Arguments))
+		if err != nil {
+			return "", fmt.Errorf("MCP tool %s: %w", call.Function.Name, err)
+		}
+		return mcp.TruncateResult(result, mcp.DefaultMaxResultLen), nil
+	}
+
+	return "", fmt.Errorf("unknown tool: %s", call.Function.Name)
 }
 
 // wsRe matches runs of whitespace for collapsing in fetchWebpage output.

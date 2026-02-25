@@ -16,7 +16,7 @@ func TestStreamDoneMsg_PromptTokensAssigned(t *testing.T) {
 	m := newMinimalModel(t)
 
 	// Simulate first turn: API reports 500 prompt tokens.
-	m.streaming = true
+	m.stream.streaming = true
 	result1, _ := m.Update(StreamDoneMsg{
 		Usage: &llm.Usage{PromptTokens: 500, CompletionTokens: 100},
 	})
@@ -26,7 +26,7 @@ func TestStreamDoneMsg_PromptTokensAssigned(t *testing.T) {
 	}
 
 	// Simulate second turn: API reports 1500 prompt tokens (includes previous messages).
-	model1.streaming = true
+	model1.stream.streaming = true
 	result2, _ := model1.Update(StreamDoneMsg{
 		Usage: &llm.Usage{PromptTokens: 1500, CompletionTokens: 200},
 	})
@@ -50,7 +50,7 @@ func TestStreamDoneMsg_NilUsage_PromptTokensUnchanged(t *testing.T) {
 
 	m := newMinimalModel(t)
 	m.stats.PromptTokens = 500
-	m.streaming = true
+	m.stream.streaming = true
 
 	result, _ := m.Update(StreamDoneMsg{Usage: nil})
 	model := result.(*Model)
@@ -83,7 +83,7 @@ func TestStreamDoneMsg_MultiTurnContextSize(t *testing.T) {
 
 	model := &m
 	for i, turn := range turns {
-		model.streaming = true
+		model.stream.streaming = true
 		result, _ := model.Update(StreamDoneMsg{
 			Usage: &llm.Usage{
 				PromptTokens:     turn.promptTokens,
@@ -119,7 +119,7 @@ func TestStreamDoneMsg_PromptTokensDecrease(t *testing.T) {
 	m := newMinimalModel(t)
 
 	// First turn: large context.
-	m.streaming = true
+	m.stream.streaming = true
 	result1, _ := m.Update(StreamDoneMsg{
 		Usage: &llm.Usage{PromptTokens: 5000, CompletionTokens: 100},
 	})
@@ -129,7 +129,7 @@ func TestStreamDoneMsg_PromptTokensDecrease(t *testing.T) {
 	}
 
 	// Second turn: context was truncated, API reports fewer prompt tokens.
-	model1.streaming = true
+	model1.stream.streaming = true
 	result2, _ := model1.Update(StreamDoneMsg{
 		Usage: &llm.Usage{PromptTokens: 2000, CompletionTokens: 50},
 	})
@@ -152,7 +152,7 @@ func TestStreamDoneMsg_LiveTokensResetOnDone(t *testing.T) {
 	// Simulate mid-stream live token estimates.
 	m.stats.CompletionTokensLive = 250
 	m.stats.ReasoningTokensLive = 75
-	m.streaming = true
+	m.stream.streaming = true
 
 	result, _ := m.Update(StreamDoneMsg{
 		Usage: &llm.Usage{PromptTokens: 1000, CompletionTokens: 300},
@@ -176,7 +176,7 @@ func TestStreamDoneMsg_ReasoningTokensAccumulated(t *testing.T) {
 
 	// Turn 1: 100 reasoning tokens estimated during streaming.
 	m.stats.ReasoningTokensLive = 100
-	m.streaming = true
+	m.stream.streaming = true
 	result1, _ := m.Update(StreamDoneMsg{
 		Usage: &llm.Usage{PromptTokens: 500, CompletionTokens: 50},
 	})
@@ -187,7 +187,7 @@ func TestStreamDoneMsg_ReasoningTokensAccumulated(t *testing.T) {
 
 	// Turn 2: 150 more reasoning tokens.
 	model1.stats.ReasoningTokensLive = 150
-	model1.streaming = true
+	model1.stream.streaming = true
 	result2, _ := model1.Update(StreamDoneMsg{
 		Usage: &llm.Usage{PromptTokens: 700, CompletionTokens: 80},
 	})

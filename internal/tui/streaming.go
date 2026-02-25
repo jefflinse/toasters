@@ -18,27 +18,27 @@ type streamStartedMsg struct {
 }
 
 func (m *Model) drainPendingCompletions() ([]llm.Message, bool) {
-	if len(m.pendingCompletions) == 0 {
+	if len(m.chat.pendingCompletions) == 0 {
 		return m.messagesFromEntries(), false
 	}
-	for _, pc := range m.pendingCompletions {
+	for _, pc := range m.chat.pendingCompletions {
 		m.appendEntry(ChatEntry{
 			Message:   llm.Message{Role: "user", Content: pc.notification},
 			Timestamp: time.Now(),
 		})
 	}
-	m.pendingCompletions = nil
+	m.chat.pendingCompletions = nil
 	return m.messagesFromEntries(), true
 }
 
 // startStream begins a new LLM stream with the current messages and available tools.
-// It sets m.streaming = true and m.stats.ResponseStart.
+// It sets m.stream.streaming = true and m.stats.ResponseStart.
 func (m *Model) startStream(msgs []llm.Message) tea.Cmd {
 	ctx, cancel := context.WithCancel(context.Background())
-	m.cancelStream = cancel
-	m.streaming = true
-	m.currentResponse = ""
-	m.currentReasoning = ""
+	m.stream.cancelStream = cancel
+	m.stream.streaming = true
+	m.stream.currentResponse = ""
+	m.stream.currentReasoning = ""
 	m.stats.ResponseStart = time.Now()
 
 	var temperature float64
@@ -63,9 +63,9 @@ func (m *Model) sendMessage() tea.Cmd {
 
 	m.input.Reset()
 	m.input.Blur()
-	m.showCmdPopup = false
-	m.filteredCmds = nil
-	m.selectedCmdIdx = 0
+	m.cmdPopup.show = false
+	m.cmdPopup.filteredCmds = nil
+	m.cmdPopup.selectedIdx = 0
 
 	m.appendEntry(ChatEntry{
 		Message:   llm.Message{Role: "user", Content: text},
@@ -73,8 +73,8 @@ func (m *Model) sendMessage() tea.Cmd {
 	})
 	m.stats.MessageCount++
 	m.err = nil
-	m.userScrolled = false
-	m.hasNewMessages = false
+	m.scroll.userScrolled = false
+	m.scroll.hasNewMessages = false
 
 	m.updateViewportContent()
 	m.chatViewport.GotoBottom()
@@ -86,27 +86,27 @@ func (m *Model) sendMessage() tea.Cmd {
 // stream via the claude CLI, reusing the same streaming pipeline as sendMessage.
 func (m *Model) sendClaudeMessage(prompt string) tea.Cmd {
 	m.input.Blur()
-	m.filteredCmds = nil
-	m.selectedCmdIdx = 0
+	m.cmdPopup.filteredCmds = nil
+	m.cmdPopup.selectedIdx = 0
 
 	m.appendEntry(ChatEntry{
 		Message:   llm.Message{Role: "user", Content: "/claude " + prompt},
 		Timestamp: time.Now(),
 	})
 	m.stats.MessageCount++
-	m.streaming = true
-	m.currentResponse = ""
-	m.currentReasoning = ""
+	m.stream.streaming = true
+	m.stream.currentResponse = ""
+	m.stream.currentReasoning = ""
 	m.err = nil
-	m.userScrolled = false
-	m.hasNewMessages = false
+	m.scroll.userScrolled = false
+	m.scroll.hasNewMessages = false
 	m.stats.ResponseStart = time.Now()
 
 	m.updateViewportContent()
 	m.chatViewport.GotoBottom()
 
 	ctx, cancel := context.WithCancel(context.Background())
-	m.cancelStream = cancel
+	m.stream.cancelStream = cancel
 
 	ch := streamClaudeResponse(ctx, prompt, m.claudeCfg)
 	return tea.Batch(
@@ -121,27 +121,27 @@ func (m *Model) sendClaudeMessage(prompt string) tea.Cmd {
 // Anthropic API stream using OAuth credentials from the macOS Keychain.
 func (m *Model) sendAnthropicMessage(prompt string) tea.Cmd {
 	m.input.Blur()
-	m.filteredCmds = nil
-	m.selectedCmdIdx = 0
+	m.cmdPopup.filteredCmds = nil
+	m.cmdPopup.selectedIdx = 0
 
 	m.appendEntry(ChatEntry{
 		Message:   llm.Message{Role: "user", Content: "/anthropic " + prompt},
 		Timestamp: time.Now(),
 	})
 	m.stats.MessageCount++
-	m.streaming = true
-	m.currentResponse = ""
-	m.currentReasoning = ""
+	m.stream.streaming = true
+	m.stream.currentResponse = ""
+	m.stream.currentReasoning = ""
 	m.err = nil
-	m.userScrolled = false
-	m.hasNewMessages = false
+	m.scroll.userScrolled = false
+	m.scroll.hasNewMessages = false
 	m.stats.ResponseStart = time.Now()
 
 	m.updateViewportContent()
 	m.chatViewport.GotoBottom()
 
 	ctx, cancel := context.WithCancel(context.Background())
-	m.cancelStream = cancel
+	m.stream.cancelStream = cancel
 
 	client := anthropic.NewClient(anthropic.DefaultModel)
 	ch := client.ChatCompletionStream(ctx, []llm.Message{{Role: "user", Content: prompt}}, 0)

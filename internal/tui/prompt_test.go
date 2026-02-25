@@ -39,15 +39,15 @@ func TestUpdatePromptMode_NavigateDown(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			m := newMinimalModel(t)
-			m.promptMode = true
-			m.promptOptions = tt.options
-			m.promptSelected = tt.startSelected
+			m.prompt.promptMode = true
+			m.prompt.promptOptions = tt.options
+			m.prompt.promptSelected = tt.startSelected
 
 			result, _ := m.updatePromptMode(tt.key)
 			got := result.(*Model)
 
-			if got.promptSelected != tt.wantSelected {
-				t.Errorf("promptSelected = %d, want %d", got.promptSelected, tt.wantSelected)
+			if got.prompt.promptSelected != tt.wantSelected {
+				t.Errorf("promptSelected = %d, want %d", got.prompt.promptSelected, tt.wantSelected)
 			}
 		})
 	}
@@ -73,15 +73,15 @@ func TestUpdatePromptMode_NavigateUp(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			m := newMinimalModel(t)
-			m.promptMode = true
-			m.promptOptions = tt.options
-			m.promptSelected = tt.startSelected
+			m.prompt.promptMode = true
+			m.prompt.promptOptions = tt.options
+			m.prompt.promptSelected = tt.startSelected
 
 			result, _ := m.updatePromptMode(tt.key)
 			got := result.(*Model)
 
-			if got.promptSelected != tt.wantSelected {
-				t.Errorf("promptSelected = %d, want %d", got.promptSelected, tt.wantSelected)
+			if got.prompt.promptSelected != tt.wantSelected {
+				t.Errorf("promptSelected = %d, want %d", got.prompt.promptSelected, tt.wantSelected)
 			}
 		})
 	}
@@ -91,17 +91,17 @@ func TestUpdatePromptMode_SelectPredefinedOption(t *testing.T) {
 	t.Parallel()
 
 	m := newMinimalModel(t)
-	m.promptMode = true
-	m.promptOptions = []string{"Option A", "Option B", "Option C"}
-	m.promptSelected = 1 // "Option B"
-	m.promptPendingCall = llm.ToolCall{ID: "call-123", Function: llm.ToolCallFunction{Name: "ask_user"}}
+	m.prompt.promptMode = true
+	m.prompt.promptOptions = []string{"Option A", "Option B", "Option C"}
+	m.prompt.promptSelected = 1 // "Option B"
+	m.prompt.promptPendingCall = llm.ToolCall{ID: "call-123", Function: llm.ToolCallFunction{Name: "ask_user"}}
 
 	result, cmd := m.updatePromptMode(specialKey(tea.KeyEnter))
 	got := result.(*Model)
 
 	// promptMode should still be true — it's cleared by handleAskUserResponse, not updatePromptMode.
 	// The cmd should produce an AskUserResponseMsg.
-	if got.promptCustom {
+	if got.prompt.promptCustom {
 		t.Error("promptCustom should be false after selecting a predefined option")
 	}
 	if cmd == nil {
@@ -126,14 +126,14 @@ func TestUpdatePromptMode_SelectCustomResponseOption(t *testing.T) {
 	t.Parallel()
 
 	m := newMinimalModel(t)
-	m.promptMode = true
-	m.promptOptions = []string{"Option A", "Option B"}
-	m.promptSelected = 2 // "Custom response..." (appended automatically)
+	m.prompt.promptMode = true
+	m.prompt.promptOptions = []string{"Option A", "Option B"}
+	m.prompt.promptSelected = 2 // "Custom response..." (appended automatically)
 
 	result, cmd := m.updatePromptMode(specialKey(tea.KeyEnter))
 	got := result.(*Model)
 
-	if !got.promptCustom {
+	if !got.prompt.promptCustom {
 		t.Error("promptCustom should be true after selecting 'Custom response...'")
 	}
 	// The cmd should be a focus command for the input, not an AskUserResponseMsg.
@@ -147,10 +147,10 @@ func TestUpdatePromptMode_SubmitCustomText(t *testing.T) {
 	t.Parallel()
 
 	m := newMinimalModel(t)
-	m.promptMode = true
-	m.promptCustom = true
-	m.promptOptions = []string{"Option A"}
-	m.promptPendingCall = llm.ToolCall{ID: "call-456", Function: llm.ToolCallFunction{Name: "ask_user"}}
+	m.prompt.promptMode = true
+	m.prompt.promptCustom = true
+	m.prompt.promptOptions = []string{"Option A"}
+	m.prompt.promptPendingCall = llm.ToolCall{ID: "call-456", Function: llm.ToolCallFunction{Name: "ask_user"}}
 	m.input.SetValue("My custom answer")
 
 	_, cmd := m.updatePromptMode(specialKey(tea.KeyEnter))
@@ -176,10 +176,10 @@ func TestUpdatePromptMode_SubmitEmptyCustomText(t *testing.T) {
 	t.Parallel()
 
 	m := newMinimalModel(t)
-	m.promptMode = true
-	m.promptCustom = true
-	m.promptOptions = []string{"Option A"}
-	m.promptPendingCall = llm.ToolCall{ID: "call-789"}
+	m.prompt.promptMode = true
+	m.prompt.promptCustom = true
+	m.prompt.promptOptions = []string{"Option A"}
+	m.prompt.promptPendingCall = llm.ToolCall{ID: "call-789"}
 	m.input.SetValue("   ") // whitespace only
 
 	_, cmd := m.updatePromptMode(specialKey(tea.KeyEnter))
@@ -202,10 +202,10 @@ func TestUpdatePromptMode_EscCancelFromOptionSelection(t *testing.T) {
 	t.Parallel()
 
 	m := newMinimalModel(t)
-	m.promptMode = true
-	m.promptCustom = false
-	m.promptOptions = []string{"Option A", "Option B"}
-	m.promptPendingCall = llm.ToolCall{ID: "call-esc"}
+	m.prompt.promptMode = true
+	m.prompt.promptCustom = false
+	m.prompt.promptOptions = []string{"Option A", "Option B"}
+	m.prompt.promptPendingCall = llm.ToolCall{ID: "call-esc"}
 
 	_, cmd := m.updatePromptMode(specialKey(tea.KeyEscape))
 
@@ -230,15 +230,15 @@ func TestUpdatePromptMode_EscFromCustomGoesBackToOptions(t *testing.T) {
 	t.Parallel()
 
 	m := newMinimalModel(t)
-	m.promptMode = true
-	m.promptCustom = true
-	m.promptOptions = []string{"Option A"}
+	m.prompt.promptMode = true
+	m.prompt.promptCustom = true
+	m.prompt.promptOptions = []string{"Option A"}
 	m.input.SetValue("some text")
 
 	result, cmd := m.updatePromptMode(specialKey(tea.KeyEscape))
 	got := result.(*Model)
 
-	if got.promptCustom {
+	if got.prompt.promptCustom {
 		t.Error("promptCustom should be false after esc from custom mode")
 	}
 	// Input should be reset.
@@ -255,9 +255,9 @@ func TestUpdatePromptMode_CustomModeDelegatesKeyToTextarea(t *testing.T) {
 	t.Parallel()
 
 	m := newMinimalModel(t)
-	m.promptMode = true
-	m.promptCustom = true
-	m.promptOptions = []string{"Option A"}
+	m.prompt.promptMode = true
+	m.prompt.promptCustom = true
+	m.prompt.promptOptions = []string{"Option A"}
 	m.input.Focus()
 
 	// Typing a character in custom mode should delegate to the textarea.
@@ -265,7 +265,7 @@ func TestUpdatePromptMode_CustomModeDelegatesKeyToTextarea(t *testing.T) {
 	got := result.(*Model)
 
 	// The model should still be in custom mode.
-	if !got.promptCustom {
+	if !got.prompt.promptCustom {
 		t.Error("promptCustom should remain true when typing in custom mode")
 	}
 }
@@ -296,30 +296,30 @@ func TestHandleToolCalls_KillSlot(t *testing.T) {
 	result, _ := m.handleToolCalls(msg)
 	got := result.(*Model)
 
-	if !got.promptMode {
+	if !got.prompt.promptMode {
 		t.Error("promptMode should be true for kill confirmation")
 	}
-	if !got.confirmKill {
+	if !got.prompt.confirmKill {
 		t.Error("confirmKill should be true")
 	}
-	if got.confirmDispatch {
+	if got.prompt.confirmDispatch {
 		t.Error("confirmDispatch should be false")
 	}
-	if got.pendingKillSlot != 2 {
-		t.Errorf("pendingKillSlot = %d, want 2", got.pendingKillSlot)
+	if got.prompt.pendingKillSlot != 2 {
+		t.Errorf("pendingKillSlot = %d, want 2", got.prompt.pendingKillSlot)
 	}
-	if got.promptPendingCall.ID != "call-kill-1" {
-		t.Errorf("promptPendingCall.ID = %q, want %q", got.promptPendingCall.ID, "call-kill-1")
+	if got.prompt.promptPendingCall.ID != "call-kill-1" {
+		t.Errorf("promptPendingCall.ID = %q, want %q", got.prompt.promptPendingCall.ID, "call-kill-1")
 	}
-	if len(got.promptOptions) != 2 || got.promptOptions[0] != "Yes, kill" || got.promptOptions[1] != "Cancel" {
-		t.Errorf("promptOptions = %v, want [Yes, kill Cancel]", got.promptOptions)
+	if len(got.prompt.promptOptions) != 2 || got.prompt.promptOptions[0] != "Yes, kill" || got.prompt.promptOptions[1] != "Cancel" {
+		t.Errorf("promptOptions = %v, want [Yes, kill Cancel]", got.prompt.promptOptions)
 	}
-	if got.promptSelected != 0 {
-		t.Errorf("promptSelected = %d, want 0", got.promptSelected)
+	if got.prompt.promptSelected != 0 {
+		t.Errorf("promptSelected = %d, want 0", got.prompt.promptSelected)
 	}
 	// Verify a chat entry was appended for the kill confirmation question.
 	found := false
-	for _, entry := range got.entries {
+	for _, entry := range got.chat.entries {
 		if strings.Contains(entry.Message.Content, "Kill slot 2") {
 			found = true
 			break
@@ -348,40 +348,40 @@ func TestHandleToolCalls_AssignTeam(t *testing.T) {
 	result, _ := m.handleToolCalls(msg)
 	got := result.(*Model)
 
-	if !got.promptMode {
+	if !got.prompt.promptMode {
 		t.Error("promptMode should be true for dispatch confirmation")
 	}
-	if !got.confirmDispatch {
+	if !got.prompt.confirmDispatch {
 		t.Error("confirmDispatch should be true")
 	}
-	if got.confirmKill {
+	if got.prompt.confirmKill {
 		t.Error("confirmKill should be false")
 	}
-	if got.changingTeam {
+	if got.prompt.changingTeam {
 		t.Error("changingTeam should be false initially")
 	}
-	if got.pendingDispatch.ID != "call-assign-1" {
-		t.Errorf("pendingDispatch.ID = %q, want %q", got.pendingDispatch.ID, "call-assign-1")
+	if got.prompt.pendingDispatch.ID != "call-assign-1" {
+		t.Errorf("pendingDispatch.ID = %q, want %q", got.prompt.pendingDispatch.ID, "call-assign-1")
 	}
-	if len(got.promptOptions) != 3 {
-		t.Fatalf("promptOptions length = %d, want 3", len(got.promptOptions))
+	if len(got.prompt.promptOptions) != 3 {
+		t.Fatalf("promptOptions length = %d, want 3", len(got.prompt.promptOptions))
 	}
-	if got.promptOptions[0] != "Yes, dispatch" {
-		t.Errorf("promptOptions[0] = %q, want %q", got.promptOptions[0], "Yes, dispatch")
+	if got.prompt.promptOptions[0] != "Yes, dispatch" {
+		t.Errorf("promptOptions[0] = %q, want %q", got.prompt.promptOptions[0], "Yes, dispatch")
 	}
-	if got.promptOptions[1] != "Change team" {
-		t.Errorf("promptOptions[1] = %q, want %q", got.promptOptions[1], "Change team")
+	if got.prompt.promptOptions[1] != "Change team" {
+		t.Errorf("promptOptions[1] = %q, want %q", got.prompt.promptOptions[1], "Change team")
 	}
-	if got.promptOptions[2] != "Cancel" {
-		t.Errorf("promptOptions[2] = %q, want %q", got.promptOptions[2], "Cancel")
+	if got.prompt.promptOptions[2] != "Cancel" {
+		t.Errorf("promptOptions[2] = %q, want %q", got.prompt.promptOptions[2], "Cancel")
 	}
 
 	// Verify the question mentions both team and job.
-	if !strings.Contains(got.promptQuestion, "alpha") {
-		t.Errorf("promptQuestion %q should contain team name 'alpha'", got.promptQuestion)
+	if !strings.Contains(got.prompt.promptQuestion, "alpha") {
+		t.Errorf("promptQuestion %q should contain team name 'alpha'", got.prompt.promptQuestion)
 	}
-	if !strings.Contains(got.promptQuestion, "job-42") {
-		t.Errorf("promptQuestion %q should contain job ID 'job-42'", got.promptQuestion)
+	if !strings.Contains(got.prompt.promptQuestion, "job-42") {
+		t.Errorf("promptQuestion %q should contain job ID 'job-42'", got.prompt.promptQuestion)
 	}
 }
 
@@ -406,34 +406,34 @@ func TestHandleToolCalls_AskUser(t *testing.T) {
 	result, _ := m.handleToolCalls(msg)
 	got := result.(*Model)
 
-	if !got.promptMode {
+	if !got.prompt.promptMode {
 		t.Error("promptMode should be true for ask_user")
 	}
-	if got.confirmKill || got.confirmDispatch {
+	if got.prompt.confirmKill || got.prompt.confirmDispatch {
 		t.Error("confirmKill and confirmDispatch should be false for ask_user")
 	}
-	if got.promptQuestion != "Which database?" {
-		t.Errorf("promptQuestion = %q, want %q", got.promptQuestion, "Which database?")
+	if got.prompt.promptQuestion != "Which database?" {
+		t.Errorf("promptQuestion = %q, want %q", got.prompt.promptQuestion, "Which database?")
 	}
-	if len(got.promptOptions) != 3 {
-		t.Fatalf("promptOptions length = %d, want 3", len(got.promptOptions))
+	if len(got.prompt.promptOptions) != 3 {
+		t.Fatalf("promptOptions length = %d, want 3", len(got.prompt.promptOptions))
 	}
-	if got.promptOptions[0] != "PostgreSQL" {
-		t.Errorf("promptOptions[0] = %q, want %q", got.promptOptions[0], "PostgreSQL")
+	if got.prompt.promptOptions[0] != "PostgreSQL" {
+		t.Errorf("promptOptions[0] = %q, want %q", got.prompt.promptOptions[0], "PostgreSQL")
 	}
-	if got.promptOptions[1] != "MySQL" {
-		t.Errorf("promptOptions[1] = %q, want %q", got.promptOptions[1], "MySQL")
+	if got.prompt.promptOptions[1] != "MySQL" {
+		t.Errorf("promptOptions[1] = %q, want %q", got.prompt.promptOptions[1], "MySQL")
 	}
-	if got.promptOptions[2] != "SQLite" {
-		t.Errorf("promptOptions[2] = %q, want %q", got.promptOptions[2], "SQLite")
+	if got.prompt.promptOptions[2] != "SQLite" {
+		t.Errorf("promptOptions[2] = %q, want %q", got.prompt.promptOptions[2], "SQLite")
 	}
-	if got.promptPendingCall.ID != "call-ask-1" {
-		t.Errorf("promptPendingCall.ID = %q, want %q", got.promptPendingCall.ID, "call-ask-1")
+	if got.prompt.promptPendingCall.ID != "call-ask-1" {
+		t.Errorf("promptPendingCall.ID = %q, want %q", got.prompt.promptPendingCall.ID, "call-ask-1")
 	}
-	if got.promptSelected != 0 {
-		t.Errorf("promptSelected = %d, want 0", got.promptSelected)
+	if got.prompt.promptSelected != 0 {
+		t.Errorf("promptSelected = %d, want 0", got.prompt.promptSelected)
 	}
-	if got.promptCustom {
+	if got.prompt.promptCustom {
 		t.Error("promptCustom should be false initially")
 	}
 }
@@ -455,15 +455,15 @@ func TestHandleToolCalls_AskUser_InvalidJSON(t *testing.T) {
 	result, _ := m.handleToolCalls(msg)
 	got := result.(*Model)
 
-	if !got.promptMode {
+	if !got.prompt.promptMode {
 		t.Error("promptMode should be true even with invalid JSON")
 	}
 	// Should fall back to defaults.
-	if got.promptQuestion != "What would you like to do?" {
-		t.Errorf("promptQuestion = %q, want default fallback", got.promptQuestion)
+	if got.prompt.promptQuestion != "What would you like to do?" {
+		t.Errorf("promptQuestion = %q, want default fallback", got.prompt.promptQuestion)
 	}
-	if len(got.promptOptions) != 0 {
-		t.Errorf("promptOptions = %v, want empty slice for invalid JSON", got.promptOptions)
+	if len(got.prompt.promptOptions) != 0 {
+		t.Errorf("promptOptions = %v, want empty slice for invalid JSON", got.prompt.promptOptions)
 	}
 }
 
@@ -488,24 +488,24 @@ func TestHandleToolCalls_EscalateToUser(t *testing.T) {
 	result, _ := m.handleToolCalls(msg)
 	got := result.(*Model)
 
-	if !got.promptMode {
+	if !got.prompt.promptMode {
 		t.Error("promptMode should be true for escalate_to_user")
 	}
 	// The question should include both question and context.
 	wantQuestion := "Need API key\n\nThe deployment requires credentials"
-	if got.promptQuestion != wantQuestion {
-		t.Errorf("promptQuestion = %q, want %q", got.promptQuestion, wantQuestion)
+	if got.prompt.promptQuestion != wantQuestion {
+		t.Errorf("promptQuestion = %q, want %q", got.prompt.promptQuestion, wantQuestion)
 	}
-	if len(got.promptOptions) != 1 || got.promptOptions[0] != "Provide answer" {
-		t.Errorf("promptOptions = %v, want [Provide answer]", got.promptOptions)
+	if len(got.prompt.promptOptions) != 1 || got.prompt.promptOptions[0] != "Provide answer" {
+		t.Errorf("promptOptions = %v, want [Provide answer]", got.prompt.promptOptions)
 	}
-	if got.promptPendingCall.ID != "call-escalate-1" {
-		t.Errorf("promptPendingCall.ID = %q, want %q", got.promptPendingCall.ID, "call-escalate-1")
+	if got.prompt.promptPendingCall.ID != "call-escalate-1" {
+		t.Errorf("promptPendingCall.ID = %q, want %q", got.prompt.promptPendingCall.ID, "call-escalate-1")
 	}
 
 	// Verify a chat entry was appended.
 	found := false
-	for _, entry := range got.entries {
+	for _, entry := range got.chat.entries {
 		if strings.Contains(entry.Message.Content, "Need API key") &&
 			strings.Contains(entry.Message.Content, "deployment requires credentials") {
 			found = true
@@ -534,12 +534,12 @@ func TestHandleToolCalls_EscalateToUser_InvalidJSON(t *testing.T) {
 	result, _ := m.handleToolCalls(msg)
 	got := result.(*Model)
 
-	if !got.promptMode {
+	if !got.prompt.promptMode {
 		t.Error("promptMode should be true even with invalid JSON")
 	}
 	// Should fall back to default question.
-	if got.promptQuestion != "A team has encountered a blocker." {
-		t.Errorf("promptQuestion = %q, want default fallback", got.promptQuestion)
+	if got.prompt.promptQuestion != "A team has encountered a blocker." {
+		t.Errorf("promptQuestion = %q, want default fallback", got.prompt.promptQuestion)
 	}
 }
 
@@ -565,8 +565,8 @@ func TestHandleToolCalls_EscalateToUser_NoContext(t *testing.T) {
 	got := result.(*Model)
 
 	// When context is empty, the question should not have the double newline separator.
-	if got.promptQuestion != "Need help" {
-		t.Errorf("promptQuestion = %q, want %q", got.promptQuestion, "Need help")
+	if got.prompt.promptQuestion != "Need help" {
+		t.Errorf("promptQuestion = %q, want %q", got.prompt.promptQuestion, "Need help")
 	}
 }
 
@@ -586,23 +586,23 @@ func TestHandleToolCalls_NormalToolExecution(t *testing.T) {
 		},
 	}
 
-	initialEntries := len(m.entries)
+	initialEntries := len(m.chat.entries)
 	result, cmd := m.handleToolCalls(msg)
 	got := result.(*Model)
 
 	// Should not enter prompt mode for normal tools.
-	if got.promptMode {
+	if got.prompt.promptMode {
 		t.Error("promptMode should be false for normal tool calls")
 	}
 
 	// Should have appended entries: assistant tool call turn + indicator (but NOT tool result yet — that's async).
-	if len(got.entries) <= initialEntries {
-		t.Errorf("expected entries to grow from %d, got %d", initialEntries, len(got.entries))
+	if len(got.chat.entries) <= initialEntries {
+		t.Errorf("expected entries to grow from %d, got %d", initialEntries, len(got.chat.entries))
 	}
 
 	// Verify the tool call indicator was appended.
 	foundIndicator := false
-	for _, entry := range got.entries {
+	for _, entry := range got.chat.entries {
 		if strings.Contains(entry.Message.Content, "calling `job_list`") {
 			foundIndicator = true
 			break
@@ -628,7 +628,7 @@ func TestHandleToolCalls_StreamingSetToFalse(t *testing.T) {
 	t.Parallel()
 
 	m := newMinimalModel(t)
-	m.streaming = true
+	m.stream.streaming = true
 
 	args, _ := json.Marshal(map[string]string{"question": "test?", "context": ""})
 	msg := ToolCallMsg{
@@ -644,7 +644,7 @@ func TestHandleToolCalls_StreamingSetToFalse(t *testing.T) {
 	got := result.(*Model)
 
 	// streaming should be false after handleToolCalls intercepts a special tool.
-	if got.streaming {
+	if got.stream.streaming {
 		t.Error("streaming should be false after intercepting ask_user")
 	}
 }
@@ -678,11 +678,11 @@ func TestHandleToolCalls_MultipleCallsFirstSpecialWins(t *testing.T) {
 	got := result.(*Model)
 
 	// The first special tool (kill_slot) should be intercepted; the second should be ignored.
-	if !got.confirmKill {
+	if !got.prompt.confirmKill {
 		t.Error("confirmKill should be true — kill_slot was first")
 	}
-	if got.promptPendingCall.ID != "call-kill-first" {
-		t.Errorf("promptPendingCall.ID = %q, want %q", got.promptPendingCall.ID, "call-kill-first")
+	if got.prompt.promptPendingCall.ID != "call-kill-first" {
+		t.Errorf("promptPendingCall.ID = %q, want %q", got.prompt.promptPendingCall.ID, "call-kill-first")
 	}
 }
 
@@ -698,29 +698,29 @@ func TestHandleAskUserResponse_TimeoutConfirm_Continue(t *testing.T) {
 
 	m := newMinimalModel(t)
 	m.gateway = gw
-	m.confirmTimeout = true
-	m.promptMode = true
-	m.pendingTimeoutSlot = 1
-	m.promptOptions = []string{"Continue (+15m)", "Kill"}
+	m.prompt.confirmTimeout = true
+	m.prompt.promptMode = true
+	m.prompt.pendingTimeoutSlot = 1
+	m.prompt.promptOptions = []string{"Continue (+15m)", "Kill"}
 
 	msg := AskUserResponseMsg{Result: "Continue (+15m)"}
 
 	result, cmd := m.handleAskUserResponse(msg)
 	got := result.(*Model)
 
-	if got.confirmTimeout {
+	if got.prompt.confirmTimeout {
 		t.Error("confirmTimeout should be false after response")
 	}
-	if got.promptMode {
+	if got.prompt.promptMode {
 		t.Error("promptMode should be false after timeout response")
 	}
-	if got.promptOptions != nil {
-		t.Errorf("promptOptions should be nil, got %v", got.promptOptions)
+	if got.prompt.promptOptions != nil {
+		t.Errorf("promptOptions should be nil, got %v", got.prompt.promptOptions)
 	}
 
 	// Should have appended an entry about extending.
 	found := false
-	for _, entry := range got.entries {
+	for _, entry := range got.chat.entries {
 		if strings.Contains(entry.Message.Content, "Slot 1 extended") {
 			found = true
 			break
@@ -744,26 +744,26 @@ func TestHandleAskUserResponse_TimeoutConfirm_Kill(t *testing.T) {
 
 	m := newMinimalModel(t)
 	m.gateway = gw
-	m.confirmTimeout = true
-	m.promptMode = true
-	m.pendingTimeoutSlot = 2
-	m.promptOptions = []string{"Continue (+15m)", "Kill"}
+	m.prompt.confirmTimeout = true
+	m.prompt.promptMode = true
+	m.prompt.pendingTimeoutSlot = 2
+	m.prompt.promptOptions = []string{"Continue (+15m)", "Kill"}
 
 	msg := AskUserResponseMsg{Result: "Kill"}
 
 	result, _ := m.handleAskUserResponse(msg)
 	got := result.(*Model)
 
-	if got.confirmTimeout {
+	if got.prompt.confirmTimeout {
 		t.Error("confirmTimeout should be false after response")
 	}
-	if got.promptMode {
+	if got.prompt.promptMode {
 		t.Error("promptMode should be false after timeout response")
 	}
 
 	// Should have appended an entry about killing.
 	found := false
-	for _, entry := range got.entries {
+	for _, entry := range got.chat.entries {
 		if strings.Contains(entry.Message.Content, "Slot 2 killed") {
 			found = true
 			break
@@ -782,26 +782,26 @@ func TestHandleAskUserResponse_KillConfirm_Yes(t *testing.T) {
 
 	m := newMinimalModel(t)
 	m.gateway = gw
-	m.confirmKill = true
-	m.promptMode = true
-	m.pendingKillSlot = 0
-	m.promptPendingCall = llm.ToolCall{ID: "call-kill-confirm"}
+	m.prompt.confirmKill = true
+	m.prompt.promptMode = true
+	m.prompt.pendingKillSlot = 0
+	m.prompt.promptPendingCall = llm.ToolCall{ID: "call-kill-confirm"}
 
 	msg := AskUserResponseMsg{Result: "Yes, kill"}
 
 	result, cmd := m.handleAskUserResponse(msg)
 	got := result.(*Model)
 
-	if got.confirmKill {
+	if got.prompt.confirmKill {
 		t.Error("confirmKill should be false after response")
 	}
-	if got.promptMode {
+	if got.prompt.promptMode {
 		t.Error("promptMode should be false after kill response")
 	}
 
 	// Should have appended a tool result entry with "killed slot 0".
 	found := false
-	for _, entry := range got.entries {
+	for _, entry := range got.chat.entries {
 		if entry.Message.Role == "tool" && strings.Contains(entry.Message.Content, "killed slot 0") {
 			found = true
 			break
@@ -825,23 +825,23 @@ func TestHandleAskUserResponse_KillConfirm_Cancel(t *testing.T) {
 
 	m := newMinimalModel(t)
 	m.gateway = gw
-	m.confirmKill = true
-	m.promptMode = true
-	m.pendingKillSlot = 1
-	m.promptPendingCall = llm.ToolCall{ID: "call-kill-cancel"}
+	m.prompt.confirmKill = true
+	m.prompt.promptMode = true
+	m.prompt.pendingKillSlot = 1
+	m.prompt.promptPendingCall = llm.ToolCall{ID: "call-kill-cancel"}
 
 	msg := AskUserResponseMsg{Result: "Cancel"}
 
 	result, cmd := m.handleAskUserResponse(msg)
 	got := result.(*Model)
 
-	if got.confirmKill {
+	if got.prompt.confirmKill {
 		t.Error("confirmKill should be false after cancel")
 	}
 
 	// Should have appended a tool result entry with "User cancelled the kill."
 	found := false
-	for _, entry := range got.entries {
+	for _, entry := range got.chat.entries {
 		if entry.Message.Role == "tool" && strings.Contains(entry.Message.Content, "User cancelled the kill") {
 			found = true
 			break
@@ -861,9 +861,9 @@ func TestHandleAskUserResponse_DispatchConfirm_YesDispatch(t *testing.T) {
 
 	m := newMinimalModel(t)
 	m.toolExec.WorkspaceDir = t.TempDir()
-	m.confirmDispatch = true
-	m.promptMode = true
-	m.pendingDispatch = llm.ToolCall{
+	m.prompt.confirmDispatch = true
+	m.prompt.promptMode = true
+	m.prompt.pendingDispatch = llm.ToolCall{
 		ID:       "call-dispatch-yes",
 		Function: llm.ToolCallFunction{Name: "assign_team", Arguments: `{"team_name":"alpha","job_id":"job-1","task":"do stuff"}`},
 	}
@@ -873,16 +873,16 @@ func TestHandleAskUserResponse_DispatchConfirm_YesDispatch(t *testing.T) {
 	result, cmd := m.handleAskUserResponse(msg)
 	got := result.(*Model)
 
-	if got.confirmDispatch {
+	if got.prompt.confirmDispatch {
 		t.Error("confirmDispatch should be false after dispatch")
 	}
-	if got.promptMode {
+	if got.prompt.promptMode {
 		t.Error("promptMode should be false after dispatch")
 	}
 
 	// Should have appended the tool call indicator entry.
 	foundToolCall := false
-	for _, entry := range got.entries {
+	for _, entry := range got.chat.entries {
 		if entry.Message.Role == "assistant" && len(entry.Message.ToolCalls) > 0 &&
 			entry.Message.ToolCalls[0].ID == "call-dispatch-yes" {
 			foundToolCall = true
@@ -907,9 +907,9 @@ func TestHandleAskUserResponse_DispatchConfirm_Cancel(t *testing.T) {
 	t.Parallel()
 
 	m := newMinimalModel(t)
-	m.confirmDispatch = true
-	m.promptMode = true
-	m.pendingDispatch = llm.ToolCall{
+	m.prompt.confirmDispatch = true
+	m.prompt.promptMode = true
+	m.prompt.pendingDispatch = llm.ToolCall{
 		ID:       "call-dispatch-cancel",
 		Function: llm.ToolCallFunction{Name: "assign_team", Arguments: `{"team_name":"beta","job_id":"job-2"}`},
 	}
@@ -919,13 +919,13 @@ func TestHandleAskUserResponse_DispatchConfirm_Cancel(t *testing.T) {
 	result, cmd := m.handleAskUserResponse(msg)
 	got := result.(*Model)
 
-	if got.confirmDispatch {
+	if got.prompt.confirmDispatch {
 		t.Error("confirmDispatch should be false after cancel")
 	}
 
 	// Should have appended a tool result with "User cancelled the dispatch."
 	found := false
-	for _, entry := range got.entries {
+	for _, entry := range got.chat.entries {
 		if entry.Message.Role == "tool" && strings.Contains(entry.Message.Content, "User cancelled the dispatch") {
 			found = true
 			break
@@ -944,14 +944,14 @@ func TestHandleAskUserResponse_DispatchConfirm_ChangeTeam(t *testing.T) {
 	t.Parallel()
 
 	m := newMinimalModel(t)
-	m.confirmDispatch = true
-	m.promptMode = true
+	m.prompt.confirmDispatch = true
+	m.prompt.promptMode = true
 	m.teams = []agents.Team{
 		{Name: "alpha"},
 		{Name: "beta"},
 		{Name: "gamma"},
 	}
-	m.pendingDispatch = llm.ToolCall{
+	m.prompt.pendingDispatch = llm.ToolCall{
 		ID:       "call-dispatch-change",
 		Function: llm.ToolCallFunction{Name: "assign_team", Arguments: `{"team_name":"alpha","job_id":"job-3"}`},
 	}
@@ -962,26 +962,26 @@ func TestHandleAskUserResponse_DispatchConfirm_ChangeTeam(t *testing.T) {
 	got := result.(*Model)
 
 	// Should enter the "change team" sub-prompt.
-	if !got.promptMode {
+	if !got.prompt.promptMode {
 		t.Error("promptMode should be true for change team sub-prompt")
 	}
-	if !got.confirmDispatch {
+	if !got.prompt.confirmDispatch {
 		t.Error("confirmDispatch should remain true during change team flow")
 	}
-	if !got.changingTeam {
+	if !got.prompt.changingTeam {
 		t.Error("changingTeam should be true")
 	}
-	if got.promptQuestion != "Select a team:" {
-		t.Errorf("promptQuestion = %q, want %q", got.promptQuestion, "Select a team:")
+	if got.prompt.promptQuestion != "Select a team:" {
+		t.Errorf("promptQuestion = %q, want %q", got.prompt.promptQuestion, "Select a team:")
 	}
-	if len(got.promptOptions) != 3 {
-		t.Fatalf("promptOptions length = %d, want 3", len(got.promptOptions))
+	if len(got.prompt.promptOptions) != 3 {
+		t.Fatalf("promptOptions length = %d, want 3", len(got.prompt.promptOptions))
 	}
-	if got.promptOptions[0] != "alpha" || got.promptOptions[1] != "beta" || got.promptOptions[2] != "gamma" {
-		t.Errorf("promptOptions = %v, want [alpha beta gamma]", got.promptOptions)
+	if got.prompt.promptOptions[0] != "alpha" || got.prompt.promptOptions[1] != "beta" || got.prompt.promptOptions[2] != "gamma" {
+		t.Errorf("promptOptions = %v, want [alpha beta gamma]", got.prompt.promptOptions)
 	}
-	if got.promptSelected != 0 {
-		t.Errorf("promptSelected = %d, want 0", got.promptSelected)
+	if got.prompt.promptSelected != 0 {
+		t.Errorf("promptSelected = %d, want 0", got.prompt.promptSelected)
 	}
 
 	// cmd should be input focus, not startStream.
@@ -995,10 +995,10 @@ func TestHandleAskUserResponse_DispatchConfirm_ChangingTeamSelection(t *testing.
 
 	m := newMinimalModel(t)
 	m.toolExec.WorkspaceDir = t.TempDir()
-	m.confirmDispatch = true
-	m.changingTeam = true
-	m.promptMode = true
-	m.pendingDispatch = llm.ToolCall{
+	m.prompt.confirmDispatch = true
+	m.prompt.changingTeam = true
+	m.prompt.promptMode = true
+	m.prompt.pendingDispatch = llm.ToolCall{
 		ID:       "call-dispatch-changed",
 		Function: llm.ToolCallFunction{Name: "assign_team", Arguments: `{"team_name":"alpha","job_id":"job-4","task":"do stuff"}`},
 	}
@@ -1008,19 +1008,19 @@ func TestHandleAskUserResponse_DispatchConfirm_ChangingTeamSelection(t *testing.
 	result, cmd := m.handleAskUserResponse(msg)
 	got := result.(*Model)
 
-	if got.changingTeam {
+	if got.prompt.changingTeam {
 		t.Error("changingTeam should be false after team selection")
 	}
-	if got.confirmDispatch {
+	if got.prompt.confirmDispatch {
 		t.Error("confirmDispatch should be false after team selection")
 	}
-	if got.promptMode {
+	if got.prompt.promptMode {
 		t.Error("promptMode should be false after team selection")
 	}
 
 	// The pending dispatch args should have been rewritten with the new team name.
 	foundToolCall := false
-	for _, entry := range got.entries {
+	for _, entry := range got.chat.entries {
 		if entry.Message.Role == "assistant" && len(entry.Message.ToolCalls) > 0 {
 			var args map[string]any
 			_ = json.Unmarshal([]byte(entry.Message.ToolCalls[0].Function.Arguments), &args)
@@ -1049,11 +1049,11 @@ func TestHandleAskUserResponse_NormalAskUser(t *testing.T) {
 
 	m := newMinimalModel(t)
 	// No confirmTimeout, confirmKill, or confirmDispatch flags set.
-	m.promptMode = true
-	m.promptCustom = true
-	m.promptQuestion = "What color?"
-	m.promptOptions = []string{"Red", "Blue"}
-	m.promptSelected = 1
+	m.prompt.promptMode = true
+	m.prompt.promptCustom = true
+	m.prompt.promptQuestion = "What color?"
+	m.prompt.promptOptions = []string{"Red", "Blue"}
+	m.prompt.promptSelected = 1
 	m.input.SetValue("some leftover text")
 
 	pendingCall := llm.ToolCall{
@@ -1067,20 +1067,20 @@ func TestHandleAskUserResponse_NormalAskUser(t *testing.T) {
 	got := result.(*Model)
 
 	// All prompt state should be cleared.
-	if got.promptMode {
+	if got.prompt.promptMode {
 		t.Error("promptMode should be false")
 	}
-	if got.promptCustom {
+	if got.prompt.promptCustom {
 		t.Error("promptCustom should be false")
 	}
-	if got.promptQuestion != "" {
-		t.Errorf("promptQuestion = %q, want empty", got.promptQuestion)
+	if got.prompt.promptQuestion != "" {
+		t.Errorf("promptQuestion = %q, want empty", got.prompt.promptQuestion)
 	}
-	if got.promptOptions != nil {
-		t.Errorf("promptOptions should be nil, got %v", got.promptOptions)
+	if got.prompt.promptOptions != nil {
+		t.Errorf("promptOptions should be nil, got %v", got.prompt.promptOptions)
 	}
-	if got.promptSelected != 0 {
-		t.Errorf("promptSelected = %d, want 0", got.promptSelected)
+	if got.prompt.promptSelected != 0 {
+		t.Errorf("promptSelected = %d, want 0", got.prompt.promptSelected)
 	}
 	if got.input.Value() != "" {
 		t.Errorf("input value = %q, want empty", got.input.Value())
@@ -1089,7 +1089,7 @@ func TestHandleAskUserResponse_NormalAskUser(t *testing.T) {
 	// Should have appended an assistant tool call entry and a tool result entry.
 	foundAssistantToolCall := false
 	foundToolResult := false
-	for _, entry := range got.entries {
+	for _, entry := range got.chat.entries {
 		if entry.Message.Role == "assistant" && len(entry.Message.ToolCalls) > 0 {
 			if entry.Message.ToolCalls[0].ID == "call-normal-ask" {
 				foundAssistantToolCall = true
@@ -1123,10 +1123,10 @@ func TestPromptMode_FullFlow_SelectAndRespond(t *testing.T) {
 	t.Parallel()
 
 	m := newMinimalModel(t)
-	m.promptMode = true
-	m.promptOptions = []string{"Yes", "No"}
-	m.promptSelected = 0
-	m.promptPendingCall = llm.ToolCall{
+	m.prompt.promptMode = true
+	m.prompt.promptOptions = []string{"Yes", "No"}
+	m.prompt.promptSelected = 0
+	m.prompt.promptPendingCall = llm.ToolCall{
 		ID:       "call-flow-1",
 		Function: llm.ToolCallFunction{Name: "ask_user"},
 	}
@@ -1134,8 +1134,8 @@ func TestPromptMode_FullFlow_SelectAndRespond(t *testing.T) {
 	// Step 1: Navigate down to "No".
 	result1, _ := m.updatePromptMode(specialKey(tea.KeyDown))
 	mp := result1.(*Model)
-	if mp.promptSelected != 1 {
-		t.Fatalf("after down, promptSelected = %d, want 1", mp.promptSelected)
+	if mp.prompt.promptSelected != 1 {
+		t.Fatalf("after down, promptSelected = %d, want 1", mp.prompt.promptSelected)
 	}
 
 	// Step 2: Press enter to select "No".
@@ -1159,12 +1159,12 @@ func TestPromptMode_FullFlow_SelectAndRespond(t *testing.T) {
 	result3, streamCmd := mp.handleAskUserResponse(askMsg)
 	mp = result3.(*Model)
 
-	if mp.promptMode {
+	if mp.prompt.promptMode {
 		t.Error("promptMode should be false after handling response")
 	}
 
 	// Should have appended entries.
-	if len(mp.entries) == 0 {
+	if len(mp.chat.entries) == 0 {
 		t.Error("expected entries to be non-empty after handling response")
 	}
 
@@ -1178,10 +1178,10 @@ func TestPromptMode_FullFlow_CustomResponse(t *testing.T) {
 	t.Parallel()
 
 	m := newMinimalModel(t)
-	m.promptMode = true
-	m.promptOptions = []string{"Option A"}
-	m.promptSelected = 0
-	m.promptPendingCall = llm.ToolCall{
+	m.prompt.promptMode = true
+	m.prompt.promptOptions = []string{"Option A"}
+	m.prompt.promptSelected = 0
+	m.prompt.promptPendingCall = llm.ToolCall{
 		ID:       "call-flow-custom",
 		Function: llm.ToolCallFunction{Name: "ask_user"},
 	}
@@ -1189,14 +1189,14 @@ func TestPromptMode_FullFlow_CustomResponse(t *testing.T) {
 	// Step 1: Navigate to "Custom response..." (index 1, since there's 1 option + Custom).
 	result1, _ := m.updatePromptMode(specialKey(tea.KeyDown))
 	mp := result1.(*Model)
-	if mp.promptSelected != 1 {
-		t.Fatalf("after down, promptSelected = %d, want 1", mp.promptSelected)
+	if mp.prompt.promptSelected != 1 {
+		t.Fatalf("after down, promptSelected = %d, want 1", mp.prompt.promptSelected)
 	}
 
 	// Step 2: Press enter to enter custom mode.
 	result2, _ := mp.updatePromptMode(specialKey(tea.KeyEnter))
 	mp = result2.(*Model)
-	if !mp.promptCustom {
+	if !mp.prompt.promptCustom {
 		t.Fatal("promptCustom should be true after selecting Custom response")
 	}
 

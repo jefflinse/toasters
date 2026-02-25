@@ -160,7 +160,19 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 		client = llmclient.NewClient(cfg.Operator.Endpoint, cfg.Operator.Model)
 	}
 
-	m := tui.NewModel(client, cfg.Claude, workspaceDir, gw, teamsDir, teams, "", toolExec, store, rt, mcpManager)
+	m := tui.NewModel(tui.ModelConfig{
+		Client:       client,
+		ClaudeCfg:    cfg.Claude,
+		WorkspaceDir: workspaceDir,
+		Gateway:      gw,
+		TeamsDir:     teamsDir,
+		Teams:        teams,
+		Awareness:    "",
+		ToolExec:     toolExec,
+		Store:        store,
+		Runtime:      rt,
+		MCPManager:   mcpManager,
+	})
 
 	p := tea.NewProgram(&m)
 

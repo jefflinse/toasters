@@ -678,17 +678,17 @@ func TestUpdate_ProgressPollMsg_UpdatesFields(t *testing.T) {
 	}
 
 	// Fields should be updated.
-	if len(got.progressJobs) != 1 || got.progressJobs[0].ID != "job-1" {
-		t.Errorf("progressJobs = %v, want [{ID: job-1}]", got.progressJobs)
+	if len(got.progress.jobs) != 1 || got.progress.jobs[0].ID != "job-1" {
+		t.Errorf("progressJobs = %v, want [{ID: job-1}]", got.progress.jobs)
 	}
-	if len(got.progressTasks) != 1 {
-		t.Errorf("progressTasks len = %d, want 1", len(got.progressTasks))
+	if len(got.progress.tasks) != 1 {
+		t.Errorf("progressTasks len = %d, want 1", len(got.progress.tasks))
 	}
-	if len(got.progressReports) != 1 {
-		t.Errorf("progressReports len = %d, want 1", len(got.progressReports))
+	if len(got.progress.reports) != 1 {
+		t.Errorf("progressReports len = %d, want 1", len(got.progress.reports))
 	}
-	if len(got.activeSessions) != 1 || got.activeSessions[0].ID != "sess-1" {
-		t.Errorf("activeSessions = %v, want [{ID: sess-1}]", got.activeSessions)
+	if len(got.progress.activeSessions) != 1 || got.progress.activeSessions[0].ID != "sess-1" {
+		t.Errorf("activeSessions = %v, want [{ID: sess-1}]", got.progress.activeSessions)
 	}
 
 	// Should return a non-nil cmd (scheduleProgressPoll).
@@ -716,17 +716,17 @@ func TestUpdate_ProgressPollMsg_NilFields(t *testing.T) {
 		t.Fatalf("Update returned %T, want *Model", result)
 	}
 
-	if got.progressJobs != nil {
-		t.Errorf("progressJobs = %v, want nil", got.progressJobs)
+	if got.progress.jobs != nil {
+		t.Errorf("progressJobs = %v, want nil", got.progress.jobs)
 	}
-	if got.progressTasks != nil {
-		t.Errorf("progressTasks = %v, want nil", got.progressTasks)
+	if got.progress.tasks != nil {
+		t.Errorf("progressTasks = %v, want nil", got.progress.tasks)
 	}
-	if got.progressReports != nil {
-		t.Errorf("progressReports = %v, want nil", got.progressReports)
+	if got.progress.reports != nil {
+		t.Errorf("progressReports = %v, want nil", got.progress.reports)
 	}
-	if got.activeSessions != nil {
-		t.Errorf("activeSessions = %v, want nil", got.activeSessions)
+	if got.progress.activeSessions != nil {
+		t.Errorf("activeSessions = %v, want nil", got.progress.activeSessions)
 	}
 
 	// Should still return a non-nil cmd.

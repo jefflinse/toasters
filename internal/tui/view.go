@@ -159,19 +159,19 @@ func (m *Model) View() tea.View {
 	}
 
 	// Grid screen takes over the full terminal.
-	if m.showGrid {
+	if m.grid.showGrid {
 		gridView := m.renderGrid()
-		if m.showPromptModal {
-			overlaid, clampedScroll := m.renderScrollableModal("Prompt", m.promptModalContent, m.promptModalScroll)
-			m.promptModalScroll = clampedScroll
+		if m.promptModal.show {
+			overlaid, clampedScroll := m.renderScrollableModal("Prompt", m.promptModal.content, m.promptModal.scroll)
+			m.promptModal.scroll = clampedScroll
 
 			v := tea.NewView(overlaid)
 			v.AltScreen = true
 			v.MouseMode = tea.MouseModeCellMotion
 			return v
-		} else if m.showOutputModal {
-			overlaid, clampedScroll := m.renderScrollableModal("Output", m.outputModalContent, m.outputModalScroll)
-			m.outputModalScroll = clampedScroll
+		} else if m.outputModal.show {
+			overlaid, clampedScroll := m.renderScrollableModal("Output", m.outputModal.content, m.outputModal.scroll)
+			m.outputModal.scroll = clampedScroll
 
 			v := tea.NewView(overlaid)
 			v.AltScreen = true
@@ -248,7 +248,7 @@ func (m *Model) View() tea.View {
 		// the thumb/track when the user has recently scrolled.
 		if m.chatViewport.TotalLineCount() > m.chatViewport.Height() {
 			var scrollCol string
-			if m.scrollbarVisible {
+			if m.scroll.scrollbarVisible {
 				scrollCol = renderScrollbar(
 					m.chatViewport.Height(),
 					m.chatViewport.TotalLineCount(),
@@ -266,7 +266,7 @@ func (m *Model) View() tea.View {
 		}
 
 		// Overlay "new messages" indicator when scrolled up and new content arrived.
-		if m.hasNewMessages && m.userScrolled {
+		if m.scroll.hasNewMessages && m.scroll.userScrolled {
 			chatLines := strings.Split(chatContent, "\n")
 			if len(chatLines) > 0 {
 				indicator := "  ↓ New messages (End to jump)  "
@@ -286,7 +286,7 @@ func (m *Model) View() tea.View {
 		}
 
 		var inputArea string
-		if m.promptMode {
+		if m.prompt.promptMode {
 			inputArea = m.renderPromptWidget(mainWidth, inputStyle)
 		} else {
 			inputArea = inputStyle.Width(mainWidth).Render(m.input.View())
@@ -300,10 +300,10 @@ func (m *Model) View() tea.View {
 
 	// Build slash command popup (if active).
 	var popupView string
-	if m.showCmdPopup && len(m.filteredCmds) > 0 {
+	if m.cmdPopup.show && len(m.cmdPopup.filteredCmds) > 0 {
 		var rows []string
-		for i, cmd := range m.filteredCmds {
-			if i == m.selectedCmdIdx {
+		for i, cmd := range m.cmdPopup.filteredCmds {
+			if i == m.cmdPopup.selectedIdx {
 				nameStr := CmdPopupNameSelectedStyle.Render(cmd.Name)
 				descStr := CmdPopupDescSelectedStyle.Render(cmd.Description)
 				row := CmdPopupSelectedStyle.Width(mainWidth).Render(
@@ -325,7 +325,7 @@ func (m *Model) View() tea.View {
 
 		// Trim the chat content to make room for the popup so the layout
 		// doesn't overflow the terminal height.
-		popupHeight := len(m.filteredCmds)
+		popupHeight := len(m.cmdPopup.filteredCmds)
 		lines := strings.Split(chatContent, "\n")
 		trimTo := len(lines) - popupHeight
 		if trimTo < 0 {
@@ -336,13 +336,13 @@ func (m *Model) View() tea.View {
 
 	// Build kill modal popup (if active) — mutually exclusive with cmd popup.
 	var killPopupView string
-	if m.showKillModal && m.gateway != nil {
+	if m.killModal.show && m.gateway != nil {
 		slots := m.gateway.Slots()
 		var rows []string
-		for i, slotIdx := range m.killModalSlots {
+		for i, slotIdx := range m.killModal.slots {
 			snap := slots[slotIdx]
 			label := fmt.Sprintf("[%d] %s · %s", slotIdx, snap.AgentName, snap.JobID)
-			if i == m.selectedKillIdx {
+			if i == m.killModal.selectedIdx {
 				row := CmdPopupSelectedStyle.Width(mainWidth).Render(
 					CmdPopupNameSelectedStyle.Render(label),
 				)
@@ -362,7 +362,7 @@ func (m *Model) View() tea.View {
 			lipgloss.JoinVertical(lipgloss.Left, rows...),
 		)
 		// Trim chatContent to make room for the modal.
-		killPopupHeight := len(m.killModalSlots) + 1 // +1 for footer
+		killPopupHeight := len(m.killModal.slots) + 1 // +1 for footer
 		lines := strings.Split(chatContent, "\n")
 		trimTo := len(lines) - killPopupHeight
 		if trimTo < 0 {
@@ -373,8 +373,8 @@ func (m *Model) View() tea.View {
 
 	// Trim chatContent when in prompt option-selection mode to prevent overflow.
 	// The prompt widget is taller than the normal input area; subtract the extra lines.
-	if m.promptMode && !m.promptCustom {
-		allOpts := append(m.promptOptions, "Custom response...")
+	if m.prompt.promptMode && !m.prompt.promptCustom {
+		allOpts := append(m.prompt.promptOptions, "Custom response...")
 		// Widget inner content: 1 question + 1 blank + N options + 1 blank + 1 hint = N+4 lines.
 		// InputAreaStyle border adds 2 vertical lines. Normal input = inputHeight(3) + 2 = 5 lines.
 		promptWidgetHeight := len(allOpts) + 4 + 2
@@ -393,8 +393,8 @@ func (m *Model) View() tea.View {
 
 	// Build claude meta strip (shown while a claude stream is active).
 	var metaStrip string
-	if m.claudeActiveMeta != "" {
-		metaStrip = ClaudeMetaStyle.Width(mainWidth).Render("⬡ " + m.claudeActiveMeta)
+	if m.stream.claudeActiveMeta != "" {
+		metaStrip = ClaudeMetaStyle.Width(mainWidth).Render("⬡ " + m.stream.claudeActiveMeta)
 	}
 
 	// overlayView is whichever popup is active (cmd popup or kill modal), if any.
@@ -726,28 +726,28 @@ func (m *Model) resizeComponents() {
 // In custom-text mode (promptCustom == true) it shows the question above the textarea.
 // style is the InputAreaStyle variant to use (may have dimmed borders when unfocused).
 func (m Model) renderPromptWidget(width int, style lipgloss.Style) string {
-	if m.promptCustom {
+	if m.prompt.promptCustom {
 		// Custom text mode: question header above the normal textarea.
-		question := HeaderStyle.Render("? " + m.promptQuestion)
+		question := HeaderStyle.Render("? " + m.prompt.promptQuestion)
 		hint := DimStyle.Render("Enter to submit · Esc to go back")
 		inner := lipgloss.JoinVertical(lipgloss.Left, question, m.input.View(), hint)
 		return style.Width(width).Render(inner)
 	}
 
 	// Option selection mode: numbered list with cursor.
-	allOptions := append(m.promptOptions, "Custom response...")
+	allOptions := append(m.prompt.promptOptions, "Custom response...")
 
 	var rows []string
 	for i, opt := range allOptions {
 		label := fmt.Sprintf("%d. %s", i+1, opt)
-		if i == m.promptSelected {
+		if i == m.prompt.promptSelected {
 			rows = append(rows, CmdPopupSelectedStyle.Render("▶ "+label))
 		} else {
 			rows = append(rows, DimStyle.Render("  "+label))
 		}
 	}
 
-	question := HeaderStyle.Render("? " + m.promptQuestion)
+	question := HeaderStyle.Render("? " + m.prompt.promptQuestion)
 	optionList := lipgloss.JoinVertical(lipgloss.Left, rows...)
 	hint := DimStyle.Render("↑↓ navigate · Enter select · Esc cancel")
 
@@ -770,7 +770,7 @@ func (m *Model) updateViewportContent() {
 	}
 
 	// Show welcome message when there's no conversation yet.
-	if !m.hasConversation() && !m.streaming {
+	if !m.hasConversation() && !m.stream.streaming {
 		// ASCII art: an angry toaster wielding a hammer.
 		// Each line is rendered with HeaderStyle so it picks up the accent color.
 		const toasterArt = `                     [###]
@@ -800,7 +800,7 @@ func (m *Model) updateViewportContent() {
 		}
 		// Count how many assistant messages (e.g. greeting) will render below.
 		hasGreeting := false
-		for _, entry := range m.entries {
+		for _, entry := range m.chat.entries {
 			if entry.Message.Role == "assistant" && entry.Message.Content != "" {
 				hasGreeting = true
 				break
@@ -825,7 +825,7 @@ func (m *Model) updateViewportContent() {
 		}
 	}
 
-	for i, entry := range m.entries {
+	for i, entry := range m.chat.entries {
 		msg := entry.Message
 		// Timestamp helper.
 		var ts string
@@ -836,18 +836,18 @@ func (m *Model) updateViewportContent() {
 		switch msg.Role {
 		case "user":
 			// Completion messages render as collapsible blocks.
-			if m.completionMsgIdx[i] {
+			if m.chat.completionMsgIdx[i] {
 				firstLine := firstLineOf(msg.Content)
-				if m.expandedMsgs[i] {
+				if m.chat.expandedMsgs[i] {
 					hint := ""
-					if i == m.selectedMsgIdx {
+					if i == m.chat.selectedMsgIdx {
 						hint = DimStyle.Render(" [ctrl+x to collapse]")
 					}
 					header := DimStyle.Render("▼ "+firstLine) + hint
 					sb.WriteString(header + "\n" + renderCompletionBlock(msg.Content) + "\n")
 				} else {
 					hint := ""
-					if i == m.selectedMsgIdx {
+					if i == m.chat.selectedMsgIdx {
 						hint = DimStyle.Render(" [ctrl+x to expand]")
 					}
 					sb.WriteString(DimStyle.Render("▶ "+firstLine) + hint + "\n\n")
@@ -874,10 +874,10 @@ func (m *Model) updateViewportContent() {
 			}
 			// Tool-call indicator messages render as collapsible tool blocks.
 			if entry.ClaudeMeta == "tool-call-indicator" {
-				if m.collapsedTools[i] {
+				if m.chat.collapsedTools[i] {
 					// Expanded: show full content with MCP tool names formatted.
 					hint := ""
-					if i == m.selectedMsgIdx {
+					if i == m.chat.selectedMsgIdx {
 						hint = DimStyle.Render(" [ctrl+x to collapse]")
 					}
 					sb.WriteString(aIndent + DimStyle.Render(formatToolCallContent(msg.Content)) + hint + "\n\n")
@@ -885,7 +885,7 @@ func (m *Model) updateViewportContent() {
 					// Collapsed (default): show summary line with MCP tool names formatted.
 					toolName := formatToolName(extractToolName(msg.Content))
 					hint := ""
-					if i == m.selectedMsgIdx {
+					if i == m.chat.selectedMsgIdx {
 						hint = DimStyle.Render(" [ctrl+x to expand]")
 					}
 					sb.WriteString(aIndent + DimStyle.Render("⚙ "+toolName+" ▶") + hint + "\n")
@@ -903,7 +903,7 @@ func (m *Model) updateViewportContent() {
 			}
 			// Render reasoning trace (if any) above the response — only when expanded.
 			if entry.Reasoning != "" {
-				if m.expandedReasoning[i] {
+				if m.chat.expandedReasoning[i] {
 					sb.WriteString(indentLines(renderReasoningBlock(entry.Reasoning, contentWidth-AssistantMsgIndent), AssistantMsgIndent))
 					sb.WriteString("\n")
 				} else {
@@ -913,21 +913,21 @@ func (m *Model) updateViewportContent() {
 			sb.WriteString(indentLines(m.renderMarkdown(msg.Content), AssistantMsgIndent) + "\n\n")
 		case "tool":
 			// Render tool result as a collapsible dimmed block.
-			if m.collapsedTools[i] {
+			if m.chat.collapsedTools[i] {
 				// Expanded: show full content.
 				preview := msg.Content
 				if len(preview) > 300 {
 					preview = preview[:300] + "…"
 				}
 				hint := ""
-				if i == m.selectedMsgIdx {
+				if i == m.chat.selectedMsgIdx {
 					hint = DimStyle.Render(" [ctrl+x to collapse]")
 				}
 				sb.WriteString(DimStyle.Render("⚙ tool result: "+preview) + hint + "\n\n")
 			} else {
 				// Collapsed (default): show summary line.
 				hint := ""
-				if i == m.selectedMsgIdx {
+				if i == m.chat.selectedMsgIdx {
 					hint = DimStyle.Render(" [ctrl+x to expand]")
 				}
 				sb.WriteString(DimStyle.Render("⚙ tool result ▶") + hint + "\n")
@@ -936,18 +936,18 @@ func (m *Model) updateViewportContent() {
 	}
 
 	// Show streaming response in progress — re-render markdown incrementally.
-	if m.streaming {
+	if m.stream.streaming {
 		streamIndent := strings.Repeat(" ", AssistantMsgIndent)
 		// Live reasoning trace while thinking.
-		if m.currentReasoning != "" {
-			sb.WriteString(indentLines(renderReasoningBlock(m.currentReasoning, contentWidth-AssistantMsgIndent), AssistantMsgIndent))
+		if m.stream.currentReasoning != "" {
+			sb.WriteString(indentLines(renderReasoningBlock(m.stream.currentReasoning, contentWidth-AssistantMsgIndent), AssistantMsgIndent))
 			sb.WriteString("\n")
 		} else {
 			sb.WriteString(streamIndent + ReasoningStyle.Render("Thinking...") + "\n\n")
 		}
 		// Live response content.
-		if m.currentResponse != "" {
-			sb.WriteString(indentLines(m.renderMarkdown(m.currentResponse), AssistantMsgIndent))
+		if m.stream.currentResponse != "" {
+			sb.WriteString(indentLines(m.renderMarkdown(m.stream.currentResponse), AssistantMsgIndent))
 			cursor := string(spinnerChars[m.spinnerFrame%len(spinnerChars)])
 			sb.WriteString(StreamingStyle.Render(" " + cursor))
 			sb.WriteString("\n\n")

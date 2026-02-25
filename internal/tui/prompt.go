@@ -17,27 +17,27 @@ import (
 // (i.e. the operator has asked the user a question with numbered options).
 func (m *Model) updatePromptMode(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
-	allOptions := append(m.promptOptions, "Custom response...")
+	allOptions := append(m.prompt.promptOptions, "Custom response...")
 	switch msg.String() {
 	case "up", "k":
-		if m.promptSelected > 0 {
-			m.promptSelected--
+		if m.prompt.promptSelected > 0 {
+			m.prompt.promptSelected--
 		}
 	case "down", "j":
-		if m.promptSelected < len(allOptions)-1 {
-			m.promptSelected++
+		if m.prompt.promptSelected < len(allOptions)-1 {
+			m.prompt.promptSelected++
 		}
 	case "enter":
-		if !m.promptCustom {
-			if m.promptSelected == len(allOptions)-1 {
+		if !m.prompt.promptCustom {
+			if m.prompt.promptSelected == len(allOptions)-1 {
 				// Selected "Custom response..."
-				m.promptCustom = true
+				m.prompt.promptCustom = true
 				m.input.Reset()
 				cmds = append(cmds, m.input.Focus())
 			} else {
 				// Selected a pre-defined option.
-				result := allOptions[m.promptSelected]
-				call := m.promptPendingCall
+				result := allOptions[m.prompt.promptSelected]
+				call := m.prompt.promptPendingCall
 				cmds = append(cmds, func() tea.Msg {
 					return AskUserResponseMsg{Call: call, Result: result}
 				})
@@ -48,25 +48,25 @@ func (m *Model) updatePromptMode(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			if result == "" {
 				result = "User provided no response."
 			}
-			call := m.promptPendingCall
+			call := m.prompt.promptPendingCall
 			cmds = append(cmds, func() tea.Msg {
 				return AskUserResponseMsg{Call: call, Result: result}
 			})
 		}
 	case "esc":
-		if m.promptCustom {
+		if m.prompt.promptCustom {
 			// Go back to option selection.
-			m.promptCustom = false
+			m.prompt.promptCustom = false
 			m.input.Reset()
 		} else {
 			// Cancel entirely.
-			call := m.promptPendingCall
+			call := m.prompt.promptPendingCall
 			cmds = append(cmds, func() tea.Msg {
 				return AskUserResponseMsg{Call: call, Result: "User cancelled."}
 			})
 		}
 	default:
-		if m.promptCustom {
+		if m.prompt.promptCustom {
 			// Delegate to textarea.
 			var inputCmd tea.Cmd
 			m.input, inputCmd = m.input.Update(msg)
@@ -84,7 +84,7 @@ func (m *Model) handleToolCalls(msg ToolCallMsg) (tea.Model, tea.Cmd) {
 
 	// The LLM wants to call tools. Dispatch them asynchronously; results arrive
 	// via ToolResultMsg, which re-invokes the stream for the final answer.
-	m.streaming = false
+	m.stream.streaming = false
 
 	// Check for kill_slot, assign_team, ask_user, or escalate_to_user — intercept before ExecuteTool.
 	for _, call := range msg.Calls {
@@ -109,18 +109,18 @@ func (m *Model) handleToolCalls(msg ToolCallMsg) (tea.Model, tea.Cmd) {
 				Timestamp:  time.Now(),
 				ClaudeMeta: "kill-confirm",
 			})
-			m.streaming = false
-			m.promptMode = true
-			m.confirmKill = true
-			m.confirmDispatch = false
-			m.pendingKillSlot = args.SlotID
-			m.promptPendingCall = call
-			m.promptQuestion = question
-			m.promptOptions = []string{"Yes, kill", "Cancel"}
-			m.promptSelected = 0
-			m.promptCustom = false
+			m.stream.streaming = false
+			m.prompt.promptMode = true
+			m.prompt.confirmKill = true
+			m.prompt.confirmDispatch = false
+			m.prompt.pendingKillSlot = args.SlotID
+			m.prompt.promptPendingCall = call
+			m.prompt.promptQuestion = question
+			m.prompt.promptOptions = []string{"Yes, kill", "Cancel"}
+			m.prompt.promptSelected = 0
+			m.prompt.promptCustom = false
 			m.updateViewportContent()
-			if !m.userScrolled {
+			if !m.scroll.userScrolled {
 				m.chatViewport.GotoBottom()
 			}
 			cmds = append(cmds, m.input.Focus())
@@ -139,18 +139,18 @@ func (m *Model) handleToolCalls(msg ToolCallMsg) (tea.Model, tea.Cmd) {
 				Timestamp:  time.Now(),
 				ClaudeMeta: "dispatch-confirm",
 			})
-			m.streaming = false
-			m.promptMode = true
-			m.confirmDispatch = true
-			m.changingTeam = false
-			m.pendingDispatch = call
-			m.promptQuestion = question
-			m.promptOptions = []string{"Yes, dispatch", "Change team", "Cancel"}
-			m.promptSelected = 0
-			m.promptCustom = false
-			m.promptPendingCall = call
+			m.stream.streaming = false
+			m.prompt.promptMode = true
+			m.prompt.confirmDispatch = true
+			m.prompt.changingTeam = false
+			m.prompt.pendingDispatch = call
+			m.prompt.promptQuestion = question
+			m.prompt.promptOptions = []string{"Yes, dispatch", "Change team", "Cancel"}
+			m.prompt.promptSelected = 0
+			m.prompt.promptCustom = false
+			m.prompt.promptPendingCall = call
 			m.updateViewportContent()
-			if !m.userScrolled {
+			if !m.scroll.userScrolled {
 				m.chatViewport.GotoBottom()
 			}
 			cmds = append(cmds, m.input.Focus())
@@ -174,15 +174,15 @@ func (m *Model) handleToolCalls(msg ToolCallMsg) (tea.Model, tea.Cmd) {
 				Timestamp:  time.Now(),
 				ClaudeMeta: "escalate-prompt",
 			})
-			m.streaming = false
-			m.promptMode = true
-			m.promptQuestion = fullQuestion
-			m.promptOptions = []string{"Provide answer"}
-			m.promptSelected = 0
-			m.promptCustom = false
-			m.promptPendingCall = call
+			m.stream.streaming = false
+			m.prompt.promptMode = true
+			m.prompt.promptQuestion = fullQuestion
+			m.prompt.promptOptions = []string{"Provide answer"}
+			m.prompt.promptSelected = 0
+			m.prompt.promptCustom = false
+			m.prompt.promptPendingCall = call
 			m.updateViewportContent()
-			if !m.userScrolled {
+			if !m.scroll.userScrolled {
 				m.chatViewport.GotoBottom()
 			}
 			cmds = append(cmds, m.input.Focus())
@@ -205,15 +205,15 @@ func (m *Model) handleToolCalls(msg ToolCallMsg) (tea.Model, tea.Cmd) {
 				ClaudeMeta: "ask-user-prompt",
 			})
 			// Enter prompt mode.
-			m.streaming = false
-			m.promptMode = true
-			m.promptQuestion = args.Question
-			m.promptOptions = args.Options
-			m.promptSelected = 0
-			m.promptCustom = false
-			m.promptPendingCall = call
+			m.stream.streaming = false
+			m.prompt.promptMode = true
+			m.prompt.promptQuestion = args.Question
+			m.prompt.promptOptions = args.Options
+			m.prompt.promptSelected = 0
+			m.prompt.promptCustom = false
+			m.prompt.promptPendingCall = call
 			m.updateViewportContent()
-			if !m.userScrolled {
+			if !m.scroll.userScrolled {
 				m.chatViewport.GotoBottom()
 			}
 			cmds = append(cmds, m.input.Focus())
@@ -244,7 +244,7 @@ func (m *Model) handleToolCalls(msg ToolCallMsg) (tea.Model, tea.Cmd) {
 
 	// Update the viewport so the user sees the tool call indicators immediately.
 	m.updateViewportContent()
-	if !m.userScrolled {
+	if !m.scroll.userScrolled {
 		m.chatViewport.GotoBottom()
 	}
 
@@ -259,57 +259,57 @@ func (m *Model) handleToolCalls(msg ToolCallMsg) (tea.Model, tea.Cmd) {
 // a response in prompt mode (or a confirmation dialog like kill/dispatch/timeout).
 func (m *Model) handleAskUserResponse(msg AskUserResponseMsg) (tea.Model, tea.Cmd) {
 	// Handle slot-timeout confirmation flow.
-	if m.confirmTimeout {
-		m.confirmTimeout = false
-		m.promptMode = false
-		m.promptOptions = nil
-		m.promptSelected = 0
-		m.promptPendingCall = llm.ToolCall{}
+	if m.prompt.confirmTimeout {
+		m.prompt.confirmTimeout = false
+		m.prompt.promptMode = false
+		m.prompt.promptOptions = nil
+		m.prompt.promptSelected = 0
+		m.prompt.promptPendingCall = llm.ToolCall{}
 		switch msg.Result {
 		case "Continue (+15m)":
-			_ = m.gateway.ExtendSlot(m.pendingTimeoutSlot)
+			_ = m.gateway.ExtendSlot(m.prompt.pendingTimeoutSlot)
 			m.appendEntry(ChatEntry{
-				Message:    llm.Message{Role: "assistant", Content: fmt.Sprintf("Slot %d extended by 15m.", m.pendingTimeoutSlot)},
+				Message:    llm.Message{Role: "assistant", Content: fmt.Sprintf("Slot %d extended by 15m.", m.prompt.pendingTimeoutSlot)},
 				Timestamp:  time.Now(),
 				ClaudeMeta: "tool-call-indicator",
 			})
 		default: // "Kill"
-			_ = m.gateway.Kill(m.pendingTimeoutSlot)
+			_ = m.gateway.Kill(m.prompt.pendingTimeoutSlot)
 			m.appendEntry(ChatEntry{
-				Message:    llm.Message{Role: "assistant", Content: fmt.Sprintf("Slot %d killed.", m.pendingTimeoutSlot)},
+				Message:    llm.Message{Role: "assistant", Content: fmt.Sprintf("Slot %d killed.", m.prompt.pendingTimeoutSlot)},
 				Timestamp:  time.Now(),
 				ClaudeMeta: "tool-call-indicator",
 			})
 		}
 		m.updateViewportContent()
-		if !m.userScrolled {
+		if !m.scroll.userScrolled {
 			m.chatViewport.GotoBottom()
 		}
 		return m, m.input.Focus()
 	}
 
 	// Handle kill confirmation flow.
-	if m.confirmKill {
-		m.confirmKill = false
-		m.promptMode = false
-		m.promptCustom = false
-		m.promptOptions = nil
-		m.promptSelected = 0
+	if m.prompt.confirmKill {
+		m.prompt.confirmKill = false
+		m.prompt.promptMode = false
+		m.prompt.promptCustom = false
+		m.prompt.promptOptions = nil
+		m.prompt.promptSelected = 0
 
 		var result string
 		if msg.Result == "Yes, kill" {
-			_ = m.gateway.Kill(m.pendingKillSlot)
-			result = fmt.Sprintf("killed slot %d", m.pendingKillSlot)
+			_ = m.gateway.Kill(m.prompt.pendingKillSlot)
+			result = fmt.Sprintf("killed slot %d", m.prompt.pendingKillSlot)
 		} else {
 			result = "User cancelled the kill."
 		}
 		m.appendEntry(ChatEntry{
-			Message:    llm.Message{Role: "assistant", ToolCalls: []llm.ToolCall{m.promptPendingCall}},
+			Message:    llm.Message{Role: "assistant", ToolCalls: []llm.ToolCall{m.prompt.promptPendingCall}},
 			Timestamp:  time.Now(),
 			ClaudeMeta: "tool-call-indicator",
 		})
 		m.appendEntry(ChatEntry{
-			Message:   llm.Message{Role: "tool", Content: result, ToolCallID: m.promptPendingCall.ID},
+			Message:   llm.Message{Role: "tool", Content: result, ToolCallID: m.prompt.promptPendingCall.ID},
 			Timestamp: time.Now(),
 		})
 		m.updateViewportContent()
@@ -317,49 +317,49 @@ func (m *Model) handleAskUserResponse(msg AskUserResponseMsg) (tea.Model, tea.Cm
 	}
 
 	// Handle dispatch confirmation flow.
-	if m.confirmDispatch {
-		m.promptMode = false
-		m.promptCustom = false
-		m.promptOptions = nil
-		m.promptSelected = 0
+	if m.prompt.confirmDispatch {
+		m.prompt.promptMode = false
+		m.prompt.promptCustom = false
+		m.prompt.promptOptions = nil
+		m.prompt.promptSelected = 0
 
-		if m.changingTeam {
+		if m.prompt.changingTeam {
 			// Second prompt: user selected a new team name.
-			m.changingTeam = false
-			m.confirmDispatch = false
+			m.prompt.changingTeam = false
+			m.prompt.confirmDispatch = false
 
 			// Rewrite the team_name in the pending dispatch args.
 			var args map[string]any
-			_ = json.Unmarshal([]byte(m.pendingDispatch.Function.Arguments), &args)
+			_ = json.Unmarshal([]byte(m.prompt.pendingDispatch.Function.Arguments), &args)
 			args["team_name"] = msg.Result
 			newArgs, _ := json.Marshal(args)
-			m.pendingDispatch.Function.Arguments = string(newArgs)
+			m.prompt.pendingDispatch.Function.Arguments = string(newArgs)
 
 			m.toolsInFlight = true
 			ctx, cancel := context.WithCancel(context.Background())
 			m.toolCancelFunc = cancel
 			m.appendEntry(ChatEntry{
-				Message:    llm.Message{Role: "assistant", ToolCalls: []llm.ToolCall{m.pendingDispatch}},
+				Message:    llm.Message{Role: "assistant", ToolCalls: []llm.ToolCall{m.prompt.pendingDispatch}},
 				Timestamp:  time.Now(),
 				ClaudeMeta: "tool-call-indicator",
 			})
 			m.updateViewportContent()
-			return m, executeToolsCmd(ctx, []llm.ToolCall{m.pendingDispatch}, m.toolExec)
+			return m, executeToolsCmd(ctx, []llm.ToolCall{m.prompt.pendingDispatch}, m.toolExec)
 		}
 
 		switch msg.Result {
 		case "Yes, dispatch":
-			m.confirmDispatch = false
+			m.prompt.confirmDispatch = false
 			m.toolsInFlight = true
 			ctx, cancel := context.WithCancel(context.Background())
 			m.toolCancelFunc = cancel
 			m.appendEntry(ChatEntry{
-				Message:    llm.Message{Role: "assistant", ToolCalls: []llm.ToolCall{m.pendingDispatch}},
+				Message:    llm.Message{Role: "assistant", ToolCalls: []llm.ToolCall{m.prompt.pendingDispatch}},
 				Timestamp:  time.Now(),
 				ClaudeMeta: "tool-call-indicator",
 			})
 			m.updateViewportContent()
-			return m, executeToolsCmd(ctx, []llm.ToolCall{m.pendingDispatch}, m.toolExec)
+			return m, executeToolsCmd(ctx, []llm.ToolCall{m.prompt.pendingDispatch}, m.toolExec)
 
 		case "Change team":
 			// Show second prompt with available team names.
@@ -367,25 +367,25 @@ func (m *Model) handleAskUserResponse(msg AskUserResponseMsg) (tea.Model, tea.Cm
 			for i, t := range m.teams {
 				teamNames[i] = t.Name
 			}
-			m.promptMode = true
-			m.confirmDispatch = true
-			m.changingTeam = true
-			m.promptQuestion = "Select a team:"
-			m.promptOptions = teamNames
-			m.promptSelected = 0
-			m.promptPendingCall = m.pendingDispatch
+			m.prompt.promptMode = true
+			m.prompt.confirmDispatch = true
+			m.prompt.changingTeam = true
+			m.prompt.promptQuestion = "Select a team:"
+			m.prompt.promptOptions = teamNames
+			m.prompt.promptSelected = 0
+			m.prompt.promptPendingCall = m.prompt.pendingDispatch
 			m.updateViewportContent()
 			return m, m.input.Focus()
 
 		default: // "Cancel" or anything else
-			m.confirmDispatch = false
+			m.prompt.confirmDispatch = false
 			m.appendEntry(ChatEntry{
-				Message:    llm.Message{Role: "assistant", ToolCalls: []llm.ToolCall{m.pendingDispatch}},
+				Message:    llm.Message{Role: "assistant", ToolCalls: []llm.ToolCall{m.prompt.pendingDispatch}},
 				Timestamp:  time.Now(),
 				ClaudeMeta: "tool-call-indicator",
 			})
 			m.appendEntry(ChatEntry{
-				Message:   llm.Message{Role: "tool", Content: "User cancelled the dispatch.", ToolCallID: m.pendingDispatch.ID},
+				Message:   llm.Message{Role: "tool", Content: "User cancelled the dispatch.", ToolCallID: m.prompt.pendingDispatch.ID},
 				Timestamp: time.Now(),
 			})
 			m.updateViewportContent()
@@ -394,11 +394,11 @@ func (m *Model) handleAskUserResponse(msg AskUserResponseMsg) (tea.Model, tea.Cm
 	}
 
 	// Clear prompt mode.
-	m.promptMode = false
-	m.promptCustom = false
-	m.promptQuestion = ""
-	m.promptOptions = nil
-	m.promptSelected = 0
+	m.prompt.promptMode = false
+	m.prompt.promptCustom = false
+	m.prompt.promptQuestion = ""
+	m.prompt.promptOptions = nil
+	m.prompt.promptSelected = 0
 	m.input.Reset()
 
 	// Inject the tool call + result into message history.
@@ -414,7 +414,7 @@ func (m *Model) handleAskUserResponse(msg AskUserResponseMsg) (tea.Model, tea.Cm
 		Timestamp: time.Now(),
 	})
 	m.updateViewportContent()
-	if !m.userScrolled {
+	if !m.scroll.userScrolled {
 		m.chatViewport.GotoBottom()
 	}
 	// Resume the stream.

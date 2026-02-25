@@ -149,7 +149,7 @@ func (m Model) renderLeftPanel(panelWidth, panelHeight int) string {
 				}
 
 				// SQLite task progress summary (if available from polling).
-				if dbTasks := m.progressTasks[j.ID]; len(dbTasks) > 0 {
+				if dbTasks := m.progress.tasks[j.ID]; len(dbTasks) > 0 {
 					summary := renderJobProgressSummary(dbTasks)
 					if summary != "" {
 						topLines = append(topLines, DimStyle.Render("  ")+summary)
@@ -346,7 +346,7 @@ func (m Model) renderSidebar(sbWidth int) string {
 	if m.stats.TotalResponses > 0 && m.stats.TotalResponseTime > 0 {
 		tps := float64(m.stats.CompletionTokens) / m.stats.TotalResponseTime.Seconds()
 		tokPerSec = fmt.Sprintf("%.1f t/s", tps)
-	} else if m.streaming && m.stats.LastResponseTime > 0 && m.stats.CompletionTokensLive > 0 {
+	} else if m.stream.streaming && m.stats.LastResponseTime > 0 && m.stats.CompletionTokensLive > 0 {
 		tps := float64(m.stats.CompletionTokensLive) / m.stats.LastResponseTime.Seconds()
 		tokPerSec = fmt.Sprintf("%.1f t/s", tps)
 	}
@@ -355,7 +355,7 @@ func (m Model) renderSidebar(sbWidth int) string {
 	totalTokens := m.stats.PromptTokens + m.stats.CompletionTokensLive + m.stats.ReasoningTokensLive
 	sb.WriteString(SidebarLabelStyle.Render("Context"))
 	sb.WriteString("\n")
-	sb.WriteString(renderContextBar(totalTokens, m.stats.SystemPromptTokens, m.stats.ContextLength, contentWidth, m.streaming, m.spinnerFrame))
+	sb.WriteString(renderContextBar(totalTokens, m.stats.SystemPromptTokens, m.stats.ContextLength, contentWidth, m.stream.streaming, m.spinnerFrame))
 	sb.WriteString("\n")
 
 	lastResp := "-"
@@ -493,12 +493,12 @@ func (m Model) renderSidebar(sbWidth int) string {
 
 	// Active session token usage — prefer live runtime snapshots (accurate token counts)
 	// over DB records (which only have counts after session completion).
-	if len(m.runtimeSessionSnapshots) > 0 {
+	if len(m.progress.runtimeSnapshots) > 0 {
 		agentsSB.WriteString("\n")
 		agentsSB.WriteString(gradientText("Sessions", [3]uint8{50, 200, 100}, [3]uint8{0, 150, 200}))
 		agentsSB.WriteString("\n")
 		var totalIn, totalOut int64
-		for _, s := range m.runtimeSessionSnapshots {
+		for _, s := range m.progress.runtimeSnapshots {
 			totalIn += s.TokensIn
 			totalOut += s.TokensOut
 			label := s.AgentID
@@ -523,13 +523,13 @@ func (m Model) renderSidebar(sbWidth int) string {
 		)
 		agentsSB.WriteString(SidebarValueStyle.Render(truncateStr(totalLine, contentWidth)))
 		agentsSB.WriteString("\n")
-	} else if len(m.activeSessions) > 0 {
+	} else if len(m.progress.activeSessions) > 0 {
 		// Fallback to DB sessions (e.g. gateway-spawned sessions not in runtime).
 		agentsSB.WriteString("\n")
 		agentsSB.WriteString(gradientText("Sessions", [3]uint8{50, 200, 100}, [3]uint8{0, 150, 200}))
 		agentsSB.WriteString("\n")
 		var totalIn, totalOut int64
-		for _, s := range m.activeSessions {
+		for _, s := range m.progress.activeSessions {
 			totalIn += s.TokensIn
 			totalOut += s.TokensOut
 			label := s.AgentID

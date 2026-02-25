@@ -27,12 +27,12 @@ func (m *Model) renderGrid() string {
 	sortedRT := m.sortedRuntimeSessions()
 	rtIdx := 0 // index into sortedRT for the next runtime session to place
 
-	pageOffset := m.gridPage * 4
+	pageOffset := m.grid.gridPage * 4
 
 	for i := range 4 {
 		absIdx := pageOffset + i
 		snap := slots[absIdx]
-		focused := i == m.gridFocusCell
+		focused := i == m.grid.gridFocusCell
 
 		innerH := cellH - 2 // top + bottom border
 		innerW := cellW - 4 // left + right border + padding
@@ -338,7 +338,7 @@ func (m *Model) renderGrid() string {
 
 	hotkeyBar := DimStyle.Render(fmt.Sprintf(
 		"  arrows: navigate   ·   k/ctrl+k: kill   ·   enter: view output   ·   p: view prompt   ·   [/]: page %d/4   ·   ctrl+g / esc: close",
-		m.gridPage+1,
+		m.grid.gridPage+1,
 	))
 	hotkeyBar = lipgloss.NewStyle().Width(m.width).Render(hotkeyBar)
 
