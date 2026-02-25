@@ -26,7 +26,7 @@ func executeToolsCmd(ctx context.Context, calls []llm.ToolCall, executor *tools.
 				break
 			}
 
-			result, err := executor.ExecuteTool(call)
+			result, err := executor.ExecuteTool(ctx, call)
 			results = append(results, ToolResult{
 				CallID: call.ID,
 				Name:   call.Function.Name,

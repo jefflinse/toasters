@@ -164,7 +164,7 @@ func TestJobSetStatus_DoneSetCompleted(t *testing.T) {
 
 	before := time.Now().UTC().Add(-time.Second) // allow for sub-second skew
 
-	result, err := te.ExecuteTool(jobSetStatusCall("test-job-done", "done"))
+	result, err := te.ExecuteTool(context.Background(), jobSetStatusCall("test-job-done", "done"))
 	if err != nil {
 		t.Fatalf("ExecuteTool returned error: %v", err)
 	}
@@ -200,7 +200,7 @@ func TestJobSetStatus_ActiveDoesNotSetCompleted(t *testing.T) {
 	te, configDir := newTestExecutor(t)
 	jobDir := makeJobDir(t, configDir, "test-job-active", "done", "")
 
-	_, err := te.ExecuteTool(jobSetStatusCall("test-job-active", "active"))
+	_, err := te.ExecuteTool(context.Background(), jobSetStatusCall("test-job-active", "active"))
 	if err != nil {
 		t.Fatalf("ExecuteTool returned error: %v", err)
 	}
@@ -225,7 +225,7 @@ func TestJobSetStatus_PausedDoesNotSetCompleted(t *testing.T) {
 	te, configDir := newTestExecutor(t)
 	jobDir := makeJobDir(t, configDir, "test-job-paused", "done", originalCompleted)
 
-	_, err := te.ExecuteTool(jobSetStatusCall("test-job-paused", "paused"))
+	_, err := te.ExecuteTool(context.Background(), jobSetStatusCall("test-job-paused", "paused"))
 	if err != nil {
 		t.Fatalf("ExecuteTool returned error: %v", err)
 	}
@@ -247,7 +247,7 @@ func TestJobSetStatus_InvalidStatus(t *testing.T) {
 	te, configDir := newTestExecutor(t)
 	makeJobDir(t, configDir, "test-job", "active", "")
 
-	result, err := te.ExecuteTool(jobSetStatusCall("test-job", "invalid"))
+	result, err := te.ExecuteTool(context.Background(), jobSetStatusCall("test-job", "invalid"))
 	if err != nil {
 		t.Fatalf("ExecuteTool returned error: %v", err)
 	}
@@ -261,7 +261,7 @@ func TestJobSetStatus_BadJSON(t *testing.T) {
 	te, _ := newTestExecutor(t)
 
 	call := makeToolCallRaw("job_set_status", "not valid json")
-	_, err := te.ExecuteTool(call)
+	_, err := te.ExecuteTool(context.Background(), call)
 	if err == nil {
 		t.Fatal("expected error for bad JSON, got nil")
 	}
@@ -275,7 +275,7 @@ func TestJobSetStatus_BadJSON(t *testing.T) {
 func TestJobSetStatus_NonexistentJob(t *testing.T) {
 	te, _ := newTestExecutor(t)
 
-	_, err := te.ExecuteTool(jobSetStatusCall("nonexistent-job", "done"))
+	_, err := te.ExecuteTool(context.Background(), jobSetStatusCall("nonexistent-job", "done"))
 	if err == nil {
 		t.Fatal("expected error for nonexistent job, got nil")
 	}
@@ -288,7 +288,7 @@ func TestJobSetStatus_NonexistentJob(t *testing.T) {
 func TestJobList_EmptyWorkspace(t *testing.T) {
 	te, _ := newTestExecutor(t)
 
-	result, err := te.ExecuteTool(makeToolCall("job_list", map[string]any{}))
+	result, err := te.ExecuteTool(context.Background(), makeToolCall("job_list", map[string]any{}))
 	if err != nil {
 		t.Fatalf("ExecuteTool returned error: %v", err)
 	}
@@ -308,7 +308,7 @@ func TestJobList_WithJobs(t *testing.T) {
 	makeJobDir(t, configDir, "alpha", "active", "")
 	makeJobDir(t, configDir, "beta", "done", "2026-01-01T00:00:00Z")
 
-	result, err := te.ExecuteTool(makeToolCall("job_list", map[string]any{}))
+	result, err := te.ExecuteTool(context.Background(), makeToolCall("job_list", map[string]any{}))
 	if err != nil {
 		t.Fatalf("ExecuteTool returned error: %v", err)
 	}
@@ -347,7 +347,7 @@ func TestJobCreate_Success(t *testing.T) {
 		"description": "A brand new job.",
 	})
 
-	result, err := te.ExecuteTool(call)
+	result, err := te.ExecuteTool(context.Background(), call)
 	if err != nil {
 		t.Fatalf("ExecuteTool returned error: %v", err)
 	}
@@ -374,7 +374,7 @@ func TestJobCreate_InvalidID(t *testing.T) {
 		"description": "Should fail.",
 	})
 
-	_, err := te.ExecuteTool(call)
+	_, err := te.ExecuteTool(context.Background(), call)
 	if err == nil {
 		t.Fatal("expected error for invalid job ID, got nil")
 	}
@@ -384,7 +384,7 @@ func TestJobCreate_BadJSON(t *testing.T) {
 	te, _ := newTestExecutor(t)
 
 	call := makeToolCallRaw("job_create", "{bad json")
-	_, err := te.ExecuteTool(call)
+	_, err := te.ExecuteTool(context.Background(), call)
 	if err == nil {
 		t.Fatal("expected error for bad JSON, got nil")
 	}
@@ -402,7 +402,7 @@ func TestJobReadOverview_Success(t *testing.T) {
 	makeJobDir(t, configDir, "read-test", "active", "")
 
 	call := makeToolCall("job_read_overview", map[string]string{"id": "read-test"})
-	result, err := te.ExecuteTool(call)
+	result, err := te.ExecuteTool(context.Background(), call)
 	if err != nil {
 		t.Fatalf("ExecuteTool returned error: %v", err)
 	}
@@ -418,7 +418,7 @@ func TestJobReadOverview_NonexistentJob(t *testing.T) {
 	te, _ := newTestExecutor(t)
 
 	call := makeToolCall("job_read_overview", map[string]string{"id": "nonexistent"})
-	_, err := te.ExecuteTool(call)
+	_, err := te.ExecuteTool(context.Background(), call)
 	if err == nil {
 		t.Fatal("expected error for nonexistent job, got nil")
 	}
@@ -428,7 +428,7 @@ func TestJobReadOverview_BadJSON(t *testing.T) {
 	te, _ := newTestExecutor(t)
 
 	call := makeToolCallRaw("job_read_overview", "not json")
-	_, err := te.ExecuteTool(call)
+	_, err := te.ExecuteTool(context.Background(), call)
 	if err == nil {
 		t.Fatal("expected error for bad JSON, got nil")
 	}
@@ -443,7 +443,7 @@ func TestJobReadTodos_Success(t *testing.T) {
 	makeJobDirWithTodo(t, configDir, "todo-read", []string{"First task", "Second task"})
 
 	call := makeToolCall("job_read_todos", map[string]string{"id": "todo-read"})
-	result, err := te.ExecuteTool(call)
+	result, err := te.ExecuteTool(context.Background(), call)
 	if err != nil {
 		t.Fatalf("ExecuteTool returned error: %v", err)
 	}
@@ -459,7 +459,7 @@ func TestJobReadTodos_NonexistentJob(t *testing.T) {
 	te, _ := newTestExecutor(t)
 
 	call := makeToolCall("job_read_todos", map[string]string{"id": "nonexistent"})
-	_, err := te.ExecuteTool(call)
+	_, err := te.ExecuteTool(context.Background(), call)
 	if err == nil {
 		t.Fatal("expected error for nonexistent job, got nil")
 	}
@@ -469,7 +469,7 @@ func TestJobReadTodos_BadJSON(t *testing.T) {
 	te, _ := newTestExecutor(t)
 
 	call := makeToolCallRaw("job_read_todos", "bad")
-	_, err := te.ExecuteTool(call)
+	_, err := te.ExecuteTool(context.Background(), call)
 	if err == nil {
 		t.Fatal("expected error for bad JSON, got nil")
 	}
@@ -489,7 +489,7 @@ func TestJobUpdateOverview_Overwrite(t *testing.T) {
 		"mode":    "overwrite",
 	})
 
-	result, err := te.ExecuteTool(call)
+	result, err := te.ExecuteTool(context.Background(), call)
 	if err != nil {
 		t.Fatalf("ExecuteTool returned error: %v", err)
 	}
@@ -517,7 +517,7 @@ func TestJobUpdateOverview_Append(t *testing.T) {
 		"mode":    "append",
 	})
 
-	result, err := te.ExecuteTool(call)
+	result, err := te.ExecuteTool(context.Background(), call)
 	if err != nil {
 		t.Fatalf("ExecuteTool returned error: %v", err)
 	}
@@ -545,7 +545,7 @@ func TestJobUpdateOverview_InvalidMode(t *testing.T) {
 		"mode":    "delete",
 	})
 
-	_, err := te.ExecuteTool(call)
+	_, err := te.ExecuteTool(context.Background(), call)
 	if err == nil {
 		t.Fatal("expected error for invalid mode, got nil")
 	}
@@ -558,7 +558,7 @@ func TestJobUpdateOverview_BadJSON(t *testing.T) {
 	te, _ := newTestExecutor(t)
 
 	call := makeToolCallRaw("job_update_overview", "bad")
-	_, err := te.ExecuteTool(call)
+	_, err := te.ExecuteTool(context.Background(), call)
 	if err == nil {
 		t.Fatal("expected error for bad JSON, got nil")
 	}
@@ -573,7 +573,7 @@ func TestJobUpdateOverview_NonexistentJob(t *testing.T) {
 		"mode":    "overwrite",
 	})
 
-	_, err := te.ExecuteTool(call)
+	_, err := te.ExecuteTool(context.Background(), call)
 	if err == nil {
 		t.Fatal("expected error for nonexistent job, got nil")
 	}
@@ -592,7 +592,7 @@ func TestJobAddTodo_Success(t *testing.T) {
 		"task": "Write more tests",
 	})
 
-	result, err := te.ExecuteTool(call)
+	result, err := te.ExecuteTool(context.Background(), call)
 	if err != nil {
 		t.Fatalf("ExecuteTool returned error: %v", err)
 	}
@@ -618,7 +618,7 @@ func TestJobAddTodo_NonexistentJob(t *testing.T) {
 		"task": "Should fail",
 	})
 
-	_, err := te.ExecuteTool(call)
+	_, err := te.ExecuteTool(context.Background(), call)
 	if err == nil {
 		t.Fatal("expected error for nonexistent job, got nil")
 	}
@@ -628,7 +628,7 @@ func TestJobAddTodo_BadJSON(t *testing.T) {
 	te, _ := newTestExecutor(t)
 
 	call := makeToolCallRaw("job_add_todo", "bad")
-	_, err := te.ExecuteTool(call)
+	_, err := te.ExecuteTool(context.Background(), call)
 	if err == nil {
 		t.Fatal("expected error for bad JSON, got nil")
 	}
@@ -647,7 +647,7 @@ func TestJobCompleteTodo_ByIndex(t *testing.T) {
 		"index_or_text": "2",
 	})
 
-	result, err := te.ExecuteTool(call)
+	result, err := te.ExecuteTool(context.Background(), call)
 	if err != nil {
 		t.Fatalf("ExecuteTool returned error: %v", err)
 	}
@@ -681,7 +681,7 @@ func TestJobCompleteTodo_ByText(t *testing.T) {
 		"index_or_text": "Fix bugs",
 	})
 
-	result, err := te.ExecuteTool(call)
+	result, err := te.ExecuteTool(context.Background(), call)
 	if err != nil {
 		t.Fatalf("ExecuteTool returned error: %v", err)
 	}
@@ -711,7 +711,7 @@ func TestJobCompleteTodo_NoMatch(t *testing.T) {
 		"index_or_text": "nonexistent task",
 	})
 
-	_, err := te.ExecuteTool(call)
+	_, err := te.ExecuteTool(context.Background(), call)
 	if err == nil {
 		t.Fatal("expected error for no matching todo, got nil")
 	}
@@ -721,7 +721,7 @@ func TestJobCompleteTodo_BadJSON(t *testing.T) {
 	te, _ := newTestExecutor(t)
 
 	call := makeToolCallRaw("job_complete_todo", "bad")
-	_, err := te.ExecuteTool(call)
+	_, err := te.ExecuteTool(context.Background(), call)
 	if err == nil {
 		t.Fatal("expected error for bad JSON, got nil")
 	}
@@ -748,7 +748,7 @@ func TestListDirectory_Success(t *testing.T) {
 
 	call := makeToolCall("list_directory", map[string]string{"path": dir})
 
-	result, err := te.ExecuteTool(call)
+	result, err := te.ExecuteTool(context.Background(), call)
 	if err != nil {
 		t.Fatalf("ExecuteTool returned error: %v", err)
 	}
@@ -773,7 +773,7 @@ func TestListDirectory_NonexistentPath(t *testing.T) {
 	te, configDir := newTestExecutor(t)
 	call := makeToolCall("list_directory", map[string]string{"path": filepath.Join(configDir, "nonexistent", "path", "xyz")})
 
-	_, err := te.ExecuteTool(call)
+	_, err := te.ExecuteTool(context.Background(), call)
 	if err == nil {
 		t.Fatal("expected error for nonexistent directory, got nil")
 	}
@@ -789,7 +789,7 @@ func TestListDirectory_EmptyDirectory(t *testing.T) {
 
 	call := makeToolCall("list_directory", map[string]string{"path": dir})
 
-	result, err := te.ExecuteTool(call)
+	result, err := te.ExecuteTool(context.Background(), call)
 	if err != nil {
 		t.Fatalf("ExecuteTool returned error: %v", err)
 	}
@@ -802,7 +802,7 @@ func TestListDirectory_BadJSON(t *testing.T) {
 	te, _ := newTestExecutor(t)
 	call := makeToolCallRaw("list_directory", "bad")
 
-	_, err := te.ExecuteTool(call)
+	_, err := te.ExecuteTool(context.Background(), call)
 	if err == nil {
 		t.Fatal("expected error for bad JSON, got nil")
 	}
@@ -812,7 +812,7 @@ func TestListDirectory_RejectsPathOutsideWorkspace(t *testing.T) {
 	te, _ := newTestExecutor(t)
 	call := makeToolCall("list_directory", map[string]string{"path": "/etc"})
 
-	_, err := te.ExecuteTool(call)
+	_, err := te.ExecuteTool(context.Background(), call)
 	if err == nil {
 		t.Fatal("expected error for path outside workspace, got nil")
 	}
@@ -825,7 +825,7 @@ func TestListDirectory_RejectsTraversalAttack(t *testing.T) {
 	te, _ := newTestExecutor(t)
 	call := makeToolCall("list_directory", map[string]string{"path": "../../../../../../etc"})
 
-	_, err := te.ExecuteTool(call)
+	_, err := te.ExecuteTool(context.Background(), call)
 	if err == nil {
 		t.Fatal("expected error for traversal attack, got nil")
 	}
@@ -848,7 +848,7 @@ func TestListDirectory_AllowsRelativePath(t *testing.T) {
 
 	call := makeToolCall("list_directory", map[string]string{"path": "mydir"})
 
-	result, err := te.ExecuteTool(call)
+	result, err := te.ExecuteTool(context.Background(), call)
 	if err != nil {
 		t.Fatalf("ExecuteTool returned error: %v", err)
 	}
@@ -866,7 +866,7 @@ func TestListSlots_NilGateway(t *testing.T) {
 	// Gateway is nil by default from newTestExecutor.
 
 	call := makeToolCall("list_slots", map[string]any{})
-	result, err := te.ExecuteTool(call)
+	result, err := te.ExecuteTool(context.Background(), call)
 	if err != nil {
 		t.Fatalf("ExecuteTool returned error: %v", err)
 	}
@@ -880,7 +880,7 @@ func TestListSlots_NoActiveSlots(t *testing.T) {
 	te.Gateway = &mockSpawner{slotSummaries: nil}
 
 	call := makeToolCall("list_slots", map[string]any{})
-	result, err := te.ExecuteTool(call)
+	result, err := te.ExecuteTool(context.Background(), call)
 	if err != nil {
 		t.Fatalf("ExecuteTool returned error: %v", err)
 	}
@@ -899,7 +899,7 @@ func TestListSlots_WithActiveSlots(t *testing.T) {
 	}
 
 	call := makeToolCall("list_slots", map[string]any{})
-	result, err := te.ExecuteTool(call)
+	result, err := te.ExecuteTool(context.Background(), call)
 	if err != nil {
 		t.Fatalf("ExecuteTool returned error: %v", err)
 	}
@@ -922,7 +922,7 @@ func TestKillSlot_NilGateway(t *testing.T) {
 	te, _ := newTestExecutor(t)
 
 	call := makeToolCall("kill_slot", map[string]any{"slot_id": 0})
-	result, err := te.ExecuteTool(call)
+	result, err := te.ExecuteTool(context.Background(), call)
 	if err != nil {
 		t.Fatalf("ExecuteTool returned error: %v", err)
 	}
@@ -942,7 +942,7 @@ func TestKillSlot_Success(t *testing.T) {
 	}
 
 	call := makeToolCall("kill_slot", map[string]any{"slot_id": 2})
-	result, err := te.ExecuteTool(call)
+	result, err := te.ExecuteTool(context.Background(), call)
 	if err != nil {
 		t.Fatalf("ExecuteTool returned error: %v", err)
 	}
@@ -963,7 +963,7 @@ func TestKillSlot_Error(t *testing.T) {
 	}
 
 	call := makeToolCall("kill_slot", map[string]any{"slot_id": 99})
-	result, err := te.ExecuteTool(call)
+	result, err := te.ExecuteTool(context.Background(), call)
 	if err != nil {
 		t.Fatalf("ExecuteTool returned error: %v", err)
 	}
@@ -978,7 +978,7 @@ func TestKillSlot_BadJSON(t *testing.T) {
 	te.Gateway = &mockSpawner{}
 
 	call := makeToolCallRaw("kill_slot", "bad")
-	_, err := te.ExecuteTool(call)
+	_, err := te.ExecuteTool(context.Background(), call)
 	if err == nil {
 		t.Fatal("expected error for bad JSON, got nil")
 	}
@@ -996,7 +996,7 @@ func TestAskUser_ReturnsFallbackMessage(t *testing.T) {
 		"options":  []string{"A", "B", "C"},
 	})
 
-	result, err := te.ExecuteTool(call)
+	result, err := te.ExecuteTool(context.Background(), call)
 	if err != nil {
 		t.Fatalf("ExecuteTool returned error: %v", err)
 	}
@@ -1017,7 +1017,7 @@ func TestEscalateToUser_Success(t *testing.T) {
 		"context":  "The build is failing.",
 	})
 
-	result, err := te.ExecuteTool(call)
+	result, err := te.ExecuteTool(context.Background(), call)
 	if err != nil {
 		t.Fatalf("ExecuteTool returned error: %v", err)
 	}
@@ -1036,7 +1036,7 @@ func TestEscalateToUser_BadJSON(t *testing.T) {
 	te, _ := newTestExecutor(t)
 
 	call := makeToolCallRaw("escalate_to_user", "bad")
-	_, err := te.ExecuteTool(call)
+	_, err := te.ExecuteTool(context.Background(), call)
 	if err == nil {
 		t.Fatal("expected error for bad JSON, got nil")
 	}
@@ -1074,7 +1074,7 @@ func TestTaskSetStatus_Success(t *testing.T) {
 		"status":  "done",
 	})
 
-	result, err := te.ExecuteTool(call)
+	result, err := te.ExecuteTool(context.Background(), call)
 	if err != nil {
 		t.Fatalf("ExecuteTool returned error: %v", err)
 	}
@@ -1114,7 +1114,7 @@ func TestTaskSetStatus_InvalidStatus(t *testing.T) {
 		"status":  "bogus",
 	})
 
-	result, err := te.ExecuteTool(call)
+	result, err := te.ExecuteTool(context.Background(), call)
 	if err != nil {
 		t.Fatalf("ExecuteTool returned error: %v", err)
 	}
@@ -1137,7 +1137,7 @@ func TestTaskSetStatus_TaskNotFound(t *testing.T) {
 		"status":  "done",
 	})
 
-	result, err := te.ExecuteTool(call)
+	result, err := te.ExecuteTool(context.Background(), call)
 	if err != nil {
 		t.Fatalf("ExecuteTool returned error: %v", err)
 	}
@@ -1150,7 +1150,7 @@ func TestTaskSetStatus_BadJSON(t *testing.T) {
 	te, _ := newTestExecutor(t)
 
 	call := makeToolCallRaw("task_set_status", "bad")
-	_, err := te.ExecuteTool(call)
+	_, err := te.ExecuteTool(context.Background(), call)
 	if err == nil {
 		t.Fatal("expected error for bad JSON, got nil")
 	}
@@ -1188,7 +1188,7 @@ func TestFetchWebpage_Success(t *testing.T) {
 	te, _ := newTestExecutor(t)
 	call := makeToolCall("fetch_webpage", map[string]string{"url": srv.URL})
 
-	result, err := te.ExecuteTool(call)
+	result, err := te.ExecuteTool(context.Background(), call)
 	if err != nil {
 		t.Fatalf("ExecuteTool returned error: %v", err)
 	}
@@ -1222,7 +1222,7 @@ func TestFetchWebpage_StripsScriptAndStyle(t *testing.T) {
 	te, _ := newTestExecutor(t)
 	call := makeToolCall("fetch_webpage", map[string]string{"url": srv.URL})
 
-	result, err := te.ExecuteTool(call)
+	result, err := te.ExecuteTool(context.Background(), call)
 	if err != nil {
 		t.Fatalf("ExecuteTool returned error: %v", err)
 	}
@@ -1250,7 +1250,7 @@ func TestFetchWebpage_NonOKStatus(t *testing.T) {
 	te, _ := newTestExecutor(t)
 	call := makeToolCall("fetch_webpage", map[string]string{"url": srv.URL})
 
-	_, err := te.ExecuteTool(call)
+	_, err := te.ExecuteTool(context.Background(), call)
 	if err == nil {
 		t.Fatal("expected error for 404 response, got nil")
 	}
@@ -1264,7 +1264,7 @@ func TestFetchWebpage_InvalidURL(t *testing.T) {
 	te, _ := newTestExecutor(t)
 	call := makeToolCall("fetch_webpage", map[string]string{"url": "http://localhost:1"})
 
-	_, err := te.ExecuteTool(call)
+	_, err := te.ExecuteTool(context.Background(), call)
 	if err == nil {
 		t.Fatal("expected error for unreachable URL, got nil")
 	}
@@ -1275,7 +1275,7 @@ func TestFetchWebpage_SSRFBlocksPrivateIP(t *testing.T) {
 	te, _ := newTestExecutor(t)
 	call := makeToolCall("fetch_webpage", map[string]string{"url": "http://127.0.0.1:9999"})
 
-	_, err := te.ExecuteTool(call)
+	_, err := te.ExecuteTool(context.Background(), call)
 	if err == nil {
 		t.Fatal("expected error for private IP, got nil")
 	}
@@ -1288,7 +1288,7 @@ func TestFetchWebpage_BadJSON(t *testing.T) {
 	te, _ := newTestExecutor(t)
 	call := makeToolCallRaw("fetch_webpage", "bad")
 
-	_, err := te.ExecuteTool(call)
+	_, err := te.ExecuteTool(context.Background(), call)
 	if err == nil {
 		t.Fatal("expected error for bad JSON, got nil")
 	}
@@ -1311,7 +1311,7 @@ func TestFetchWebpage_CollapsesWhitespace(t *testing.T) {
 	te, _ := newTestExecutor(t)
 	call := makeToolCall("fetch_webpage", map[string]string{"url": srv.URL})
 
-	result, err := te.ExecuteTool(call)
+	result, err := te.ExecuteTool(context.Background(), call)
 	if err != nil {
 		t.Fatalf("ExecuteTool returned error: %v", err)
 	}
@@ -1337,7 +1337,7 @@ func TestFetchWebpage_TruncatesLongContent(t *testing.T) {
 	te, _ := newTestExecutor(t)
 	call := makeToolCall("fetch_webpage", map[string]string{"url": srv.URL})
 
-	result, err := te.ExecuteTool(call)
+	result, err := te.ExecuteTool(context.Background(), call)
 	if err != nil {
 		t.Fatalf("ExecuteTool returned error: %v", err)
 	}
@@ -1359,7 +1359,7 @@ func TestAssignTeam_NilGateway(t *testing.T) {
 		"task":      "Do something",
 	})
 
-	_, err := te.ExecuteTool(call)
+	_, err := te.ExecuteTool(context.Background(), call)
 	if err == nil {
 		t.Fatal("expected error for nil gateway, got nil")
 	}
@@ -1379,7 +1379,7 @@ func TestAssignTeam_JobDoesNotExist(t *testing.T) {
 		"task":      "Do something",
 	})
 
-	result, err := te.ExecuteTool(call)
+	result, err := te.ExecuteTool(context.Background(), call)
 	if err != nil {
 		t.Fatalf("ExecuteTool returned error: %v", err)
 	}
@@ -1405,7 +1405,7 @@ func TestAssignTeam_TeamNotFound(t *testing.T) {
 		"task":      "Do something",
 	})
 
-	_, err := te.ExecuteTool(call)
+	_, err := te.ExecuteTool(context.Background(), call)
 	if err == nil {
 		t.Fatal("expected error for nonexistent team, got nil")
 	}
@@ -1440,7 +1440,7 @@ func TestAssignTeam_SuccessfulDispatch(t *testing.T) {
 		"task":      "Implement feature X",
 	})
 
-	result, err := te.ExecuteTool(call)
+	result, err := te.ExecuteTool(context.Background(), call)
 	if err != nil {
 		t.Fatalf("ExecuteTool returned error: %v", err)
 	}
@@ -1469,7 +1469,7 @@ func TestAssignTeam_AlreadyRunning(t *testing.T) {
 		"task":      "Continue work",
 	})
 
-	result, err := te.ExecuteTool(call)
+	result, err := te.ExecuteTool(context.Background(), call)
 	if err != nil {
 		t.Fatalf("ExecuteTool returned error: %v", err)
 	}
@@ -1498,7 +1498,7 @@ func TestAssignTeam_SpawnError(t *testing.T) {
 		"task":      "Do work",
 	})
 
-	_, err := te.ExecuteTool(call)
+	_, err := te.ExecuteTool(context.Background(), call)
 	if err == nil {
 		t.Fatal("expected error from spawn failure, got nil")
 	}
@@ -1512,7 +1512,7 @@ func TestAssignTeam_BadJSON(t *testing.T) {
 	te.Gateway = &mockSpawner{}
 
 	call := makeToolCallRaw("assign_team", "bad")
-	_, err := te.ExecuteTool(call)
+	_, err := te.ExecuteTool(context.Background(), call)
 	if err == nil {
 		t.Fatal("expected error for bad JSON, got nil")
 	}
@@ -1539,7 +1539,7 @@ func TestAssignTeam_SetsTaskTeam(t *testing.T) {
 		"task":      "Do work",
 	})
 
-	_, err = te.ExecuteTool(call)
+	_, err = te.ExecuteTool(context.Background(), call)
 	if err != nil {
 		t.Fatalf("ExecuteTool returned error: %v", err)
 	}
@@ -1562,7 +1562,7 @@ func TestUnknownTool_ReturnsError(t *testing.T) {
 	te, _ := newTestExecutor(t)
 
 	call := makeToolCall("nonexistent_tool", map[string]any{})
-	_, err := te.ExecuteTool(call)
+	_, err := te.ExecuteTool(context.Background(), call)
 	if err == nil {
 		t.Fatal("expected error for unknown tool, got nil")
 	}
@@ -1646,7 +1646,7 @@ func TestJobCreate_DualWriteToSQLite(t *testing.T) {
 		"description": "Testing dual-write to SQLite.",
 	})
 
-	result, err := te.ExecuteTool(call)
+	result, err := te.ExecuteTool(context.Background(), call)
 	if err != nil {
 		t.Fatalf("ExecuteTool returned error: %v", err)
 	}
@@ -1689,14 +1689,14 @@ func TestJobSetStatus_DualWriteToSQLite(t *testing.T) {
 		"name":        "Status Dual Job",
 		"description": "Testing status dual-write.",
 	})
-	_, err := te.ExecuteTool(createCall)
+	_, err := te.ExecuteTool(context.Background(), createCall)
 	if err != nil {
 		t.Fatalf("job_create failed: %v", err)
 	}
 
 	// Set status to "done".
 	statusCall := jobSetStatusCall("status-dual-job", "done")
-	result, err := te.ExecuteTool(statusCall)
+	result, err := te.ExecuteTool(context.Background(), statusCall)
 	if err != nil {
 		t.Fatalf("job_set_status returned error: %v", err)
 	}
@@ -1736,7 +1736,7 @@ func TestJobCreate_NilStoreGracefulDegradation(t *testing.T) {
 		"description": "Should succeed without SQLite.",
 	})
 
-	result, err := te.ExecuteTool(call)
+	result, err := te.ExecuteTool(context.Background(), call)
 	if err != nil {
 		t.Fatalf("ExecuteTool returned error: %v", err)
 	}
@@ -1798,7 +1798,7 @@ func TestAssignTeam_UsesRuntimeWhenProviderConfigured(t *testing.T) {
 		"task":      "Implement feature via runtime",
 	})
 
-	result, err := te.ExecuteTool(call)
+	result, err := te.ExecuteTool(context.Background(), call)
 	if err != nil {
 		t.Fatalf("ExecuteTool returned error: %v", err)
 	}
@@ -1854,7 +1854,7 @@ func TestAssignTeam_FallsBackToGatewayWhenNoProvider(t *testing.T) {
 		"task":      "Do work via gateway",
 	})
 
-	result, err := te.ExecuteTool(call)
+	result, err := te.ExecuteTool(context.Background(), call)
 	if err != nil {
 		t.Fatalf("ExecuteTool returned error: %v", err)
 	}
@@ -1899,7 +1899,7 @@ func TestAssignTeam_FallsBackToGatewayOnRuntimeError(t *testing.T) {
 		"task":      "Do work with fallback",
 	})
 
-	result, err := te.ExecuteTool(call)
+	result, err := te.ExecuteTool(context.Background(), call)
 	if err != nil {
 		t.Fatalf("ExecuteTool returned error: %v", err)
 	}
@@ -1921,7 +1921,7 @@ func TestListSessions_NilRuntime(t *testing.T) {
 	// te.Runtime is nil by default.
 
 	call := makeToolCall("list_sessions", map[string]any{})
-	result, err := te.ExecuteTool(call)
+	result, err := te.ExecuteTool(context.Background(), call)
 	if err != nil {
 		t.Fatalf("ExecuteTool returned error: %v", err)
 	}
@@ -1939,7 +1939,7 @@ func TestListSessions_NoActiveSessions(t *testing.T) {
 	te.Runtime = runtime.New(nil, provider.NewRegistry())
 
 	call := makeToolCall("list_sessions", map[string]any{})
-	result, err := te.ExecuteTool(call)
+	result, err := te.ExecuteTool(context.Background(), call)
 	if err != nil {
 		t.Fatalf("ExecuteTool returned error: %v", err)
 	}
@@ -1957,7 +1957,7 @@ func TestCancelSession_NilRuntime(t *testing.T) {
 	// te.Runtime is nil by default.
 
 	call := makeToolCall("cancel_session", map[string]string{"session_id": "abc"})
-	result, err := te.ExecuteTool(call)
+	result, err := te.ExecuteTool(context.Background(), call)
 	if err != nil {
 		t.Fatalf("ExecuteTool returned error: %v", err)
 	}
@@ -1975,7 +1975,7 @@ func TestCancelSession_NonexistentSession(t *testing.T) {
 	te.Runtime = runtime.New(nil, provider.NewRegistry())
 
 	call := makeToolCall("cancel_session", map[string]string{"session_id": "nonexistent"})
-	result, err := te.ExecuteTool(call)
+	result, err := te.ExecuteTool(context.Background(), call)
 	if err != nil {
 		t.Fatalf("ExecuteTool returned error: %v", err)
 	}
@@ -1993,7 +1993,7 @@ func TestCancelSession_BadJSON(t *testing.T) {
 	te.Runtime = runtime.New(nil, provider.NewRegistry())
 
 	call := makeToolCallRaw("cancel_session", "bad")
-	_, err := te.ExecuteTool(call)
+	_, err := te.ExecuteTool(context.Background(), call)
 	if err == nil {
 		t.Fatal("expected error for bad JSON, got nil")
 	}

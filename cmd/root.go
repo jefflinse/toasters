@@ -19,6 +19,7 @@ import (
 	"github.com/jefflinse/toasters/internal/llm"
 	llmclient "github.com/jefflinse/toasters/internal/llm/client"
 	llmtools "github.com/jefflinse/toasters/internal/llm/tools"
+	"github.com/jefflinse/toasters/internal/mcp"
 	"github.com/jefflinse/toasters/internal/provider"
 	"github.com/jefflinse/toasters/internal/runtime"
 	"github.com/jefflinse/toasters/internal/tui"
@@ -129,6 +130,20 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 	// Create the runtime for agent session management.
 	rt := runtime.New(store, registry)
 
+	// Initialize MCP manager and connect to configured servers.
+	mcpManager := mcp.NewManager()
+	if len(cfg.MCP.Servers) > 0 {
+		if err := mcpManager.Connect(context.Background(), cfg.MCP.Servers); err != nil {
+			log.Printf("warning: MCP connect error: %v", err)
+		}
+	}
+	defer func() { _ = mcpManager.Close() }()
+
+	// Wire MCP tools into agent runtime.
+	if len(mcpManager.Tools()) > 0 {
+		rt.SetMCPCaller(mcpManager, mcp.ToRuntimeToolDefs(mcpManager.Tools()))
+	}
+
 	// Create the gateway with a no-op notify for now.
 	// The TUI will replace this with a real notify after the program starts.
 	gw := gateway.New(cfg.Claude, workspaceDir, func() {})
@@ -136,6 +151,10 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 	toolExec.DefaultProvider = cfg.Agents.DefaultProvider
 	toolExec.DefaultModel = cfg.Agents.DefaultModel
 	toolExec.RepoRoot = repoRoot
+
+	// Wire MCP tools into operator tool set.
+	toolExec.MCPManager = mcpManager
+	toolExec.Tools = append(toolExec.Tools, mcp.ToLLMTools(mcpManager.Tools())...)
 
 	var client llm.Provider
 	switch cfg.Operator.Provider {
