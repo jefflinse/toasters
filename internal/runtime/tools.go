@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -35,6 +37,7 @@ type CoreTools struct {
 	spawner    AgentSpawner // for spawn_agent; may be nil
 	depth      int          // current spawn depth
 	maxDepth   int          // max spawn depth
+	httpClient *http.Client // for web_fetch; nil uses webFetchClient
 }
 
 // CoreToolsOption configures a CoreTools instance.
@@ -58,7 +61,7 @@ func WithSpawner(s AgentSpawner, depth, maxDepth int) CoreToolsOption {
 func NewCoreTools(workDir string, opts ...CoreToolsOption) *CoreTools {
 	ct := &CoreTools{
 		workDir:    workDir,
-		allowShell: true,
+		allowShell: false, // secure default — require explicit opt-in
 		maxDepth:   defaultMaxDepth,
 	}
 	for _, opt := range opts {
@@ -202,6 +205,7 @@ func (ct *CoreTools) Definitions() []ToolDef {
 }
 
 // resolvePath resolves a path relative to workDir and validates it doesn't escape the sandbox.
+// It resolves symlinks to prevent symlink-based sandbox escapes.
 func (ct *CoreTools) resolvePath(path string) (string, error) {
 	if path == "" {
 		return "", fmt.Errorf("path is empty")
@@ -214,14 +218,41 @@ func (ct *CoreTools) resolvePath(path string) (string, error) {
 		resolved = filepath.Clean(filepath.Join(ct.workDir, path))
 	}
 
-	// Ensure the resolved path is under workDir.
-	absWorkDir, err := filepath.Abs(ct.workDir)
+	// Resolve symlinks in workDir to get the real base path.
+	absWorkDir, err := filepath.EvalSymlinks(ct.workDir)
 	if err != nil {
 		return "", fmt.Errorf("resolving work directory: %w", err)
 	}
-	absResolved, err := filepath.Abs(resolved)
+	absWorkDir, err = filepath.Abs(absWorkDir)
 	if err != nil {
-		return "", fmt.Errorf("resolving path: %w", err)
+		return "", fmt.Errorf("resolving work directory: %w", err)
+	}
+
+	// For existing paths, resolve symlinks to get the real path.
+	// For new paths (write_file), walk up to find the nearest existing ancestor
+	// and resolve symlinks from there.
+	var absResolved string
+	if evalResolved, evalErr := filepath.EvalSymlinks(resolved); evalErr == nil {
+		absResolved, _ = filepath.Abs(evalResolved)
+	} else {
+		// Path doesn't exist yet — walk up to find the nearest existing ancestor.
+		remaining := resolved
+		var tail []string
+		for {
+			parent := filepath.Dir(remaining)
+			tail = append([]string{filepath.Base(remaining)}, tail...)
+			if parentResolved, err2 := filepath.EvalSymlinks(parent); err2 == nil {
+				absParent, _ := filepath.Abs(parentResolved)
+				absResolved = filepath.Join(append([]string{absParent}, tail...)...)
+				break
+			}
+			if parent == remaining {
+				// Reached filesystem root without finding an existing ancestor.
+				absResolved, _ = filepath.Abs(resolved)
+				break
+			}
+			remaining = parent
+		}
 	}
 
 	if !strings.HasPrefix(absResolved, absWorkDir+string(filepath.Separator)) && absResolved != absWorkDir {
@@ -565,6 +596,59 @@ func (ct *CoreTools) shell(ctx context.Context, args json.RawMessage) (string, e
 	return result, nil
 }
 
+// privateNetworks lists IP ranges that should not be accessible via web_fetch.
+var privateNetworks = []*net.IPNet{
+	mustParseCIDR("127.0.0.0/8"),
+	mustParseCIDR("10.0.0.0/8"),
+	mustParseCIDR("172.16.0.0/12"),
+	mustParseCIDR("192.168.0.0/16"),
+	mustParseCIDR("169.254.0.0/16"),
+	mustParseCIDR("::1/128"),
+	mustParseCIDR("fc00::/7"),
+	mustParseCIDR("fe80::/10"),
+}
+
+func mustParseCIDR(s string) *net.IPNet {
+	_, n, err := net.ParseCIDR(s)
+	if err != nil {
+		panic(err)
+	}
+	return n
+}
+
+func isPrivateIP(ip net.IP) bool {
+	for _, network := range privateNetworks {
+		if network.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+// webFetchClient is a dedicated HTTP client with SSRF protection.
+var webFetchClient = &http.Client{
+	Timeout: 30 * time.Second,
+	Transport: &http.Transport{
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			host, _, err := net.SplitHostPort(addr)
+			if err != nil {
+				return nil, err
+			}
+			ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+			if err != nil {
+				return nil, err
+			}
+			for _, ip := range ips {
+				if isPrivateIP(ip.IP) {
+					return nil, fmt.Errorf("access to private/reserved IP %s is blocked", ip.IP)
+				}
+			}
+			dialer := &net.Dialer{Timeout: 10 * time.Second}
+			return dialer.DialContext(ctx, network, addr)
+		},
+	},
+}
+
 func (ct *CoreTools) webFetch(ctx context.Context, args json.RawMessage) (string, error) {
 	var params struct {
 		URL string `json:"url"`
@@ -577,7 +661,16 @@ func (ct *CoreTools) webFetch(ctx context.Context, args json.RawMessage) (string
 		return "", fmt.Errorf("url is required")
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	// Validate URL scheme.
+	u, err := url.Parse(params.URL)
+	if err != nil {
+		return "", fmt.Errorf("invalid URL: %w", err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return "", fmt.Errorf("unsupported URL scheme %q (only http and https allowed)", u.Scheme)
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, params.URL, nil)
@@ -586,7 +679,12 @@ func (ct *CoreTools) webFetch(ctx context.Context, args json.RawMessage) (string
 	}
 	req.Header.Set("User-Agent", "toasters-agent/1.0")
 
-	resp, err := http.DefaultClient.Do(req)
+	client := ct.httpClient
+	if client == nil {
+		client = webFetchClient
+	}
+
+	resp, err := client.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("fetching URL: %w", err)
 	}
@@ -627,6 +725,7 @@ func (ct *CoreTools) spawnAgent(ctx context.Context, args json.RawMessage) (stri
 		InitialMessage: params.Message,
 		WorkDir:        ct.workDir,
 		MaxDepth:       ct.maxDepth,
+		Depth:          ct.depth,
 	})
 	if err != nil {
 		return "", fmt.Errorf("spawning agent: %w", err)

@@ -273,7 +273,7 @@ func TestGrep(t *testing.T) {
 
 func TestShell(t *testing.T) {
 	dir := t.TempDir()
-	ct := NewCoreTools(dir)
+	ct := NewCoreTools(dir, WithShell(true))
 
 	t.Run("simple command", func(t *testing.T) {
 		result, err := ct.Execute(context.Background(), "shell", mustJSON(t, map[string]any{
@@ -302,8 +302,8 @@ func TestShell(t *testing.T) {
 		assertContains(t, err.Error(), "timed out")
 	})
 
-	t.Run("shell disabled", func(t *testing.T) {
-		noShell := NewCoreTools(dir, WithShell(false))
+	t.Run("shell disabled by default", func(t *testing.T) {
+		noShell := NewCoreTools(dir)
 		_, err := noShell.Execute(context.Background(), "shell", mustJSON(t, map[string]any{
 			"command": "echo hello",
 		}))
@@ -322,6 +322,7 @@ func TestWebFetch(t *testing.T) {
 
 		dir := t.TempDir()
 		ct := NewCoreTools(dir)
+		ct.httpClient = srv.Client() // bypass SSRF check for local test server
 
 		result, err := ct.Execute(context.Background(), "web_fetch", mustJSON(t, map[string]any{
 			"url": srv.URL,
@@ -339,6 +340,7 @@ func TestWebFetch(t *testing.T) {
 
 		dir := t.TempDir()
 		ct := NewCoreTools(dir)
+		ct.httpClient = srv.Client() // bypass SSRF check for local test server
 
 		_, err := ct.Execute(context.Background(), "web_fetch", mustJSON(t, map[string]any{
 			"url": srv.URL,
@@ -355,6 +357,39 @@ func TestWebFetch(t *testing.T) {
 			"url": "",
 		}))
 		assertError(t, err)
+	})
+
+	t.Run("rejects private IP", func(t *testing.T) {
+		dir := t.TempDir()
+		ct := NewCoreTools(dir)
+
+		_, err := ct.Execute(context.Background(), "web_fetch", mustJSON(t, map[string]any{
+			"url": "http://127.0.0.1/",
+		}))
+		assertError(t, err)
+		assertContains(t, err.Error(), "private/reserved IP")
+	})
+
+	t.Run("rejects link-local metadata IP", func(t *testing.T) {
+		dir := t.TempDir()
+		ct := NewCoreTools(dir)
+
+		_, err := ct.Execute(context.Background(), "web_fetch", mustJSON(t, map[string]any{
+			"url": "http://169.254.169.254/",
+		}))
+		assertError(t, err)
+		assertContains(t, err.Error(), "private/reserved IP")
+	})
+
+	t.Run("rejects unsupported URL scheme", func(t *testing.T) {
+		dir := t.TempDir()
+		ct := NewCoreTools(dir)
+
+		_, err := ct.Execute(context.Background(), "web_fetch", mustJSON(t, map[string]any{
+			"url": "file:///etc/passwd",
+		}))
+		assertError(t, err)
+		assertContains(t, err.Error(), "unsupported URL scheme")
 	})
 }
 
@@ -401,6 +436,47 @@ func TestPathTraversal(t *testing.T) {
 			assertContains(t, err.Error(), "escapes working directory")
 		})
 	}
+}
+
+func TestSymlinkEscape(t *testing.T) {
+	dir := t.TempDir()
+	ct := NewCoreTools(dir)
+
+	// Create a symlink inside workDir pointing to /tmp (outside sandbox).
+	symlink := filepath.Join(dir, "escape")
+	if err := os.Symlink("/tmp", symlink); err != nil {
+		t.Skipf("cannot create symlink: %v", err)
+	}
+
+	// Attempting to read through the symlink should be rejected.
+	_, err := ct.Execute(context.Background(), "read_file", mustJSON(t, map[string]any{
+		"path": "escape/somefile.txt",
+	}))
+	assertError(t, err)
+	assertContains(t, err.Error(), "escapes working directory")
+}
+
+func TestSpawnDepthPropagation(t *testing.T) {
+	dir := t.TempDir()
+
+	// A spawner at depth 1 with maxDepth 2 should be able to spawn.
+	spawner := &mockSpawner{result: "ok"}
+	ct := NewCoreTools(dir, WithSpawner(spawner, 1, 2))
+	result, err := ct.Execute(context.Background(), "spawn_agent", mustJSON(t, map[string]any{
+		"system_prompt": "test",
+		"message":       "hello",
+	}))
+	assertNoError(t, err)
+	assertEqual(t, "ok", result)
+
+	// A spawner at depth 2 with maxDepth 2 should NOT be able to spawn.
+	ct2 := NewCoreTools(dir, WithSpawner(spawner, 2, 2))
+	_, err = ct2.Execute(context.Background(), "spawn_agent", mustJSON(t, map[string]any{
+		"system_prompt": "test",
+		"message":       "hello",
+	}))
+	assertError(t, err)
+	assertContains(t, err.Error(), "max spawn depth")
 }
 
 func TestUnknownTool(t *testing.T) {

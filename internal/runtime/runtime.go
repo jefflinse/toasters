@@ -40,7 +40,7 @@ func (r *Runtime) SpawnAgent(ctx context.Context, opts SpawnOpts) (*Session, err
 	id := uuid.New().String()
 
 	// Determine spawn depth for child agents.
-	depth := 0
+	depth := opts.Depth
 	maxDepth := opts.MaxDepth
 	if maxDepth <= 0 {
 		maxDepth = defaultMaxDepth
@@ -77,9 +77,11 @@ func (r *Runtime) SpawnAgent(ctx context.Context, opts SpawnOpts) (*Session, err
 		}
 	}
 
-	// Start session in goroutine.
+	// Start session in goroutine. Use context.Background() because the session
+	// has its own internal context for lifecycle management. The caller's context
+	// should not control the session's lifetime for fire-and-forget spawns.
 	go func() {
-		err := sess.Run(ctx)
+		err := sess.Run(context.Background())
 
 		// Update persistence on completion.
 		if r.store != nil {

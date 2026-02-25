@@ -18,6 +18,7 @@ type SpawnOpts struct {
 	WorkDir        string
 	MaxTurns       int // 0 = use default (50)
 	MaxDepth       int // 0 = use default (3); for spawn_agent recursion
+	Depth          int // current spawn depth (set by parent)
 }
 
 const (
