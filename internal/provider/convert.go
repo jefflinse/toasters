@@ -153,9 +153,10 @@ func (a *LLMProviderAdapter) doStream(ctx context.Context, messages []llm.Messag
 		req.Tools = append(req.Tools, ToolFromLLM(t))
 	}
 
-	if temperature > 0 {
-		req.Temperature = &temperature
-	}
+	// Always pass temperature through — 0.0 is a meaningful value (deterministic).
+	// The llm.Provider interface uses float64 (not *float64), so we can't
+	// distinguish "not set" from "zero" at this layer.
+	req.Temperature = &temperature
 
 	eventCh, err := a.provider.ChatStream(ctx, req)
 	if err != nil {

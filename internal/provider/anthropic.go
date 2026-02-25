@@ -102,7 +102,9 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, req ChatRequest) (<-
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("x-api-key", p.apiKey)
+	if p.apiKey != "" {
+		httpReq.Header.Set("x-api-key", p.apiKey)
+	}
 	httpReq.Header.Set("anthropic-version", p.version)
 
 	ch := make(chan StreamEvent, 8)
