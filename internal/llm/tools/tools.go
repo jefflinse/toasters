@@ -416,8 +416,8 @@ func (te *ToolExecutor) ExecuteTool(call llm.ToolCall) (string, error) {
 				Type:   "general",
 				Status: db.JobStatusPending,
 			}
-			if err := te.Store.CreateJob(ctx, dbJob); err != nil {
-				log.Printf("warning: failed to persist job %s to SQLite: %v", j.ID, err)
+			if dbErr := te.Store.CreateJob(ctx, dbJob); dbErr != nil {
+				log.Printf("warning: failed to persist job %s to SQLite: %v", j.ID, dbErr)
 			}
 		}
 		return "created: " + j.ID, nil
@@ -659,8 +659,8 @@ func (te *ToolExecutor) ExecuteTool(call llm.ToolCall) (string, error) {
 		if te.Store != nil {
 			ctx := context.Background()
 			dbStatus := mapJobStatus(args.Status)
-			if err := te.Store.UpdateJobStatus(ctx, args.ID, dbStatus); err != nil {
-				log.Printf("warning: failed to update job %s status in SQLite: %v", args.ID, err)
+			if dbErr := te.Store.UpdateJobStatus(ctx, args.ID, dbStatus); dbErr != nil {
+				log.Printf("warning: failed to update job %s status in SQLite: %v", args.ID, dbErr)
 			}
 		}
 		return fmt.Sprintf("job %s status set to %s", args.ID, args.Status), nil
@@ -677,7 +677,7 @@ func (te *ToolExecutor) ExecuteTool(call llm.ToolCall) (string, error) {
 		for _, s := range sessions {
 			elapsed := time.Since(s.StartTime).Truncate(time.Second)
 			lines = append(lines, fmt.Sprintf("session %s: agent=%s model=%s provider=%s status=%s tokens_in=%d tokens_out=%d elapsed=%s",
-				s.ID[:8], s.AgentID, s.Model, s.Provider, s.Status, s.TokensIn, s.TokensOut, elapsed))
+				shortID(s.ID), s.AgentID, s.Model, s.Provider, s.Status, s.TokensIn, s.TokensOut, elapsed))
 		}
 		return strings.Join(lines, "\n"), nil
 
@@ -705,14 +705,14 @@ func (te *ToolExecutor) ExecuteTool(call llm.ToolCall) (string, error) {
 		if matchID == "" {
 			// Try exact match on all sessions (including non-active).
 			if err := te.Runtime.CancelSession(args.SessionID); err != nil {
-				return fmt.Sprintf("session %q not found", args.SessionID), nil
+				return fmt.Sprintf("session %q not found: %v", args.SessionID, err), nil
 			}
 			return fmt.Sprintf("cancelled session %s", args.SessionID), nil
 		}
 		if err := te.Runtime.CancelSession(matchID); err != nil {
 			return fmt.Sprintf("error cancelling session: %v", err), nil
 		}
-		return fmt.Sprintf("cancelled session %s", matchID[:8]), nil
+		return fmt.Sprintf("cancelled session %s", shortID(matchID)), nil
 
 	default:
 		return "", fmt.Errorf("unknown tool: %s", call.Function.Name)
@@ -807,6 +807,14 @@ func listDirectory(path string) (string, error) {
 	}
 
 	return strings.Join(lines, "\n"), nil
+}
+
+// shortID returns the first 8 characters of an ID, or the full ID if shorter.
+func shortID(id string) string {
+	if len(id) > 8 {
+		return id[:8]
+	}
+	return id
 }
 
 // mapJobStatus maps markdown job status strings to db.JobStatus constants.

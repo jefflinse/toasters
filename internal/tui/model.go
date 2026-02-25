@@ -1207,6 +1207,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		slot.status = msg.Status
 
+		// Clean up the session entry to prevent unbounded growth.
+		defer delete(m.runtimeSessions, msg.SessionID)
+
 		// Build completion notification for the operator (same pattern as gateway).
 		outputTail := slot.output.String()
 		const maxTail = 2000
@@ -1323,6 +1326,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !needTick && m.gateway != nil {
 			for _, snap := range m.gateway.Slots() {
 				if snap.Status == gateway.SlotRunning {
+					needTick = true
+					break
+				}
+			}
+		}
+		if !needTick {
+			for _, rs := range m.runtimeSessions {
+				if rs.status == "active" {
 					needTick = true
 					break
 				}

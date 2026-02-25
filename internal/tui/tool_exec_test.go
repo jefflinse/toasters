@@ -20,6 +20,76 @@ func TestExecuteToolsCmd_BasicResults(t *testing.T) {
 
 	calls := []llm.ToolCall{
 		{
+			ID:   "call-1",
+			Type: "function",
+			Function: llm.ToolCallFunction{
+				Name:      "job_list",
+				Arguments: "{}",
+			},
+		},
+	}
+
+	ctx := context.Background()
+	cmd := executeToolsCmd(ctx, calls, executor)
+	msg := cmd()
+
+	result, ok := msg.(ToolResultMsg)
+	if !ok {
+		t.Fatalf("expected ToolResultMsg, got %T", msg)
+	}
+	if len(result.Results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(result.Results))
+	}
+	if result.Results[0].CallID != "call-1" {
+		t.Errorf("CallID = %q, want %q", result.Results[0].CallID, "call-1")
+	}
+	if result.Results[0].Name != "job_list" {
+		t.Errorf("Name = %q, want %q", result.Results[0].Name, "job_list")
+	}
+	if result.Results[0].Err != nil {
+		t.Errorf("unexpected error: %v", result.Results[0].Err)
+	}
+}
+
+func TestExecuteToolsCmd_MultipleTools(t *testing.T) {
+	t.Parallel()
+
+	executor := tools.NewToolExecutor(nil, nil, t.TempDir(), nil, nil)
+
+	calls := []llm.ToolCall{
+		{ID: "call-1", Type: "function", Function: llm.ToolCallFunction{Name: "job_list", Arguments: "{}"}},
+		{ID: "call-2", Type: "function", Function: llm.ToolCallFunction{Name: "job_list", Arguments: "{}"}},
+		{ID: "call-3", Type: "function", Function: llm.ToolCallFunction{Name: "job_list", Arguments: "{}"}},
+	}
+
+	ctx := context.Background()
+	cmd := executeToolsCmd(ctx, calls, executor)
+	msg := cmd()
+
+	result, ok := msg.(ToolResultMsg)
+	if !ok {
+		t.Fatalf("expected ToolResultMsg, got %T", msg)
+	}
+	if len(result.Results) != 3 {
+		t.Fatalf("expected 3 results, got %d", len(result.Results))
+	}
+	for i, want := range []string{"call-1", "call-2", "call-3"} {
+		if result.Results[i].CallID != want {
+			t.Errorf("Results[%d].CallID = %q, want %q", i, result.Results[i].CallID, want)
+		}
+		if result.Results[i].Err != nil {
+			t.Errorf("Results[%d] unexpected error: %v", i, result.Results[i].Err)
+		}
+	}
+}
+
+func TestExecuteToolsCmd_ErrorHandling(t *testing.T) {
+	t.Parallel()
+
+	executor := tools.NewToolExecutor(nil, nil, t.TempDir(), nil, nil)
+
+	calls := []llm.ToolCall{
+		{
 			ID:   "call-err",
 			Type: "function",
 			Function: llm.ToolCallFunction{

@@ -47,6 +47,7 @@ func newMinimalModel(t *testing.T) Model {
 		expandedReasoning: make(map[int]bool),
 		collapsedTools:    make(map[int]bool),
 		blockers:          make(map[string]*job.Blocker),
+		runtimeSessions:   make(map[string]*runtimeSlot),
 	}
 }
 
