@@ -329,6 +329,31 @@ var staticTools = []llm.Tool{
 			},
 		},
 	},
+	{
+		Type: "function",
+		Function: llm.ToolFunction{
+			Name:        "list_sessions",
+			Description: "List all active runtime agent sessions with their status, agent name, model, and elapsed time.",
+			Parameters:  map[string]any{"type": "object", "properties": map[string]any{}, "required": []string{}},
+		},
+	},
+	{
+		Type: "function",
+		Function: llm.ToolFunction{
+			Name:        "cancel_session",
+			Description: "Cancel a running runtime agent session by its session ID (or prefix).",
+			Parameters: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"session_id": map[string]any{
+						"type":        "string",
+						"description": "The session ID or prefix to cancel.",
+					},
+				},
+				"required": []string{"session_id"},
+			},
+		},
+	},
 }
 
 // ExecuteTool dispatches a tool call to the appropriate handler and returns
@@ -639,6 +664,55 @@ func (te *ToolExecutor) ExecuteTool(call llm.ToolCall) (string, error) {
 			}
 		}
 		return fmt.Sprintf("job %s status set to %s", args.ID, args.Status), nil
+
+	case "list_sessions":
+		if te.Runtime == nil {
+			return "runtime not initialized", nil
+		}
+		sessions := te.Runtime.ActiveSessions()
+		if len(sessions) == 0 {
+			return "no active runtime sessions", nil
+		}
+		var lines []string
+		for _, s := range sessions {
+			elapsed := time.Since(s.StartTime).Truncate(time.Second)
+			lines = append(lines, fmt.Sprintf("session %s: agent=%s model=%s provider=%s status=%s tokens_in=%d tokens_out=%d elapsed=%s",
+				s.ID[:8], s.AgentID, s.Model, s.Provider, s.Status, s.TokensIn, s.TokensOut, elapsed))
+		}
+		return strings.Join(lines, "\n"), nil
+
+	case "cancel_session":
+		if te.Runtime == nil {
+			return "runtime not initialized", nil
+		}
+		var args struct {
+			SessionID string `json:"session_id"`
+		}
+		if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
+			return "", fmt.Errorf("parsing cancel_session args: %w", err)
+		}
+		// Support prefix matching — find the session whose ID starts with the given prefix.
+		sessions := te.Runtime.ActiveSessions()
+		var matchID string
+		for _, s := range sessions {
+			if strings.HasPrefix(s.ID, args.SessionID) {
+				if matchID != "" {
+					return fmt.Sprintf("ambiguous session prefix %q — matches multiple sessions", args.SessionID), nil
+				}
+				matchID = s.ID
+			}
+		}
+		if matchID == "" {
+			// Try exact match on all sessions (including non-active).
+			if err := te.Runtime.CancelSession(args.SessionID); err != nil {
+				return fmt.Sprintf("session %q not found", args.SessionID), nil
+			}
+			return fmt.Sprintf("cancelled session %s", args.SessionID), nil
+		}
+		if err := te.Runtime.CancelSession(matchID); err != nil {
+			return fmt.Sprintf("error cancelling session: %v", err), nil
+		}
+		return fmt.Sprintf("cancelled session %s", matchID[:8]), nil
 
 	default:
 		return "", fmt.Errorf("unknown tool: %s", call.Function.Name)
