@@ -179,9 +179,10 @@ func TestTruncateResult_EmptyArray(t *testing.T) {
 func TestTruncateResult_HugeElements_JSONTruncation(t *testing.T) {
 	// Array where even a single element exceeds the limit.
 	// JSON-aware truncation should produce an array with 0 real items + metadata.
+	// Use strings with non-base64 characters so SlimJSON doesn't strip them as opaque blobs.
 	items := []map[string]string{
-		{"data": strings.Repeat("x", 10000)},
-		{"data": strings.Repeat("y", 10000)},
+		{"data": strings.Repeat("Hello, world! ", 715)},
+		{"data": strings.Repeat("Goodbye now! ", 770)},
 	}
 	data, _ := json.Marshal(items)
 	input := string(data)
@@ -260,13 +261,15 @@ func TestTruncateResult_JSONString_FallsBackToByte(t *testing.T) {
 }
 
 func TestTruncateResult_JSONNumber_FallsBackToByte(t *testing.T) {
-	// A very long number string (technically valid JSON).
-	input := strings.Repeat("1", 200)
+	// A very long non-JSON string that looks number-like but isn't valid JSON.
+	// (json.Unmarshal parses large integers as float64, losing precision and
+	// shortening the output, so we use a non-JSON string to test byte fallback.)
+	input := "num=" + strings.Repeat("1", 200)
 	maxLen := 50
 	got := TruncateResult(input, maxLen)
 
 	if !strings.Contains(got, "truncated") {
-		t.Error("expected byte fallback for JSON number")
+		t.Error("expected byte fallback for non-JSON string")
 	}
 }
 

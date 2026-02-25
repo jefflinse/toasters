@@ -38,17 +38,21 @@ func (tc *TruncatingCaller) Call(ctx context.Context, namespacedName string, arg
 const DefaultMaxResultLen = 16000
 
 // TruncateResult truncates an MCP tool result to fit within maxLen bytes.
-// It attempts JSON-aware truncation first (shrinking arrays), then falls back
-// to byte-level truncation if the result is not valid JSON.
+// It first applies JSON slimming to remove low-value fields, then attempts
+// JSON-aware truncation (shrinking arrays), and finally falls back to
+// byte-level truncation if the result is not valid JSON.
 //
 // The byte fallback is UTF-8 safe — it never splits a multi-byte character.
-// If the result is already within maxLen, it is returned unchanged.
 func TruncateResult(result string, maxLen int) string {
+	// First pass: slim the JSON to remove low-value fields.
+	result = SlimJSON(result)
+
+	// If slimming brought it under the limit, we're done.
 	if len(result) <= maxLen {
 		return result
 	}
 
-	// Try JSON-aware truncation.
+	// Second pass: truncate (JSON-aware array shrinking, then byte fallback).
 	if truncated, ok := truncateJSON(result, maxLen); ok {
 		return truncated
 	}
