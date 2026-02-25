@@ -168,8 +168,11 @@ func Dir() (string, error) {
 
 // WorkspaceDir returns the resolved workspace directory from cfg.
 // A leading ~ is expanded to the user's home directory.
-// Absolute paths are returned unchanged.
+// Absolute paths are returned unchanged without calling os.UserHomeDir.
 func WorkspaceDir(cfg *Config) (string, error) {
+	if cfg.WorkspaceDir != "" && !strings.HasPrefix(cfg.WorkspaceDir, "~") {
+		return cfg.WorkspaceDir, nil
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
@@ -179,7 +182,11 @@ func WorkspaceDir(cfg *Config) (string, error) {
 
 // DatabasePath returns the resolved database file path from cfg.
 // A leading ~ is expanded to the user's home directory.
+// Absolute paths are returned unchanged without calling os.UserHomeDir.
 func DatabasePath(cfg *Config) (string, error) {
+	if cfg.DatabasePath != "" && !strings.HasPrefix(cfg.DatabasePath, "~") {
+		return cfg.DatabasePath, nil
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err

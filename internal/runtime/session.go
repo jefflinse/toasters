@@ -37,6 +37,7 @@ type Session struct {
 	// Observer pattern.
 	mu          sync.Mutex
 	subscribers []chan SessionEvent
+	closed      bool // set to true by closeSubscribers(), under mu
 
 	// Context for cancellation.
 	ctx    context.Context
@@ -95,6 +96,20 @@ func newSession(id string, p provider.Provider, opts SpawnOpts, toolExec ToolExe
 // Run executes the conversation loop. It blocks until the conversation
 // completes, fails, is cancelled, or exceeds max turns.
 func (s *Session) Run(ctx context.Context) (retErr error) {
+	// Merge the external context with the session's own context.
+	ctx, cancel := context.WithCancel(ctx)
+	stop := context.AfterFunc(s.ctx, cancel)
+
+	// Defers run LIFO. Execution order:
+	//   1. termErr setter  — must run FIRST so termErr is visible before done closes
+	//   2. close(s.done)   — unblocks SpawnAndWait callers
+	//   3. closeSubscribers — closes subscriber channels
+	//   4. cancel          — cancels the merged context
+	//   5. stop            — stops the AfterFunc watcher
+	defer stop()
+	defer cancel()
+	defer s.closeSubscribers()
+	defer close(s.done)
 	defer func() {
 		if retErr != nil {
 			s.mu.Lock()
@@ -102,15 +117,6 @@ func (s *Session) Run(ctx context.Context) (retErr error) {
 			s.mu.Unlock()
 		}
 	}()
-	defer close(s.done)
-	defer s.closeSubscribers()
-
-	// Merge the external context with the session's own context.
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	stop := context.AfterFunc(s.ctx, cancel)
-	defer stop()
 
 	for turn := 0; turn < s.maxTurns; turn++ {
 		if ctx.Err() != nil {
@@ -246,17 +252,14 @@ func (s *Session) Subscribe() <-chan SessionEvent {
 	ch := make(chan SessionEvent, subscriberBufSize)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	// Check under mu whether the session is already done. closeSubscribers()
-	// runs before close(s.done) (LIFO defer order), so once s.done is closed
-	// all subscribers have already been closed and s.subscribers is nil.
-	// A non-blocking select on s.done is sufficient to detect this case.
-	select {
-	case <-s.done:
-		// Session already finished — close immediately so the caller's range
-		// loop exits rather than blocking forever.
+	// Check s.closed under mu. closeSubscribers() sets closed=true before
+	// closing channels, so this flag is the authoritative signal that no
+	// further closes will happen. Using s.done would leave a window between
+	// closeSubscribers() running and close(s.done) executing where a new
+	// subscriber could be appended and never closed.
+	if s.closed {
 		close(ch)
 		return ch
-	default:
 	}
 	s.subscribers = append(s.subscribers, ch)
 	return ch
@@ -354,6 +357,7 @@ func (s *Session) setStatus(status string) {
 
 func (s *Session) closeSubscribers() {
 	s.mu.Lock()
+	s.closed = true
 	for _, ch := range s.subscribers {
 		close(ch)
 	}

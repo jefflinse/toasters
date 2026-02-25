@@ -11,7 +11,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
@@ -284,32 +283,25 @@ func Watch(ctx context.Context, dir string, onChange func()) error {
 	// Best-effort: ignore error if dir doesn't exist yet.
 	_ = w.Add(dir)
 
-	var (
-		debounceTimer *time.Timer
-		debounceMu    sync.Mutex
-	)
+	// A nil channel blocks forever, so debounceTimer starts inactive.
+	// When set to time.After(...), the case arm becomes selectable.
+	// onChange runs on this goroutine — never concurrently with itself.
+	var debounceTimer <-chan time.Time
 
 	for {
 		select {
 		case <-ctx.Done():
-			debounceMu.Lock()
-			if debounceTimer != nil {
-				debounceTimer.Stop()
-			}
-			debounceMu.Unlock()
 			return nil
 		case event, ok := <-w.Events:
 			if !ok {
 				return nil
 			}
 			if strings.HasSuffix(event.Name, ".md") {
-				debounceMu.Lock()
-				if debounceTimer != nil {
-					debounceTimer.Stop()
-				}
-				debounceTimer = time.AfterFunc(200*time.Millisecond, onChange)
-				debounceMu.Unlock()
+				debounceTimer = time.After(200 * time.Millisecond)
 			}
+		case <-debounceTimer:
+			debounceTimer = nil
+			onChange()
 		case err, ok := <-w.Errors:
 			if !ok {
 				return nil
@@ -343,19 +335,14 @@ func WatchRecursive(ctx context.Context, dir string, onChange func()) error {
 		}
 	}
 
-	var (
-		debounceTimer *time.Timer
-		debounceMu    sync.Mutex
-	)
+	// A nil channel blocks forever, so debounceTimer starts inactive.
+	// When set to time.After(...), the case arm becomes selectable.
+	// onChange runs on this goroutine — never concurrently with itself.
+	var debounceTimer <-chan time.Time
 
 	for {
 		select {
 		case <-ctx.Done():
-			debounceMu.Lock()
-			if debounceTimer != nil {
-				debounceTimer.Stop()
-			}
-			debounceMu.Unlock()
 			return nil
 		case event, ok := <-w.Events:
 			if !ok {
@@ -370,13 +357,11 @@ func WatchRecursive(ctx context.Context, dir string, onChange func()) error {
 			}
 			// Debounce onChange for any .md file event.
 			if strings.HasSuffix(event.Name, ".md") {
-				debounceMu.Lock()
-				if debounceTimer != nil {
-					debounceTimer.Stop()
-				}
-				debounceTimer = time.AfterFunc(200*time.Millisecond, onChange)
-				debounceMu.Unlock()
+				debounceTimer = time.After(200 * time.Millisecond)
 			}
+		case <-debounceTimer:
+			debounceTimer = nil
+			onChange()
 		case err, ok := <-w.Errors:
 			if !ok {
 				return nil
