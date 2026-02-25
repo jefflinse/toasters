@@ -902,6 +902,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleToolCalls(msg)
 
 	case ToolResultMsg:
+		// If tools were already cancelled (e.g. via Escape), discard the late result.
+		// The goroutine always sends a ToolResultMsg even after cancellation.
+		if !m.toolsInFlight {
+			return m, nil
+		}
+
 		m.toolsInFlight = false
 		if m.toolCancelFunc != nil {
 			m.toolCancelFunc() // clean up context
@@ -926,8 +932,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.chatViewport.GotoBottom()
 		}
 
-		// Drain any completion notifications that arrived while tools were executing.
-		m.drainPendingCompletions()
+		// Drain completions into entries; we rebuild messages from entries below.
+		_, _ = m.drainPendingCompletions()
 
 		// Re-invoke the stream with the updated messages for the final answer.
 		return m, m.startStream(m.messagesFromEntries())

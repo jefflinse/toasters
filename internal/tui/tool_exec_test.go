@@ -30,7 +30,7 @@ func TestExecuteToolsCmd_BasicResults(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	cmd := executeToolsCmd(calls, executor, ctx)
+	cmd := executeToolsCmd(ctx, calls, executor)
 	msg := cmd()
 
 	result, ok := msg.(ToolResultMsg)
@@ -76,7 +76,7 @@ func TestExecuteToolsCmd_MultipleTools(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	cmd := executeToolsCmd(calls, executor, ctx)
+	cmd := executeToolsCmd(ctx, calls, executor)
 	msg := cmd()
 
 	result, ok := msg.(ToolResultMsg)
@@ -113,7 +113,7 @@ func TestExecuteToolsCmd_ErrorHandling(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	cmd := executeToolsCmd(calls, executor, ctx)
+	cmd := executeToolsCmd(ctx, calls, executor)
 	msg := cmd()
 
 	result, ok := msg.(ToolResultMsg)
@@ -159,7 +159,7 @@ func TestExecuteToolsCmd_Cancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	cmd := executeToolsCmd(calls, executor, ctx)
+	cmd := executeToolsCmd(ctx, calls, executor)
 	msg := cmd()
 
 	result, ok := msg.(ToolResultMsg)
@@ -212,7 +212,7 @@ func TestExecuteToolsCmd_ResultOrdering(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	cmd := executeToolsCmd(calls, executor, ctx)
+	cmd := executeToolsCmd(ctx, calls, executor)
 	msg := cmd()
 
 	result, ok := msg.(ToolResultMsg)
@@ -239,6 +239,7 @@ func TestToolResultMsg_HandlerAppendsEntries(t *testing.T) {
 		Message:   llm.Message{Role: "system", Content: "system prompt"},
 		Timestamp: time.Now(),
 	})
+	m.toolsInFlight = true // must be true for handler to process results
 
 	initialEntries := len(m.entries)
 
@@ -286,6 +287,7 @@ func TestToolResultMsg_HandlerFormatsErrors(t *testing.T) {
 		Message:   llm.Message{Role: "system", Content: "system prompt"},
 		Timestamp: time.Now(),
 	})
+	m.toolsInFlight = true // must be true for handler to process results
 
 	initialEntries := len(m.entries)
 
@@ -351,5 +353,46 @@ func TestEscCancelsToolsInFlight(t *testing.T) {
 	// Verify the context was actually cancelled.
 	if ctx.Err() == nil {
 		t.Error("context should be cancelled after Escape")
+	}
+}
+
+func TestToolResultMsg_DiscardedAfterEscapeCancellation(t *testing.T) {
+	t.Parallel()
+
+	m := newMinimalModel(t)
+	m.appendEntry(ChatEntry{
+		Message:   llm.Message{Role: "system", Content: "system prompt"},
+		Timestamp: time.Now(),
+	})
+
+	// Simulate: tools were in flight, user pressed Escape (toolsInFlight is now false).
+	m.toolsInFlight = false
+	m.toolCancelFunc = nil
+
+	initialEntries := len(m.entries)
+
+	// A late ToolResultMsg arrives from the goroutine.
+	msg := ToolResultMsg{
+		Results: []ToolResult{
+			{CallID: "call-late", Name: "job_list", Result: "[]"},
+		},
+	}
+
+	result, cmd := m.Update(msg)
+	got := result.(*Model)
+
+	// The late result should be discarded — no entries appended.
+	if len(got.entries) != initialEntries {
+		t.Errorf("entries count = %d, want %d (late result should be discarded)", len(got.entries), initialEntries)
+	}
+
+	// No command should be returned (no stream restart).
+	if cmd != nil {
+		t.Error("expected nil cmd for discarded late ToolResultMsg")
+	}
+
+	// toolsInFlight should still be false.
+	if got.toolsInFlight {
+		t.Error("toolsInFlight should remain false")
 	}
 }

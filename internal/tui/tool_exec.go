@@ -12,7 +12,7 @@ import (
 // executeToolsCmd returns a tea.Cmd that executes tool calls in a goroutine.
 // Results are delivered back to the Bubble Tea event loop as a ToolResultMsg.
 // The goroutine does NOT access any Model fields — it only communicates via the message.
-func executeToolsCmd(calls []llm.ToolCall, executor *tools.ToolExecutor, ctx context.Context) tea.Cmd {
+func executeToolsCmd(ctx context.Context, calls []llm.ToolCall, executor *tools.ToolExecutor) tea.Cmd {
 	return func() tea.Msg {
 		results := make([]ToolResult, 0, len(calls))
 		for _, call := range calls {

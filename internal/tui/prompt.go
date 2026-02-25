@@ -82,8 +82,8 @@ func (m *Model) updatePromptMode(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 func (m *Model) handleToolCalls(msg ToolCallMsg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 
-	// The LLM wants to call tools. Execute them synchronously, inject results,
-	// then re-invoke the stream for the final answer.
+	// The LLM wants to call tools. Dispatch them asynchronously; results arrive
+	// via ToolResultMsg, which re-invokes the stream for the final answer.
 	m.streaming = false
 
 	// Check for kill_slot, assign_team, ask_user, or escalate_to_user — intercept before ExecuteTool.
@@ -252,7 +252,7 @@ func (m *Model) handleToolCalls(msg ToolCallMsg) (tea.Model, tea.Cmd) {
 	m.toolsInFlight = true
 	ctx, cancel := context.WithCancel(context.Background())
 	m.toolCancelFunc = cancel
-	return m, executeToolsCmd(msg.Calls, m.toolExec, ctx)
+	return m, executeToolsCmd(ctx, msg.Calls, m.toolExec)
 }
 
 // handleAskUserResponse processes an AskUserResponseMsg — the user has submitted
