@@ -3,7 +3,7 @@ package provider
 import (
 	"fmt"
 	"os"
-	"sort"
+	"slices"
 	"sync"
 )
 
@@ -53,7 +53,7 @@ func (r *Registry) List() []string {
 	for name := range r.providers {
 		names = append(names, name)
 	}
-	sort.Strings(names)
+	slices.Sort(names)
 	return names
 }
 

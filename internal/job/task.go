@@ -1,11 +1,12 @@
 package job
 
 import (
+	"cmp"
 	"crypto/rand"
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 
@@ -150,8 +151,8 @@ func ListTasks(jobDir string) ([]Task, error) {
 		tasks = append(tasks, t)
 	}
 
-	sort.Slice(tasks, func(i, k int) bool {
-		return tasks[i].Created < tasks[k].Created
+	slices.SortFunc(tasks, func(a, b Task) int {
+		return cmp.Compare(a.Created, b.Created)
 	})
 
 	return tasks, nil

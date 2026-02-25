@@ -1,10 +1,11 @@
 package db
 
 import (
+	"cmp"
 	"database/sql"
 	"embed"
 	"fmt"
-	"sort"
+	"slices"
 	"strings"
 )
 
@@ -94,8 +95,8 @@ func loadMigrations() ([]migration, error) {
 		})
 	}
 
-	sort.Slice(migrations, func(i, j int) bool {
-		return migrations[i].version < migrations[j].version
+	slices.SortFunc(migrations, func(a, b migration) int {
+		return cmp.Compare(a.version, b.version)
 	})
 
 	return migrations, nil

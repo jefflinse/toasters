@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 )
@@ -92,12 +92,8 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, req ChatRequest) (<-cha
 	// Convert tools.
 	for _, t := range req.Tools {
 		body.Tools = append(body.Tools, openAITool{
-			Type: "function",
-			Function: openAIToolFunction{
-				Name:        t.Name,
-				Description: t.Description,
-				Parameters:  t.Parameters,
-			},
+			Type:     "function",
+			Function: openAIToolFunction(t),
 		})
 	}
 
@@ -259,7 +255,7 @@ func (p *OpenAIProvider) emitToolCalls(accumulated map[int]*openAIToolCallAccum,
 	for idx := range accumulated {
 		indices = append(indices, idx)
 	}
-	sort.Ints(indices)
+	slices.Sort(indices)
 
 	for _, idx := range indices {
 		acc := accumulated[idx]
@@ -274,9 +270,7 @@ func (p *OpenAIProvider) emitToolCalls(accumulated map[int]*openAIToolCallAccum,
 	}
 
 	// Clear accumulated so we don't emit again.
-	for k := range accumulated {
-		delete(accumulated, k)
-	}
+	clear(accumulated)
 }
 
 // Models returns available models. Tries LM Studio endpoint first, falls back to OpenAI.

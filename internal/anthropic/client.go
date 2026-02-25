@@ -12,7 +12,7 @@ import (
 	"net/url"
 	"os/exec"
 	"runtime"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 
@@ -599,7 +599,7 @@ func parseSSEStream(ctx context.Context, r io.Reader, ch chan<- llm.StreamRespon
 				for idx := range toolBlocks {
 					indices = append(indices, idx)
 				}
-				sort.Ints(indices)
+				slices.Sort(indices)
 				calls := make([]llm.ToolCall, 0, len(indices))
 				for _, idx := range indices {
 					acc := toolBlocks[idx]

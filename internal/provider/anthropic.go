@@ -9,7 +9,7 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 
@@ -368,7 +368,7 @@ func (p *AnthropicProvider) streamResponse(ctx context.Context, req *http.Reques
 				for idx := range toolBlocks {
 					indices = append(indices, idx)
 				}
-				sort.Ints(indices)
+				slices.Sort(indices)
 
 				for _, idx := range indices {
 					acc := toolBlocks[idx]

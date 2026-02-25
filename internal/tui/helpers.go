@@ -2,7 +2,7 @@
 package tui
 
 import (
-	"sort"
+	"slices"
 	"strings"
 	"time"
 
@@ -159,7 +159,7 @@ func renderScrollbar(viewportHeight int, totalLines int, scrollPercent float64) 
 	trackStyle := lipgloss.NewStyle().Foreground(ColorBorder)
 
 	lines := make([]string, viewportHeight)
-	for i := 0; i < viewportHeight; i++ {
+	for i := range viewportHeight {
 		if i >= thumbStart && i < thumbEnd {
 			lines[i] = thumbStyle.Render("█")
 		} else {
@@ -448,8 +448,8 @@ func (m *Model) sortedRuntimeSessions() []*runtimeSlot {
 	for _, rs := range m.runtimeSessions {
 		slots = append(slots, rs)
 	}
-	sort.Slice(slots, func(i, j int) bool {
-		return slots[i].startTime.Before(slots[j].startTime)
+	slices.SortFunc(slots, func(a, b *runtimeSlot) int {
+		return a.startTime.Compare(b.startTime)
 	})
 	return slots
 }
@@ -469,7 +469,7 @@ func (m *Model) runtimeSessionForGridCell(cellIdx int) *runtimeSlot {
 	rtIdx := 0
 	pageOffset := m.gridPage * 4
 
-	for i := 0; i < 4; i++ {
+	for i := range 4 {
 		absIdx := pageOffset + i
 		snap := slots[absIdx]
 		if !snap.Active {

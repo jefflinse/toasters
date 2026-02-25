@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -248,9 +249,7 @@ func BuildRegistry(discovered []Agent, coordinatorName string) Registry {
 	}
 
 	if coordIdx < 0 {
-		workers := make([]Agent, len(discovered))
-		copy(workers, discovered)
-		return Registry{Workers: workers}
+		return Registry{Workers: slices.Clone(discovered)}
 	}
 
 	coord := discovered[coordIdx]

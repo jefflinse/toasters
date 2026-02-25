@@ -29,7 +29,7 @@ func (m *Model) renderGrid() string {
 
 	pageOffset := m.gridPage * 4
 
-	for i := 0; i < 4; i++ {
+	for i := range 4 {
 		absIdx := pageOffset + i
 		snap := slots[absIdx]
 		focused := i == m.gridFocusCell

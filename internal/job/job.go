@@ -1,12 +1,13 @@
 package job
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -72,8 +73,8 @@ func List(workspaceDir string) ([]Job, error) {
 		jobs = append(jobs, j)
 	}
 
-	sort.Slice(jobs, func(i, k int) bool {
-		return jobs[i].Created < jobs[k].Created
+	slices.SortFunc(jobs, func(a, b Job) int {
+		return cmp.Compare(a.Created, b.Created)
 	})
 
 	return jobs, nil

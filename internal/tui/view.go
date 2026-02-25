@@ -486,7 +486,7 @@ func (m *Model) renderLoading() tea.View {
 	blobStyle := lipgloss.NewStyle().Foreground(blobColor).Bold(true)
 
 	var barParts []string
-	for i := 0; i < loadingBarWidth; i++ {
+	for i := range loadingBarWidth {
 		ch := "-"
 		if i == blobPos {
 			barParts = append(barParts, blobStyle.Render("O"))

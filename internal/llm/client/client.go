@@ -9,7 +9,7 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 
@@ -238,7 +238,7 @@ func (c *Client) doStream(ctx context.Context, reqBody llm.ChatRequest, ch chan<
 				for idx := range accumulated {
 					indices = append(indices, idx)
 				}
-				sort.Ints(indices)
+				slices.Sort(indices)
 				calls := make([]llm.ToolCall, 0, len(indices))
 				for _, idx := range indices {
 					calls = append(calls, *accumulated[idx])
