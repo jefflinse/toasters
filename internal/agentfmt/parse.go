@@ -132,6 +132,8 @@ func ParseSkill(path string) (*SkillDef, error) {
 }
 
 // ParseAgent parses a .md file as an AgentDef.
+// Format detection is applied so that Claude Code and OpenCode files are
+// imported correctly (e.g. OpenCode's map-style tools field).
 func ParseAgent(path string) (*AgentDef, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -143,7 +145,15 @@ func ParseAgent(path string) (*AgentDef, error) {
 		return nil, fmt.Errorf("parsing agent file %s: %w", path, err)
 	}
 
-	return unmarshalAgent(fmYAML, body, filenameStem(path))
+	var raw map[string]any
+	if err := yaml.Unmarshal([]byte(fmYAML), &raw); err != nil {
+		return nil, fmt.Errorf("parsing frontmatter YAML in %s: %w", path, err)
+	}
+	if raw == nil {
+		raw = make(map[string]any)
+	}
+
+	return parseAgentByFormat(raw, fmYAML, body, filenameStem(path))
 }
 
 // ParseTeam parses a .md file as a TeamDef.
