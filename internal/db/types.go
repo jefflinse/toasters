@@ -15,6 +15,7 @@ type JobStatus string
 const (
 	JobStatusPending   JobStatus = "pending"
 	JobStatusActive    JobStatus = "active"
+	JobStatusPaused    JobStatus = "paused"
 	JobStatusCompleted JobStatus = "completed"
 	JobStatusFailed    JobStatus = "failed"
 	JobStatusCancelled JobStatus = "cancelled"
@@ -44,13 +45,15 @@ const (
 
 // Job represents a unit of work managed by the orchestrator.
 type Job struct {
-	ID        string
-	Title     string
-	Type      string // bug_fix, new_feature, prototype, review
-	Status    JobStatus
-	CreatedAt time.Time
-	UpdatedAt time.Time
-	Metadata  json.RawMessage // extensible JSON blob
+	ID           string
+	Title        string
+	Description  string
+	Type         string // bug_fix, new_feature, prototype, review
+	Status       JobStatus
+	WorkspaceDir string
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+	Metadata     json.RawMessage // extensible JSON blob
 }
 
 // Task represents a single step within a job.
@@ -60,6 +63,7 @@ type Task struct {
 	Title     string
 	Status    TaskStatus
 	AgentID   string // assigned agent (may be empty)
+	TeamID    string // assigned team (may be empty)
 	ParentID  string // DAG edge, empty for root tasks
 	SortOrder int
 	CreatedAt time.Time
@@ -145,6 +149,14 @@ type JobFilter struct {
 	Type   *string
 	Limit  int
 	Offset int
+}
+
+// JobUpdate specifies fields to update on a job.
+type JobUpdate struct {
+	Title        *string
+	Description  *string
+	Status       *JobStatus
+	WorkspaceDir *string
 }
 
 // SessionUpdate specifies fields to update on an agent session.

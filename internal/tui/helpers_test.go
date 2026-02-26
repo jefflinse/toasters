@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jefflinse/toasters/internal/job"
+	"github.com/jefflinse/toasters/internal/db"
 	"github.com/jefflinse/toasters/internal/provider"
 )
 
@@ -734,13 +734,12 @@ func TestRenderScrollbar(t *testing.T) {
 func TestDisplayJobs(t *testing.T) {
 	t.Parallel()
 
-	makeJob := func(id string, status job.Status, completed string) job.Job {
-		return job.Job{
-			Frontmatter: job.Frontmatter{
-				ID:        id,
-				Status:    status,
-				Completed: completed,
-			},
+	makeJob := func(id string, status db.JobStatus, updatedAt time.Time) *db.Job {
+		return &db.Job{
+			ID:        id,
+			Title:     id,
+			Status:    status,
+			UpdatedAt: updatedAt,
 		}
 	}
 
@@ -756,10 +755,10 @@ func TestDisplayJobs(t *testing.T) {
 	t.Run("active jobs come first", func(t *testing.T) {
 		t.Parallel()
 		m := Model{
-			jobs: []job.Job{
-				makeJob("done-1", job.StatusDone, time.Now().Format(time.RFC3339)),
-				makeJob("active-1", job.StatusActive, ""),
-				makeJob("paused-1", job.StatusPaused, ""),
+			jobs: []*db.Job{
+				makeJob("done-1", db.JobStatusCompleted, time.Now()),
+				makeJob("active-1", db.JobStatusActive, time.Time{}),
+				makeJob("paused-1", db.JobStatusPaused, time.Time{}),
 			},
 		}
 		result := m.displayJobs()
@@ -779,13 +778,13 @@ func TestDisplayJobs(t *testing.T) {
 
 	t.Run("stale done jobs are hidden", func(t *testing.T) {
 		t.Parallel()
-		staleTime := time.Now().Add(-48 * time.Hour).Format(time.RFC3339)
-		recentTime := time.Now().Add(-1 * time.Hour).Format(time.RFC3339)
+		staleTime := time.Now().Add(-48 * time.Hour)
+		recentTime := time.Now().Add(-1 * time.Hour)
 		m := Model{
-			jobs: []job.Job{
-				makeJob("stale", job.StatusDone, staleTime),
-				makeJob("recent", job.StatusDone, recentTime),
-				makeJob("active", job.StatusActive, ""),
+			jobs: []*db.Job{
+				makeJob("stale", db.JobStatusCompleted, staleTime),
+				makeJob("recent", db.JobStatusCompleted, recentTime),
+				makeJob("active", db.JobStatusActive, time.Time{}),
 			},
 		}
 		result := m.displayJobs()
@@ -799,29 +798,16 @@ func TestDisplayJobs(t *testing.T) {
 		}
 	})
 
-	t.Run("done job without completed timestamp is shown", func(t *testing.T) {
+	t.Run("done job without updated timestamp is shown", func(t *testing.T) {
 		t.Parallel()
 		m := Model{
-			jobs: []job.Job{
-				makeJob("done-no-ts", job.StatusDone, ""),
+			jobs: []*db.Job{
+				makeJob("done-no-ts", db.JobStatusCompleted, time.Time{}),
 			},
 		}
 		result := m.displayJobs()
 		if len(result) != 1 {
 			t.Fatalf("expected 1 job, got %d", len(result))
-		}
-	})
-
-	t.Run("done job with invalid timestamp is shown", func(t *testing.T) {
-		t.Parallel()
-		m := Model{
-			jobs: []job.Job{
-				makeJob("done-bad-ts", job.StatusDone, "not-a-date"),
-			},
-		}
-		result := m.displayJobs()
-		if len(result) != 1 {
-			t.Fatalf("expected 1 job (invalid timestamp not filtered), got %d", len(result))
 		}
 	})
 }
@@ -832,9 +818,9 @@ func TestHasBlocker(t *testing.T) {
 	t.Run("no blockers map entry", func(t *testing.T) {
 		t.Parallel()
 		m := Model{
-			blockers: make(map[string]*job.Blocker),
+			blockers: make(map[string]*Blocker),
 		}
-		j := job.Job{Frontmatter: job.Frontmatter{ID: "job-1"}}
+		j := &db.Job{ID: "job-1"}
 		if m.hasBlocker(j) {
 			t.Error("expected no blocker for job without entry")
 		}
@@ -843,11 +829,11 @@ func TestHasBlocker(t *testing.T) {
 	t.Run("nil blocker entry", func(t *testing.T) {
 		t.Parallel()
 		m := Model{
-			blockers: map[string]*job.Blocker{
+			blockers: map[string]*Blocker{
 				"job-1": nil,
 			},
 		}
-		j := job.Job{Frontmatter: job.Frontmatter{ID: "job-1"}}
+		j := &db.Job{ID: "job-1"}
 		if m.hasBlocker(j) {
 			t.Error("expected no blocker for nil entry")
 		}
@@ -856,11 +842,11 @@ func TestHasBlocker(t *testing.T) {
 	t.Run("answered blocker", func(t *testing.T) {
 		t.Parallel()
 		m := Model{
-			blockers: map[string]*job.Blocker{
+			blockers: map[string]*Blocker{
 				"job-1": {Answered: true},
 			},
 		}
-		j := job.Job{Frontmatter: job.Frontmatter{ID: "job-1"}}
+		j := &db.Job{ID: "job-1"}
 		if m.hasBlocker(j) {
 			t.Error("expected no blocker for answered blocker")
 		}
@@ -869,11 +855,11 @@ func TestHasBlocker(t *testing.T) {
 	t.Run("unanswered blocker", func(t *testing.T) {
 		t.Parallel()
 		m := Model{
-			blockers: map[string]*job.Blocker{
+			blockers: map[string]*Blocker{
 				"job-1": {Answered: false},
 			},
 		}
-		j := job.Job{Frontmatter: job.Frontmatter{ID: "job-1"}}
+		j := &db.Job{ID: "job-1"}
 		if !m.hasBlocker(j) {
 			t.Error("expected blocker for unanswered blocker")
 		}
@@ -886,25 +872,25 @@ func TestJobByID(t *testing.T) {
 	t.Run("found", func(t *testing.T) {
 		t.Parallel()
 		m := Model{
-			jobs: []job.Job{
-				{Frontmatter: job.Frontmatter{ID: "job-1", Name: "First"}},
-				{Frontmatter: job.Frontmatter{ID: "job-2", Name: "Second"}},
+			jobs: []*db.Job{
+				{ID: "job-1", Title: "First"},
+				{ID: "job-2", Title: "Second"},
 			},
 		}
 		j, ok := m.jobByID("job-2")
 		if !ok {
 			t.Fatal("expected to find job-2")
 		}
-		if j.Name != "Second" {
-			t.Errorf("got name %q, want %q", j.Name, "Second")
+		if j.Title != "Second" {
+			t.Errorf("got title %q, want %q", j.Title, "Second")
 		}
 	})
 
 	t.Run("not found", func(t *testing.T) {
 		t.Parallel()
 		m := Model{
-			jobs: []job.Job{
-				{Frontmatter: job.Frontmatter{ID: "job-1", Name: "First"}},
+			jobs: []*db.Job{
+				{ID: "job-1", Title: "First"},
 			},
 		}
 		_, ok := m.jobByID("nonexistent")

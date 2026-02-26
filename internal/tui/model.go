@@ -19,7 +19,6 @@ import (
 	"github.com/jefflinse/toasters/internal/config"
 	"github.com/jefflinse/toasters/internal/db"
 	"github.com/jefflinse/toasters/internal/gateway"
-	"github.com/jefflinse/toasters/internal/job"
 	"github.com/jefflinse/toasters/internal/llm/tools"
 	"github.com/jefflinse/toasters/internal/mcp"
 	"github.com/jefflinse/toasters/internal/provider"
@@ -115,7 +114,7 @@ type outputModalState struct {
 type blockerModalState struct {
 	show        bool
 	jobID       string
-	blocker     *job.Blocker
+	blocker     *Blocker
 	questionIdx int
 	inputText   string
 }
@@ -184,8 +183,8 @@ type Model struct {
 	progress    progressState
 	chat        chatState
 
-	jobs         []job.Job
-	blockers     map[string]*job.Blocker // keyed by job ID
+	jobs         []*db.Job
+	blockers     map[string]*Blocker // keyed by job ID
 	selectedJob  int
 	selectedTeam int
 	focused      focusedPanel
@@ -267,7 +266,6 @@ type runtimeSlot struct {
 func NewModel(cfg ModelConfig) Model {
 	client := cfg.Client
 	claudeCfg := cfg.ClaudeCfg
-	workspaceDir := cfg.WorkspaceDir
 	gw := cfg.Gateway
 	teamsDir := cfg.TeamsDir
 	teams := cfg.Teams
@@ -323,9 +321,8 @@ func NewModel(cfg ModelConfig) Model {
 		},
 	}
 
-	jobs, _ := job.List(workspaceDir)
-	m.jobs = jobs
-	m.blockers = make(map[string]*job.Blocker)
+	m.jobs = []*db.Job{}
+	m.blockers = make(map[string]*Blocker)
 	m.selectedJob = 0
 	m.focused = focusChat
 	m.gateway = gw
@@ -1146,13 +1143,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.selectedJob = 0
 			}
 		}
-		for _, j := range m.jobs {
-			if _, exists := m.blockers[j.ID]; !exists {
-				if b, err := job.ReadBlocker(j.Dir); err == nil && b != nil {
-					m.blockers[j.ID] = b
-				}
-			}
-		}
 		return m, nil
 
 	case AppReadyMsg:
@@ -1240,15 +1230,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.blockerModal.inputText = ""
 
 		// Re-spawn the team with blocker context.
-		j, ok := m.jobByID(msg.jobID)
+		_, ok := m.jobByID(msg.jobID)
 		if ok && m.gateway != nil {
-			spawnPrompt := fmt.Sprintf("A blocker was encountered on job '%s' and the user has provided responses. See BLOCKER.md in the job directory for the full context and answers. Resume the job addressing the blocker.", msg.jobID)
+			spawnPrompt := fmt.Sprintf("A blocker was encountered on job '%s' and the user has provided responses. Resume the job addressing the blocker.", msg.jobID)
 
-			// Prefer team from TASK.md; fall back to blocker.Team for backward compat.
+			// Use the team from the blocker directly.
 			teamName := msg.blocker.Team
-			if t, err := job.GetFirstTaskTeam(j.Dir); err == nil && t != "" {
-				teamName = t
-			}
 
 			// Find the team by name.
 			var matchedTeam agents.Team
@@ -1258,8 +1245,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					break
 				}
 			}
-			if _, _, err := m.gateway.SpawnTeam(teamName, j.ID, spawnPrompt, matchedTeam); err != nil {
-				slog.Error("failed to re-spawn team after blocker", "team", teamName, "job", j.ID, "error", err)
+			if _, _, err := m.gateway.SpawnTeam(teamName, msg.jobID, spawnPrompt, matchedTeam); err != nil {
+				slog.Error("failed to re-spawn team after blocker", "team", teamName, "job", msg.jobID, "error", err)
 			} else {
 				return m, spinnerTick() // re-arm spinner for agent heartbeat
 			}

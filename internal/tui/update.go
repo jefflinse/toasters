@@ -3,14 +3,12 @@ package tui
 
 import (
 	"fmt"
-	"log/slog"
 	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/jefflinse/toasters/internal/gateway"
-	"github.com/jefflinse/toasters/internal/job"
 	"github.com/jefflinse/toasters/internal/provider"
 )
 
@@ -282,28 +280,8 @@ func (m *Model) handleAgentOutput(msg AgentOutputMsg) (tea.Model, tea.Cmd) {
 					cmds = append(cmds, m.startStream(m.messagesFromEntries()))
 				}
 
-				// Check for BLOCKER.md and mark first task done — always, not buffered.
-				for _, j := range m.jobs {
-					if j.ID == snap.JobID {
-						if b, err := job.ReadBlocker(j.Dir); err == nil && b != nil {
-							if _, alreadyKnown := m.blockers[j.ID]; !alreadyKnown {
-								cmds = append(cmds, m.addToast("⚠ Blocker on "+j.ID, toastWarning))
-							}
-							m.blockers[j.ID] = b
-						}
-						// Mark the first task done only on a clean completion.
-						if !snap.Killed && snap.ExitSummary != "" {
-							if tasks, err := job.ListTasks(j.Dir); err == nil && len(tasks) > 0 {
-								if err := job.SetTaskStatus(tasks[0].Dir, job.StatusDone); err != nil {
-									slog.Error("failed to mark task done", "error", err)
-								}
-							}
-						} else {
-							slog.Info("slot completed without clean exit, skipping task auto-mark", "slot", i, "killed", snap.Killed, "exitSummary", snap.ExitSummary)
-						}
-						break
-					}
-				}
+				// Blocker detection and task status management are now handled
+				// via SQLite tools in the agent runtime (Phase 3 Session B).
 			}
 			// Update tracked state.
 			m.prevSlotActive[i] = snap.Active

@@ -9,7 +9,6 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -17,7 +16,6 @@ import (
 	"github.com/jefflinse/toasters/internal/agents"
 	"github.com/jefflinse/toasters/internal/claude"
 	"github.com/jefflinse/toasters/internal/config"
-	"github.com/jefflinse/toasters/internal/job"
 	"github.com/jefflinse/toasters/internal/orchestration"
 	"github.com/jefflinse/toasters/internal/provider"
 )
@@ -190,25 +188,10 @@ func (g *Gateway) SpawnTeam(teamName, jobID, task string, team agents.Team) (slo
 		}
 	}
 
-	// Read job context outside the lock (I/O).
-	jobDir := filepath.Join(job.JobsDir(g.workspaceDir), jobID)
-	overview, _ := job.ReadOverview(jobDir)
-	todos, _ := job.ReadTodos(jobDir)
-
-	// Assemble prompt.
+	// Assemble prompt. Job context is now provided by the operator via the task
+	// parameter; filesystem OVERVIEW.md/TODO.md/BLOCKER.md are no longer read.
 	var sb strings.Builder
-	sb.WriteString(agents.BuildTeamCoordinatorPrompt(team, jobDir))
-	sb.WriteString("\n\n---\n\n## Job Context\n\n### OVERVIEW.md\n")
-	sb.WriteString(overview)
-	sb.WriteString("\n\n### TODO.md\n")
-	sb.WriteString(todos)
-
-	// Inject BLOCKER.md if present — provides full blocker context and user responses.
-	blockerPath := filepath.Join(jobDir, "BLOCKER.md")
-	if blockerData, err := os.ReadFile(blockerPath); err == nil && len(blockerData) > 0 {
-		sb.WriteString("\n\n## Blocker Resolution\n\nA blocker was previously encountered on this job. The following file contains the blocker details and the user's responses. Address the blocker using the provided answers before continuing with the job.\n\n")
-		sb.WriteString(string(blockerData))
-	}
+	sb.WriteString(agents.BuildTeamCoordinatorPrompt(team, g.workspaceDir))
 
 	if task != "" {
 		sb.WriteString("\n\n---\n\n## Task\n")
@@ -261,7 +244,7 @@ func (g *Gateway) SpawnTeam(teamName, jobID, task string, team agents.Team) (slo
 
 	// Start the subprocess goroutine.
 	go func() {
-		ch := spawnClaudeStream(ctx, prompt, g.claudeCfg, permissionArgs, agentsJSON, jobDir, dbPath)
+		ch := spawnClaudeStream(ctx, prompt, g.claudeCfg, permissionArgs, agentsJSON, g.workspaceDir, dbPath)
 		for ev := range ch {
 			// Handle subagent tracking fields (may accompany text content).
 			if ev.SubagentSpawned {
@@ -336,15 +319,6 @@ func (g *Gateway) SpawnTeam(teamName, jobID, task string, team agents.Team) (slo
 			}
 		}
 
-		// After stream closes, read REPORT.md from the job dir.
-		reportPath := filepath.Join(jobDir, "REPORT.md")
-		if reportData, err := os.ReadFile(reportPath); err == nil {
-			g.mu.Lock()
-			s.output.WriteString("\n\n---\n\n## Team Report\n\n")
-			s.output.WriteString(string(reportData))
-			g.mu.Unlock()
-			g.doNotify()
-		}
 	}()
 
 	return idx, false, nil

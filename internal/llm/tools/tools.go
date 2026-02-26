@@ -179,7 +179,7 @@ var staticTools = []provider.Tool{
 	},
 	{
 		Name:        "job_read_overview",
-		Description: "Read the OVERVIEW.md file for a job.",
+		Description: "Read the overview/description for a job.",
 		Parameters: mustMarshalJSON(map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -190,7 +190,7 @@ var staticTools = []provider.Tool{
 	},
 	{
 		Name:        "job_read_todos",
-		Description: "Read the TODO.md file for a job.",
+		Description: "List the tasks for a job.",
 		Parameters: mustMarshalJSON(map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -201,7 +201,7 @@ var staticTools = []provider.Tool{
 	},
 	{
 		Name:        "job_update_overview",
-		Description: "Overwrite or append to the OVERVIEW.md body for a job. Does not touch frontmatter.",
+		Description: "Update the description for a job.",
 		Parameters: mustMarshalJSON(map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -214,7 +214,7 @@ var staticTools = []provider.Tool{
 	},
 	{
 		Name:        "job_add_todo",
-		Description: "Append a new TODO item to the TODO.md file for a job.",
+		Description: "Add a new task to a job.",
 		Parameters: mustMarshalJSON(map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -226,7 +226,7 @@ var staticTools = []provider.Tool{
 	},
 	{
 		Name:        "job_complete_todo",
-		Description: "Mark a TODO item as done in the TODO.md file for a job.",
+		Description: "Mark a task as completed in a job.",
 		Parameters: mustMarshalJSON(map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -570,20 +570,4 @@ func shortID(id string) string {
 		return id[:8]
 	}
 	return id
-}
-
-// mapJobStatus maps markdown job status strings to db.JobStatus constants.
-func mapJobStatus(status string) db.JobStatus {
-	switch status {
-	case "active":
-		return db.JobStatusActive
-	case "done":
-		return db.JobStatusCompleted
-	case "cancelled":
-		return db.JobStatusCancelled
-	case "paused":
-		return db.JobStatusPending // closest match
-	default:
-		return db.JobStatusPending
-	}
 }

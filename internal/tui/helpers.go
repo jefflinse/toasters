@@ -10,8 +10,8 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/jefflinse/toasters/internal/agents"
+	"github.com/jefflinse/toasters/internal/db"
 	"github.com/jefflinse/toasters/internal/gateway"
-	"github.com/jefflinse/toasters/internal/job"
 	"github.com/jefflinse/toasters/internal/provider"
 )
 
@@ -430,46 +430,42 @@ func (m *Model) newSession() {
 
 // displayJobs returns the filtered and sorted list of jobs for display in the left panel.
 // Rules:
-//   - StatusDone jobs completed more than 24 hours ago are hidden.
-//   - Sort order: StatusActive first (by Created asc), then StatusPaused (by Created asc),
-//     then StatusDone (by Created asc).
-func (m Model) displayJobs() []job.Job {
+//   - Completed jobs updated more than 24 hours ago are hidden.
+//   - Sort order: Active first (by CreatedAt asc), then Paused (by CreatedAt asc),
+//     then Completed (by CreatedAt asc).
+func (m Model) displayJobs() []*db.Job {
 	now := time.Now()
 	cutoff := now.Add(-24 * time.Hour)
 
-	var active, paused, done []job.Job
+	var active, paused, done []*db.Job
 	for _, j := range m.jobs {
-		if j.Status == job.StatusDone {
-			if j.Completed != "" {
-				t, err := time.Parse(time.RFC3339, j.Completed)
-				if err == nil && t.Before(cutoff) {
-					continue // hide stale completed jobs
-				}
+		if j.Status == db.JobStatusCompleted {
+			if !j.UpdatedAt.IsZero() && j.UpdatedAt.Before(cutoff) {
+				continue // hide stale completed jobs
 			}
 			done = append(done, j)
-		} else if j.Status == job.StatusPaused {
+		} else if j.Status == db.JobStatusPaused {
 			paused = append(paused, j)
 		} else {
 			active = append(active, j)
 		}
 	}
 
-	// Each group is already in Created-ascending order (job.List sorts by Created).
-	result := make([]job.Job, 0, len(active)+len(paused)+len(done))
+	result := make([]*db.Job, 0, len(active)+len(paused)+len(done))
 	result = append(result, active...)
 	result = append(result, paused...)
 	result = append(result, done...)
 	return result
 }
 
-// jobByID returns the job with the given ID, or false if not found.
-func (m *Model) jobByID(id string) (job.Job, bool) {
+// jobByID returns the job with the given ID, or nil, false if not found.
+func (m *Model) jobByID(id string) (*db.Job, bool) {
 	for _, j := range m.jobs {
 		if j.ID == id {
 			return j, true
 		}
 	}
-	return job.Job{}, false
+	return nil, false
 }
 
 // sortedRuntimeSessions returns the runtime sessions sorted by start time

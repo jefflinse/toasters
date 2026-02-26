@@ -8,7 +8,6 @@ import (
 
 	"github.com/jefflinse/toasters/internal/agents"
 	"github.com/jefflinse/toasters/internal/db"
-	"github.com/jefflinse/toasters/internal/job"
 	"github.com/jefflinse/toasters/internal/mcp"
 	"github.com/jefflinse/toasters/internal/provider"
 	"github.com/jefflinse/toasters/internal/runtime"
@@ -161,9 +160,9 @@ type TeamsReloadedMsg struct {
 	Awareness string
 }
 
-// JobsReloadedMsg is sent when the jobs directory changes on disk.
+// JobsReloadedMsg is sent when jobs are reloaded (e.g. from SQLite polling).
 type JobsReloadedMsg struct {
-	Jobs []job.Job
+	Jobs []*db.Job
 }
 
 // AppReadyMsg is sent when the app has finished loading and is ready to start.
@@ -271,7 +270,7 @@ type TeamsAutoDetectDoneMsg struct {
 // blockerAnswersSubmittedMsg is sent when the user has submitted answers for a blocker.
 type blockerAnswersSubmittedMsg struct {
 	jobID   string
-	blocker *job.Blocker
+	blocker *Blocker
 }
 
 // MCPStatusMsg is sent after MCP connection completes to trigger startup toasts.

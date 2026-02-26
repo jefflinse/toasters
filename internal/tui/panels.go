@@ -10,7 +10,6 @@ import (
 
 	"github.com/jefflinse/toasters/internal/db"
 	"github.com/jefflinse/toasters/internal/gateway"
-	"github.com/jefflinse/toasters/internal/job"
 	"github.com/jefflinse/toasters/internal/mcp"
 )
 
@@ -106,16 +105,16 @@ func (m Model) renderLeftPanel(panelWidth, panelHeight int) string {
 			// Job name row with status prefix icon.
 			var statusPrefix string
 			switch j.Status {
-			case job.StatusActive:
+			case db.JobStatusActive:
 				statusPrefix = "▶ "
-			case job.StatusPaused:
+			case db.JobStatusPaused:
 				statusPrefix = "⏸ "
-			case job.StatusDone:
+			case db.JobStatusCompleted:
 				statusPrefix = "✓ "
 			default:
 				statusPrefix = "· "
 			}
-			name := truncateStr(j.Name, contentWidth-len([]rune(statusPrefix))-1)
+			name := truncateStr(j.Title, contentWidth-len([]rune(statusPrefix))-1)
 			selected := i == m.selectedJob
 			if selected {
 				topLines = append(topLines, JobSelectedStyle.Render(statusPrefix+name))
@@ -123,25 +122,8 @@ func (m Model) renderLeftPanel(panelWidth, panelHeight int) string {
 				topLines = append(topLines, JobItemStyle.Render(statusPrefix+name))
 			}
 
-			// Child items: only show for active/paused jobs (not done).
-			if j.Status != job.StatusDone {
-				// Team + status sub-line (from first task).
-				if tasks, err := job.ListTasks(j.Dir); err == nil && len(tasks) > 0 {
-					t := tasks[0]
-					if t.Team != "" {
-						var prefix string
-						switch t.Status {
-						case job.StatusDone:
-							prefix = "  ✓ "
-						case job.StatusPaused:
-							prefix = "  ⏸ "
-						default:
-							prefix = "  ◆ "
-						}
-						teamLine := prefix + truncateStr(t.Team, contentWidth-5)
-						topLines = append(topLines, DimStyle.Render(teamLine))
-					}
-				}
+			// Child items: only show for active/paused jobs (not completed).
+			if j.Status != db.JobStatusCompleted {
 				// BLOCKED child (always first if present).
 				if m.hasBlocker(j) {
 					blockerLine := "  ⚠ BLOCKED"
@@ -156,19 +138,12 @@ func (m Model) renderLeftPanel(panelWidth, panelHeight int) string {
 					}
 				}
 
-				// Task subitems from TODO.md.
-				if todosContent, err := job.ReadTodos(j.Dir); err == nil {
-					lines := strings.Split(todosContent, "\n")
-					for _, l := range lines {
-						if strings.HasPrefix(l, "- [ ] ") {
-							task := strings.TrimPrefix(l, "- [ ] ")
-							taskLine := "  ○ " + truncateStr(task, contentWidth-5)
-							topLines = append(topLines, TaskPendingStyle.Render(taskLine))
-						} else if strings.HasPrefix(l, "- [x] ") {
-							task := strings.TrimPrefix(l, "- [x] ")
-							taskLine := "  ✓ " + truncateStr(task, contentWidth-5)
-							topLines = append(topLines, TaskDoneStyle.Render(taskLine))
-						}
+				// Task subitems from SQLite.
+				if dbTasks := m.progress.tasks[j.ID]; len(dbTasks) > 0 {
+					for _, task := range dbTasks {
+						indicator, style := taskStatusIndicator(task.Status)
+						taskLine := "  " + indicator + " " + truncateStr(task.Title, contentWidth-5)
+						topLines = append(topLines, style.Render(taskLine))
 					}
 				}
 			}
@@ -199,14 +174,14 @@ func (m Model) renderLeftPanel(panelWidth, panelHeight int) string {
 		middleLines = append(middleLines, PlaceholderPaneStyle.Render("—"))
 	} else {
 		selectedJob := displayedJobs[m.selectedJob]
-		middleLines = append(middleLines, LeftPanelHeaderStyle.Render(truncateStr(selectedJob.Name, contentWidth)))
+		middleLines = append(middleLines, LeftPanelHeaderStyle.Render(truncateStr(selectedJob.Title, contentWidth)))
 
 		// Status badge
 		var statusStyle lipgloss.Style
 		switch selectedJob.Status {
-		case job.StatusActive:
+		case db.JobStatusActive:
 			statusStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("76"))
-		case job.StatusPaused:
+		case db.JobStatusPaused:
 			statusStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("226"))
 		default:
 			statusStyle = DimStyle
@@ -223,16 +198,16 @@ func (m Model) renderLeftPanel(panelWidth, panelHeight int) string {
 			}
 		}
 
-		// TODO summary
-		if todosContent, err := job.ReadTodos(selectedJob.Dir); err == nil {
-			lines := strings.Split(todosContent, "\n")
+		// Task summary from SQLite.
+		if dbTasks := m.progress.tasks[selectedJob.ID]; len(dbTasks) > 0 {
 			var pending []string
 			doneCount := 0
-			for _, l := range lines {
-				if strings.HasPrefix(l, "- [ ] ") {
-					pending = append(pending, strings.TrimPrefix(l, "- [ ] "))
-				} else if strings.HasPrefix(l, "- [x] ") {
+			for _, task := range dbTasks {
+				switch task.Status {
+				case db.TaskStatusCompleted:
 					doneCount++
+				case db.TaskStatusPending, db.TaskStatusInProgress, db.TaskStatusBlocked:
+					pending = append(pending, task.Title)
 				}
 			}
 			total := len(pending) + doneCount

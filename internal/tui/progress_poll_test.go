@@ -32,6 +32,12 @@ func (m *mockStore) ListJobs(ctx context.Context, filter db.JobFilter) ([]*db.Jo
 	}
 	return nil, nil
 }
+func (m *mockStore) ListAllJobs(ctx context.Context) ([]*db.Job, error) {
+	return m.ListJobs(ctx, db.JobFilter{})
+}
+func (m *mockStore) UpdateJob(ctx context.Context, id string, update db.JobUpdate) error {
+	return nil
+}
 func (m *mockStore) UpdateJobStatus(ctx context.Context, id string, status db.JobStatus) error {
 	return nil
 }

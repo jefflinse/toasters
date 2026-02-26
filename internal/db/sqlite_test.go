@@ -1029,6 +1029,405 @@ func TestArtifacts(t *testing.T) {
 	}
 }
 
+// --- Job Description and WorkspaceDir ---
+
+func TestJobs_DescriptionAndWorkspaceDir(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+
+	job := &Job{
+		ID:           "job-desc",
+		Title:        "Described job",
+		Description:  "This is a detailed description",
+		Type:         "new_feature",
+		Status:       JobStatusPending,
+		WorkspaceDir: "/home/user/project",
+	}
+
+	if err := store.CreateJob(ctx, job); err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+
+	got, err := store.GetJob(ctx, "job-desc")
+	if err != nil {
+		t.Fatalf("GetJob: %v", err)
+	}
+	if got.Description != "This is a detailed description" {
+		t.Errorf("Description = %q, want %q", got.Description, "This is a detailed description")
+	}
+	if got.WorkspaceDir != "/home/user/project" {
+		t.Errorf("WorkspaceDir = %q, want %q", got.WorkspaceDir, "/home/user/project")
+	}
+}
+
+func TestJobs_DefaultDescriptionAndWorkspaceDir(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+
+	// Create a job without setting Description or WorkspaceDir — they should default to "".
+	job := &Job{ID: "job-nofields", Title: "Minimal", Type: "test", Status: JobStatusPending}
+	if err := store.CreateJob(ctx, job); err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+
+	got, err := store.GetJob(ctx, "job-nofields")
+	if err != nil {
+		t.Fatalf("GetJob: %v", err)
+	}
+	if got.Description != "" {
+		t.Errorf("Description = %q, want empty", got.Description)
+	}
+	if got.WorkspaceDir != "" {
+		t.Errorf("WorkspaceDir = %q, want empty", got.WorkspaceDir)
+	}
+}
+
+func TestJobs_ListIncludesNewFields(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+
+	job := &Job{
+		ID:           "job-list-new",
+		Title:        "Listed job",
+		Description:  "Listed description",
+		Type:         "bug_fix",
+		Status:       JobStatusActive,
+		WorkspaceDir: "/tmp/workspace",
+	}
+	if err := store.CreateJob(ctx, job); err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+
+	jobs, err := store.ListJobs(ctx, JobFilter{})
+	if err != nil {
+		t.Fatalf("ListJobs: %v", err)
+	}
+	if len(jobs) != 1 {
+		t.Fatalf("ListJobs returned %d jobs, want 1", len(jobs))
+	}
+	if jobs[0].Description != "Listed description" {
+		t.Errorf("Description = %q, want %q", jobs[0].Description, "Listed description")
+	}
+	if jobs[0].WorkspaceDir != "/tmp/workspace" {
+		t.Errorf("WorkspaceDir = %q, want %q", jobs[0].WorkspaceDir, "/tmp/workspace")
+	}
+}
+
+// --- ListAllJobs ---
+
+func TestListAllJobs(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+
+	// Create multiple jobs with different statuses.
+	for i, status := range []JobStatus{JobStatusPending, JobStatusActive, JobStatusCompleted, JobStatusPaused} {
+		job := &Job{
+			ID:     fmt.Sprintf("all-job-%d", i),
+			Title:  fmt.Sprintf("Job %d", i),
+			Type:   "test",
+			Status: status,
+		}
+		if err := store.CreateJob(ctx, job); err != nil {
+			t.Fatalf("CreateJob(%d): %v", i, err)
+		}
+	}
+
+	jobs, err := store.ListAllJobs(ctx)
+	if err != nil {
+		t.Fatalf("ListAllJobs: %v", err)
+	}
+	if len(jobs) != 4 {
+		t.Fatalf("ListAllJobs returned %d jobs, want 4", len(jobs))
+	}
+}
+
+func TestListAllJobs_Empty(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+
+	jobs, err := store.ListAllJobs(ctx)
+	if err != nil {
+		t.Fatalf("ListAllJobs: %v", err)
+	}
+	if len(jobs) != 0 {
+		t.Errorf("ListAllJobs returned %d jobs, want 0", len(jobs))
+	}
+}
+
+// --- UpdateJob ---
+
+func TestUpdateJob_AllFields(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+
+	job := &Job{
+		ID:           "job-upd",
+		Title:        "Original",
+		Description:  "Original desc",
+		Type:         "test",
+		Status:       JobStatusPending,
+		WorkspaceDir: "/original",
+	}
+	if err := store.CreateJob(ctx, job); err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+
+	newTitle := "Updated Title"
+	newDesc := "Updated description"
+	newStatus := JobStatusActive
+	newDir := "/updated/workspace"
+
+	if err := store.UpdateJob(ctx, "job-upd", JobUpdate{
+		Title:        &newTitle,
+		Description:  &newDesc,
+		Status:       &newStatus,
+		WorkspaceDir: &newDir,
+	}); err != nil {
+		t.Fatalf("UpdateJob: %v", err)
+	}
+
+	got, err := store.GetJob(ctx, "job-upd")
+	if err != nil {
+		t.Fatalf("GetJob: %v", err)
+	}
+	if got.Title != "Updated Title" {
+		t.Errorf("Title = %q, want %q", got.Title, "Updated Title")
+	}
+	if got.Description != "Updated description" {
+		t.Errorf("Description = %q, want %q", got.Description, "Updated description")
+	}
+	if got.Status != JobStatusActive {
+		t.Errorf("Status = %q, want %q", got.Status, JobStatusActive)
+	}
+	if got.WorkspaceDir != "/updated/workspace" {
+		t.Errorf("WorkspaceDir = %q, want %q", got.WorkspaceDir, "/updated/workspace")
+	}
+	if got.UpdatedAt.Before(got.CreatedAt) {
+		t.Errorf("UpdatedAt (%v) should not be before CreatedAt (%v)", got.UpdatedAt, got.CreatedAt)
+	}
+}
+
+func TestUpdateJob_PartialUpdate(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+
+	job := &Job{
+		ID:           "job-partial",
+		Title:        "Original",
+		Description:  "Original desc",
+		Type:         "test",
+		Status:       JobStatusPending,
+		WorkspaceDir: "/original",
+	}
+	if err := store.CreateJob(ctx, job); err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+
+	// Only update description — other fields should remain unchanged.
+	newDesc := "Only this changed"
+	if err := store.UpdateJob(ctx, "job-partial", JobUpdate{
+		Description: &newDesc,
+	}); err != nil {
+		t.Fatalf("UpdateJob: %v", err)
+	}
+
+	got, err := store.GetJob(ctx, "job-partial")
+	if err != nil {
+		t.Fatalf("GetJob: %v", err)
+	}
+	if got.Title != "Original" {
+		t.Errorf("Title = %q, want %q (should be unchanged)", got.Title, "Original")
+	}
+	if got.Description != "Only this changed" {
+		t.Errorf("Description = %q, want %q", got.Description, "Only this changed")
+	}
+	if got.Status != JobStatusPending {
+		t.Errorf("Status = %q, want %q (should be unchanged)", got.Status, JobStatusPending)
+	}
+	if got.WorkspaceDir != "/original" {
+		t.Errorf("WorkspaceDir = %q, want %q (should be unchanged)", got.WorkspaceDir, "/original")
+	}
+}
+
+func TestUpdateJob_NoFields(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+
+	// Updating with no fields should be a no-op, not an error.
+	err := store.UpdateJob(ctx, "anything", JobUpdate{})
+	if err != nil {
+		t.Fatalf("UpdateJob with no fields: %v", err)
+	}
+}
+
+func TestUpdateJob_NotFound(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+
+	newTitle := "Nope"
+	err := store.UpdateJob(ctx, "nonexistent", JobUpdate{Title: &newTitle})
+	if err == nil {
+		t.Fatal("expected error for nonexistent job, got nil")
+	}
+	if !errors.Is(err, ErrNotFound) {
+		t.Errorf("expected ErrNotFound, got: %v", err)
+	}
+}
+
+// --- JobStatusPaused ---
+
+func TestJobStatusPaused(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+
+	job := &Job{ID: "job-paused", Title: "Paused job", Type: "test", Status: JobStatusPaused}
+	if err := store.CreateJob(ctx, job); err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+
+	got, err := store.GetJob(ctx, "job-paused")
+	if err != nil {
+		t.Fatalf("GetJob: %v", err)
+	}
+	if got.Status != JobStatusPaused {
+		t.Errorf("Status = %q, want %q", got.Status, JobStatusPaused)
+	}
+
+	// Filter by paused status.
+	pausedStatus := JobStatusPaused
+	jobs, err := store.ListJobs(ctx, JobFilter{Status: &pausedStatus})
+	if err != nil {
+		t.Fatalf("ListJobs: %v", err)
+	}
+	if len(jobs) != 1 {
+		t.Fatalf("ListJobs(paused) returned %d jobs, want 1", len(jobs))
+	}
+}
+
+// --- Task TeamID ---
+
+func TestTasks_TeamID(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+
+	job := &Job{ID: "job-team", Title: "Team test", Type: "test", Status: JobStatusActive}
+	if err := store.CreateJob(ctx, job); err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+
+	task := &Task{
+		ID:        "task-team-1",
+		JobID:     "job-team",
+		Title:     "Team task",
+		Status:    TaskStatusPending,
+		AgentID:   "agent-1",
+		TeamID:    "backend-team",
+		SortOrder: 1,
+	}
+	if err := store.CreateTask(ctx, task); err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+
+	// GetTask
+	got, err := store.GetTask(ctx, "task-team-1")
+	if err != nil {
+		t.Fatalf("GetTask: %v", err)
+	}
+	if got.TeamID != "backend-team" {
+		t.Errorf("TeamID = %q, want %q", got.TeamID, "backend-team")
+	}
+
+	// ListTasksForJob
+	tasks, err := store.ListTasksForJob(ctx, "job-team")
+	if err != nil {
+		t.Fatalf("ListTasksForJob: %v", err)
+	}
+	if len(tasks) != 1 {
+		t.Fatalf("ListTasksForJob returned %d tasks, want 1", len(tasks))
+	}
+	if tasks[0].TeamID != "backend-team" {
+		t.Errorf("TeamID = %q, want %q", tasks[0].TeamID, "backend-team")
+	}
+
+	// GetReadyTasks
+	ready, err := store.GetReadyTasks(ctx, "job-team")
+	if err != nil {
+		t.Fatalf("GetReadyTasks: %v", err)
+	}
+	if len(ready) != 1 {
+		t.Fatalf("GetReadyTasks returned %d tasks, want 1", len(ready))
+	}
+	if ready[0].TeamID != "backend-team" {
+		t.Errorf("TeamID = %q, want %q", ready[0].TeamID, "backend-team")
+	}
+}
+
+func TestTasks_DefaultTeamID(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+
+	job := &Job{ID: "job-noteam", Title: "No team", Type: "test", Status: JobStatusActive}
+	if err := store.CreateJob(ctx, job); err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+
+	// Create task without TeamID — should default to "".
+	task := &Task{ID: "task-noteam", JobID: "job-noteam", Title: "No team task", Status: TaskStatusPending}
+	if err := store.CreateTask(ctx, task); err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+
+	got, err := store.GetTask(ctx, "task-noteam")
+	if err != nil {
+		t.Fatalf("GetTask: %v", err)
+	}
+	if got.TeamID != "" {
+		t.Errorf("TeamID = %q, want empty", got.TeamID)
+	}
+}
+
+// --- Migration 002 ---
+
+func TestMigration002_NewColumns(t *testing.T) {
+	store := openTestStore(t)
+
+	// Verify the new columns exist by querying table_info.
+	type colInfo struct {
+		name string
+	}
+
+	checkColumn := func(table, column string) {
+		t.Helper()
+		var found bool
+		rows, err := store.db.Query(fmt.Sprintf("PRAGMA table_info(%s)", table))
+		if err != nil {
+			t.Fatalf("PRAGMA table_info(%s): %v", table, err)
+		}
+		defer rows.Close() //nolint:errcheck
+		for rows.Next() {
+			var cid int
+			var name, typ string
+			var notnull int
+			var dflt sql.NullString
+			var pk int
+			if err := rows.Scan(&cid, &name, &typ, &notnull, &dflt, &pk); err != nil {
+				t.Fatalf("scanning column info: %v", err)
+			}
+			if name == column {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("column %s.%s not found", table, column)
+		}
+	}
+
+	checkColumn("jobs", "description")
+	checkColumn("jobs", "workspace_dir")
+	checkColumn("tasks", "team_id")
+}
+
 // --- Migration tests ---
 
 func TestMigrationVersion(t *testing.T) {
@@ -1038,8 +1437,8 @@ func TestMigrationVersion(t *testing.T) {
 	if err := store.db.QueryRow("SELECT COALESCE(MAX(version), 0) FROM schema_version").Scan(&version); err != nil {
 		t.Fatalf("querying schema version: %v", err)
 	}
-	if version < 1 {
-		t.Errorf("schema version = %d, want >= 1", version)
+	if version < 2 {
+		t.Errorf("schema version = %d, want >= 2", version)
 	}
 }
 

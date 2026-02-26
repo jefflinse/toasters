@@ -78,9 +78,10 @@ func (s *SQLiteStore) CreateJob(ctx context.Context, job *Job) error {
 	}
 
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO jobs (id, title, type, status, created_at, updated_at, metadata)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		job.ID, job.Title, job.Type, string(job.Status),
+		`INSERT INTO jobs (id, title, description, type, status, workspace_dir, created_at, updated_at, metadata)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		job.ID, job.Title, job.Description, job.Type, string(job.Status),
+		job.WorkspaceDir,
 		job.CreatedAt.Format(time.RFC3339), job.UpdatedAt.Format(time.RFC3339),
 		nullableJSON(job.Metadata),
 	)
@@ -92,7 +93,7 @@ func (s *SQLiteStore) CreateJob(ctx context.Context, job *Job) error {
 
 func (s *SQLiteStore) GetJob(ctx context.Context, id string) (*Job, error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT id, title, type, status, created_at, updated_at, metadata
+		`SELECT id, title, description, type, status, workspace_dir, created_at, updated_at, metadata
 		 FROM jobs WHERE id = ?`, id)
 
 	j := &Job{}
@@ -100,8 +101,8 @@ func (s *SQLiteStore) GetJob(ctx context.Context, id string) (*Job, error) {
 	var createdAt, updatedAt string
 	var metadata sql.NullString
 
-	if err := row.Scan(&j.ID, &j.Title, &j.Type, &status,
-		&createdAt, &updatedAt, &metadata); err != nil {
+	if err := row.Scan(&j.ID, &j.Title, &j.Description, &j.Type, &status,
+		&j.WorkspaceDir, &createdAt, &updatedAt, &metadata); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, fmt.Errorf("job %q: %w", id, ErrNotFound)
 		}
@@ -118,7 +119,7 @@ func (s *SQLiteStore) GetJob(ctx context.Context, id string) (*Job, error) {
 }
 
 func (s *SQLiteStore) ListJobs(ctx context.Context, filter JobFilter) ([]*Job, error) {
-	query := "SELECT id, title, type, status, created_at, updated_at, metadata FROM jobs"
+	query := "SELECT id, title, description, type, status, workspace_dir, created_at, updated_at, metadata FROM jobs"
 	var args []any
 	var conditions []string
 
@@ -146,6 +147,16 @@ func (s *SQLiteStore) ListJobs(ctx context.Context, filter JobFilter) ([]*Job, e
 		args = append(args, filter.Offset)
 	}
 
+	return s.queryJobs(ctx, query, args...)
+}
+
+func (s *SQLiteStore) ListAllJobs(ctx context.Context) ([]*Job, error) {
+	return s.queryJobs(ctx,
+		"SELECT id, title, description, type, status, workspace_dir, created_at, updated_at, metadata FROM jobs ORDER BY created_at DESC")
+}
+
+// queryJobs executes a query and scans the results into Job structs.
+func (s *SQLiteStore) queryJobs(ctx context.Context, query string, args ...any) ([]*Job, error) {
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("listing jobs: %w", err)
@@ -159,8 +170,8 @@ func (s *SQLiteStore) ListJobs(ctx context.Context, filter JobFilter) ([]*Job, e
 		var createdAt, updatedAt string
 		var metadata sql.NullString
 
-		if err := rows.Scan(&j.ID, &j.Title, &j.Type, &status,
-			&createdAt, &updatedAt, &metadata); err != nil {
+		if err := rows.Scan(&j.ID, &j.Title, &j.Description, &j.Type, &status,
+			&j.WorkspaceDir, &createdAt, &updatedAt, &metadata); err != nil {
 			return nil, fmt.Errorf("scanning job row: %w", err)
 		}
 
@@ -173,6 +184,44 @@ func (s *SQLiteStore) ListJobs(ctx context.Context, filter JobFilter) ([]*Job, e
 		jobs = append(jobs, j)
 	}
 	return jobs, rows.Err()
+}
+
+func (s *SQLiteStore) UpdateJob(ctx context.Context, id string, update JobUpdate) error {
+	var sets []string
+	var args []any
+
+	if update.Title != nil {
+		sets = append(sets, "title = ?")
+		args = append(args, *update.Title)
+	}
+	if update.Description != nil {
+		sets = append(sets, "description = ?")
+		args = append(args, *update.Description)
+	}
+	if update.Status != nil {
+		sets = append(sets, "status = ?")
+		args = append(args, string(*update.Status))
+	}
+	if update.WorkspaceDir != nil {
+		sets = append(sets, "workspace_dir = ?")
+		args = append(args, *update.WorkspaceDir)
+	}
+
+	if len(sets) == 0 {
+		return nil // nothing to update
+	}
+
+	sets = append(sets, "updated_at = ?")
+	args = append(args, time.Now().UTC().Format(time.RFC3339))
+
+	args = append(args, id)
+	query := "UPDATE jobs SET " + strings.Join(sets, ", ") + " WHERE id = ?"
+
+	result, err := s.db.ExecContext(ctx, query, args...)
+	if err != nil {
+		return fmt.Errorf("updating job: %w", err)
+	}
+	return checkRowsAffected(result, "job", id)
 }
 
 func (s *SQLiteStore) UpdateJobStatus(ctx context.Context, id string, status JobStatus) error {
@@ -198,11 +247,11 @@ func (s *SQLiteStore) CreateTask(ctx context.Context, task *Task) error {
 	}
 
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO tasks (id, job_id, title, status, agent_id, parent_id, sort_order,
+		`INSERT INTO tasks (id, job_id, title, status, agent_id, team_id, parent_id, sort_order,
 		                     created_at, updated_at, summary, metadata)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		task.ID, task.JobID, task.Title, string(task.Status),
-		task.AgentID, task.ParentID, task.SortOrder,
+		task.AgentID, task.TeamID, task.ParentID, task.SortOrder,
 		task.CreatedAt.Format(time.RFC3339), task.UpdatedAt.Format(time.RFC3339),
 		task.Summary, nullableJSON(task.Metadata),
 	)
@@ -214,7 +263,7 @@ func (s *SQLiteStore) CreateTask(ctx context.Context, task *Task) error {
 
 func (s *SQLiteStore) GetTask(ctx context.Context, id string) (*Task, error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT id, job_id, title, status, agent_id, parent_id, sort_order,
+		`SELECT id, job_id, title, status, agent_id, team_id, parent_id, sort_order,
 		        created_at, updated_at, summary, metadata
 		 FROM tasks WHERE id = ?`, id)
 
@@ -223,7 +272,7 @@ func (s *SQLiteStore) GetTask(ctx context.Context, id string) (*Task, error) {
 
 func (s *SQLiteStore) ListTasksForJob(ctx context.Context, jobID string) ([]*Task, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, job_id, title, status, agent_id, parent_id, sort_order,
+		`SELECT id, job_id, title, status, agent_id, team_id, parent_id, sort_order,
 		        created_at, updated_at, summary, metadata
 		 FROM tasks WHERE job_id = ? ORDER BY sort_order, created_at`, jobID)
 	if err != nil {
@@ -266,7 +315,7 @@ func (s *SQLiteStore) AddTaskDependency(ctx context.Context, taskID, dependsOn s
 // GetReadyTasks returns tasks that are pending and have all dependencies completed.
 func (s *SQLiteStore) GetReadyTasks(ctx context.Context, jobID string) ([]*Task, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT t.id, t.job_id, t.title, t.status, t.agent_id, t.parent_id, t.sort_order,
+		`SELECT t.id, t.job_id, t.title, t.status, t.agent_id, t.team_id, t.parent_id, t.sort_order,
 		        t.created_at, t.updated_at, t.summary, t.metadata
 		 FROM tasks t
 		 WHERE t.job_id = ?
@@ -695,7 +744,7 @@ func scanTask(s scanner) (*Task, error) {
 	var metadata sql.NullString
 
 	if err := s.Scan(&t.ID, &t.JobID, &t.Title, &status,
-		&t.AgentID, &t.ParentID, &t.SortOrder,
+		&t.AgentID, &t.TeamID, &t.ParentID, &t.SortOrder,
 		&createdAt, &updatedAt, &t.Summary, &metadata); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrNotFound

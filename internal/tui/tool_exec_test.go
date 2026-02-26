@@ -3,21 +3,35 @@ package tui
 import (
 	"context"
 	"encoding/json"
+	"path/filepath"
 	"testing"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/jefflinse/toasters/internal/db"
 	"github.com/jefflinse/toasters/internal/llm/tools"
 	"github.com/jefflinse/toasters/internal/provider"
 )
 
+// newToolExecTestExecutor creates a ToolExecutor with a real SQLite store for
+// tool_exec tests that call job-related tools.
+func newToolExecTestExecutor(t *testing.T) *tools.ToolExecutor {
+	t.Helper()
+	store, err := db.Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatalf("opening test store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	return tools.NewToolExecutor(nil, nil, t.TempDir(), store, nil)
+}
+
 func TestExecuteToolsCmd_BasicResults(t *testing.T) {
 	t.Parallel()
 
-	// Use a real ToolExecutor with no gateway — job_list with an empty workspace
+	// Use a real ToolExecutor with a SQLite store — job_list with an empty store
 	// returns an empty list, which is a valid non-error result.
-	executor := tools.NewToolExecutor(nil, nil, t.TempDir(), nil, nil)
+	executor := newToolExecTestExecutor(t)
 
 	calls := []provider.ToolCall{
 		{
@@ -52,7 +66,7 @@ func TestExecuteToolsCmd_BasicResults(t *testing.T) {
 func TestExecuteToolsCmd_MultipleTools(t *testing.T) {
 	t.Parallel()
 
-	executor := tools.NewToolExecutor(nil, nil, t.TempDir(), nil, nil)
+	executor := newToolExecTestExecutor(t)
 
 	calls := []provider.ToolCall{
 		{ID: "call-1", Name: "job_list", Arguments: json.RawMessage("{}")},
@@ -116,7 +130,7 @@ func TestExecuteToolsCmd_ErrorHandling(t *testing.T) {
 func TestExecuteToolsCmd_Cancellation(t *testing.T) {
 	t.Parallel()
 
-	executor := tools.NewToolExecutor(nil, nil, t.TempDir(), nil, nil)
+	executor := newToolExecTestExecutor(t)
 
 	calls := []provider.ToolCall{
 		{
@@ -158,7 +172,7 @@ func TestExecuteToolsCmd_Cancellation(t *testing.T) {
 func TestExecuteToolsCmd_ResultOrdering(t *testing.T) {
 	t.Parallel()
 
-	executor := tools.NewToolExecutor(nil, nil, t.TempDir(), nil, nil)
+	executor := newToolExecTestExecutor(t)
 
 	calls := []provider.ToolCall{
 		{

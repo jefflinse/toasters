@@ -14,7 +14,6 @@ import (
 	"github.com/jefflinse/toasters/internal/config"
 	"github.com/jefflinse/toasters/internal/db"
 	"github.com/jefflinse/toasters/internal/gateway"
-	"github.com/jefflinse/toasters/internal/job"
 	llmtools "github.com/jefflinse/toasters/internal/llm/tools"
 	"github.com/jefflinse/toasters/internal/mcp"
 	"github.com/jefflinse/toasters/internal/provider"
@@ -248,21 +247,6 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 		})
 		if err != nil && watchCtx.Err() == nil {
 			slog.Error("teams watcher error", "error", err)
-		}
-	}()
-
-	go func() {
-		jobsDir := job.JobsDir(workspaceDir)
-		err := agents.WatchRecursive(watchCtx, jobsDir, func() {
-			jobs, err := job.List(workspaceDir)
-			if err != nil {
-				slog.Error("jobs reload failed", "error", err)
-				return
-			}
-			p.Send(tui.JobsReloadedMsg{Jobs: jobs})
-		})
-		if err != nil {
-			slog.Error("jobs watcher error", "error", err)
 		}
 	}()
 

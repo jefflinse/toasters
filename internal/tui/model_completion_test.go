@@ -11,7 +11,6 @@ import (
 	"github.com/jefflinse/toasters/internal/agents"
 	"github.com/jefflinse/toasters/internal/config"
 	"github.com/jefflinse/toasters/internal/gateway"
-	"github.com/jefflinse/toasters/internal/job"
 	llmtools "github.com/jefflinse/toasters/internal/llm/tools"
 	"github.com/jefflinse/toasters/internal/provider"
 )
@@ -46,7 +45,7 @@ func newMinimalModel(t *testing.T) Model {
 			expandedReasoning: make(map[int]bool),
 			collapsedTools:    make(map[int]bool),
 		},
-		blockers:        make(map[string]*job.Blocker),
+		blockers:        make(map[string]*Blocker),
 		runtimeSessions: make(map[string]*runtimeSlot),
 	}
 }

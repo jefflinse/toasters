@@ -8,6 +8,8 @@ type Store interface {
 	CreateJob(ctx context.Context, job *Job) error
 	GetJob(ctx context.Context, id string) (*Job, error)
 	ListJobs(ctx context.Context, filter JobFilter) ([]*Job, error)
+	ListAllJobs(ctx context.Context) ([]*Job, error)
+	UpdateJob(ctx context.Context, id string, update JobUpdate) error
 	UpdateJobStatus(ctx context.Context, id string, status JobStatus) error
 
 	// Tasks

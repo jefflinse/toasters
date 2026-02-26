@@ -5,10 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"path/filepath"
 
 	"github.com/jefflinse/toasters/internal/agents"
-	"github.com/jefflinse/toasters/internal/job"
 	"github.com/jefflinse/toasters/internal/provider"
 	"github.com/jefflinse/toasters/internal/runtime"
 )
@@ -26,8 +24,10 @@ func handleAssignTeam(_ context.Context, te *ToolExecutor, call provider.ToolCal
 		return "", fmt.Errorf("parsing assign_team args: %w", err)
 	}
 	// Guard: verify the job exists before dispatching to a team.
-	jobDir := filepath.Join(job.JobsDir(te.WorkspaceDir), args.JobID)
-	if _, loadErr := job.Load(jobDir); loadErr != nil {
+	if te.Store == nil {
+		return "", fmt.Errorf("database not available")
+	}
+	if _, err := te.Store.GetJob(context.Background(), args.JobID); err != nil {
 		return fmt.Sprintf("job %q does not exist; call job_create first", args.JobID), nil
 	}
 	// Look up team by name.
@@ -43,13 +43,9 @@ func handleAssignTeam(_ context.Context, te *ToolExecutor, call provider.ToolCal
 	if !found {
 		return "", fmt.Errorf("team %q not found", args.TeamName)
 	}
-	// Persist team assignment to the first task.
-	if tasks, err := job.ListTasks(jobDir); err == nil && len(tasks) > 0 {
-		_ = job.SetTaskTeam(tasks[0].Dir, args.TeamName)
-	}
 	// Try runtime path first if available and configured.
 	if te.Runtime != nil && te.DefaultProvider != "" {
-		prompt := agents.BuildTeamCoordinatorPrompt(team, jobDir)
+		prompt := agents.BuildTeamCoordinatorPrompt(team, te.WorkspaceDir)
 		opts := runtime.SpawnOpts{
 			AgentID:        team.Name,
 			ProviderName:   te.DefaultProvider,
@@ -57,7 +53,7 @@ func handleAssignTeam(_ context.Context, te *ToolExecutor, call provider.ToolCal
 			SystemPrompt:   prompt,
 			JobID:          args.JobID,
 			InitialMessage: args.Task,
-			WorkDir:        jobDir,
+			WorkDir:        te.WorkspaceDir,
 			MaxDepth:       1, // coordinators may spawn workers; workers may not spawn further
 		}
 		sess, err := te.Runtime.SpawnAgent(context.Background(), opts)

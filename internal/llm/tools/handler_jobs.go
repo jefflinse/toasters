@@ -2,19 +2,55 @@ package tools
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
-	"log/slog"
-	"path/filepath"
-	"time"
+	"regexp"
+	"strconv"
+	"strings"
 
 	"github.com/jefflinse/toasters/internal/db"
-	"github.com/jefflinse/toasters/internal/job"
 	"github.com/jefflinse/toasters/internal/provider"
 )
 
-func handleJobList(_ context.Context, te *ToolExecutor, _ provider.ToolCall) (string, error) {
-	jobs, err := job.List(te.WorkspaceDir)
+// jobIDRe validates job IDs: lowercase letters, digits, and hyphens only.
+var jobIDRe = regexp.MustCompile(`^[a-z0-9-]+$`)
+
+// newTaskID generates a random UUID v4 for task IDs.
+func newTaskID() string {
+	var b [16]byte
+	_, _ = rand.Read(b[:])
+	b[6] = (b[6] & 0x0f) | 0x40
+	b[8] = (b[8] & 0x3f) | 0x80
+	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x",
+		b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
+}
+
+// dbJobStatusToTool maps db.JobStatus to tool-facing status strings.
+func dbJobStatusToTool(s db.JobStatus) string {
+	switch s {
+	case db.JobStatusPending:
+		return "pending"
+	case db.JobStatusActive:
+		return "active"
+	case db.JobStatusPaused:
+		return "paused"
+	case db.JobStatusCompleted:
+		return "done"
+	case db.JobStatusFailed:
+		return "failed"
+	case db.JobStatusCancelled:
+		return "cancelled"
+	default:
+		return string(s)
+	}
+}
+
+func handleJobList(ctx context.Context, te *ToolExecutor, _ provider.ToolCall) (string, error) {
+	if te.Store == nil {
+		return "", fmt.Errorf("database not available")
+	}
+	jobs, err := te.Store.ListAllJobs(ctx)
 	if err != nil {
 		return "", fmt.Errorf("listing jobs: %w", err)
 	}
@@ -26,13 +62,21 @@ func handleJobList(_ context.Context, te *ToolExecutor, _ provider.ToolCall) (st
 	}
 	items := make([]item, len(jobs))
 	for i, j := range jobs {
-		items[i] = item{ID: j.ID, Name: j.Name, Description: j.Description, Status: string(j.Status)}
+		items[i] = item{
+			ID:          j.ID,
+			Name:        j.Title,
+			Description: j.Description,
+			Status:      dbJobStatusToTool(j.Status),
+		}
 	}
 	b, _ := json.Marshal(items)
 	return string(b), nil
 }
 
-func handleJobCreate(_ context.Context, te *ToolExecutor, call provider.ToolCall) (string, error) {
+func handleJobCreate(ctx context.Context, te *ToolExecutor, call provider.ToolCall) (string, error) {
+	if te.Store == nil {
+		return "", fmt.Errorf("database not available")
+	}
 	var args struct {
 		ID          string `json:"id"`
 		Name        string `json:"name"`
@@ -41,49 +85,76 @@ func handleJobCreate(_ context.Context, te *ToolExecutor, call provider.ToolCall
 	if err := json.Unmarshal(call.Arguments, &args); err != nil {
 		return "", fmt.Errorf("parsing job_create args: %w", err)
 	}
-	j, err := job.Create(te.WorkspaceDir, args.ID, args.Name, args.Description)
-	if err != nil {
+	if !jobIDRe.MatchString(args.ID) {
+		return "", fmt.Errorf("invalid job ID %q: must match [a-z0-9-]+", args.ID)
+	}
+	dbJob := &db.Job{
+		ID:          args.ID,
+		Title:       args.Name,
+		Description: args.Description,
+		Type:        "general",
+		Status:      db.JobStatusPending,
+	}
+	if err := te.Store.CreateJob(ctx, dbJob); err != nil {
 		return "", fmt.Errorf("creating job: %w", err)
 	}
-	// Dual-write to SQLite if available.
-	if te.Store != nil {
-		ctx := context.Background()
-		dbJob := &db.Job{
-			ID:     j.ID,
-			Title:  args.Name,
-			Type:   "general",
-			Status: db.JobStatusPending,
-		}
-		if dbErr := te.Store.CreateJob(ctx, dbJob); dbErr != nil {
-			slog.Warn("failed to persist job to SQLite", "job", j.ID, "error", dbErr)
-		}
-	}
-	return "created: " + j.ID, nil
+	return "created: " + args.ID, nil
 }
 
-func handleJobReadOverview(_ context.Context, te *ToolExecutor, call provider.ToolCall) (string, error) {
+func handleJobReadOverview(ctx context.Context, te *ToolExecutor, call provider.ToolCall) (string, error) {
+	if te.Store == nil {
+		return "", fmt.Errorf("database not available")
+	}
 	var args struct {
 		ID string `json:"id"`
 	}
 	if err := json.Unmarshal(call.Arguments, &args); err != nil {
 		return "", fmt.Errorf("parsing job_read_overview args: %w", err)
 	}
-	dir := filepath.Join(job.JobsDir(te.WorkspaceDir), args.ID)
-	return job.ReadOverview(dir)
+	j, err := te.Store.GetJob(ctx, args.ID)
+	if err != nil {
+		return "", fmt.Errorf("reading job %q: %w", args.ID, err)
+	}
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "# %s\n\n", j.Title)
+	fmt.Fprintf(&sb, "**Status:** %s\n", dbJobStatusToTool(j.Status))
+	fmt.Fprintf(&sb, "**Created:** %s\n", j.CreatedAt.Format("2006-01-02T15:04:05Z07:00"))
+	if j.Description != "" {
+		fmt.Fprintf(&sb, "\n%s\n", j.Description)
+	}
+	return sb.String(), nil
 }
 
-func handleJobReadTodos(_ context.Context, te *ToolExecutor, call provider.ToolCall) (string, error) {
+func handleJobReadTodos(ctx context.Context, te *ToolExecutor, call provider.ToolCall) (string, error) {
+	if te.Store == nil {
+		return "", fmt.Errorf("database not available")
+	}
 	var args struct {
 		ID string `json:"id"`
 	}
 	if err := json.Unmarshal(call.Arguments, &args); err != nil {
 		return "", fmt.Errorf("parsing job_read_todos args: %w", err)
 	}
-	dir := filepath.Join(job.JobsDir(te.WorkspaceDir), args.ID)
-	return job.ReadTodos(dir)
+	tasks, err := te.Store.ListTasksForJob(ctx, args.ID)
+	if err != nil {
+		return "", fmt.Errorf("listing tasks for job %q: %w", args.ID, err)
+	}
+	var sb strings.Builder
+	sb.WriteString("# Tasks\n\n")
+	for _, t := range tasks {
+		check := "[ ]"
+		if t.Status == db.TaskStatusCompleted {
+			check = "[x]"
+		}
+		fmt.Fprintf(&sb, "- %s %s (%s)\n", check, t.Title, string(t.Status))
+	}
+	return sb.String(), nil
 }
 
-func handleJobUpdateOverview(_ context.Context, te *ToolExecutor, call provider.ToolCall) (string, error) {
+func handleJobUpdateOverview(ctx context.Context, te *ToolExecutor, call provider.ToolCall) (string, error) {
+	if te.Store == nil {
+		return "", fmt.Errorf("database not available")
+	}
 	var args struct {
 		ID      string `json:"id"`
 		Content string `json:"content"`
@@ -95,20 +166,27 @@ func handleJobUpdateOverview(_ context.Context, te *ToolExecutor, call provider.
 	if args.Mode != "overwrite" && args.Mode != "append" {
 		return "", fmt.Errorf("invalid mode %q: must be 'overwrite' or 'append'", args.Mode)
 	}
-	dir := filepath.Join(job.JobsDir(te.WorkspaceDir), args.ID)
-	var overviewErr error
-	if args.Mode == "overwrite" {
-		overviewErr = job.WriteOverview(dir, args.Content)
-	} else {
-		overviewErr = job.AppendOverview(dir, args.Content)
+
+	newDesc := args.Content
+	if args.Mode == "append" {
+		j, err := te.Store.GetJob(ctx, args.ID)
+		if err != nil {
+			return "", fmt.Errorf("reading job %q for append: %w", args.ID, err)
+		}
+		newDesc = j.Description + "\n" + args.Content
 	}
-	if overviewErr != nil {
-		return "", overviewErr
+
+	update := db.JobUpdate{Description: &newDesc}
+	if err := te.Store.UpdateJob(ctx, args.ID, update); err != nil {
+		return "", fmt.Errorf("updating job %q: %w", args.ID, err)
 	}
 	return "ok", nil
 }
 
-func handleJobAddTodo(_ context.Context, te *ToolExecutor, call provider.ToolCall) (string, error) {
+func handleJobAddTodo(ctx context.Context, te *ToolExecutor, call provider.ToolCall) (string, error) {
+	if te.Store == nil {
+		return "", fmt.Errorf("database not available")
+	}
 	var args struct {
 		ID   string `json:"id"`
 		Task string `json:"task"`
@@ -116,14 +194,22 @@ func handleJobAddTodo(_ context.Context, te *ToolExecutor, call provider.ToolCal
 	if err := json.Unmarshal(call.Arguments, &args); err != nil {
 		return "", fmt.Errorf("parsing job_add_todo args: %w", err)
 	}
-	dir := filepath.Join(job.JobsDir(te.WorkspaceDir), args.ID)
-	if err := job.AddTodo(dir, args.Task); err != nil {
-		return "", err
+	task := &db.Task{
+		ID:     newTaskID(),
+		JobID:  args.ID,
+		Title:  args.Task,
+		Status: db.TaskStatusPending,
+	}
+	if err := te.Store.CreateTask(ctx, task); err != nil {
+		return "", fmt.Errorf("adding task to job %q: %w", args.ID, err)
 	}
 	return "ok", nil
 }
 
-func handleJobCompleteTodo(_ context.Context, te *ToolExecutor, call provider.ToolCall) (string, error) {
+func handleJobCompleteTodo(ctx context.Context, te *ToolExecutor, call provider.ToolCall) (string, error) {
+	if te.Store == nil {
+		return "", fmt.Errorf("database not available")
+	}
 	var args struct {
 		ID          string `json:"id"`
 		IndexOrText string `json:"index_or_text"`
@@ -131,14 +217,38 @@ func handleJobCompleteTodo(_ context.Context, te *ToolExecutor, call provider.To
 	if err := json.Unmarshal(call.Arguments, &args); err != nil {
 		return "", fmt.Errorf("parsing job_complete_todo args: %w", err)
 	}
-	dir := filepath.Join(job.JobsDir(te.WorkspaceDir), args.ID)
-	if err := job.CompleteTodo(dir, args.IndexOrText); err != nil {
-		return "", err
+	tasks, err := te.Store.ListTasksForJob(ctx, args.ID)
+	if err != nil {
+		return "", fmt.Errorf("listing tasks for job %q: %w", args.ID, err)
 	}
-	return "ok", nil
+
+	// Try to match by 1-based index first.
+	if idx, parseErr := strconv.Atoi(args.IndexOrText); parseErr == nil {
+		if idx < 1 || idx > len(tasks) {
+			return "", fmt.Errorf("task index %d out of range (1-%d)", idx, len(tasks))
+		}
+		if err := te.Store.UpdateTaskStatus(ctx, tasks[idx-1].ID, db.TaskStatusCompleted, ""); err != nil {
+			return "", fmt.Errorf("completing task: %w", err)
+		}
+		return "ok", nil
+	}
+
+	// Fall back to substring match on title.
+	for _, t := range tasks {
+		if strings.Contains(t.Title, args.IndexOrText) {
+			if err := te.Store.UpdateTaskStatus(ctx, t.ID, db.TaskStatusCompleted, ""); err != nil {
+				return "", fmt.Errorf("completing task: %w", err)
+			}
+			return "ok", nil
+		}
+	}
+	return "", fmt.Errorf("no task matching %q in job %q", args.IndexOrText, args.ID)
 }
 
-func handleTaskSetStatus(_ context.Context, te *ToolExecutor, call provider.ToolCall) (string, error) {
+func handleTaskSetStatus(ctx context.Context, te *ToolExecutor, call provider.ToolCall) (string, error) {
+	if te.Store == nil {
+		return "", fmt.Errorf("database not available")
+	}
 	var args struct {
 		JobID  string `json:"job_id"`
 		TaskID string `json:"task_id"`
@@ -147,18 +257,24 @@ func handleTaskSetStatus(_ context.Context, te *ToolExecutor, call provider.Tool
 	if err := json.Unmarshal(call.Arguments, &args); err != nil {
 		return "", fmt.Errorf("parsing task_set_status args: %w", err)
 	}
-	validStatuses := map[string]bool{"active": true, "done": true, "paused": true}
-	if !validStatuses[args.Status] {
+	statusMap := map[string]db.TaskStatus{
+		"active": db.TaskStatusInProgress,
+		"done":   db.TaskStatusCompleted,
+		"paused": db.TaskStatusPending,
+	}
+	dbStatus, ok := statusMap[args.Status]
+	if !ok {
 		return fmt.Sprintf("invalid status %q: must be one of active, done, paused", args.Status), nil
 	}
-	jobDir := filepath.Join(job.JobsDir(te.WorkspaceDir), args.JobID)
-	tasks, err := job.ListTasks(jobDir)
+
+	// Verify the task exists and belongs to the specified job.
+	tasks, err := te.Store.ListTasksForJob(ctx, args.JobID)
 	if err != nil {
 		return "", fmt.Errorf("listing tasks: %w", err)
 	}
 	for _, t := range tasks {
 		if t.ID == args.TaskID {
-			if err := job.SetTaskStatus(t.Dir, job.Status(args.Status)); err != nil {
+			if err := te.Store.UpdateTaskStatus(ctx, args.TaskID, dbStatus, ""); err != nil {
 				return "", fmt.Errorf("setting task status: %w", err)
 			}
 			return fmt.Sprintf("task %s status set to %s", args.TaskID, args.Status), nil
@@ -167,7 +283,10 @@ func handleTaskSetStatus(_ context.Context, te *ToolExecutor, call provider.Tool
 	return fmt.Sprintf("task %q not found in job %q", args.TaskID, args.JobID), nil
 }
 
-func handleJobSetStatus(_ context.Context, te *ToolExecutor, call provider.ToolCall) (string, error) {
+func handleJobSetStatus(ctx context.Context, te *ToolExecutor, call provider.ToolCall) (string, error) {
+	if te.Store == nil {
+		return "", fmt.Errorf("database not available")
+	}
 	var args struct {
 		ID     string `json:"id"`
 		Status string `json:"status"`
@@ -175,25 +294,18 @@ func handleJobSetStatus(_ context.Context, te *ToolExecutor, call provider.ToolC
 	if err := json.Unmarshal(call.Arguments, &args); err != nil {
 		return "", fmt.Errorf("parsing job_set_status args: %w", err)
 	}
-	validStatuses := map[string]bool{"active": true, "done": true, "cancelled": true, "paused": true}
-	if !validStatuses[args.Status] {
+	statusMap := map[string]db.JobStatus{
+		"active":    db.JobStatusActive,
+		"done":      db.JobStatusCompleted,
+		"cancelled": db.JobStatusCancelled,
+		"paused":    db.JobStatusPaused,
+	}
+	dbStatus, ok := statusMap[args.Status]
+	if !ok {
 		return fmt.Sprintf("invalid status %q: must be one of active, done, cancelled, paused", args.Status), nil
 	}
-	dir := filepath.Join(job.JobsDir(te.WorkspaceDir), args.ID)
-	updates := map[string]string{"status": args.Status}
-	if args.Status == "done" {
-		updates["completed"] = time.Now().UTC().Format(time.RFC3339)
-	}
-	if err := job.UpdateFrontmatter(dir, updates); err != nil {
+	if err := te.Store.UpdateJobStatus(ctx, args.ID, dbStatus); err != nil {
 		return "", fmt.Errorf("updating job status: %w", err)
-	}
-	// Dual-write to SQLite if available.
-	if te.Store != nil {
-		ctx := context.Background()
-		dbStatus := mapJobStatus(args.Status)
-		if dbErr := te.Store.UpdateJobStatus(ctx, args.ID, dbStatus); dbErr != nil {
-			slog.Warn("failed to update job status in SQLite", "job", args.ID, "error", dbErr)
-		}
 	}
 	return fmt.Sprintf("job %s status set to %s", args.ID, args.Status), nil
 }
