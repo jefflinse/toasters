@@ -46,12 +46,21 @@ func Execute() error {
 func runTUI(cmd *cobra.Command, _ []string) error {
 	config.BindFlags(cmd)
 
-	cfg, err := config.Load()
+	configDir, err := config.Dir()
 	if err != nil {
 		return err
 	}
 
-	configDir, err := config.Dir()
+	// Bootstrap runs before config.Load() so that the default config.yaml is
+	// written to disk before Viper reads it. On first run this ensures the
+	// operator and provider settings from the embedded default are picked up
+	// rather than Viper's built-in fallback defaults.
+	if err := bootstrap.Run(configDir, defaults.SystemFiles, defaults.DefaultConfig); err != nil {
+		// Non-fatal — log to stderr since the slog handler isn't set up yet.
+		slog.Warn("bootstrap failed", "error", err)
+	}
+
+	cfg, err := config.Load()
 	if err != nil {
 		return err
 	}
@@ -69,12 +78,6 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 		}
 	} else {
 		slog.SetDefault(slog.New(slog.NewTextHandler(io.Discard, nil)))
-	}
-
-	// Run bootstrap to ensure system/ and user/ directories exist.
-	if err := bootstrap.Run(configDir, defaults.SystemFiles, defaults.DefaultConfig); err != nil {
-		slog.Warn("bootstrap failed", "error", err)
-		// Non-fatal — continue with whatever exists
 	}
 
 	workspaceDir, err := config.WorkspaceDir(cfg)
