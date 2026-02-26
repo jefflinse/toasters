@@ -647,53 +647,26 @@ Week 2:
 
 ---
 
-## Phase 3: Teams & Agents
+## Phase 3: Teams & Agents (Completed 2026-02-26)
 
 **Goal:** Build a complete teams and agents management system with composable agent definitions, curated teams, shared agents, and per-agent provider/model selection. Consolidate job persistence to SQLite-only.
 
-**Status:** Planning. See `PHASE_3.md` for full details.
+**Status:** ✅ Complete. All 6 milestones, 30 tasks delivered across 3 execution sessions. See `PHASE_3.md` for the roadmap and `PHASE_3_RESUME.md` for execution details.
 
-**Estimated total effort:** 1.5–2 weeks
+**What was delivered:**
 
----
+| Milestone | Description | Status |
+|-----------|-------------|--------|
+| 1 — SQLite-Only Job Persistence | Removed markdown dual-writes, deleted `internal/job/` package | ✅ Done |
+| 2 — Frontmatter Parsing + Agent Definition Format | `internal/agentfmt` package, YAML parsing, Claude Code import/export, retired `internal/frontmatter/` | ✅ Done |
+| 3 — Directory Layout, Bootstrap, DB Schema | `system/` + `user/` layout, `go:embed`, file-to-DB loader, fsnotify live reload, runtime composition (`internal/compose/`) | ✅ Done |
+| 4 — System Team + Operator Event Loop | Code-driven event loop, system agents (planner, scheduler, blocker-handler), `consult_agent`, task lifecycle tools | ✅ Done |
+| 5 — TUI Evolution — Activity Feed | Chat → chronological activity feed with system events interleaved with LLM interactions | ✅ Done |
+| 6 — TUI CRUD + Polish | Create/edit/delete skills/agents/teams via modals, auto-team promotion (`Ctrl+P`), final docs | ✅ Done |
 
-### 3.1 — SQLite-Only Job Persistence
+**Post-delivery cleanup:** Code review findings (3 blockers + 9 suggestions) addressed. Pre-Phase 3 tech debt (Wave 3) completed. See `CLAUDE.md` for details.
 
-**Effort:** 1 day
-**Depends on:** 1.1 (SQLite)
-
-Stop dual-writing jobs to markdown files. SQLite is the sole source of truth for job state. Remove the `internal/job/` package or reduce it to read-only.
-
----
-
-### 3.2 — Teams & Agents Management System
-
-**Effort:** 1–2 weeks
-**Depends on:** 1.1 (SQLite), 1.3 (agent runtime)
-**Unlocks:** Reusable team compositions, composable agents, dynamic team assembly
-
-The core Phase 3 deliverable. Key goals:
-- Composable agent definitions (layered traits, role overlays, team-specific overrides)
-- Agent generation (programmatic, not just hand-authored `.md` files)
-- Curated teams for specific workflows
-- Shared agents reusable across teams
-- Per-agent provider/model selection
-- TUI integration (`/teams` command, agents panel)
-
----
-
-### Phase 3 Delivery Sequence
-
-```
-Week 1:
-  3.1 (SQLite-only jobs) ────►  done
-  3.2 design exploration ────────────────────►  in progress
-
-Week 2:
-  3.2 implementation ────────────────────────────────►  done
-```
-
-**Phase 3 exit criteria:** Job persistence is SQLite-only. You can define composable agent definitions, assemble curated teams with shared agents, assign per-agent providers/models, and the operator can discover and select teams for work assignment.
+**Phase 3 exit criteria:** All met. Job persistence is SQLite-only. Three-layer composition model (Skills → Agents → Teams) with runtime assembly. Code-driven operator event loop with system team. Activity feed TUI. Full CRUD for skills, agents, and teams. Auto-team detection and promotion.
 
 ---
 

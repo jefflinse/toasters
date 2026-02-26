@@ -280,8 +280,8 @@ func (m *Model) handleAgentOutput(msg AgentOutputMsg) (tea.Model, tea.Cmd) {
 					cmds = append(cmds, m.startStream(m.messagesFromEntries()))
 				}
 
-				// Blocker detection and task status management are now handled
-				// via SQLite tools in the agent runtime (Phase 3 Session B).
+				// Blocker detection and task status management are handled
+				// via SQLite tools in the agent runtime.
 			}
 			// Update tracked state.
 			m.prevSlotActive[i] = snap.Active

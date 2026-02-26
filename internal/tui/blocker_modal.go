@@ -114,8 +114,8 @@ func (m Model) hasBlocker(j *db.Job) bool {
 }
 
 // submitBlockerAnswers emits a blockerAnswersSubmittedMsg to the event loop.
-// Blocker answers are no longer written to the filesystem; they will be
-// stored differently in the new architecture (Phase 3 Session B).
+// Blocker answers are no longer written to the filesystem; they are
+// handled via the operator event loop and SQLite persistence.
 func (m *Model) submitBlockerAnswers() tea.Cmd {
 	b := m.blockerModal.blocker
 	jobID := m.blockerModal.jobID
