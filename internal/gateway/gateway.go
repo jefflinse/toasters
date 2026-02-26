@@ -119,7 +119,8 @@ func New(claudeCfg config.ClaudeConfig, workspaceDir string, notify func()) *Gat
 // SpawnTeam starts a Claude subprocess for a team coordinator in a free slot.
 // It returns the slot index, a boolean indicating whether the team was already
 // running (idempotent duplicate call), and an error if no slot is available.
-func (g *Gateway) SpawnTeam(teamName, jobID, task string, team agents.Team) (slotID int, alreadyRunning bool, err error) {
+// jobDir is the per-job workspace directory where the subprocess runs.
+func (g *Gateway) SpawnTeam(teamName, jobID, task string, team agents.Team, jobDir string) (slotID int, alreadyRunning bool, err error) {
 	g.mu.Lock()
 
 	// Find a free slot: first nil slot, then first done slot.
@@ -191,7 +192,7 @@ func (g *Gateway) SpawnTeam(teamName, jobID, task string, team agents.Team) (slo
 	// Assemble prompt. Job context is now provided by the operator via the task
 	// parameter; filesystem OVERVIEW.md/TODO.md/BLOCKER.md are no longer read.
 	var sb strings.Builder
-	sb.WriteString(agents.BuildTeamCoordinatorPrompt(team, g.workspaceDir))
+	sb.WriteString(agents.BuildTeamCoordinatorPrompt(team, jobDir))
 
 	if task != "" {
 		sb.WriteString("\n\n---\n\n## Task\n")
@@ -244,7 +245,7 @@ func (g *Gateway) SpawnTeam(teamName, jobID, task string, team agents.Team) (slo
 
 	// Start the subprocess goroutine.
 	go func() {
-		ch := spawnClaudeStream(ctx, prompt, g.claudeCfg, permissionArgs, agentsJSON, g.workspaceDir, dbPath)
+		ch := spawnClaudeStream(ctx, prompt, g.claudeCfg, permissionArgs, agentsJSON, jobDir, dbPath)
 		for ev := range ch {
 			// Handle subagent tracking fields (may accompany text content).
 			if ev.SubagentSpawned {

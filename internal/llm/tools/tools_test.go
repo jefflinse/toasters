@@ -13,6 +13,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gofrs/uuid/v5"
+
 	"github.com/jefflinse/toasters/internal/agents"
 	"github.com/jefflinse/toasters/internal/db"
 	"github.com/jefflinse/toasters/internal/orchestration"
@@ -112,7 +114,7 @@ func createTestJob(t *testing.T, store db.Store, id, title, description string, 
 func createTestTask(t *testing.T, store db.Store, jobID, title string, status db.TaskStatus) *db.Task {
 	t.Helper()
 	task := &db.Task{
-		ID:     newTaskID(),
+		ID:     uuid.Must(uuid.NewV4()).String(),
 		JobID:  jobID,
 		Title:  title,
 		Status: status,
@@ -126,14 +128,14 @@ func createTestTask(t *testing.T, store db.Store, jobID, title string, status db
 // --- Mock GatewaySpawner ---
 
 type mockSpawner struct {
-	spawnTeamFn   func(teamName, jobID, task string, team agents.Team) (int, bool, error)
+	spawnTeamFn   func(teamName, jobID, task string, team agents.Team, jobDir string) (int, bool, error)
 	slotSummaries []orchestration.GatewaySlot
 	killFn        func(slotID int) error
 }
 
-func (m *mockSpawner) SpawnTeam(teamName, jobID, task string, team agents.Team) (int, bool, error) {
+func (m *mockSpawner) SpawnTeam(teamName, jobID, task string, team agents.Team, jobDir string) (int, bool, error) {
 	if m.spawnTeamFn != nil {
-		return m.spawnTeamFn(teamName, jobID, task, team)
+		return m.spawnTeamFn(teamName, jobID, task, team, jobDir)
 	}
 	return 0, false, nil
 }
@@ -358,10 +360,9 @@ func TestJobList_NilStore(t *testing.T) {
 // ============================================================================
 
 func TestJobCreate_Success(t *testing.T) {
-	te, _ := newTestExecutor(t)
+	te, configDir := newTestExecutor(t)
 
 	call := makeToolCall("job_create", map[string]string{
-		"id":          "new-job",
 		"name":        "New Job",
 		"description": "A brand new job.",
 	})
@@ -370,13 +371,19 @@ func TestJobCreate_Success(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ExecuteTool returned error: %v", err)
 	}
-	if !strings.Contains(result, "new-job") {
-		t.Errorf("expected result to contain job ID, got %q", result)
+
+	// Result format is "created: <uuid>".
+	if !strings.HasPrefix(result, "created: ") {
+		t.Fatalf("expected result to start with 'created: ', got %q", result)
+	}
+	jobID := strings.TrimPrefix(result, "created: ")
+	if jobID == "" {
+		t.Fatal("expected non-empty job ID in result")
 	}
 
 	// Verify the job exists in SQLite with correct fields.
 	ctx := context.Background()
-	dbJob, err := te.Store.GetJob(ctx, "new-job")
+	dbJob, err := te.Store.GetJob(ctx, jobID)
 	if err != nil {
 		t.Fatalf("GetJob from SQLite failed: %v", err)
 	}
@@ -392,20 +399,62 @@ func TestJobCreate_Success(t *testing.T) {
 	if dbJob.Type != "general" {
 		t.Errorf("SQLite job type: got %q, want %q", dbJob.Type, "general")
 	}
+
+	// Verify WorkspaceDir was auto-created under the workspace directory.
+	if !strings.HasPrefix(dbJob.WorkspaceDir, configDir) {
+		t.Errorf("WorkspaceDir %q does not start with workspace %q", dbJob.WorkspaceDir, configDir)
+	}
+	if !strings.HasSuffix(dbJob.WorkspaceDir, jobID) {
+		t.Errorf("WorkspaceDir %q does not end with job ID %q", dbJob.WorkspaceDir, jobID)
+	}
+	info, err := os.Stat(dbJob.WorkspaceDir)
+	if err != nil {
+		t.Fatalf("os.Stat(%q): %v", dbJob.WorkspaceDir, err)
+	}
+	if !info.IsDir() {
+		t.Errorf("WorkspaceDir %q is not a directory", dbJob.WorkspaceDir)
+	}
 }
 
-func TestJobCreate_InvalidID(t *testing.T) {
+func TestJobCreate_AutoGeneratesUUID(t *testing.T) {
 	te, _ := newTestExecutor(t)
 
-	call := makeToolCall("job_create", map[string]string{
-		"id":          "INVALID ID!",
-		"name":        "Bad Job",
-		"description": "Should fail.",
+	// Create two jobs and verify they get different auto-generated UUIDs.
+	call1 := makeToolCall("job_create", map[string]string{
+		"name":        "Job One",
+		"description": "First job.",
+	})
+	call2 := makeToolCall("job_create", map[string]string{
+		"name":        "Job Two",
+		"description": "Second job.",
 	})
 
-	_, err := te.ExecuteTool(context.Background(), call)
-	if err == nil {
-		t.Fatal("expected error for invalid job ID, got nil")
+	result1, err := te.ExecuteTool(context.Background(), call1)
+	if err != nil {
+		t.Fatalf("ExecuteTool (job 1) returned error: %v", err)
+	}
+	result2, err := te.ExecuteTool(context.Background(), call2)
+	if err != nil {
+		t.Fatalf("ExecuteTool (job 2) returned error: %v", err)
+	}
+
+	id1 := strings.TrimPrefix(result1, "created: ")
+	id2 := strings.TrimPrefix(result2, "created: ")
+
+	if id1 == "" || id2 == "" {
+		t.Fatalf("expected non-empty job IDs, got %q and %q", id1, id2)
+	}
+	if id1 == id2 {
+		t.Errorf("expected unique job IDs, both got %q", id1)
+	}
+
+	// Verify both jobs exist in the store.
+	ctx := context.Background()
+	if _, err := te.Store.GetJob(ctx, id1); err != nil {
+		t.Errorf("GetJob(%q) failed: %v", id1, err)
+	}
+	if _, err := te.Store.GetJob(ctx, id2); err != nil {
+		t.Errorf("GetJob(%q) failed: %v", id2, err)
 	}
 }
 
@@ -1548,7 +1597,7 @@ func TestAssignTeam_SuccessfulDispatch(t *testing.T) {
 
 	spawnCalled := false
 	te.Gateway = &mockSpawner{
-		spawnTeamFn: func(teamName, jobID, task string, team agents.Team) (int, bool, error) {
+		spawnTeamFn: func(teamName, jobID, task string, team agents.Team, jobDir string) (int, bool, error) {
 			spawnCalled = true
 			if teamName != "coding" {
 				t.Errorf("expected team 'coding', got %q", teamName)
@@ -1584,7 +1633,7 @@ func TestAssignTeam_SuccessfulDispatch(t *testing.T) {
 func TestAssignTeam_AlreadyRunning(t *testing.T) {
 	te, _ := newTestExecutor(t)
 	te.Gateway = &mockSpawner{
-		spawnTeamFn: func(_, _, _ string, _ agents.Team) (int, bool, error) {
+		spawnTeamFn: func(_, _, _ string, _ agents.Team, _ string) (int, bool, error) {
 			return 3, true, nil
 		},
 	}
@@ -1613,7 +1662,7 @@ func TestAssignTeam_AlreadyRunning(t *testing.T) {
 func TestAssignTeam_SpawnError(t *testing.T) {
 	te, _ := newTestExecutor(t)
 	te.Gateway = &mockSpawner{
-		spawnTeamFn: func(_, _, _ string, _ agents.Team) (int, bool, error) {
+		spawnTeamFn: func(_, _, _ string, _ agents.Team, _ string) (int, bool, error) {
 			return 0, false, fmt.Errorf("no available slots")
 		},
 	}
@@ -1763,7 +1812,7 @@ func TestAssignTeam_UsesRuntimeWhenProviderConfigured(t *testing.T) {
 	// Set up a gateway mock that should NOT be called.
 	gatewayCalled := false
 	te.Gateway = &mockSpawner{
-		spawnTeamFn: func(_, _, _ string, _ agents.Team) (int, bool, error) {
+		spawnTeamFn: func(_, _, _ string, _ agents.Team, _ string) (int, bool, error) {
 			gatewayCalled = true
 			return 0, false, nil
 		},
@@ -1817,7 +1866,7 @@ func TestAssignTeam_FallsBackToGatewayWhenNoProvider(t *testing.T) {
 
 	gatewayCalled := false
 	te.Gateway = &mockSpawner{
-		spawnTeamFn: func(teamName, jobID, task string, _ agents.Team) (int, bool, error) {
+		spawnTeamFn: func(teamName, jobID, task string, _ agents.Team, _ string) (int, bool, error) {
 			gatewayCalled = true
 			if teamName != "coding" {
 				t.Errorf("expected team 'coding', got %q", teamName)
@@ -1865,7 +1914,7 @@ func TestAssignTeam_FallsBackToGatewayOnRuntimeError(t *testing.T) {
 
 	gatewayCalled := false
 	te.Gateway = &mockSpawner{
-		spawnTeamFn: func(_, _, _ string, _ agents.Team) (int, bool, error) {
+		spawnTeamFn: func(_, _, _ string, _ agents.Team, _ string) (int, bool, error) {
 			gatewayCalled = true
 			return 5, false, nil
 		},
@@ -1976,7 +2025,7 @@ func TestCancelSession_BadJSON(t *testing.T) {
 // ============================================================================
 
 func TestAssignTeam_RuntimePath_WorkDirIsWorkspaceDir(t *testing.T) {
-	te, configDir := newTestExecutor(t)
+	te, _ := newTestExecutor(t)
 
 	// Register a mock provider so SpawnAgent succeeds.
 	mock := &mockProvider{name: "test-provider"}
@@ -2001,16 +2050,23 @@ func TestAssignTeam_RuntimePath_WorkDirIsWorkspaceDir(t *testing.T) {
 	// but it should NOT be called when the runtime path succeeds.
 	gatewayCalled := false
 	te.Gateway = &mockSpawner{
-		spawnTeamFn: func(_, _, _ string, _ agents.Team) (int, bool, error) {
+		spawnTeamFn: func(_, _, _ string, _ agents.Team, _ string) (int, bool, error) {
 			gatewayCalled = true
 			return 0, false, nil
 		},
 	}
 	te.SetTeams([]agents.Team{{Name: "coding"}})
 
-	// Create the job in SQLite.
+	// Create the job in SQLite with a known WorkspaceDir.
 	const jobID = "workdir-regression-job"
-	createTestJob(t, te.Store, jobID, "WorkDir Regression Job", "Test", db.JobStatusActive)
+	jobWorkDir := t.TempDir()
+	job := createTestJob(t, te.Store, jobID, "WorkDir Regression Job", "Test", db.JobStatusActive)
+	_ = job
+	// Set the WorkspaceDir on the job (createTestJob doesn't set it).
+	wdir := jobWorkDir
+	if err := te.Store.UpdateJob(context.Background(), jobID, db.JobUpdate{WorkspaceDir: &wdir}); err != nil {
+		t.Fatalf("setting job WorkspaceDir: %v", err)
+	}
 
 	call := makeToolCall("assign_team", map[string]string{
 		"team_name": "coding",
@@ -2040,12 +2096,12 @@ func TestAssignTeam_RuntimePath_WorkDirIsWorkspaceDir(t *testing.T) {
 	}
 
 	// The system prompt is built with agents.BuildTeamCoordinatorPrompt(team, workspaceDir).
-	// It contains the workspace dir path. Verify it's the configDir (our workspace).
+	// It contains the workspace dir path. Verify it's the job's WorkspaceDir.
 	prompt := sess.SystemPrompt()
-	if !strings.Contains(prompt, configDir) {
+	if !strings.Contains(prompt, jobWorkDir) {
 		t.Errorf("session SystemPrompt does not contain expected workspace dir %q\n"+
 			"Prompt excerpt: %q",
-			configDir,
+			jobWorkDir,
 			truncateForError(prompt, 200),
 		)
 	}

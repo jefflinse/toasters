@@ -79,7 +79,7 @@ func New(cfg Config) *Operator {
 	eventCh := make(chan Event, eventChSize)
 	var systemTools *SystemTools
 	if cfg.Store != nil && cfg.Composer != nil {
-		systemTools = NewSystemTools(cfg.Store, cfg.Composer, eventCh, nil)
+		systemTools = NewSystemTools(cfg.Store, cfg.Composer, eventCh, nil, cfg.WorkDir)
 	}
 
 	tools := newOperatorTools(cfg.Runtime, cfg.Composer, cfg.Store, systemTools, cfg.WorkDir)

@@ -9,6 +9,7 @@ require (
 	github.com/atotto/clipboard v0.1.4
 	github.com/charmbracelet/glamour v0.10.0
 	github.com/fsnotify/fsnotify v1.9.0
+	github.com/gofrs/uuid/v5 v5.4.0
 	github.com/google/uuid v1.6.0
 	github.com/mark3labs/mcp-go v0.44.0
 	github.com/spf13/cobra v1.10.2

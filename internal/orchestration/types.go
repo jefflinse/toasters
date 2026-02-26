@@ -16,7 +16,7 @@ type GatewaySlot struct {
 
 // GatewaySpawner is the interface satisfied by *gateway.Gateway.
 type GatewaySpawner interface {
-	SpawnTeam(teamName, jobID, task string, team agents.Team) (slotID int, alreadyRunning bool, err error)
+	SpawnTeam(teamName, jobID, task string, team agents.Team, jobDir string) (slotID int, alreadyRunning bool, err error)
 	SlotSummaries() []GatewaySlot
 	Kill(slotID int) error
 }

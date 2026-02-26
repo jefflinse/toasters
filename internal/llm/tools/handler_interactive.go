@@ -11,7 +11,7 @@ import (
 	"github.com/jefflinse/toasters/internal/runtime"
 )
 
-func handleAssignTeam(_ context.Context, te *ToolExecutor, call provider.ToolCall) (string, error) {
+func handleAssignTeam(ctx context.Context, te *ToolExecutor, call provider.ToolCall) (string, error) {
 	if te.Gateway == nil {
 		return "", fmt.Errorf("gateway not initialized")
 	}
@@ -23,11 +23,12 @@ func handleAssignTeam(_ context.Context, te *ToolExecutor, call provider.ToolCal
 	if err := json.Unmarshal(call.Arguments, &args); err != nil {
 		return "", fmt.Errorf("parsing assign_team args: %w", err)
 	}
-	// Guard: verify the job exists before dispatching to a team.
+	// Guard: verify the job exists and get its workspace directory.
 	if te.Store == nil {
 		return "", fmt.Errorf("database not available")
 	}
-	if _, err := te.Store.GetJob(context.Background(), args.JobID); err != nil {
+	job, err := te.Store.GetJob(ctx, args.JobID)
+	if err != nil {
 		return fmt.Sprintf("job %q does not exist; call job_create first", args.JobID), nil
 	}
 	// Look up team by name.
@@ -45,7 +46,7 @@ func handleAssignTeam(_ context.Context, te *ToolExecutor, call provider.ToolCal
 	}
 	// Try runtime path first if available and configured.
 	if te.Runtime != nil && te.DefaultProvider != "" {
-		prompt := agents.BuildTeamCoordinatorPrompt(team, te.WorkspaceDir)
+		prompt := agents.BuildTeamCoordinatorPrompt(team, job.WorkspaceDir)
 		opts := runtime.SpawnOpts{
 			AgentID:        team.Name,
 			ProviderName:   te.DefaultProvider,
@@ -54,10 +55,10 @@ func handleAssignTeam(_ context.Context, te *ToolExecutor, call provider.ToolCal
 			JobID:          args.JobID,
 			TeamName:       team.Name,
 			InitialMessage: args.Task,
-			WorkDir:        te.WorkspaceDir,
+			WorkDir:        job.WorkspaceDir,
 			MaxDepth:       1, // coordinators may spawn workers; workers may not spawn further
 		}
-		sess, err := te.Runtime.SpawnAgent(context.Background(), opts)
+		sess, err := te.Runtime.SpawnAgent(ctx, opts)
 		if err != nil {
 			slog.Warn("runtime spawn failed, falling back to gateway", "error", err)
 			// Fall through to gateway path below.
@@ -66,7 +67,7 @@ func handleAssignTeam(_ context.Context, te *ToolExecutor, call provider.ToolCal
 		}
 	}
 	// Fall through to gateway path.
-	slotID, alreadyRunning, err := te.Gateway.SpawnTeam(args.TeamName, args.JobID, args.Task, team)
+	slotID, alreadyRunning, err := te.Gateway.SpawnTeam(args.TeamName, args.JobID, args.Task, team, job.WorkspaceDir)
 	if err != nil {
 		return "", fmt.Errorf("spawning team: %w", err)
 	}

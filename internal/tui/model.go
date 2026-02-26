@@ -1267,7 +1267,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.blockerModal.inputText = ""
 
 		// Re-spawn the team with blocker context.
-		_, ok := m.jobByID(msg.jobID)
+		job, ok := m.jobByID(msg.jobID)
 		if ok && m.gateway != nil {
 			spawnPrompt := fmt.Sprintf("A blocker was encountered on job '%s' and the user has provided responses. Resume the job addressing the blocker.", msg.jobID)
 
@@ -1282,7 +1282,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					break
 				}
 			}
-			if _, _, err := m.gateway.SpawnTeam(teamName, msg.jobID, spawnPrompt, matchedTeam); err != nil {
+			if _, _, err := m.gateway.SpawnTeam(teamName, msg.jobID, spawnPrompt, matchedTeam, job.WorkspaceDir); err != nil {
 				slog.Error("failed to re-spawn team after blocker", "team", teamName, "job", msg.jobID, "error", err)
 			} else {
 				return m, spinnerTick() // re-arm spinner for agent heartbeat

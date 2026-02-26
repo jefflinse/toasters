@@ -2,13 +2,14 @@ package operator
 
 import (
 	"context"
-	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/gofrs/uuid/v5"
 
 	"github.com/jefflinse/toasters/internal/compose"
 	"github.com/jefflinse/toasters/internal/db"
@@ -17,7 +18,7 @@ import (
 
 // TeamLeadSpawner is the interface for spawning team lead sessions.
 type TeamLeadSpawner interface {
-	SpawnTeamLead(ctx context.Context, composed *compose.ComposedAgent, taskID string, jobID string) error
+	SpawnTeamLead(ctx context.Context, composed *compose.ComposedAgent, taskID string, jobID string, workDir string) error
 }
 
 // SystemTools provides orchestration tools for system agents (planner,
@@ -29,15 +30,17 @@ type SystemTools struct {
 	composer *compose.Composer
 	eventCh  chan<- Event
 	spawner  TeamLeadSpawner
+	workDir  string // global workspace directory; per-job subdirs are created under this
 }
 
 // NewSystemTools creates a new SystemTools instance.
-func NewSystemTools(store db.Store, composer *compose.Composer, eventCh chan<- Event, spawner TeamLeadSpawner) *SystemTools {
+func NewSystemTools(store db.Store, composer *compose.Composer, eventCh chan<- Event, spawner TeamLeadSpawner, workDir string) *SystemTools {
 	return &SystemTools{
 		store:    store,
 		composer: composer,
 		eventCh:  eventCh,
 		spawner:  spawner,
+		workDir:  workDir,
 	}
 }
 
@@ -46,7 +49,7 @@ func (st *SystemTools) Definitions() []runtime.ToolDef {
 	return []runtime.ToolDef{
 		{
 			Name:        "create_job",
-			Description: "Create a new job. A job is a top-level unit of work that contains tasks.",
+			Description: "Create a new job. A job is a top-level unit of work that contains tasks. A per-job workspace directory is automatically created.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
@@ -57,10 +60,6 @@ func (st *SystemTools) Definitions() []runtime.ToolDef {
 					"description": {
 						"type": "string",
 						"description": "Detailed description of what the job entails"
-					},
-					"workspace_dir": {
-						"type": "string",
-						"description": "Working directory for the job (optional)"
 					}
 				},
 				"required": ["title", "description"]
@@ -167,9 +166,8 @@ func (st *SystemTools) Execute(ctx context.Context, name string, args json.RawMe
 
 func (st *SystemTools) createJob(ctx context.Context, args json.RawMessage) (string, error) {
 	var params struct {
-		Title        string `json:"title"`
-		Description  string `json:"description"`
-		WorkspaceDir string `json:"workspace_dir"`
+		Title       string `json:"title"`
+		Description string `json:"description"`
 	}
 	if err := json.Unmarshal(args, &params); err != nil {
 		return "", fmt.Errorf("parsing create_job args: %w", err)
@@ -182,32 +180,27 @@ func (st *SystemTools) createJob(ctx context.Context, args json.RawMessage) (str
 		return "", fmt.Errorf("description is required")
 	}
 
-	// Validate workspace_dir if provided.
-	workspaceDir := params.WorkspaceDir
-	if workspaceDir != "" {
-		absDir, err := filepath.Abs(workspaceDir)
-		if err != nil {
-			return "", fmt.Errorf("invalid workspace_dir: %w", err)
-		}
-		info, err := os.Stat(absDir)
-		if err != nil {
-			return "", fmt.Errorf("workspace_dir does not exist: %w", err)
-		}
-		if !info.IsDir() {
-			return "", fmt.Errorf("workspace_dir is not a directory: %s", absDir)
-		}
-		workspaceDir = absDir
+	jobID, err := uuid.NewV4()
+	if err != nil {
+		return "", fmt.Errorf("generating job ID: %w", err)
+	}
+
+	// Create per-job workspace subdirectory under the global workspace.
+	jobDir := filepath.Join(st.workDir, jobID.String())
+	if err := os.MkdirAll(jobDir, 0o755); err != nil {
+		return "", fmt.Errorf("creating job workspace directory: %w", err)
 	}
 
 	job := &db.Job{
-		ID:           newID(),
+		ID:           jobID.String(),
 		Title:        params.Title,
 		Description:  params.Description,
 		Status:       db.JobStatusPending,
-		WorkspaceDir: workspaceDir,
+		WorkspaceDir: jobDir,
 	}
 
 	if err := st.store.CreateJob(ctx, job); err != nil {
+		_ = os.Remove(jobDir) // best-effort cleanup of orphaned directory
 		return "", fmt.Errorf("creating job: %w", err)
 	}
 
@@ -235,8 +228,13 @@ func (st *SystemTools) createTask(ctx context.Context, args json.RawMessage) (st
 		return "", fmt.Errorf("title is required")
 	}
 
+	taskID, err := uuid.NewV4()
+	if err != nil {
+		return "", fmt.Errorf("generating task ID: %w", err)
+	}
+
 	task := &db.Task{
-		ID:     newID(),
+		ID:     taskID.String(),
 		JobID:  params.JobID,
 		Title:  params.Title,
 		Status: db.TaskStatusPending,
@@ -279,32 +277,38 @@ func (st *SystemTools) assignTask(ctx context.Context, args json.RawMessage) (st
 		return "", fmt.Errorf("task %q is %s, not pending", params.TaskID, task.Status)
 	}
 
-	// 2. Get team to verify it exists and get its name.
+	// 2. Get the job to obtain the per-job workspace directory.
+	job, err := st.store.GetJob(ctx, task.JobID)
+	if err != nil {
+		return "", fmt.Errorf("getting job for workspace: %w", err)
+	}
+
+	// 3. Get team to verify it exists and get its name.
 	team, err := st.store.GetTeam(ctx, params.TeamID)
 	if err != nil {
 		return "", fmt.Errorf("getting team: %w", err)
 	}
 
-	// 3. Update task: set status to in_progress and assign team.
+	// 4. Update task: set status to in_progress and assign team.
 	if err := st.store.AssignTask(ctx, params.TaskID, params.TeamID); err != nil {
 		return "", fmt.Errorf("assigning task: %w", err)
 	}
 
-	// 4. Compose the team lead agent.
+	// 5. Compose the team lead agent.
 	composed, err := st.composer.Compose(ctx, team.LeadAgent, params.TeamID)
 	if err != nil {
 		return "", fmt.Errorf("composing team lead: %w", err)
 	}
 
-	// 5. Spawn team lead goroutine (fire-and-forget).
+	// 6. Spawn team lead goroutine (fire-and-forget) with the job's workspace dir.
 	if st.spawner == nil {
 		return "", fmt.Errorf("cannot assign task: no agent spawner configured")
 	}
-	if err := st.spawner.SpawnTeamLead(ctx, composed, params.TaskID, task.JobID); err != nil {
+	if err := st.spawner.SpawnTeamLead(ctx, composed, params.TaskID, task.JobID, job.WorkspaceDir); err != nil {
 		return "", fmt.Errorf("spawning team lead: %w", err)
 	}
 
-	// 6. Send EventTaskStarted to the event channel.
+	// 7. Send EventTaskStarted to the event channel.
 	trySendEvent(ctx, st.eventCh, Event{
 		Type: EventTaskStarted,
 		Payload: TaskStartedPayload{
@@ -419,11 +423,4 @@ func (st *SystemTools) surfaceToUser(ctx context.Context, args json.RawMessage) 
 	}
 
 	return fmt.Sprintf("Surfaced to user: %s", params.Text), nil
-}
-
-// newID generates a random UUID-like identifier using crypto/rand.
-func newID() string {
-	b := make([]byte, 16)
-	_, _ = rand.Read(b)
-	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:])
 }

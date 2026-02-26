@@ -159,15 +159,14 @@ var staticTools = []provider.Tool{
 	},
 	{
 		Name:        "job_create",
-		Description: "Create a new job.",
+		Description: "Create a new job. A UUID is auto-generated and a per-job workspace directory is created.",
 		Parameters: mustMarshalJSON(map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"id":          map[string]any{"type": "string", "description": "Slug identifier (lowercase letters, digits, hyphens only, e.g. 'auth-refactor')."},
 				"name":        map[string]any{"type": "string", "description": "Human-readable name."},
 				"description": map[string]any{"type": "string", "description": "1-3 sentence summary of the job."},
 			},
-			"required": []string{"id", "name", "description"},
+			"required": []string{"name", "description"},
 		}),
 	},
 	{

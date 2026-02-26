@@ -139,7 +139,7 @@ func newTestOperatorTools(t *testing.T, agents []*db.Agent) *operatorTools {
 
 	composer := compose.New(store, "test-provider", "test-model")
 	eventCh := make(chan Event, 64)
-	systemTools := NewSystemTools(store, composer, eventCh, nil)
+	systemTools := NewSystemTools(store, composer, eventCh, nil, t.TempDir())
 
 	return newOperatorTools(nil, composer, store, systemTools, t.TempDir())
 }
@@ -624,7 +624,7 @@ func TestEventLoop_TaskCompleted_AssignsNextTask(t *testing.T) {
 
 	// Create operator with SystemTools that have a spawner.
 	eventCh := make(chan Event, eventChSize)
-	systemTools := NewSystemTools(store, composer, eventCh, spawner)
+	systemTools := NewSystemTools(store, composer, eventCh, spawner, t.TempDir())
 	tools := newOperatorTools(rt, composer, store, systemTools, t.TempDir())
 	provTools := operatorToolsToProviderTools(tools.Definitions())
 
@@ -1577,7 +1577,7 @@ func TestSurfaceToUserCreatesFeedEntry(t *testing.T) {
 	store := newOperatorTestStore(t)
 	composer := compose.New(store, "test-provider", "test-model")
 	eventCh := make(chan Event, 64)
-	systemTools := NewSystemTools(store, composer, eventCh, nil)
+	systemTools := NewSystemTools(store, composer, eventCh, nil, t.TempDir())
 	tools := newOperatorTools(nil, composer, store, systemTools, t.TempDir())
 
 	result, err := tools.Execute(context.Background(), "surface_to_user",
@@ -1651,7 +1651,7 @@ func TestQueryJobDelegatesToSystemTools(t *testing.T) {
 
 	composer := compose.New(store, "test-provider", "test-model")
 	eventCh := make(chan Event, 64)
-	systemTools := NewSystemTools(store, composer, eventCh, nil)
+	systemTools := NewSystemTools(store, composer, eventCh, nil, t.TempDir())
 	tools := newOperatorTools(nil, composer, store, systemTools, t.TempDir())
 
 	result, err := tools.Execute(ctx, "query_job",
@@ -1670,7 +1670,7 @@ func TestQueryTeamsDelegatesToSystemTools(t *testing.T) {
 
 	composer := compose.New(store, "test-provider", "test-model")
 	eventCh := make(chan Event, 64)
-	systemTools := NewSystemTools(store, composer, eventCh, nil)
+	systemTools := NewSystemTools(store, composer, eventCh, nil, t.TempDir())
 	tools := newOperatorTools(nil, composer, store, systemTools, t.TempDir())
 
 	result, err := tools.Execute(ctx, "query_teams", json.RawMessage(`{}`))

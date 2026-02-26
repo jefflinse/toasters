@@ -2,29 +2,18 @@ package tools
 
 import (
 	"context"
-	"crypto/rand"
 	"encoding/json"
 	"fmt"
-	"regexp"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/gofrs/uuid/v5"
 
 	"github.com/jefflinse/toasters/internal/db"
 	"github.com/jefflinse/toasters/internal/provider"
 )
-
-// jobIDRe validates job IDs: lowercase letters, digits, and hyphens only.
-var jobIDRe = regexp.MustCompile(`^[a-z0-9-]+$`)
-
-// newTaskID generates a random UUID v4 for task IDs.
-func newTaskID() string {
-	var b [16]byte
-	_, _ = rand.Read(b[:])
-	b[6] = (b[6] & 0x0f) | 0x40
-	b[8] = (b[8] & 0x3f) | 0x80
-	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x",
-		b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
-}
 
 // dbJobStatusToTool maps db.JobStatus to tool-facing status strings.
 func dbJobStatusToTool(s db.JobStatus) string {
@@ -78,27 +67,43 @@ func handleJobCreate(ctx context.Context, te *ToolExecutor, call provider.ToolCa
 		return "", fmt.Errorf("database not available")
 	}
 	var args struct {
-		ID          string `json:"id"`
 		Name        string `json:"name"`
 		Description string `json:"description"`
 	}
 	if err := json.Unmarshal(call.Arguments, &args); err != nil {
 		return "", fmt.Errorf("parsing job_create args: %w", err)
 	}
-	if !jobIDRe.MatchString(args.ID) {
-		return "", fmt.Errorf("invalid job ID %q: must match [a-z0-9-]+", args.ID)
+	if args.Name == "" {
+		return "", fmt.Errorf("name is required")
 	}
+	if args.Description == "" {
+		return "", fmt.Errorf("description is required")
+	}
+
+	jobID, err := uuid.NewV4()
+	if err != nil {
+		return "", fmt.Errorf("generating job ID: %w", err)
+	}
+
+	// Create per-job workspace subdirectory under the global workspace.
+	jobDir := filepath.Join(te.WorkspaceDir, jobID.String())
+	if err := os.MkdirAll(jobDir, 0o755); err != nil {
+		return "", fmt.Errorf("creating job workspace directory: %w", err)
+	}
+
 	dbJob := &db.Job{
-		ID:          args.ID,
-		Title:       args.Name,
-		Description: args.Description,
-		Type:        "general",
-		Status:      db.JobStatusPending,
+		ID:           jobID.String(),
+		Title:        args.Name,
+		Description:  args.Description,
+		Type:         "general",
+		Status:       db.JobStatusPending,
+		WorkspaceDir: jobDir,
 	}
 	if err := te.Store.CreateJob(ctx, dbJob); err != nil {
+		_ = os.Remove(jobDir) // best-effort cleanup of orphaned directory
 		return "", fmt.Errorf("creating job: %w", err)
 	}
-	return "created: " + args.ID, nil
+	return "created: " + dbJob.ID, nil
 }
 
 func handleJobReadOverview(ctx context.Context, te *ToolExecutor, call provider.ToolCall) (string, error) {
@@ -194,8 +199,12 @@ func handleJobAddTodo(ctx context.Context, te *ToolExecutor, call provider.ToolC
 	if err := json.Unmarshal(call.Arguments, &args); err != nil {
 		return "", fmt.Errorf("parsing job_add_todo args: %w", err)
 	}
+	taskID, err := uuid.NewV4()
+	if err != nil {
+		return "", fmt.Errorf("generating task ID: %w", err)
+	}
 	task := &db.Task{
-		ID:     newTaskID(),
+		ID:     taskID.String(),
 		JobID:  args.ID,
 		Title:  args.Task,
 		Status: db.TaskStatusPending,

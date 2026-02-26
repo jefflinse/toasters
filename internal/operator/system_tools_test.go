@@ -4,10 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/gofrs/uuid/v5"
 
 	"github.com/jefflinse/toasters/internal/compose"
 	"github.com/jefflinse/toasters/internal/db"
@@ -26,12 +29,13 @@ type spawnCall struct {
 	Composed *compose.ComposedAgent
 	TaskID   string
 	JobID    string
+	WorkDir  string
 }
 
-func (m *mockSpawner) SpawnTeamLead(_ context.Context, composed *compose.ComposedAgent, taskID string, jobID string) error {
+func (m *mockSpawner) SpawnTeamLead(_ context.Context, composed *compose.ComposedAgent, taskID string, jobID string, workDir string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.calls = append(m.calls, spawnCall{Composed: composed, TaskID: taskID, JobID: jobID})
+	m.calls = append(m.calls, spawnCall{Composed: composed, TaskID: taskID, JobID: jobID, WorkDir: workDir})
 	return nil
 }
 
@@ -55,8 +59,9 @@ func newTestStore(t *testing.T) db.Store {
 }
 
 // newTestSystemTools creates a SystemTools with a real store, mock spawner,
-// and buffered event channel.
-func newTestSystemTools(t *testing.T) (*SystemTools, db.Store, *mockSpawner, chan Event) {
+// and buffered event channel. Returns the SystemTools, store, spawner, event
+// channel, and the workDir used by SystemTools.
+func newTestSystemTools(t *testing.T) (*SystemTools, db.Store, *mockSpawner, chan Event, string) {
 	t.Helper()
 	store := newTestStore(t)
 	spawner := &mockSpawner{}
@@ -65,8 +70,9 @@ func newTestSystemTools(t *testing.T) (*SystemTools, db.Store, *mockSpawner, cha
 	// Create a composer with the real store.
 	composer := compose.New(store, "test-provider", "test-model")
 
-	st := NewSystemTools(store, composer, eventCh, spawner)
-	return st, store, spawner, eventCh
+	workDir := t.TempDir()
+	st := NewSystemTools(store, composer, eventCh, spawner, workDir)
+	return st, store, spawner, eventCh, workDir
 }
 
 // seedTeam inserts a team, its lead agent, and team membership into the store.
@@ -104,14 +110,12 @@ func seedTeam(t *testing.T, ctx context.Context, store db.Store, teamID, teamNam
 // --- Tests ---
 
 func TestCreateJob(t *testing.T) {
-	st, store, _, _ := newTestSystemTools(t)
+	st, store, _, _, workDir := newTestSystemTools(t)
 	ctx := context.Background()
 
-	workDir := t.TempDir()
 	args, _ := json.Marshal(map[string]string{
-		"title":         "Build web app",
-		"description":   "Create a new web application",
-		"workspace_dir": workDir,
+		"title":       "Build web app",
+		"description": "Create a new web application",
 	})
 	result, err := st.Execute(ctx, "create_job", args)
 	assertNoError(t, err)
@@ -131,12 +135,28 @@ func TestCreateJob(t *testing.T) {
 	assertNoError(t, err)
 	assertEqual(t, "Build web app", job.Title)
 	assertEqual(t, "Create a new web application", job.Description)
-	assertEqual(t, workDir, job.WorkspaceDir)
 	assertEqual(t, string(db.JobStatusPending), string(job.Status))
+
+	// WorkspaceDir should be <workDir>/<jobID>.
+	if !strings.HasPrefix(job.WorkspaceDir, workDir) {
+		t.Errorf("WorkspaceDir %q does not start with workDir %q", job.WorkspaceDir, workDir)
+	}
+	if !strings.HasSuffix(job.WorkspaceDir, jobID) {
+		t.Errorf("WorkspaceDir %q does not end with jobID %q", job.WorkspaceDir, jobID)
+	}
+
+	// Verify the directory was actually created on disk.
+	info, err := os.Stat(job.WorkspaceDir)
+	if err != nil {
+		t.Fatalf("os.Stat(%q): %v", job.WorkspaceDir, err)
+	}
+	if !info.IsDir() {
+		t.Errorf("WorkspaceDir %q is not a directory", job.WorkspaceDir)
+	}
 }
 
 func TestCreateJob_MissingParams(t *testing.T) {
-	st, _, _, _ := newTestSystemTools(t)
+	st, _, _, _, _ := newTestSystemTools(t)
 	ctx := context.Background()
 
 	// Missing title.
@@ -151,7 +171,7 @@ func TestCreateJob_MissingParams(t *testing.T) {
 }
 
 func TestCreateTask(t *testing.T) {
-	st, store, _, _ := newTestSystemTools(t)
+	st, store, _, _, _ := newTestSystemTools(t)
 	ctx := context.Background()
 
 	// First create a job.
@@ -192,7 +212,7 @@ func TestCreateTask(t *testing.T) {
 }
 
 func TestCreateTask_WithTeamID(t *testing.T) {
-	st, store, _, _ := newTestSystemTools(t)
+	st, store, _, _, _ := newTestSystemTools(t)
 	ctx := context.Background()
 
 	// Create a job.
@@ -227,7 +247,7 @@ func TestCreateTask_WithTeamID(t *testing.T) {
 }
 
 func TestCreateTask_MissingParams(t *testing.T) {
-	st, _, _, _ := newTestSystemTools(t)
+	st, _, _, _, _ := newTestSystemTools(t)
 	ctx := context.Background()
 
 	// Missing job_id.
@@ -242,7 +262,7 @@ func TestCreateTask_MissingParams(t *testing.T) {
 }
 
 func TestAssignTask(t *testing.T) {
-	st, store, spawner, eventCh := newTestSystemTools(t)
+	st, store, spawner, eventCh, _ := newTestSystemTools(t)
 	ctx := context.Background()
 
 	// Seed a team.
@@ -296,6 +316,11 @@ func TestAssignTask(t *testing.T) {
 	assertEqual(t, jobID, calls[0].JobID)
 	assertEqual(t, "lead-agent", calls[0].Composed.AgentID)
 
+	// Verify the job's workspace directory was propagated to the spawner.
+	job, err := store.GetJob(ctx, jobID)
+	assertNoError(t, err)
+	assertEqual(t, job.WorkspaceDir, calls[0].WorkDir)
+
 	// Verify event was sent.
 	select {
 	case ev := <-eventCh:
@@ -315,7 +340,7 @@ func TestAssignTask(t *testing.T) {
 }
 
 func TestAssignTask_NotPending(t *testing.T) {
-	st, store, _, _ := newTestSystemTools(t)
+	st, store, _, _, _ := newTestSystemTools(t)
 	ctx := context.Background()
 
 	// Seed a team.
@@ -361,7 +386,7 @@ func TestAssignTask_NotPending(t *testing.T) {
 }
 
 func TestAssignTask_MissingParams(t *testing.T) {
-	st, _, _, _ := newTestSystemTools(t)
+	st, _, _, _, _ := newTestSystemTools(t)
 	ctx := context.Background()
 
 	// Missing task_id.
@@ -376,7 +401,7 @@ func TestAssignTask_MissingParams(t *testing.T) {
 }
 
 func TestQueryTeams(t *testing.T) {
-	st, store, _, _ := newTestSystemTools(t)
+	st, store, _, _, _ := newTestSystemTools(t)
 	ctx := context.Background()
 
 	// Seed two teams.
@@ -433,7 +458,7 @@ func TestQueryTeams(t *testing.T) {
 }
 
 func TestQueryTeams_Empty(t *testing.T) {
-	st, _, _, _ := newTestSystemTools(t)
+	st, _, _, _, _ := newTestSystemTools(t)
 	ctx := context.Background()
 
 	result, err := st.Execute(ctx, "query_teams", json.RawMessage(`{}`))
@@ -442,7 +467,7 @@ func TestQueryTeams_Empty(t *testing.T) {
 }
 
 func TestQueryJob(t *testing.T) {
-	st, store, _, _ := newTestSystemTools(t)
+	st, store, _, _, _ := newTestSystemTools(t)
 	ctx := context.Background()
 
 	// Create a job with tasks.
@@ -496,7 +521,7 @@ func TestQueryJob(t *testing.T) {
 }
 
 func TestQueryJob_MissingJobID(t *testing.T) {
-	st, _, _, _ := newTestSystemTools(t)
+	st, _, _, _, _ := newTestSystemTools(t)
 	ctx := context.Background()
 
 	_, err := st.Execute(ctx, "query_job", json.RawMessage(`{}`))
@@ -505,7 +530,7 @@ func TestQueryJob_MissingJobID(t *testing.T) {
 }
 
 func TestQueryJob_NotFound(t *testing.T) {
-	st, _, _, _ := newTestSystemTools(t)
+	st, _, _, _, _ := newTestSystemTools(t)
 	ctx := context.Background()
 
 	_, err := st.Execute(ctx, "query_job", json.RawMessage(`{"job_id": "nonexistent"}`))
@@ -513,7 +538,7 @@ func TestQueryJob_NotFound(t *testing.T) {
 }
 
 func TestSurfaceToUser(t *testing.T) {
-	st, store, _, _ := newTestSystemTools(t)
+	st, store, _, _, _ := newTestSystemTools(t)
 	ctx := context.Background()
 
 	result, err := st.Execute(ctx, "surface_to_user", json.RawMessage(`{
@@ -534,7 +559,7 @@ func TestSurfaceToUser(t *testing.T) {
 }
 
 func TestSurfaceToUser_MissingText(t *testing.T) {
-	st, _, _, _ := newTestSystemTools(t)
+	st, _, _, _, _ := newTestSystemTools(t)
 	ctx := context.Background()
 
 	_, err := st.Execute(ctx, "surface_to_user", json.RawMessage(`{}`))
@@ -543,7 +568,7 @@ func TestSurfaceToUser_MissingText(t *testing.T) {
 }
 
 func TestSystemToolsUnknownTool(t *testing.T) {
-	st, _, _, _ := newTestSystemTools(t)
+	st, _, _, _, _ := newTestSystemTools(t)
 	ctx := context.Background()
 
 	_, err := st.Execute(ctx, "nonexistent", json.RawMessage(`{}`))
@@ -554,7 +579,7 @@ func TestSystemToolsUnknownTool(t *testing.T) {
 }
 
 func TestSystemToolDefinitions(t *testing.T) {
-	st, _, _, _ := newTestSystemTools(t)
+	st, _, _, _, _ := newTestSystemTools(t)
 	defs := st.Definitions()
 
 	expectedTools := []string{
@@ -591,19 +616,23 @@ func TestSystemToolDefinitions(t *testing.T) {
 	}
 }
 
-func TestNewID_Uniqueness(t *testing.T) {
+func TestUUIDv4_Uniqueness(t *testing.T) {
 	seen := make(map[string]bool)
 	for i := 0; i < 1000; i++ {
-		id := newID()
-		if seen[id] {
-			t.Fatalf("duplicate ID generated: %s", id)
+		id, err := uuid.NewV4()
+		if err != nil {
+			t.Fatalf("generating UUID: %v", err)
 		}
-		seen[id] = true
+		s := id.String()
+		if seen[s] {
+			t.Fatalf("duplicate UUID generated: %s", s)
+		}
+		seen[s] = true
 
-		// Verify format: 5 hex segments separated by dashes.
-		parts := strings.Split(id, "-")
+		// Verify format: 5 hex segments separated by dashes (standard UUID format).
+		parts := strings.Split(s, "-")
 		if len(parts) != 5 {
-			t.Fatalf("expected 5 parts in ID, got %d: %s", len(parts), id)
+			t.Fatalf("expected 5 parts in UUID, got %d: %s", len(parts), s)
 		}
 	}
 }
