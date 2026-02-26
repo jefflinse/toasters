@@ -1,5 +1,5 @@
 // Package agents provides types and functions for loading and managing agent
-// definitions from Markdown files with optional YAML-like frontmatter.
+// definitions from Markdown files with YAML frontmatter.
 package agents
 
 import (
@@ -9,12 +9,12 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
-	"github.com/jefflinse/toasters/internal/frontmatter"
+	"github.com/jefflinse/toasters/internal/agentfmt"
+	"gopkg.in/yaml.v3"
 )
 
 // WrapperPrompt is the toasters-owned framing text appended to every coordinator
@@ -32,14 +32,34 @@ Available workers:
 
 // Agent represents a single agent loaded from a Markdown file.
 type Agent struct {
+	// Existing fields (kept for backwards compatibility).
 	Name          string          // filename stem (e.g. "prototyper" from "prototyper.md")
 	Description   string          // from frontmatter "description" field
 	Mode          string          // from frontmatter "mode" field ("primary" = coordinator, anything else = worker)
 	Color         string          // from frontmatter "color" field (hex color, e.g. "#FF9800")
 	Temperature   float64         // from frontmatter "temperature" field (0 if absent)
 	Body          string          // the system prompt text (everything after the closing --- of frontmatter)
-	Tools         map[string]bool // from frontmatter "tools:" block; key=tool name, value=allowed (false=denied)
-	HasToolsBlock bool            // true if a "tools:" block was present in frontmatter
+	Tools         map[string]bool // legacy enable/disable map for ClaudePermissionArgs compat
+	HasToolsBlock bool            // true if allowed or disallowed tools were specified
+
+	// Superset fields from agentfmt.
+	Skills          []string       // skill references for composition
+	TopP            *float64       // optional top-p sampling parameter
+	MaxTurns        int            // maximum conversation turns
+	Provider        string         // LLM provider name
+	Model           string         // LLM model name
+	ModelOptions    map[string]any // provider-specific model options
+	AllowedTools    []string       // tool allowlist (from agentfmt Tools)
+	DisallowedTools []string       // tool denylist
+	PermissionMode  string         // permission mode (e.g. "plan", "acceptEdits")
+	Permissions     map[string]any // granular permission config
+	MCPServers      any            // MCP server config (list or map)
+	Memory          string         // persistent memory/instructions
+	Hidden          bool           // hide from UI
+	Disabled        bool           // disable agent
+	Hooks           map[string]any // lifecycle hooks
+	Background      bool           // run in background
+	Isolation       string         // isolation mode (e.g. "container")
 }
 
 // ClaudePermissionArgs returns the Claude CLI permission flags for this agent.
@@ -99,97 +119,181 @@ type Registry struct {
 
 // ParseFile reads the Markdown file at path and returns an Agent.
 //
-// If the file begins with "---\n", the content up to the next "\n---\n" (or
-// "\n---" at EOF) is treated as frontmatter and parsed line-by-line for
-// key: value pairs. The remainder is the body. If no frontmatter delimiter is
-// present, the entire file content becomes the body.
+// The file is parsed using agentfmt, which supports YAML frontmatter in
+// toasters, Claude Code, and OpenCode formats. If the file has no valid
+// frontmatter, the entire content becomes the body.
 //
-// Only file read failures are returned as errors; malformed frontmatter lines
-// are silently skipped.
+// Legacy files with tools as a map (e.g. "bash: false") are handled via
+// a fallback that parses the raw YAML and converts the map to the Agent's
+// legacy Tools field.
+//
+// Only file read failures are returned as errors; files without frontmatter
+// are treated as body-only agents.
 func ParseFile(path string) (Agent, error) {
-	data, err := os.ReadFile(path)
+	stem := filenameStem(path)
+
+	defType, def, err := agentfmt.ParseFile(path)
 	if err != nil {
-		return Agent{}, fmt.Errorf("reading agent file %s: %w", path, err)
+		// agentfmt failed — try legacy tools-map fallback before giving up.
+		agent, fallbackErr := parseLegacyFallback(path, stem)
+		if fallbackErr == nil {
+			return agent, nil
+		}
+		// Both failed — treat entire content as body.
+		data, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return Agent{}, fmt.Errorf("reading agent file %s: %w", path, readErr)
+		}
+		return Agent{Name: stem, Body: strings.TrimSpace(string(data))}, nil
 	}
 
-	stem := filepath.Base(path)
-	stem = strings.TrimSuffix(stem, filepath.Ext(stem))
+	switch defType {
+	case agentfmt.DefAgent:
+		return agentDefToAgent(def.(*agentfmt.AgentDef), stem), nil
+	case agentfmt.DefSkill:
+		skill := def.(*agentfmt.SkillDef)
+		return Agent{
+			Name:        skill.Name,
+			Description: skill.Description,
+			Body:        skill.Body,
+		}, nil
+	case agentfmt.DefTeam:
+		team := def.(*agentfmt.TeamDef)
+		return Agent{
+			Name:        team.Name,
+			Description: team.Description,
+			Body:        team.Body,
+		}, nil
+	default:
+		return Agent{Name: stem}, nil
+	}
+}
 
-	agent := Agent{Name: stem}
+// agentDefToAgent converts an agentfmt.AgentDef to an Agent, mapping all
+// superset fields and maintaining backwards compatibility with the legacy
+// Tools map and HasToolsBlock flag.
+func agentDefToAgent(def *agentfmt.AgentDef, defaultName string) Agent {
+	name := def.Name
+	if name == "" {
+		name = defaultName
+	}
 
-	content := string(data)
+	var temp float64
+	if def.Temperature != nil {
+		temp = *def.Temperature
+	}
 
-	fmLines, body, err := frontmatter.Split(content)
+	// Build legacy Tools map from allowed/disallowed tool lists.
+	var tools map[string]bool
+	hasToolsBlock := len(def.Tools) > 0 || len(def.DisallowedTools) > 0
+	if hasToolsBlock {
+		tools = make(map[string]bool)
+		for _, t := range def.Tools {
+			tools[t] = true
+		}
+		for _, t := range def.DisallowedTools {
+			tools[t] = false
+		}
+	}
+
+	return Agent{
+		// Existing fields.
+		Name:          name,
+		Description:   def.Description,
+		Mode:          def.Mode,
+		Color:         def.Color,
+		Temperature:   temp,
+		Body:          def.Body,
+		Tools:         tools,
+		HasToolsBlock: hasToolsBlock,
+
+		// Superset fields.
+		Skills:          def.Skills,
+		TopP:            def.TopP,
+		MaxTurns:        def.MaxTurns,
+		Provider:        def.Provider,
+		Model:           def.Model,
+		ModelOptions:    def.ModelOptions,
+		AllowedTools:    def.Tools,
+		DisallowedTools: def.DisallowedTools,
+		PermissionMode:  def.PermissionMode,
+		Permissions:     def.Permissions,
+		MCPServers:      def.MCPServers,
+		Memory:          def.Memory,
+		Hidden:          def.Hidden,
+		Disabled:        def.Disabled,
+		Hooks:           def.Hooks,
+		Background:      def.Background,
+		Isolation:       def.Isolation,
+	}
+}
+
+// filenameStem returns the filename without extension.
+func filenameStem(path string) string {
+	base := filepath.Base(path)
+	return strings.TrimSuffix(base, filepath.Ext(base))
+}
+
+// parseLegacyFallback handles agent files where the tools field is a YAML map
+// (e.g. "bash: false") rather than a list. This format was used by the old
+// line-by-line parser and is not supported by agentfmt's typed unmarshaling.
+func parseLegacyFallback(path, stem string) (Agent, error) {
+	data, err := os.ReadFile(path)
 	if err != nil {
-		// No valid frontmatter — treat entire content as body.
-		agent.Body = strings.TrimSpace(content)
-	} else {
-		agent.Body = strings.TrimSpace(body)
-		parseFrontmatter(&agent, strings.Join(fmLines, "\n"))
+		return Agent{}, err
+	}
+
+	fmYAML, body, err := agentfmt.SplitFrontmatter(string(data))
+	if err != nil {
+		return Agent{}, err
+	}
+
+	// Parse into a generic map to extract fields including map-style tools.
+	var raw map[string]any
+	if err := yaml.Unmarshal([]byte(fmYAML), &raw); err != nil {
+		return Agent{}, err
+	}
+
+	agent := Agent{
+		Name: stem,
+		Body: strings.TrimSpace(body),
+	}
+
+	if v, ok := raw["name"].(string); ok && v != "" {
+		agent.Name = v
+	}
+	if v, ok := raw["description"].(string); ok {
+		agent.Description = v
+	}
+	if v, ok := raw["mode"].(string); ok {
+		agent.Mode = v
+	}
+	if v, ok := raw["color"].(string); ok {
+		agent.Color = agentfmt.NormalizeColor(v)
+	}
+	if v, ok := raw["temperature"].(float64); ok {
+		agent.Temperature = v
+	} else if v, ok := raw["temperature"].(int); ok {
+		agent.Temperature = float64(v)
+	}
+
+	// Handle tools as a map (legacy format: "bash: false").
+	if toolsRaw, ok := raw["tools"]; ok {
+		if toolsMap, ok := toolsRaw.(map[string]any); ok {
+			agent.HasToolsBlock = true
+			agent.Tools = make(map[string]bool, len(toolsMap))
+			for k, v := range toolsMap {
+				switch bv := v.(type) {
+				case bool:
+					agent.Tools[k] = bv
+				default:
+					agent.Tools[k] = true
+				}
+			}
+		}
 	}
 
 	return agent, nil
-}
-
-// parseFrontmatter scans the frontmatter block line by line and populates
-// the known fields on agent. Lines that don't match "key: value" are ignored.
-// Multi-line blocks (e.g. "tools:") are handled by entering a block-parsing
-// mode when a line has no value after the colon.
-func parseFrontmatter(agent *Agent, block string) {
-	inToolsBlock := false
-
-	for _, line := range strings.Split(block, "\n") {
-		// A line starting with whitespace may be a tools block entry.
-		if inToolsBlock {
-			trimmed := strings.TrimSpace(line)
-			if trimmed == "" || !strings.HasPrefix(line, " ") {
-				// Blank line or non-indented line exits the tools block.
-				inToolsBlock = false
-				// Fall through to process this line as a top-level key.
-			} else {
-				// Parse "  key: value" tool entry.
-				idx := strings.Index(trimmed, ":")
-				if idx >= 0 {
-					toolKey := strings.TrimSpace(trimmed[:idx])
-					toolVal := strings.TrimSpace(trimmed[idx+1:])
-					agent.Tools[toolKey] = toolVal != "false"
-				}
-				continue
-			}
-		}
-
-		idx := strings.Index(line, ":")
-		if idx < 0 {
-			continue
-		}
-		key := strings.TrimSpace(line[:idx])
-		val := strings.TrimSpace(line[idx+1:])
-
-		// Strip surrounding double-quotes if present
-		if len(val) >= 2 && val[0] == '"' && val[len(val)-1] == '"' {
-			val = val[1 : len(val)-1]
-		}
-
-		switch key {
-		case "description":
-			agent.Description = val
-		case "mode":
-			agent.Mode = val
-		case "color":
-			agent.Color = val
-		case "temperature":
-			if f, err := strconv.ParseFloat(val, 64); err == nil {
-				agent.Temperature = f
-			}
-		case "tools":
-			if val == "" {
-				// Multi-line tools block — enter block mode.
-				agent.HasToolsBlock = true
-				agent.Tools = make(map[string]bool)
-				inToolsBlock = true
-			}
-		}
-	}
 }
 
 // Discover loads all agent Markdown files from dir.
@@ -375,6 +479,7 @@ func WatchRecursive(ctx context.Context, dir string, onChange func()) error {
 // The coordinator is the agent with mode=="primary"; all others are workers.
 type Team struct {
 	Name        string  // directory name (e.g. "coding")
+	Description string  // from team.md frontmatter (empty if no team.md)
 	Dir         string  // absolute path to team directory
 	Coordinator *Agent  // nil if no primary agent found
 	Workers     []Agent // all non-coordinator agents
@@ -437,12 +542,27 @@ func DiscoverTeams(teamsDir string) ([]Team, error) {
 		}
 
 		reg := BuildRegistry(discovered, "")
-		teams = append(teams, Team{
+
+		team := Team{
 			Name:        entry.Name(),
 			Dir:         subdir,
 			Coordinator: reg.Coordinator,
 			Workers:     reg.Workers,
-		})
+		}
+
+		// Check for team.md metadata.
+		teamMDPath := filepath.Join(subdir, "team.md")
+		if teamDef, err := agentfmt.ParseTeam(teamMDPath); err == nil {
+			team.Description = teamDef.Description
+			if teamDef.Lead != "" {
+				// Override coordinator selection based on team.md lead field.
+				reg = BuildRegistry(discovered, teamDef.Lead)
+				team.Coordinator = reg.Coordinator
+				team.Workers = reg.Workers
+			}
+		}
+
+		teams = append(teams, team)
 	}
 
 	return teams, nil

@@ -1056,3 +1056,108 @@ func TestParseTeam_FileReadError(t *testing.T) {
 		t.Fatal("expected error, got nil")
 	}
 }
+
+func TestParseFile_ClaudeCodeFormat(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+
+	content := `---
+name: cc-agent
+description: A Claude Code agent
+model: sonnet
+maxTurns: 10
+disallowedTools:
+  - web_fetch
+color: red
+---
+You are a Claude Code agent.`
+
+	path := writeTestFile(t, dir, "cc-agent.md", content)
+	defType, def, err := agentfmt.ParseFile(path)
+	if err != nil {
+		t.Fatalf("ParseFile: %v", err)
+	}
+	if defType != agentfmt.DefAgent {
+		t.Errorf("DefType = %q, want %q", defType, agentfmt.DefAgent)
+	}
+	agent, ok := def.(*agentfmt.AgentDef)
+	if !ok {
+		t.Fatalf("def is %T, want *AgentDef", def)
+	}
+	if agent.Name != "cc-agent" {
+		t.Errorf("Name = %q, want %q", agent.Name, "cc-agent")
+	}
+	// Model alias should be expanded.
+	if agent.Model != "claude-sonnet-4-20250514" {
+		t.Errorf("Model = %q, want %q", agent.Model, "claude-sonnet-4-20250514")
+	}
+	if agent.Provider != "anthropic" {
+		t.Errorf("Provider = %q, want %q", agent.Provider, "anthropic")
+	}
+	if agent.MaxTurns != 10 {
+		t.Errorf("MaxTurns = %d, want %d", agent.MaxTurns, 10)
+	}
+	if !reflect.DeepEqual(agent.DisallowedTools, []string{"web_fetch"}) {
+		t.Errorf("DisallowedTools = %v, want [web_fetch]", agent.DisallowedTools)
+	}
+	if agent.Color != "#FF0000" {
+		t.Errorf("Color = %q, want %q", agent.Color, "#FF0000")
+	}
+	if agent.Body != "You are a Claude Code agent." {
+		t.Errorf("Body = %q, want %q", agent.Body, "You are a Claude Code agent.")
+	}
+}
+
+func TestParseFile_OpenCodeFormat(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+
+	content := `---
+name: oc-agent
+description: An OpenCode agent
+provider: anthropic/claude-sonnet-4-20250514
+steps: 25
+disable: true
+permission: auto
+color: cyan
+---
+You are an OpenCode agent.`
+
+	path := writeTestFile(t, dir, "oc-agent.md", content)
+	defType, def, err := agentfmt.ParseFile(path)
+	if err != nil {
+		t.Fatalf("ParseFile: %v", err)
+	}
+	if defType != agentfmt.DefAgent {
+		t.Errorf("DefType = %q, want %q", defType, agentfmt.DefAgent)
+	}
+	agent, ok := def.(*agentfmt.AgentDef)
+	if !ok {
+		t.Fatalf("def is %T, want *AgentDef", def)
+	}
+	if agent.Name != "oc-agent" {
+		t.Errorf("Name = %q, want %q", agent.Name, "oc-agent")
+	}
+	if agent.Provider != "anthropic" {
+		t.Errorf("Provider = %q, want %q", agent.Provider, "anthropic")
+	}
+	if agent.Model != "claude-sonnet-4-20250514" {
+		t.Errorf("Model = %q, want %q", agent.Model, "claude-sonnet-4-20250514")
+	}
+	if agent.MaxTurns != 25 {
+		t.Errorf("MaxTurns = %d, want %d", agent.MaxTurns, 25)
+	}
+	if !agent.Disabled {
+		t.Error("Disabled = false, want true")
+	}
+	wantPerms := map[string]any{"_mode": "auto"}
+	if !reflect.DeepEqual(agent.Permissions, wantPerms) {
+		t.Errorf("Permissions = %v, want %v", agent.Permissions, wantPerms)
+	}
+	if agent.Color != "#00FFFF" {
+		t.Errorf("Color = %q, want %q", agent.Color, "#00FFFF")
+	}
+	if agent.Body != "You are an OpenCode agent." {
+		t.Errorf("Body = %q, want %q", agent.Body, "You are an OpenCode agent.")
+	}
+}

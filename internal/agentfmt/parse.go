@@ -1,12 +1,12 @@
 package agentfmt
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
-	"github.com/jefflinse/toasters/internal/frontmatter"
 	"gopkg.in/yaml.v3"
 )
 
@@ -46,7 +46,7 @@ var teamFields = map[string]bool{
 //
 // Heuristic:
 //   - Has "lead" or "agents" → team
-//   - Has any agent-only field → agent
+//   - Has any agent-only field (including Claude Code camelCase or OpenCode equivalents) → agent
 //   - Otherwise → skill
 func detectType(raw map[string]any) DefType {
 	for key := range raw {
@@ -55,7 +55,7 @@ func detectType(raw map[string]any) DefType {
 		}
 	}
 	for key := range raw {
-		if agentOnlyFields[key] {
+		if agentOnlyFields[key] || claudeCodeCamelFields[key] || openCodeFields[key] {
 			return DefAgent
 		}
 	}
@@ -75,7 +75,7 @@ func ParseFile(path string) (DefType, any, error) {
 		return "", nil, fmt.Errorf("reading definition file %s: %w", path, err)
 	}
 
-	fmYAML, body, err := splitFrontmatter(string(data))
+	fmYAML, body, err := SplitFrontmatter(string(data))
 	if err != nil {
 		return "", nil, fmt.Errorf("parsing definition file %s: %w", path, err)
 	}
@@ -101,7 +101,7 @@ func ParseFile(path string) (DefType, any, error) {
 		return DefTeam, def, nil
 
 	case DefAgent:
-		def, err := unmarshalAgent(fmYAML, body, stem)
+		def, err := parseAgentByFormat(raw, fmYAML, body, stem)
 		if err != nil {
 			return "", nil, fmt.Errorf("parsing agent definition %s: %w", path, err)
 		}
@@ -123,7 +123,7 @@ func ParseSkill(path string) (*SkillDef, error) {
 		return nil, fmt.Errorf("reading skill file %s: %w", path, err)
 	}
 
-	fmYAML, body, err := splitFrontmatter(string(data))
+	fmYAML, body, err := SplitFrontmatter(string(data))
 	if err != nil {
 		return nil, fmt.Errorf("parsing skill file %s: %w", path, err)
 	}
@@ -138,7 +138,7 @@ func ParseAgent(path string) (*AgentDef, error) {
 		return nil, fmt.Errorf("reading agent file %s: %w", path, err)
 	}
 
-	fmYAML, body, err := splitFrontmatter(string(data))
+	fmYAML, body, err := SplitFrontmatter(string(data))
 	if err != nil {
 		return nil, fmt.Errorf("parsing agent file %s: %w", path, err)
 	}
@@ -153,7 +153,7 @@ func ParseTeam(path string) (*TeamDef, error) {
 		return nil, fmt.Errorf("reading team file %s: %w", path, err)
 	}
 
-	fmYAML, body, err := splitFrontmatter(string(data))
+	fmYAML, body, err := SplitFrontmatter(string(data))
 	if err != nil {
 		return nil, fmt.Errorf("parsing team file %s: %w", path, err)
 	}
@@ -164,7 +164,7 @@ func ParseTeam(path string) (*TeamDef, error) {
 // ParseBytes parses raw content (frontmatter + body) into the specified type.
 // Returns *SkillDef, *AgentDef, or *TeamDef depending on defType.
 func ParseBytes(data []byte, defType DefType) (any, error) {
-	fmYAML, body, err := splitFrontmatter(string(data))
+	fmYAML, body, err := SplitFrontmatter(string(data))
 	if err != nil {
 		return nil, fmt.Errorf("parsing definition: %w", err)
 	}
@@ -181,15 +181,52 @@ func ParseBytes(data []byte, defType DefType) (any, error) {
 	}
 }
 
-// splitFrontmatter uses the existing frontmatter.Split to extract the YAML
-// block and body from content. Returns the raw YAML string (joined frontmatter
-// lines) and the body.
-func splitFrontmatter(content string) (string, string, error) {
-	fmLines, body, err := frontmatter.Split(content)
-	if err != nil {
-		return "", "", err
+// parseAgentByFormat detects the source format and dispatches to the
+// appropriate import function.
+func parseAgentByFormat(raw map[string]any, fmYAML, body, defaultName string) (*AgentDef, error) {
+	switch DetectFormat(raw) {
+	case FormatClaudeCode:
+		return ImportClaudeCode(fmYAML, body, defaultName)
+	case FormatOpenCode:
+		return ImportOpenCode(fmYAML, body, defaultName)
+	default:
+		return unmarshalAgent(fmYAML, body, defaultName)
 	}
-	return strings.Join(fmLines, "\n"), strings.TrimSpace(body), nil
+}
+
+// SplitFrontmatter extracts the YAML block and body from content delimited by
+// "---" lines. Returns the raw YAML string and the trimmed body. Delimiter
+// lines are matched after trimming trailing whitespace, so "--- " is accepted.
+func SplitFrontmatter(content string) (string, string, error) {
+	lines := strings.Split(content, "\n")
+
+	// Find opening "---".
+	start := -1
+	for i, l := range lines {
+		if strings.TrimRight(l, " \t") == "---" {
+			start = i
+			break
+		}
+	}
+	if start == -1 {
+		return "", "", errors.New("no frontmatter delimiter found")
+	}
+
+	// Find closing "---".
+	end := -1
+	for i := start + 1; i < len(lines); i++ {
+		if strings.TrimRight(lines[i], " \t") == "---" {
+			end = i
+			break
+		}
+	}
+	if end == -1 {
+		return "", "", errors.New("frontmatter closing delimiter not found")
+	}
+
+	fmYAML := strings.Join(lines[start+1:end], "\n")
+	body := strings.TrimSpace(strings.Join(lines[end+1:], "\n"))
+	return fmYAML, body, nil
 }
 
 // filenameStem returns the filename without extension.

@@ -66,6 +66,12 @@ type AgentDef struct {
 	Body string `yaml:"-"` // markdown body (system prompt)
 }
 
+// Warning represents a lossy field that was dropped during export.
+type Warning struct {
+	Field  string // the AgentDef field name that was dropped
+	Reason string // why it was dropped (e.g., "not supported by Claude Code format")
+}
+
 // TeamDef represents a team definition.
 type TeamDef struct {
 	Name        string   `yaml:"name"`

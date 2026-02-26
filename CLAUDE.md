@@ -8,7 +8,7 @@ Toasters is a Go-based TUI orchestration tool for agentic coding work. It coordi
 
 ```bash
 go build ./...          # Build
-go test ./...           # Test (16 test packages, see list below)
+go test ./...           # Test (15 test packages, see list below)
 go run main.go          # Run the TUI
 ```
 
@@ -21,12 +21,14 @@ cmd/                        # Cobra CLI setup, launches TUI
 agents/                     # Built-in agent definition files (.md with YAML frontmatter)
 internal/
   agentfmt/                 # YAML frontmatter parsing for agent/skill/team definitions (superset format)
-  agents/                   # Agent discovery, parsing, team management
+                            #   Supports Toasters, Claude Code, and OpenCode formats with auto-detection
+                            #   Import: ImportClaudeCode, ImportOpenCode (lossless)
+                            #   Export: ExportClaudeCode, ExportOpenCode (lossy with Warning list)
+  agents/                   # Agent discovery, parsing, team management (uses agentfmt for parsing)
   anthropic/                # Anthropic API client + OAuth/Keychain
   claude/                   # Shared Claude CLI stream-json types
   config/                   # Viper-based config from ~/.config/toasters/config.yaml
   db/                       # SQLite persistence (Store interface, migrations, CRUD)
-  frontmatter/              # Shared YAML frontmatter parsing (Split + Parse) — to be replaced by agentfmt
   gateway/                  # Claude subprocess slot management (4 concurrent slots)
   llm/                      # Legacy LLM types (OpenAI wire format, used by llm/client)
     client/                 # OpenAI-compatible streaming client
@@ -54,7 +56,7 @@ internal/
 - **Provider Registry**: Multi-provider LLM abstraction supporting OpenAI-compatible APIs (LM Studio, Ollama, OpenAI) and Anthropic's Messages API. Providers are configured in YAML and looked up by name. Anthropic supports both API key and Keychain/OAuth authentication.
 - **SQLite Persistence**: Operational state stored in SQLite via `modernc.org/sqlite` (pure Go). WAL mode for concurrent reads. Schema includes jobs, tasks, task dependencies, progress reports, agents, teams, sessions, and artifacts. Auto-migrating on open.
 - **Jobs**: Persisted in SQLite only. Each job has a description, workspace directory, and associated tasks. Toasters is workspace-centric — coordinators start in the job workspace directory; there is no concept of a "current working directory."
-- **Agents**: Defined as `.md` files with YAML frontmatter (name, description, mode, color, temperature, tools). Discovered from directories and hot-reloaded via fsnotify (debounced at 200ms).
+- **Agents**: Defined as `.md` files with YAML frontmatter (superset format supporting Toasters, Claude Code, and OpenCode fields). Key fields: name, description, mode, skills, temperature, max_turns, provider, model, tools, disallowed_tools, permission_mode, permissions, mcp_servers, color, hooks, memory, hidden, disabled. Discovered from directories and hot-reloaded via fsnotify (debounced at 200ms). Parsed via `internal/agentfmt` with auto-detection of source format.
 
 ## Tech Stack
 
@@ -112,9 +114,9 @@ Key settings:
 
 ## Testing
 
-Tests exist across 16 test packages. They use standard Go testing with `t.TempDir()` for file I/O and helper functions for assertions. Run `golangci-lint run` for linting — the codebase currently has 0 lint findings.
+Tests exist across 15 test packages. They use standard Go testing with `t.TempDir()` for file I/O and helper functions for assertions. Run `golangci-lint run` for linting — the codebase currently has 0 lint findings.
 
-Key coverage numbers: `frontmatter` 100%, `llm/tools` 88.3%, `llm/client` 87.7%, `runtime` 87.0%, `provider` 84.9%, `db` 83.6%, `mcp` 83%, `agents` 72.1%, `config` 65.7%.
+Key coverage numbers: `llm/tools` 88.3%, `llm/client` 87.7%, `runtime` 87.0%, `provider` 84.9%, `db` 83.6%, `mcp` 83%, `agents` 72.1%, `config` 65.7%.
 
 ## Tech Debt Execution Plan (Pre-Phase 3)
 
