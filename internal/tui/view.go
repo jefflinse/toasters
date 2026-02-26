@@ -4,6 +4,7 @@ package tui
 import (
 	"fmt"
 	"image/color"
+	"math"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -74,6 +75,66 @@ func gradientText(text string, from, to [3]uint8) string {
 			Render(string(r)))
 	}
 	return sb.String()
+}
+
+// rainbowText applies a cycling rainbow effect to each character of text.
+// The phase parameter shifts the hue offset, creating an animation when
+// incremented each frame (e.g. driven by spinnerFrame).
+func rainbowText(text string, phase int) string {
+	runes := []rune(text)
+	if len(runes) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	for i, r := range runes {
+		// Spread one full hue cycle across ~20 characters; shift by phase.
+		hue := math.Mod(float64(i)/20.0+float64(phase)/10.0, 1.0)
+		cr, cg, cb := hslToRGB(hue, 1.0, 0.6)
+		sb.WriteString(lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color(fmt.Sprintf("#%02x%02x%02x", cr, cg, cb))).
+			Render(string(r)))
+	}
+	return sb.String()
+}
+
+// hslToRGB converts HSL (h in [0,1], s in [0,1], l in [0,1]) to RGB bytes.
+func hslToRGB(h, s, l float64) (uint8, uint8, uint8) {
+	if s == 0 {
+		v := uint8(l * 255)
+		return v, v, v
+	}
+	var q float64
+	if l < 0.5 {
+		q = l * (1 + s)
+	} else {
+		q = l + s - l*s
+	}
+	p := 2*l - q
+	r := hueToRGB(p, q, h+1.0/3.0)
+	g := hueToRGB(p, q, h)
+	b := hueToRGB(p, q, h-1.0/3.0)
+	return uint8(r * 255), uint8(g * 255), uint8(b * 255)
+}
+
+// hueToRGB is a helper for hslToRGB.
+func hueToRGB(p, q, t float64) float64 {
+	if t < 0 {
+		t++
+	}
+	if t > 1 {
+		t--
+	}
+	switch {
+	case t < 1.0/6.0:
+		return p + (q-p)*6*t
+	case t < 1.0/2.0:
+		return q
+	case t < 2.0/3.0:
+		return p + (q-p)*(2.0/3.0-t)*6
+	default:
+		return p
+	}
 }
 
 // numLoadingFrames is the total number of animation frames (ping-pong across the bar).

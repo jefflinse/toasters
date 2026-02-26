@@ -133,7 +133,12 @@ func (m *Model) renderGrid() string {
 			header += " " + miniTokenBar(totalTokens)
 		}
 
-		headerLine := headerStyle.Render(truncateStr(header, innerW))
+		var headerLine string
+		if focused {
+			headerLine = rainbowText(truncateStr(header, innerW), m.spinnerFrame)
+		} else {
+			headerLine = headerStyle.Render(truncateStr(header, innerW))
+		}
 
 		// 2. Summary (prefer ExitSummary when done)
 		summary := snap.Summary
@@ -391,7 +396,12 @@ func (m *Model) renderRuntimeGridCell(rs *runtimeSlot, cellW, cellH, innerW, inn
 		statusMark = "✓"
 	}
 	header := fmt.Sprintf("%s %s · %s · %s", statusMark, rs.agentName, rs.jobID, elapsed)
-	headerLine := hdrStyle.Render(truncateStr(header, innerW))
+	var headerLine string
+	if focused {
+		headerLine = rainbowText(truncateStr(header, innerW), m.spinnerFrame)
+	} else {
+		headerLine = hdrStyle.Render(truncateStr(header, innerW))
+	}
 
 	// Status line
 	runtimeLabel := "⚡ runtime"

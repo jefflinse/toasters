@@ -1455,6 +1455,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		}
+		// Keep ticking while grid is visible so the rainbow title animates.
+		if !needTick && m.grid.showGrid {
+			needTick = true
+		}
 		if needTick {
 			return m, spinnerTick()
 		}
