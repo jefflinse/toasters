@@ -381,3 +381,88 @@ func TestImportOpenCode_InvalidYAML(t *testing.T) {
 		t.Fatal("expected error for invalid YAML, got nil")
 	}
 }
+
+func TestImportOpenCode_ToolsAsMapFalseToDisallowed(t *testing.T) {
+	t.Parallel()
+
+	// OpenCode map-style tools: false entries → DisallowedTools, true entries → Tools.
+	fmYAML := `
+tools:
+  write: false
+  edit: false
+`
+	def, err := agentfmt.ImportOpenCode(fmYAML, "", "test")
+	if err != nil {
+		t.Fatalf("ImportOpenCode: %v", err)
+	}
+	if def.Tools != nil {
+		t.Errorf("Tools = %v, want nil (no true entries)", def.Tools)
+	}
+	if len(def.DisallowedTools) != 2 {
+		t.Fatalf("DisallowedTools = %v, want 2 entries", def.DisallowedTools)
+	}
+	// Order is non-deterministic from map iteration; check membership.
+	disallowed := make(map[string]bool, len(def.DisallowedTools))
+	for _, d := range def.DisallowedTools {
+		disallowed[d] = true
+	}
+	if !disallowed["write"] {
+		t.Error("DisallowedTools missing 'write'")
+	}
+	if !disallowed["edit"] {
+		t.Error("DisallowedTools missing 'edit'")
+	}
+}
+
+func TestImportOpenCode_ToolsAsMapMixed(t *testing.T) {
+	t.Parallel()
+
+	fmYAML := `
+tools:
+  bash: true
+  read: true
+  write: false
+`
+	def, err := agentfmt.ImportOpenCode(fmYAML, "", "test")
+	if err != nil {
+		t.Fatalf("ImportOpenCode: %v", err)
+	}
+	if len(def.Tools) != 2 {
+		t.Fatalf("Tools = %v, want 2 entries", def.Tools)
+	}
+	enabled := make(map[string]bool, len(def.Tools))
+	for _, d := range def.Tools {
+		enabled[d] = true
+	}
+	if !enabled["bash"] {
+		t.Error("Tools missing 'bash'")
+	}
+	if !enabled["read"] {
+		t.Error("Tools missing 'read'")
+	}
+	if len(def.DisallowedTools) != 1 || def.DisallowedTools[0] != "write" {
+		t.Errorf("DisallowedTools = %v, want [write]", def.DisallowedTools)
+	}
+}
+
+func TestImportOpenCode_ModePassthrough(t *testing.T) {
+	t.Parallel()
+
+	// OpenCode mode values are passed through as-is (no mapping applied).
+	for _, mode := range []string{"subagent", "primary", "worker", "lead", ""} {
+		t.Run("mode="+mode, func(t *testing.T) {
+			t.Parallel()
+			fmYAML := "mode: " + mode
+			if mode == "" {
+				fmYAML = "name: no-mode"
+			}
+			def, err := agentfmt.ImportOpenCode(fmYAML, "", "test")
+			if err != nil {
+				t.Fatalf("ImportOpenCode: %v", err)
+			}
+			if def.Mode != mode {
+				t.Errorf("Mode = %q, want %q", def.Mode, mode)
+			}
+		})
+	}
+}

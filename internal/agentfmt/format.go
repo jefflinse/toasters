@@ -32,6 +32,7 @@ var openCodeFields = map[string]bool{
 // Heuristics:
 //   - Has camelCase fields (maxTurns, disallowedTools, mcpServers, permissionMode) → ClaudeCode
 //   - Has "steps" or "disable" or "permission" (singular) field → OpenCode
+//   - Has "tools" as a map (tool_name: bool) rather than a list → OpenCode
 //   - Otherwise → Toasters
 func DetectFormat(frontmatter map[string]any) Format {
 	for key := range frontmatter {
@@ -42,6 +43,14 @@ func DetectFormat(frontmatter map[string]any) Format {
 
 	for key := range frontmatter {
 		if openCodeFields[key] {
+			return FormatOpenCode
+		}
+	}
+
+	// OpenCode uses "tools" as a map of tool_name→bool to enable/disable tools.
+	// Toasters and Claude Code use "tools" as a list of strings.
+	if v, ok := frontmatter["tools"]; ok {
+		if _, isMap := v.(map[string]any); isMap {
 			return FormatOpenCode
 		}
 	}

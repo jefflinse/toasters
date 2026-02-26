@@ -41,8 +41,15 @@ func ImportOpenCode(fmYAML string, body string, defaultName string) (*AgentDef, 
 	def.Temperature = mapFloat64Ptr(raw, "temperature")
 	def.TopP = mapFloat64Ptr(raw, "top_p")
 
-	// Tools.
-	def.Tools = mapStringSlice(raw, "tools")
+	// Mode — OpenCode uses "subagent"/"primary"; pass through as-is since
+	// Toasters' internal/agents package also uses "primary" for coordinators.
+	def.Mode = mapString(raw, "mode")
+
+	// Tools — OpenCode supports both a list of enabled tool names and a map of
+	// tool_name→bool to selectively enable/disable tools.
+	//   List form:  tools: [read_file, bash]  → Tools
+	//   Map form:   tools: {write: false}      → false entries → DisallowedTools
+	def.Tools, def.DisallowedTools = resolveOpenCodeTools(raw)
 
 	// "disable" (bool) → disabled.
 	def.Disabled = mapBool(raw, "disable")
@@ -59,6 +66,58 @@ func ImportOpenCode(fmYAML string, body string, defaultName string) (*AgentDef, 
 
 	def.Body = body
 	return def, nil
+}
+
+// resolveOpenCodeTools handles OpenCode's two forms of the "tools" field:
+//   - List form: tools: [read_file, bash] → all entries go into the enabled tools list
+//   - Map form:  tools: {write: false, edit: false} → true entries → Tools, false entries → DisallowedTools
+//
+// Returns (tools, disallowedTools).
+func resolveOpenCodeTools(raw map[string]any) ([]string, []string) {
+	v, ok := raw["tools"]
+	if !ok {
+		return nil, nil
+	}
+
+	switch t := v.(type) {
+	case []any:
+		// List form — same as mapStringSlice.
+		result := make([]string, 0, len(t))
+		for _, item := range t {
+			if s, ok := item.(string); ok {
+				result = append(result, s)
+			}
+		}
+		if len(result) == 0 {
+			return nil, nil
+		}
+		return result, nil
+
+	case map[string]any:
+		// Map form — split by bool value.
+		var enabled, disabled []string
+		for name, val := range t {
+			b, ok := val.(bool)
+			if !ok {
+				continue
+			}
+			if b {
+				enabled = append(enabled, name)
+			} else {
+				disabled = append(disabled, name)
+			}
+		}
+		if len(enabled) == 0 {
+			enabled = nil
+		}
+		if len(disabled) == 0 {
+			disabled = nil
+		}
+		return enabled, disabled
+
+	default:
+		return nil, nil
+	}
 }
 
 // resolveOpenCodeProviderModel handles OpenCode's combined "provider/model"
@@ -119,6 +178,7 @@ var openCodeKnownFields = map[string]bool{
 	"permission":  true,
 	"color":       true,
 	"hidden":      true,
+	"mode":        true,
 }
 
 // collectOpenCodeModelOptions merges the explicit "model_options" field with

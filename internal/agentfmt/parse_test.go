@@ -833,6 +833,16 @@ func TestDetectFormat(t *testing.T) {
 			want: agentfmt.FormatOpenCode,
 		},
 		{
+			name: "opencode tools as map",
+			fm:   map[string]any{"name": "test", "tools": map[string]any{"write": false, "edit": false}},
+			want: agentfmt.FormatOpenCode,
+		},
+		{
+			name: "toasters tools as list (not opencode)",
+			fm:   map[string]any{"name": "test", "tools": []any{"read_file", "bash"}},
+			want: agentfmt.FormatToasters,
+		},
+		{
 			name: "empty frontmatter",
 			fm:   map[string]any{},
 			want: agentfmt.FormatToasters,
