@@ -61,8 +61,9 @@ type Config struct {
 	SystemPrompt string // optional; uses default if empty
 	Store        db.Store
 	Composer     *compose.Composer
-	OnText       func(text string) // called with streamed text from the operator LLM
-	OnEvent      func(event Event) // called when the event loop processes an event
+	Spawner      runtime.TeamLeadSpawner // spawns team lead sessions on task assignment; may be nil
+	OnText       func(text string)       // called with streamed text from the operator LLM
+	OnEvent      func(event Event)       // called when the event loop processes an event
 }
 
 // New creates a new Operator. Call Start to begin processing events.
@@ -74,12 +75,11 @@ func New(cfg Config) *Operator {
 
 	// Create SystemTools for system agents to use. The event channel is the
 	// operator's own channel so system agent actions (e.g. assign_task) flow
-	// back through the operator event loop. Spawner is nil because system
-	// agents don't spawn team leads directly.
+	// back through the operator event loop.
 	eventCh := make(chan Event, eventChSize)
 	var systemTools *SystemTools
 	if cfg.Store != nil && cfg.Composer != nil {
-		systemTools = NewSystemTools(cfg.Store, cfg.Composer, eventCh, nil, cfg.WorkDir)
+		systemTools = NewSystemTools(cfg.Store, cfg.Composer, eventCh, cfg.Spawner, cfg.WorkDir)
 	}
 
 	tools := newOperatorTools(cfg.Runtime, cfg.Composer, cfg.Store, systemTools, cfg.WorkDir)

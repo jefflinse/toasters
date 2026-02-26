@@ -17,9 +17,9 @@ import (
 )
 
 // TeamLeadSpawner is the interface for spawning team lead sessions.
-type TeamLeadSpawner interface {
-	SpawnTeamLead(ctx context.Context, composed *compose.ComposedAgent, taskID string, jobID string, workDir string) error
-}
+// This is an alias for runtime.TeamLeadSpawner, re-exported here for
+// convenience so callers don't need to import both packages.
+type TeamLeadSpawner = runtime.TeamLeadSpawner
 
 // SystemTools provides orchestration tools for system agents (planner,
 // scheduler, blocker-handler). These are distinct from the operator's own

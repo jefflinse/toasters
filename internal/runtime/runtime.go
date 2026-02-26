@@ -76,7 +76,7 @@ func (r *Runtime) SpawnAgent(ctx context.Context, opts SpawnOpts) (*Session, err
 		coreTools := NewCoreTools(
 			opts.WorkDir,
 			WithShell(true),
-			WithSpawner(r, depth+1, maxDepth),
+			WithSpawner(r, depth, maxDepth),
 			WithStore(r.store),
 			WithSessionContext(id, opts.AgentID, opts.JobID),
 			WithProvider(opts.ProviderName, opts.Model),

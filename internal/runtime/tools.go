@@ -851,7 +851,7 @@ func (ct *CoreTools) spawnAgent(ctx context.Context, args json.RawMessage) (stri
 		InitialMessage: params.Message,
 		WorkDir:        ct.workDir,
 		MaxDepth:       ct.maxDepth,
-		Depth:          ct.depth,
+		Depth:          ct.depth + 1,
 		ProviderName:   ct.providerName,
 		Model:          ct.model,
 		AgentID:        ct.agentID,

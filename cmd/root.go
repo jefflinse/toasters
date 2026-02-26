@@ -245,6 +245,7 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 			WorkDir:  workspaceDir,
 			Store:    store,
 			Composer: composer,
+			Spawner:  rt,
 			OnText: func(text string) {
 				if prog := p.Load(); prog != nil {
 					prog.Send(tui.OperatorTextMsg{Text: text})

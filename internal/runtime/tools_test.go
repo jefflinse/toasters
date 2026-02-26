@@ -576,6 +576,91 @@ func TestSpawnAgent(t *testing.T) {
 	})
 }
 
+// TestSpawnAgentDepth_TeamLeadHasSpawnAgent is a regression test for the
+// off-by-one bug in WithSpawner where team leads were given depth=1 instead of
+// depth=0, causing spawn_agent to be excluded from their tool set.
+//
+// A CoreTools at depth=0 with maxDepth=1 (the team lead configuration) MUST
+// include spawn_agent in Definitions(). Before the fix, SpawnTeamLead called
+// WithSpawner(r, depth+1, maxDepth) which passed depth=1, making depth < maxDepth
+// false and excluding spawn_agent.
+func TestSpawnAgentDepth_TeamLeadHasSpawnAgent(t *testing.T) {
+	dir := t.TempDir()
+	// depth=0, maxDepth=1: team lead — should have spawn_agent.
+	ct := NewCoreTools(dir, WithSpawner(&mockSpawner{}, 0, 1))
+	defs := ct.Definitions()
+
+	names := make(map[string]bool, len(defs))
+	for _, d := range defs {
+		names[d.Name] = true
+	}
+
+	if !names["spawn_agent"] {
+		t.Errorf("CoreTools at depth=0, maxDepth=1 should include spawn_agent "+
+			"(team lead configuration); got tools: %v", toolNames(defs))
+	}
+}
+
+// TestSpawnAgentDepth_WorkerLacksSpawnAgent verifies that a CoreTools at
+// depth=1 with maxDepth=1 (the worker configuration) does NOT include
+// spawn_agent. Workers must not be able to spawn further agents.
+func TestSpawnAgentDepth_WorkerLacksSpawnAgent(t *testing.T) {
+	dir := t.TempDir()
+	// depth=1, maxDepth=1: worker — should NOT have spawn_agent.
+	ct := NewCoreTools(dir, WithSpawner(&mockSpawner{}, 1, 1))
+	defs := ct.Definitions()
+
+	names := make(map[string]bool, len(defs))
+	for _, d := range defs {
+		names[d.Name] = true
+	}
+
+	if names["spawn_agent"] {
+		t.Errorf("CoreTools at depth=1, maxDepth=1 should NOT include spawn_agent "+
+			"(worker configuration); got tools: %v", toolNames(defs))
+	}
+}
+
+// TestSpawnAgentDepth_ChildDepthIncrement is a regression test for the
+// off-by-one bug in spawnAgent where child sessions were spawned at the same
+// depth as the parent (ct.depth) instead of depth+1.
+//
+// When a team lead (depth=0) calls spawn_agent, the child must be spawned at
+// depth=1 so that the child (a worker) cannot itself call spawn_agent.
+// Before the fix, the child was spawned at depth=0, giving it spawn_agent
+// access and allowing unbounded recursion.
+func TestSpawnAgentDepth_ChildDepthIncrement(t *testing.T) {
+	dir := t.TempDir()
+
+	capturing := &capturingSpawner{result: "ok"}
+	// Parent is at depth=0 (team lead), maxDepth=1.
+	ct := NewCoreTools(dir,
+		WithSpawner(capturing, 0, 1),
+		WithProvider("test-provider", "test-model"),
+	)
+
+	_, err := ct.Execute(context.Background(), "spawn_agent", mustJSON(t, map[string]any{
+		"system_prompt": "you are a worker",
+		"message":       "do the work",
+	}))
+	assertNoError(t, err)
+
+	if capturing.received == nil {
+		t.Fatal("SpawnAndWait was never called")
+	}
+
+	got := *capturing.received
+	// Child must be at depth=1 (parent depth 0 + 1).
+	if got.Depth != 1 {
+		t.Errorf("child SpawnOpts.Depth = %d, want 1 (regression: was 0 before fix, "+
+			"which gave workers spawn_agent access)", got.Depth)
+	}
+	// MaxDepth must be propagated unchanged.
+	if got.MaxDepth != 1 {
+		t.Errorf("child SpawnOpts.MaxDepth = %d, want 1", got.MaxDepth)
+	}
+}
+
 // TestSpawnAgentPropagatesProviderAndContext is a regression test for the bug
 // where spawn_agent never passed ProviderName or Model to child SpawnOpts,
 // causing every child spawn to fail with `provider "" not found`.
