@@ -20,7 +20,8 @@ import (
 )
 
 const (
-	eventChSize = 64
+	eventChSize = 256
+	maxMessages = 200
 
 	defaultSystemPrompt = `You are the operator — an orchestration agent that coordinates work.
 When a user sends a message, analyze it and decide how to proceed.
@@ -359,6 +360,10 @@ func (o *Operator) checkJobComplete(ctx context.Context, jobID string) {
 		return
 	}
 
+	if len(tasks) == 0 {
+		return // No tasks yet — not complete.
+	}
+
 	// Check if all tasks are in a terminal state (completed, failed, cancelled).
 	for _, task := range tasks {
 		switch task.Status {
@@ -464,6 +469,11 @@ func (o *Operator) handleUserMessage(ctx context.Context, payload UserMessagePay
 func (o *Operator) appendMessage(msg provider.Message) {
 	o.mu.Lock()
 	o.messages = append(o.messages, msg)
+	// Prevent unbounded growth of conversation history. Keep the most recent
+	// messages to stay within LLM context window limits.
+	if len(o.messages) > maxMessages {
+		o.messages = o.messages[len(o.messages)-maxMessages:]
+	}
 	o.mu.Unlock()
 }
 

@@ -50,8 +50,8 @@ func (m *Model) updateTeamsModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.teamsModal.inputMode = false
 			m.teamsModal.nameInput = ""
 		case "enter":
-			name := m.teamsModal.nameInput
-			valid := name != "" && !strings.ContainsAny(name, `/\.`)
+			name := strings.TrimSpace(m.teamsModal.nameInput)
+			valid := name != "" && !strings.ContainsAny(name, "/\\.\n\r:")
 			if valid {
 				if err := os.MkdirAll(filepath.Join(m.teamsDir, name), 0755); err != nil {
 					slog.Error("failed to create team directory", "name", name, "error", err)
@@ -162,7 +162,15 @@ func (m *Model) updateTeamsModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if m.teamsModal.confirmDelete {
 			if len(m.teamsModal.teams) > 0 && m.teamsModal.teamIdx < len(m.teamsModal.teams) {
 				team := m.teamsModal.teams[m.teamsModal.teamIdx]
-				_ = os.RemoveAll(team.Dir)
+				// Validate that team.Dir is under the expected teams directory
+				// before performing recursive deletion.
+				realTeamDir, err := filepath.EvalSymlinks(team.Dir)
+				realTeamsDir, err2 := filepath.EvalSymlinks(m.teamsDir)
+				if err == nil && err2 == nil && strings.HasPrefix(realTeamDir, realTeamsDir+string(filepath.Separator)) {
+					_ = os.RemoveAll(team.Dir)
+				} else {
+					slog.Error("refusing to delete team outside teams directory", "dir", team.Dir, "teamsDir", m.teamsDir)
+				}
 			}
 			m.reloadTeamsForModal()
 			if m.teamsModal.teamIdx >= len(m.teamsModal.teams) && len(m.teamsModal.teams) > 0 {
@@ -229,14 +237,14 @@ func getCachedHomeDir() string {
 }
 
 // isReadOnlyTeam returns true if the team's directory is one of the well-known
-// auto-detected read-only directories (~/.opencode/agents, ~/.claude/agents).
+// auto-detected read-only directories (~/.config/opencode/agents, ~/.claude/agents).
 func isReadOnlyTeam(team agents.Team) bool {
 	home := getCachedHomeDir()
 	if home == "" {
 		return false
 	}
 	readOnlyDirs := []string{
-		filepath.Join(home, ".opencode", "agents"),
+		filepath.Join(home, ".config", "opencode", "agents"),
 		filepath.Join(home, ".claude", "agents"),
 	}
 	for _, d := range readOnlyDirs {
@@ -249,11 +257,11 @@ func isReadOnlyTeam(team agents.Team) bool {
 
 // isSystemTeam returns true if the team's directory is under ~/.config/toasters/system/.
 func isSystemTeam(team agents.Team) bool {
-	home := getCachedHomeDir()
-	if home == "" {
+	cfgDir, err := config.Dir()
+	if err != nil {
 		return false
 	}
-	systemDir := filepath.Join(home, ".config", "toasters", "system")
+	systemDir := filepath.Join(cfgDir, "system")
 	return strings.HasPrefix(team.Dir, systemDir)
 }
 

@@ -250,6 +250,22 @@ Items deferred from earlier phases that may be addressed in Phase 4 or later:
 | MCP server HTTP transport | Phase 3 | stdio is sufficient; HTTP needed only for non-Claude external agents |
 | MCP resource/prompt support | Phase 3 | Only MCP tools are consumed; resources and prompts are future scope |
 | Remove Claude CLI subprocess fallback | Phase 3 | Keep as-is in case it's still useful |
+| Consolidate `agents` package with `agentfmt`/`loader`/`compose` | Phase 3 review | Legacy parallel pipeline for discovery, parsing, prompt building, watching. Migrate gateway and `llm/tools` to consume from DB |
+| Consolidate `orchestration` package | Phase 3 review | 22-line cycle-breaker; inline `GatewaySlot` into `gateway`, `GatewaySpawner` into `llm/tools` |
+| Consolidate `runtime.MCPCaller` with `mcp.MCPCaller` | Phase 3 review | Can't import `mcp` from `runtime` due to cycle via `mcp/convert.go`. Resolve by extracting shared types or restructuring imports |
+| Async `consult_agent` in operator event loop | Phase 3 review | `handleUserMessage` blocks the event loop during LLM calls (30-60s). Consider spawning consultations in goroutines |
+| Dead exported code: `ExportClaudeCode`, `ExportOpenCode`, `ParseBytes` | Phase 3 review | Exported but unused in production. Keep if planned for future export feature, otherwise unexport |
+| Unexport `loader.Slugify` | Phase 3 review | Only used within `loader` package (now also used by TUI CRUD). Consider moving to a shared utility package |
+| Inconsistent TUI modal styles | Phase 3 review | Teams modal uses `Teams*` prefixed styles; skills/agents modals use generic `Modal*` styles |
+| Non-standard UUID format in `operator/system_tools.go` | Phase 3 review | `newID()` uses `crypto/rand` hex format; `runtime` uses `google/uuid`. Standardize on `google/uuid` |
+| Shared `editorFinishedMsg` type location | Phase 3 review | Defined in `skills_modal.go` but used by `agents_modal.go`. Move to a common file |
+| `reloadTeamsForModal` discards errors | Phase 3 review | `agents.DiscoverTeams` error silently dropped; user gets empty list with no feedback |
+| `generateBasicTeamMD` produces "Qa" for short words | Phase 3 review | `humanizeDirName` doesn't handle common abbreviations (QA, CI, etc.) |
+| `.gitignore` gaps | Phase 3 review | Missing `*.db`, `*.log`, `.env`, `config.yaml`, `coverage.out` patterns |
+| `disallowed_tools` denylist not enforced at execution time | Phase 3 review | LLM is told about filtered tools but `CoreTools.Execute` doesn't enforce the denylist. Defense-in-depth gap |
+| `workspace_dir` accepts any directory | Phase 3 review | `create_job` validates existence but not location. Consider restricting to home directory |
+| No size limit on direct `ParseFile` calls | Phase 3 review | Loader enforces 1 MiB limit but direct `agentfmt.ParseFile` calls in TUI bypass it |
+| Tool schema duplication within `progress` package | Phase 3 review | `progress/server.go` re-specifies schemas already defined in `progress/tools.go`. Use `ProgressToolDefs()` to drive MCP server registration |
 
 ---
 

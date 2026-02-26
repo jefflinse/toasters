@@ -10,6 +10,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"gopkg.in/yaml.v3"
 )
 
 // Run performs first-run bootstrap and upgrade migration.
@@ -220,11 +222,20 @@ func copyEmbeddedFS(fsys embed.FS, root, destDir string) error {
 // as the team name.
 func generateBasicTeamMD(path, dirName string) error {
 	name := humanizeDirName(dirName)
-	content := fmt.Sprintf(`---
-name: %s
-description: Team %s (migrated from legacy layout)
----
-`, name, name)
+	// Use yaml.Marshal for safe YAML encoding of the name.
+	type teamFrontmatter struct {
+		Name        string `yaml:"name"`
+		Description string `yaml:"description"`
+	}
+	fm := teamFrontmatter{
+		Name:        name,
+		Description: fmt.Sprintf("Team %s (migrated from legacy layout)", name),
+	}
+	data, err := yaml.Marshal(&fm)
+	if err != nil {
+		return fmt.Errorf("marshaling team frontmatter: %w", err)
+	}
+	content := fmt.Sprintf("---\n%s---\n", string(data))
 	return os.WriteFile(path, []byte(content), 0o644)
 }
 

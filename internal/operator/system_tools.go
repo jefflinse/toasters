@@ -15,8 +15,8 @@ import (
 	"github.com/jefflinse/toasters/internal/runtime"
 )
 
-// AgentSpawner is the interface for spawning team lead sessions.
-type AgentSpawner interface {
+// TeamLeadSpawner is the interface for spawning team lead sessions.
+type TeamLeadSpawner interface {
 	SpawnTeamLead(ctx context.Context, composed *compose.ComposedAgent, taskID string, jobID string) error
 }
 
@@ -28,11 +28,11 @@ type SystemTools struct {
 	store    db.Store
 	composer *compose.Composer
 	eventCh  chan<- Event
-	spawner  AgentSpawner
+	spawner  TeamLeadSpawner
 }
 
 // NewSystemTools creates a new SystemTools instance.
-func NewSystemTools(store db.Store, composer *compose.Composer, eventCh chan<- Event, spawner AgentSpawner) *SystemTools {
+func NewSystemTools(store db.Store, composer *compose.Composer, eventCh chan<- Event, spawner TeamLeadSpawner) *SystemTools {
 	return &SystemTools{
 		store:    store,
 		composer: composer,
@@ -142,24 +142,6 @@ func (st *SystemTools) Definitions() []runtime.ToolDef {
 				"required": ["text"]
 			}`),
 		},
-		{
-			Name:        "relay_to_team",
-			Description: "Send a message to a team. Use this to relay instructions, feedback, or context to a team that is working on a task.",
-			Parameters: json.RawMessage(`{
-				"type": "object",
-				"properties": {
-					"team_id": {
-						"type": "string",
-						"description": "ID of the team to relay the message to"
-					},
-					"message": {
-						"type": "string",
-						"description": "The message to send to the team"
-					}
-				},
-				"required": ["team_id", "message"]
-			}`),
-		},
 	}
 }
 
@@ -178,8 +160,6 @@ func (st *SystemTools) Execute(ctx context.Context, name string, args json.RawMe
 		return st.queryJob(ctx, args)
 	case "surface_to_user":
 		return st.surfaceToUser(ctx, args)
-	case "relay_to_team":
-		return st.relayToTeam(ctx, args)
 	default:
 		return "", fmt.Errorf("%w: %s", runtime.ErrUnknownTool, name)
 	}
@@ -317,6 +297,9 @@ func (st *SystemTools) assignTask(ctx context.Context, args json.RawMessage) (st
 	}
 
 	// 5. Spawn team lead goroutine (fire-and-forget).
+	if st.spawner == nil {
+		return "", fmt.Errorf("cannot assign task: no agent spawner configured")
+	}
 	if err := st.spawner.SpawnTeamLead(ctx, composed, params.TaskID, task.JobID); err != nil {
 		return "", fmt.Errorf("spawning team lead: %w", err)
 	}
@@ -436,32 +419,6 @@ func (st *SystemTools) surfaceToUser(ctx context.Context, args json.RawMessage) 
 	}
 
 	return fmt.Sprintf("Surfaced to user: %s", params.Text), nil
-}
-
-func (st *SystemTools) relayToTeam(_ context.Context, args json.RawMessage) (string, error) {
-	var params struct {
-		TeamID  string `json:"team_id"`
-		Message string `json:"message"`
-	}
-	if err := json.Unmarshal(args, &params); err != nil {
-		return "", fmt.Errorf("parsing relay_to_team args: %w", err)
-	}
-
-	if params.TeamID == "" {
-		return "", fmt.Errorf("team_id is required")
-	}
-	if params.Message == "" {
-		return "", fmt.Errorf("message is required")
-	}
-
-	// Placeholder: log the relay. Actual implementation needs team session
-	// tracking, which comes in a later phase.
-	slog.Info("relay to team",
-		"team_id", params.TeamID,
-		"message", params.Message,
-	)
-
-	return fmt.Sprintf("Relayed to team %s: %s", params.TeamID, params.Message), nil
 }
 
 // newID generates a random UUID-like identifier using crypto/rand.

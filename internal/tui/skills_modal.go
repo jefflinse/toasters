@@ -17,6 +17,7 @@ import (
 
 	"github.com/jefflinse/toasters/internal/config"
 	"github.com/jefflinse/toasters/internal/db"
+	"github.com/jefflinse/toasters/internal/loader"
 )
 
 // skillsModalState holds all state for the /skills modal overlay.
@@ -45,7 +46,7 @@ func (m *Model) updateSkillsModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.skillsModal.nameInput = ""
 		case "enter":
 			name := strings.TrimSpace(m.skillsModal.nameInput)
-			valid := name != "" && !strings.ContainsAny(name, `/\.`)
+			valid := name != "" && !strings.ContainsAny(name, "/\\.\n\r:")
 			if valid {
 				if err := createSkillFile(name); err != nil {
 					slog.Error("failed to create skill file", "name", name, "error", err)
@@ -171,8 +172,11 @@ func createSkillFile(name string) error {
 		return fmt.Errorf("creating skills dir: %w", err)
 	}
 
-	// Sanitize name for filename: lowercase, replace spaces with hyphens.
-	filename := strings.ToLower(strings.ReplaceAll(name, " ", "-")) + ".md"
+	// Sanitize name for filename using Slugify for consistent, safe filenames.
+	filename := loader.Slugify(name) + ".md"
+	if filename == ".md" {
+		return fmt.Errorf("invalid skill name: produces empty filename")
+	}
 	path := filepath.Join(skillsDir, filename)
 
 	if _, err := os.Stat(path); err == nil {

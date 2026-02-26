@@ -16,6 +16,7 @@ import (
 
 	"github.com/jefflinse/toasters/internal/config"
 	"github.com/jefflinse/toasters/internal/db"
+	"github.com/jefflinse/toasters/internal/loader"
 )
 
 // agentsModalState holds all state for the /agents modal overlay.
@@ -39,7 +40,7 @@ func (m *Model) updateAgentsModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.agentsModal.nameInput = ""
 		case "enter":
 			name := strings.TrimSpace(m.agentsModal.nameInput)
-			valid := name != "" && !strings.ContainsAny(name, `/\.`)
+			valid := name != "" && !strings.ContainsAny(name, "/\\.\n\r:")
 			if valid {
 				if err := createAgentFile(name); err != nil {
 					slog.Error("failed to create agent file", "name", name, "error", err)
@@ -167,8 +168,11 @@ func createAgentFile(name string) error {
 		return fmt.Errorf("creating agents dir: %w", err)
 	}
 
-	// Sanitize name for filename: lowercase, replace spaces with hyphens.
-	filename := strings.ToLower(strings.ReplaceAll(name, " ", "-")) + ".md"
+	// Sanitize name for filename using Slugify for consistent, safe filenames.
+	filename := loader.Slugify(name) + ".md"
+	if filename == ".md" {
+		return fmt.Errorf("invalid agent name: produces empty filename")
+	}
 	path := filepath.Join(agentsDir, filename)
 
 	if _, err := os.Stat(path); err == nil {

@@ -542,34 +542,6 @@ func TestSurfaceToUser_MissingText(t *testing.T) {
 	assertContains(t, err.Error(), "text is required")
 }
 
-func TestRelayToTeam(t *testing.T) {
-	st, _, _, _ := newTestSystemTools(t)
-	ctx := context.Background()
-
-	result, err := st.Execute(ctx, "relay_to_team", json.RawMessage(`{
-		"team_id": "backend",
-		"message": "Please prioritize the API endpoint"
-	}`))
-	assertNoError(t, err)
-	assertContains(t, result, "Relayed to team backend")
-	assertContains(t, result, "Please prioritize the API endpoint")
-}
-
-func TestRelayToTeam_MissingParams(t *testing.T) {
-	st, _, _, _ := newTestSystemTools(t)
-	ctx := context.Background()
-
-	// Missing team_id.
-	_, err := st.Execute(ctx, "relay_to_team", json.RawMessage(`{"message": "hello"}`))
-	assertError(t, err)
-	assertContains(t, err.Error(), "team_id is required")
-
-	// Missing message.
-	_, err = st.Execute(ctx, "relay_to_team", json.RawMessage(`{"team_id": "t1"}`))
-	assertError(t, err)
-	assertContains(t, err.Error(), "message is required")
-}
-
 func TestSystemToolsUnknownTool(t *testing.T) {
 	st, _, _, _ := newTestSystemTools(t)
 	ctx := context.Background()
@@ -592,7 +564,6 @@ func TestSystemToolDefinitions(t *testing.T) {
 		"query_teams",
 		"query_job",
 		"surface_to_user",
-		"relay_to_team",
 	}
 
 	if len(defs) != len(expectedTools) {

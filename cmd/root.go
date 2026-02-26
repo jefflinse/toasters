@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/spf13/cobra"
@@ -144,6 +145,7 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 
 	// Create the runtime for agent session management.
 	rt := runtime.New(store, registry)
+	defer rt.Shutdown()
 
 	// Initialize MCP manager and connect to configured servers.
 	mcpManager := mcp.NewManager()
@@ -187,7 +189,50 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 	// Callbacks use p.Send() which is safe to call before p.Run() — messages
 	// are buffered until the program starts.
 	var op *operator.Operator
-	var p *tea.Program
+	var p atomic.Pointer[tea.Program]
+
+	// notifySessionStarted wires a runtime session into the TUI event loop.
+	// It is used for all sessions — both coordinator sessions (spawned by assign_team)
+	// and child sessions (spawned by spawn_agent) — via rt.OnSessionStarted.
+	// Defined before operator.Start() to avoid a data race on the callback.
+	notifySessionStarted := func(sess *runtime.Session) {
+		snap := sess.Snapshot()
+		if prog := p.Load(); prog != nil {
+			prog.Send(tui.RuntimeSessionStartedMsg{
+				SessionID:      snap.ID,
+				AgentName:      snap.AgentID,
+				TeamName:       snap.TeamName,
+				JobID:          snap.JobID,
+				SystemPrompt:   sess.SystemPrompt(),
+				InitialMessage: sess.InitialMessage(),
+			})
+		}
+
+		// Forward events in a goroutine.
+		go func() {
+			events := sess.Subscribe()
+			for ev := range events {
+				if prog := p.Load(); prog != nil {
+					prog.Send(tui.RuntimeSessionEventMsg{Event: ev})
+				}
+			}
+			// Session done — send completion message.
+			finalSnap := sess.Snapshot()
+			if prog := p.Load(); prog != nil {
+				prog.Send(tui.RuntimeSessionDoneMsg{
+					SessionID: finalSnap.ID,
+					AgentName: finalSnap.AgentID,
+					JobID:     finalSnap.JobID,
+					FinalText: sess.FinalText(),
+					Status:    finalSnap.Status,
+				})
+			}
+		}()
+	}
+
+	// Wire the callback on the runtime so all sessions (coordinator + children)
+	// are forwarded to the TUI through a single path.
+	rt.OnSessionStarted = notifySessionStarted
 
 	if store != nil {
 		op = operator.New(operator.Config{
@@ -198,13 +243,13 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 			Store:    store,
 			Composer: composer,
 			OnText: func(text string) {
-				if p != nil {
-					p.Send(tui.OperatorTextMsg{Text: text})
+				if prog := p.Load(); prog != nil {
+					prog.Send(tui.OperatorTextMsg{Text: text})
 				}
 			},
 			OnEvent: func(event operator.Event) {
-				if p != nil {
-					p.Send(tui.OperatorEventMsg{Event: event})
+				if prog := p.Load(); prog != nil {
+					prog.Send(tui.OperatorEventMsg{Event: event})
 				}
 			},
 		})
@@ -229,47 +274,12 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 		Operator:     op,
 	})
 
-	p = tea.NewProgram(&m)
+	prog := tea.NewProgram(&m)
+	p.Store(prog)
 
 	gw.SetSend(func(msg gateway.SlotTimeoutMsg) {
-		p.Send(msg)
+		prog.Send(msg)
 	})
-
-	// notifySessionStarted wires a runtime session into the TUI event loop.
-	// It is used for all sessions — both coordinator sessions (spawned by assign_team)
-	// and child sessions (spawned by spawn_agent) — via rt.OnSessionStarted.
-	notifySessionStarted := func(sess *runtime.Session) {
-		snap := sess.Snapshot()
-		p.Send(tui.RuntimeSessionStartedMsg{
-			SessionID:      snap.ID,
-			AgentName:      snap.AgentID,
-			TeamName:       snap.TeamName,
-			JobID:          snap.JobID,
-			SystemPrompt:   sess.SystemPrompt(),
-			InitialMessage: sess.InitialMessage(),
-		})
-
-		// Forward events in a goroutine.
-		go func() {
-			events := sess.Subscribe()
-			for ev := range events {
-				p.Send(tui.RuntimeSessionEventMsg{Event: ev})
-			}
-			// Session done — send completion message.
-			finalSnap := sess.Snapshot()
-			p.Send(tui.RuntimeSessionDoneMsg{
-				SessionID: finalSnap.ID,
-				AgentName: finalSnap.AgentID,
-				JobID:     finalSnap.JobID,
-				FinalText: sess.FinalText(),
-				Status:    finalSnap.Status,
-			})
-		}()
-	}
-
-	// Wire the callback on the runtime so all sessions (coordinator + children)
-	// are forwarded to the TUI through a single path.
-	rt.OnSessionStarted = notifySessionStarted
 
 	// Generate team awareness and pre-fetch the operator greeting in the background
 	// so the TUI appears immediately. Always send AppReadyMsg even on error.
@@ -287,7 +297,7 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 			slog.Warn("failed to pre-fetch greeting", "error", err)
 		}
 
-		p.Send(tui.AppReadyMsg{Awareness: awareness, Greeting: greeting})
+		prog.Send(tui.AppReadyMsg{Awareness: awareness, Greeting: greeting})
 	}()
 
 	watchCtx, watchCancel := context.WithCancel(context.Background())
@@ -303,7 +313,7 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 			allTeams := append(newTeams, autoTeams...)
 			toolExec.SetTeams(allTeams)
 			newAwareness := generateTeamAwareness(context.Background(), client, allTeams, configDir)
-			p.Send(tui.TeamsReloadedMsg{Teams: allTeams, Awareness: newAwareness})
+			prog.Send(tui.TeamsReloadedMsg{Teams: allTeams, Awareness: newAwareness})
 		})
 		if err != nil && watchCtx.Err() == nil {
 			slog.Error("teams watcher error", "error", err)
@@ -313,7 +323,7 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 	// Watch for definition file changes and reload.
 	if ldr != nil {
 		defWatcher, defWatchErr := loader.NewWatcher(ldr, func() {
-			p.Send(tui.DefinitionsReloadedMsg{})
+			prog.Send(tui.DefinitionsReloadedMsg{})
 		})
 		if defWatchErr != nil {
 			slog.Warn("failed to create definitions watcher", "error", defWatchErr)
@@ -327,6 +337,6 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 		}
 	}
 
-	_, err = p.Run()
+	_, err = prog.Run()
 	return err
 }

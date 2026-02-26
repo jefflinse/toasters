@@ -237,6 +237,33 @@ func (r *Runtime) CancelSession(id string) error {
 	return nil
 }
 
+// Shutdown cancels all active sessions and waits for them to complete.
+// Call this before closing the database to ensure session cleanup finishes.
+func (r *Runtime) Shutdown() {
+	r.mu.Lock()
+	sessions := make([]*Session, 0, len(r.sessions))
+	for _, s := range r.sessions {
+		sessions = append(sessions, s)
+	}
+	r.mu.Unlock()
+
+	for _, s := range sessions {
+		s.Cancel()
+	}
+
+	// Wait for all sessions to finish (they remove themselves from the map).
+	for {
+		r.mu.Lock()
+		remaining := len(r.sessions)
+		r.mu.Unlock()
+		if remaining == 0 {
+			return
+		}
+		// Brief sleep to avoid busy-waiting.
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 // ActiveSessions returns snapshots of all sessions with "active" status.
 func (r *Runtime) ActiveSessions() []SessionSnapshot {
 	r.mu.Lock()

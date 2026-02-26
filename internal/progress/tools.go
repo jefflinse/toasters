@@ -2,8 +2,8 @@ package progress
 
 import "encoding/json"
 
-// ToolDef mirrors runtime.ToolDef to avoid an import cycle.
-// The runtime package converts these to runtime.ToolDef when wiring progress tools.
+// ToolDef mirrors runtime.ToolDef to avoid an import cycle (runtime imports
+// progress for handler dispatch). Keep in sync with runtime.ToolDef.
 type ToolDef struct {
 	Name        string
 	Description string

@@ -9,6 +9,11 @@ import (
 // non-blocking select so that sends from the event loop goroutine (which is
 // also the sole reader) cannot self-deadlock, and sends from agent goroutines
 // respect context cancellation instead of blocking indefinitely.
+//
+// Note: events may be dropped during shutdown when the context is cancelled.
+// This is acceptable because the DB state (task status, progress reports) is
+// already persisted before the event is sent. Events are for operator awareness
+// only — the persistent state is consistent regardless.
 func trySendEvent(ctx context.Context, ch chan<- Event, ev Event) {
 	select {
 	case ch <- ev:

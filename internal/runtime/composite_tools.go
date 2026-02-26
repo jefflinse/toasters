@@ -28,10 +28,8 @@ func NewCompositeTools(core *CoreTools, mcp MCPCaller, mcpDefs []ToolDef) *Compo
 // Execute tries CoreTools first; if unknown tool and name contains "__", dispatches to MCP.
 func (ct *CompositeTools) Execute(ctx context.Context, name string, args json.RawMessage) (string, error) {
 	result, err := ct.core.Execute(ctx, name, args)
-	if errors.Is(err, ErrUnknownTool) && strings.Contains(name, "__") {
-		if ct.mcp != nil {
-			return ct.mcp.Call(ctx, name, args)
-		}
+	if errors.Is(err, ErrUnknownTool) && strings.Contains(name, "__") && ct.mcp != nil {
+		return ct.mcp.Call(ctx, name, args)
 	}
 	return result, err
 }

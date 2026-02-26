@@ -24,23 +24,16 @@ import (
 	"github.com/jefflinse/toasters/internal/runtime"
 )
 
-// MCPCaller is the interface for dispatching MCP tool calls.
-// The concrete implementation is *mcp.Manager from internal/mcp.
-// Defined here to avoid importing internal/mcp from internal/llm/tools.
-type MCPCaller interface {
-	Call(ctx context.Context, name string, args json.RawMessage) (string, error)
-}
-
 // ToolExecutor holds the dependencies needed to execute operator tool calls.
 type ToolExecutor struct {
-	Gateway      orchestration.AgentSpawner
+	Gateway      orchestration.GatewaySpawner
 	teams        []agents.Team
 	teamsMu      sync.RWMutex
 	WorkspaceDir string
 	Tools        []provider.Tool
 	Store        db.Store         // may be nil
 	Runtime      *runtime.Runtime // may be nil
-	MCPManager   MCPCaller        // may be nil
+	MCPManager   mcp.MCPCaller    // may be nil
 
 	// Runtime agent configuration — set after construction.
 	DefaultProvider  string                      // default provider name for runtime agents
@@ -65,7 +58,7 @@ func (te *ToolExecutor) getTeams() []agents.Team {
 }
 
 // NewToolExecutor creates a ToolExecutor with the default static tools.
-func NewToolExecutor(gateway orchestration.AgentSpawner, teams []agents.Team, workspaceDir string, store db.Store, rt *runtime.Runtime) *ToolExecutor {
+func NewToolExecutor(gateway orchestration.GatewaySpawner, teams []agents.Team, workspaceDir string, store db.Store, rt *runtime.Runtime) *ToolExecutor {
 	return &ToolExecutor{
 		Gateway:      gateway,
 		teams:        teams,

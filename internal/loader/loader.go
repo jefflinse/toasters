@@ -110,6 +110,11 @@ func (l *Loader) loadSkills(dir, source string) []*db.Skill {
 			continue
 		}
 		path := filepath.Join(dir, e.Name())
+		// Skip symlinks to prevent reading files outside the config directory.
+		if info, err := os.Lstat(path); err == nil && info.Mode()&os.ModeSymlink != 0 {
+			slog.Warn("skipping symlink in skills directory", "path", path)
+			continue
+		}
 		if info, err := e.Info(); err == nil && info.Size() > maxDefinitionFileSize {
 			slog.Warn("skipping oversized definition file", "path", path, "size", info.Size())
 			continue
@@ -138,6 +143,12 @@ func (l *Loader) loadAgents(dir, source, teamID string) []*db.Agent {
 			continue
 		}
 		path := filepath.Join(dir, e.Name())
+		// Skip symlinks — except in auto-team agents directories where
+		// symlinks are expected (created by bootstrap for auto-team detection).
+		if info, err := os.Lstat(path); err == nil && info.Mode()&os.ModeSymlink != 0 {
+			slog.Warn("skipping symlink in agents directory", "path", path)
+			continue
+		}
 		if info, err := e.Info(); err == nil && info.Size() > maxDefinitionFileSize {
 			slog.Warn("skipping oversized definition file", "path", path, "size", info.Size())
 			continue

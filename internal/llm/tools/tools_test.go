@@ -123,7 +123,7 @@ func createTestTask(t *testing.T, store db.Store, jobID, title string, status db
 	return task
 }
 
-// --- Mock AgentSpawner ---
+// --- Mock GatewaySpawner ---
 
 type mockSpawner struct {
 	spawnTeamFn   func(teamName, jobID, task string, team agents.Team) (int, bool, error)

@@ -1595,14 +1595,14 @@ func TestSurfaceToUserCreatesFeedEntry(t *testing.T) {
 	assertEqual(t, string(db.FeedEntrySystemEvent), string(entries[0].EntryType))
 }
 
-func TestSurfaceToUserWithoutStore(t *testing.T) {
-	// surface_to_user should still work without a store (graceful degradation).
+func TestSurfaceToUserWithoutSystemTools(t *testing.T) {
+	// surface_to_user should return an error when no system tools are configured.
 	tools := newOperatorTools(nil, nil, nil, nil, t.TempDir())
 
-	result, err := tools.Execute(context.Background(), "surface_to_user",
+	_, err := tools.Execute(context.Background(), "surface_to_user",
 		json.RawMessage(`{"text": "No store available"}`))
-	assertNoError(t, err)
-	assertContains(t, result, "Surfaced to user")
+	assertError(t, err)
+	assertContains(t, err.Error(), "surface_to_user unavailable")
 }
 
 func TestOperatorToolsUnknownTool(t *testing.T) {

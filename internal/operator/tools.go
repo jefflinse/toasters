@@ -173,29 +173,10 @@ func (ot *operatorTools) consultAgent(ctx context.Context, args json.RawMessage)
 }
 
 func (ot *operatorTools) surfaceToUser(ctx context.Context, args json.RawMessage) (string, error) {
-	var params struct {
-		Text string `json:"text"`
+	if ot.systemTools == nil {
+		return "", fmt.Errorf("surface_to_user unavailable: no system tools configured")
 	}
-	if err := json.Unmarshal(args, &params); err != nil {
-		return "", fmt.Errorf("parsing surface_to_user args: %w", err)
-	}
-
-	if params.Text == "" {
-		return "", fmt.Errorf("text is required")
-	}
-
-	// Create a feed entry in the DB so the TUI can display it.
-	if ot.store != nil {
-		entry := &db.FeedEntry{
-			EntryType: db.FeedEntrySystemEvent,
-			Content:   params.Text,
-		}
-		if err := ot.store.CreateFeedEntry(ctx, entry); err != nil {
-			slog.Warn("failed to create feed entry for surface_to_user", "error", err)
-		}
-	}
-
-	return fmt.Sprintf("Surfaced to user: %s", params.Text), nil
+	return ot.systemTools.Execute(ctx, "surface_to_user", args)
 }
 
 // queryJob delegates to SystemTools.queryJob for DB-backed job queries.
