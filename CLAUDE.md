@@ -8,7 +8,7 @@ Toasters is a Go-based TUI orchestration tool for agentic coding work. It coordi
 
 ```bash
 go build ./...          # Build
-go test ./...           # Test (16 test packages)
+go test ./...           # Test (16 test packages, see list below)
 go run main.go          # Run the TUI
 ```
 
@@ -20,17 +20,19 @@ cmd/                        # Cobra CLI setup, launches TUI
   mcp_server.go             # `toasters mcp-server` subcommand (stdio MCP server for agents)
 agents/                     # Built-in agent definition files (.md with YAML frontmatter)
 internal/
+  agentfmt/                 # YAML frontmatter parsing for agent/skill/team definitions (superset format)
   agents/                   # Agent discovery, parsing, team management
   anthropic/                # Anthropic API client + OAuth/Keychain
   claude/                   # Shared Claude CLI stream-json types
   config/                   # Viper-based config from ~/.config/toasters/config.yaml
   db/                       # SQLite persistence (Store interface, migrations, CRUD)
-  frontmatter/              # Shared YAML frontmatter parsing (Split + Parse)
+  frontmatter/              # Shared YAML frontmatter parsing (Split + Parse) — to be replaced by agentfmt
   gateway/                  # Claude subprocess slot management (4 concurrent slots)
   llm/                      # Legacy LLM types (OpenAI wire format, used by llm/client)
     client/                 # OpenAI-compatible streaming client
     tools/                  # Tool executor with registry-based dispatch (18 handlers in 5 files)
   mcp/                      # MCP client manager, tool conversion, namespacing, result truncation/slimming, server status tracking
+  operator/                 # Operator event loop, typed events, system tools (consult_agent, assign_task)
   orchestration/            # Cross-cutting orchestration types (GatewaySlot, AgentSpawner)
   progress/                 # Progress tool handlers, MCP server (report_progress, etc.)
   provider/                 # Multi-provider LLM client (OpenAI, Anthropic, registry)
@@ -39,7 +41,6 @@ internal/
   sse/                      # Shared SSE parsing (reader, Anthropic event types, OpenAI chunk types)
   tui/                      # Bubble Tea TUI (model, views, grid, modals, streaming, MCP modal)
     progress_poll.go        # SQLite polling loop for real-time progress display
-  job/                      # Job file persistence (OVERVIEW.md + TODO.md)
 ```
 
 ## Architecture
@@ -52,7 +53,7 @@ internal/
 - **Gateway**: Manages up to 4 concurrent Claude CLI subprocesses (`MaxSlots = 4`). Each slot runs a Claude agent with a specific prompt and job context. Retained as a fallback alongside the in-process runtime.
 - **Provider Registry**: Multi-provider LLM abstraction supporting OpenAI-compatible APIs (LM Studio, Ollama, OpenAI) and Anthropic's Messages API. Providers are configured in YAML and looked up by name. Anthropic supports both API key and Keychain/OAuth authentication.
 - **SQLite Persistence**: Operational state stored in SQLite via `modernc.org/sqlite` (pure Go). WAL mode for concurrent reads. Schema includes jobs, tasks, task dependencies, progress reports, agents, teams, sessions, and artifacts. Auto-migrating on open.
-- **Jobs**: Dual-persisted — markdown files (`OVERVIEW.md` + `TODO.md`) for human readability, SQLite for structured queries. New jobs are written to both. Toasters is workspace-centric — coordinators start in the job workspace directory; there is no concept of a "current working directory."
+- **Jobs**: Persisted in SQLite only. Each job has a description, workspace directory, and associated tasks. Toasters is workspace-centric — coordinators start in the job workspace directory; there is no concept of a "current working directory."
 - **Agents**: Defined as `.md` files with YAML frontmatter (name, description, mode, color, temperature, tools). Discovered from directories and hot-reloaded via fsnotify (debounced at 200ms).
 
 ## Tech Stack
@@ -67,7 +68,7 @@ internal/
 
 ## Code Conventions
 
-- **Packages**: lowercase single word (`agents`, `config`, `gateway`, `llm`, `tui`, `job`)
+- **Packages**: lowercase single word (`agents`, `config`, `gateway`, `llm`, `tui`, `operator`)
 - **Types**: PascalCase (`Agent`, `Team`, `Gateway`, `SlotSnapshot`, `Job`)
 - **Constants**: SCREAMING_SNAKE or PascalCase for exported (`MaxSlots`, `InputHeight`)
 - **Error handling**: Always `if err != nil` with `fmt.Errorf("context: %w", err)` wrapping. Return errors, don't log and swallow.
@@ -113,7 +114,7 @@ Key settings:
 
 Tests exist across 16 test packages. They use standard Go testing with `t.TempDir()` for file I/O and helper functions for assertions. Run `golangci-lint run` for linting — the codebase currently has 0 lint findings.
 
-Key coverage numbers: `frontmatter` 100%, `llm/tools` 88.3%, `llm/client` 87.7%, `runtime` 87.0%, `job` 85.7%, `provider` 84.9%, `db` 83.6%, `mcp` 83%, `agents` 72.1%, `config` 65.7%.
+Key coverage numbers: `frontmatter` 100%, `llm/tools` 88.3%, `llm/client` 87.7%, `runtime` 87.0%, `provider` 84.9%, `db` 83.6%, `mcp` 83%, `agents` 72.1%, `config` 65.7%.
 
 ## Tech Debt Execution Plan (Pre-Phase 3)
 
