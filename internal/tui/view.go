@@ -87,8 +87,8 @@ func rainbowText(text string, phase int) string {
 	}
 	var sb strings.Builder
 	for i, r := range runes {
-		// Spread one full hue cycle across ~20 characters; shift by phase.
-		hue := math.Mod(float64(i)/20.0+float64(phase)/10.0, 1.0)
+		// Spread one full hue cycle across ~20 characters; shift by phase (1 full cycle per ~30 frames).
+		hue := math.Mod(float64(i)/20.0+float64(phase)/30.0, 1.0)
 		cr, cg, cb := hslToRGB(hue, 1.0, 0.6)
 		sb.WriteString(lipgloss.NewStyle().
 			Bold(true).

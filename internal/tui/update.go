@@ -64,7 +64,16 @@ func (m *Model) updateOutputModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 // updateGrid handles key events when the grid screen is visible.
 func (m *Model) updateGrid(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	absSlot := m.grid.gridPage*4 + m.grid.gridFocusCell
+	// Fetch the gateway snapshot exactly once so sortedSlotIndicesFrom and
+	// runtimeSessionForGridCell operate on the same consistent view of state.
+	var slots [gateway.MaxSlots]gateway.SlotSnapshot
+	if m.gateway != nil {
+		slots = m.gateway.Slots()
+	}
+	// Compute absSlot using the same sorted index order as renderGrid so that
+	// kill/enter target the slot that is visually focused.
+	sortedIndices := sortedSlotIndicesFrom(slots)
+	absSlot := sortedIndices[m.grid.gridPage*4+m.grid.gridFocusCell]
 	switch msg.String() {
 	case "ctrl+g", "esc":
 		m.grid.showGrid = false
@@ -76,7 +85,6 @@ func (m *Model) updateGrid(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "enter":
 		if m.gateway != nil {
-			slots := m.gateway.Slots()
 			snap := slots[absSlot]
 			if snap.Active && snap.Output != "" {
 				m.outputModal.show = true
@@ -87,7 +95,7 @@ func (m *Model) updateGrid(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 		// Check for runtime session in this cell.
-		if rs := m.runtimeSessionForGridCell(m.grid.gridFocusCell); rs != nil {
+		if rs := m.runtimeSessionForGridCell(m.grid.gridFocusCell, slots, sortedIndices); rs != nil {
 			output := rs.output.String()
 			if output != "" {
 				m.outputModal.show = true
@@ -99,7 +107,6 @@ func (m *Model) updateGrid(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "p":
 		if m.gateway != nil {
-			slots := m.gateway.Slots()
 			snap := slots[absSlot]
 			if snap.Active && snap.Prompt != "" {
 				m.promptModal.show = true
@@ -109,7 +116,7 @@ func (m *Model) updateGrid(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 		// Check for runtime session in this cell.
-		if rs := m.runtimeSessionForGridCell(m.grid.gridFocusCell); rs != nil {
+		if rs := m.runtimeSessionForGridCell(m.grid.gridFocusCell, slots, sortedIndices); rs != nil {
 			// Build a combined prompt view: system prompt + initial message.
 			var promptContent strings.Builder
 			if rs.systemPrompt != "" {

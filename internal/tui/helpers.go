@@ -471,15 +471,29 @@ func (m *Model) jobByID(id string) (*db.Job, bool) {
 	return nil, false
 }
 
-// sortedRuntimeSessions returns the runtime sessions sorted by start time
-// for stable, deterministic display ordering.
+// sortedRuntimeSessions returns the runtime sessions sorted for display:
+// active sessions first, then completed/failed/cancelled, with startTime
+// as the tiebreaker within each group. sessionID is used as a final stable
+// tiebreaker to ensure deterministic ordering when two sessions share the
+// same startTime (Go map iteration is randomized).
 func (m *Model) sortedRuntimeSessions() []*runtimeSlot {
 	slots := make([]*runtimeSlot, 0, len(m.runtimeSessions))
 	for _, rs := range m.runtimeSessions {
 		slots = append(slots, rs)
 	}
 	slices.SortFunc(slots, func(a, b *runtimeSlot) int {
-		return a.startTime.Compare(b.startTime)
+		aActive := a.status == "active"
+		bActive := b.status == "active"
+		if aActive != bActive {
+			if aActive {
+				return -1 // active before inactive
+			}
+			return 1
+		}
+		if cmp := a.startTime.Compare(b.startTime); cmp != 0 {
+			return cmp
+		}
+		return strings.Compare(a.sessionID, b.sessionID) // stable tiebreaker
 	})
 	return slots
 }
@@ -487,20 +501,26 @@ func (m *Model) sortedRuntimeSessions() []*runtimeSlot {
 // runtimeSessionForGridCell returns the runtime session displayed in the given
 // grid cell index (0-3 within the current page), or nil if the cell does not
 // contain a runtime session. This replicates the overlay logic used in renderGrid:
-// iterate gateway slots for the current page, and for each inactive slot, assign
-// the next sorted runtime session.
-func (m *Model) runtimeSessionForGridCell(cellIdx int) *runtimeSlot {
-	var slots [gateway.MaxSlots]gateway.SlotSnapshot
-	if m.gateway != nil {
-		slots = m.gateway.Slots()
-	}
-
+// iterate gateway slots for the current page (using the same sorted order), and
+// for each inactive slot, assign the next sorted runtime session.
+//
+// slots and sortedIndices must be the same snapshot/ordering already used by the
+// caller (renderGrid or updateGrid) so that rtIdx arithmetic is consistent.
+func (m *Model) runtimeSessionForGridCell(cellIdx int, slots [gateway.MaxSlots]gateway.SlotSnapshot, sortedIndices []int) *runtimeSlot {
 	sortedRT := m.sortedRuntimeSessions()
-	rtIdx := 0
 	pageOffset := m.grid.gridPage * 4
 
+	// Pre-skip runtime sessions consumed by earlier pages (mirrors renderGrid).
+	rtIdx := 0
+	for i := range pageOffset {
+		snap := slots[sortedIndices[i]]
+		if !snap.Active {
+			rtIdx++
+		}
+	}
+
 	for i := range 4 {
-		absIdx := pageOffset + i
+		absIdx := sortedIndices[pageOffset+i]
 		snap := slots[absIdx]
 		if !snap.Active {
 			if rtIdx < len(sortedRT) {

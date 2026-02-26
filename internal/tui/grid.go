@@ -4,6 +4,7 @@ package tui
 import (
 	"fmt"
 	"image/color"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -13,24 +14,67 @@ import (
 	"github.com/jefflinse/toasters/internal/gateway"
 )
 
+// slotPriority returns the display priority for a gateway slot snapshot.
+// Lower values sort first: 0 = running, 1 = done, 2 = inactive.
+func slotPriority(snap gateway.SlotSnapshot) int {
+	if !snap.Active {
+		return 2
+	}
+	if snap.Status == gateway.SlotRunning {
+		return 0
+	}
+	return 1 // SlotDone
+}
+
+// sortedSlotIndicesFrom returns a slice of slot indices (0..MaxSlots-1) sorted by
+// display priority: running first, then done, then inactive. The order is
+// stable within each priority group (preserves original index order).
+// It operates on the caller-provided snapshot so all slot-related logic within
+// a single render or key-handler pass uses a consistent view of gateway state.
+func sortedSlotIndicesFrom(slots [gateway.MaxSlots]gateway.SlotSnapshot) []int {
+	indices := make([]int, gateway.MaxSlots)
+	for i := range indices {
+		indices[i] = i
+	}
+	slices.SortStableFunc(indices, func(a, b int) int {
+		return slotPriority(slots[a]) - slotPriority(slots[b])
+	})
+	return indices
+}
+
 func (m *Model) renderGrid() string {
 	cellW := m.width / 2
 	cellH := (m.height - 1) / 2 // -1 to make room for the hotkey bar
 
 	var cells [4]string
+	// Fetch the snapshot exactly once so the pre-skip loop and sortedSlotIndicesFrom
+	// operate on the same consistent view of gateway state.
 	var slots [gateway.MaxSlots]gateway.SlotSnapshot
 	if m.gateway != nil {
 		slots = m.gateway.Slots()
 	}
 
+	// Sorted slot indices: running first, done second, inactive last.
+	sortedIndices := sortedSlotIndicesFrom(slots)
+
 	// Collect sorted runtime sessions to overlay into empty grid cells.
 	sortedRT := m.sortedRuntimeSessions()
-	rtIdx := 0 // index into sortedRT for the next runtime session to place
 
 	pageOffset := m.grid.gridPage * 4
 
+	// Pre-skip runtime sessions consumed by earlier pages.
+	// For each inactive slot on pages before the current one, a runtime session
+	// was placed there, so we must advance past it.
+	rtIdx := 0
+	for i := range pageOffset {
+		snap := slots[sortedIndices[i]]
+		if !snap.Active {
+			rtIdx++
+		}
+	}
+
 	for i := range 4 {
-		absIdx := pageOffset + i
+		absIdx := sortedIndices[pageOffset+i]
 		snap := slots[absIdx]
 		focused := i == m.grid.gridFocusCell
 
@@ -396,6 +440,9 @@ func (m *Model) renderRuntimeGridCell(rs *runtimeSlot, cellW, cellH, innerW, inn
 		statusMark = "✓"
 	}
 	agentLabel := rs.agentName
+	if agentLabel == "" {
+		agentLabel = "runtime"
+	}
 	if rs.teamName != "" {
 		agentLabel += " · " + rs.teamName
 	}
@@ -407,8 +454,12 @@ func (m *Model) renderRuntimeGridCell(rs *runtimeSlot, cellW, cellH, innerW, inn
 		headerLine = hdrStyle.Render(truncateStr(header, innerW))
 	}
 
-	// Status line
-	runtimeLabel := "⚡ runtime"
+	// Status line: show agent name (fallback to "runtime" if empty).
+	statusAgentLabel := rs.agentName
+	if statusAgentLabel == "" {
+		statusAgentLabel = "runtime"
+	}
+	runtimeLabel := "⚡ " + statusAgentLabel
 	if rs.status != "active" {
 		runtimeLabel = "✓ " + rs.status
 	}
