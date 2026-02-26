@@ -310,8 +310,8 @@ func TestLoad_UserTeam(t *testing.T) {
 	if teams[0].ID != "dev-team" {
 		t.Errorf("team ID = %q, want %q", teams[0].ID, "dev-team")
 	}
-	if teams[0].LeadAgent != "frontend-specialist" {
-		t.Errorf("team lead = %q, want %q", teams[0].LeadAgent, "frontend-specialist")
+	if teams[0].LeadAgent != "dev-team/frontend-specialist" {
+		t.Errorf("team lead = %q, want %q", teams[0].LeadAgent, "dev-team/frontend-specialist")
 	}
 	if teams[0].IsAuto {
 		t.Error("team should not be auto")
@@ -334,9 +334,9 @@ func TestLoad_UserTeam(t *testing.T) {
 		agentsByID[a.ID] = a
 	}
 
-	fs, ok := agentsByID["frontend-specialist"]
+	fs, ok := agentsByID["dev-team/frontend-specialist"]
 	if !ok {
-		t.Fatal("frontend-specialist agent not found")
+		t.Fatal("dev-team/frontend-specialist agent not found")
 	}
 	if fs.TeamID != "dev-team" {
 		t.Errorf("frontend-specialist team_id = %q, want %q", fs.TeamID, "dev-team")
@@ -363,8 +363,8 @@ func TestLoad_UserTeam(t *testing.T) {
 	for _, ta := range teamAgents {
 		taByAgent[ta.AgentID] = ta
 	}
-	if ta, ok := taByAgent["frontend-specialist"]; !ok {
-		t.Error("frontend-specialist not in team agents")
+	if ta, ok := taByAgent["dev-team/frontend-specialist"]; !ok {
+		t.Error("dev-team/frontend-specialist not in team agents")
 	} else if ta.Role != "lead" {
 		t.Errorf("frontend-specialist role = %q, want %q", ta.Role, "lead")
 	}
@@ -496,8 +496,8 @@ You work in the auto team.
 	if !teams[0].IsAuto {
 		t.Error("team should be auto")
 	}
-	if teams[0].LeadAgent != "auto-lead" {
-		t.Errorf("team lead = %q, want %q", teams[0].LeadAgent, "auto-lead")
+	if teams[0].LeadAgent != "auto-claude/auto-lead" {
+		t.Errorf("team lead = %q, want %q", teams[0].LeadAgent, "auto-claude/auto-lead")
 	}
 	if teams[0].Culture != "Auto team culture." {
 		t.Errorf("team culture = %q, want %q", teams[0].Culture, "Auto team culture.")

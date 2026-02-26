@@ -370,8 +370,15 @@ func convertAgent(ad *agentfmt.AgentDef, source, path, teamID string) *db.Agent 
 		maxTurns = &v
 	}
 
+	// Scope the agent ID to its team to avoid collisions between agents with
+	// the same name in different teams (e.g. system/planner vs opencode/planner).
+	id := Slugify(ad.Name)
+	if teamID != "" {
+		id = teamID + "/" + id
+	}
+
 	return &db.Agent{
-		ID:              Slugify(ad.Name),
+		ID:              id,
 		Name:            ad.Name,
 		Description:     ad.Description,
 		Mode:            ad.Mode,
