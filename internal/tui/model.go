@@ -38,18 +38,19 @@ const (
 // ModelConfig holds all dependencies and configuration needed to create a Model.
 // It replaces the 11-parameter NewModel constructor signature.
 type ModelConfig struct {
-	Client       provider.Provider
-	ClaudeCfg    config.ClaudeConfig
-	WorkspaceDir string
-	Gateway      *gateway.Gateway
-	TeamsDir     string
-	Teams        []agents.Team
-	Awareness    string
-	ToolExec     *tools.ToolExecutor
-	Store        db.Store
-	Runtime      *runtime.Runtime
-	MCPManager   *mcp.Manager
-	Operator     *operator.Operator
+	Client        provider.Provider
+	ClaudeCfg     config.ClaudeConfig
+	WorkspaceDir  string
+	Gateway       *gateway.Gateway
+	TeamsDir      string
+	Teams         []agents.Team
+	Awareness     string
+	ToolExec      *tools.ToolExecutor
+	Store         db.Store
+	Runtime       *runtime.Runtime
+	MCPManager    *mcp.Manager
+	Operator      *operator.Operator
+	OperatorModel string // configured operator model name; shown in sidebar before first response
 }
 
 // streamingState holds all state related to the active LLM stream.
@@ -332,6 +333,7 @@ func NewModel(cfg ModelConfig) Model {
 		operator:     op,
 		stats: SessionStats{
 			Endpoint:  client.Name(),
+			ModelName: cfg.OperatorModel,
 			Connected: false,
 		},
 	}
@@ -1129,13 +1131,24 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.stats.Connected = true
 			m.err = nil
-			// Prefer the loaded model; fall back to first in list.
+			// Pick the displayed model name: prefer the configured model if it
+			// appears in the list, then a "loaded" model, then the first in list.
 			if len(msg.Models) > 0 {
 				picked := msg.Models[0]
 				for _, mi := range msg.Models {
 					if mi.State == "loaded" {
 						picked = mi
 						break
+					}
+				}
+				// If we have a configured model name, prefer it over the list pick
+				// so the sidebar reflects what's actually configured.
+				if m.stats.ModelName != "" {
+					for _, mi := range msg.Models {
+						if mi.ID == m.stats.ModelName {
+							picked = mi
+							break
+						}
 					}
 				}
 				m.stats.ModelName = picked.ID

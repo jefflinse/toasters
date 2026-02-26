@@ -263,18 +263,19 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 	}
 
 	m := tui.NewModel(tui.ModelConfig{
-		Client:       client,
-		ClaudeCfg:    cfg.Claude,
-		WorkspaceDir: workspaceDir,
-		Gateway:      gw,
-		TeamsDir:     teamsDir,
-		Teams:        teams,
-		Awareness:    "",
-		ToolExec:     toolExec,
-		Store:        store,
-		Runtime:      rt,
-		MCPManager:   mcpManager,
-		Operator:     op,
+		Client:        client,
+		ClaudeCfg:     cfg.Claude,
+		WorkspaceDir:  workspaceDir,
+		Gateway:       gw,
+		TeamsDir:      teamsDir,
+		Teams:         teams,
+		Awareness:     "",
+		ToolExec:      toolExec,
+		Store:         store,
+		Runtime:       rt,
+		MCPManager:    mcpManager,
+		Operator:      op,
+		OperatorModel: cfg.Operator.Model,
 	})
 
 	prog := tea.NewProgram(&m)
