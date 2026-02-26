@@ -4,6 +4,8 @@
 **Branch:** `phase-3`
 **Build:** ✅ passes
 **Tests:** ✅ all 19 test packages pass
+**Lint:** ✅ 0 findings
+**Status:** ✅ ALL 6 MILESTONES COMPLETE
 
 ---
 
@@ -46,56 +48,71 @@
 | 4.6 | Full operator event loop (mechanical handling + selective LLM routing) | ✅ Complete |
 | 4.7 | Wire event loop into startup (cmd/root.go, TUI integration) | ✅ Complete |
 
+### Session C — Complete (Milestones 5–6)
+
+| Task | Description | Status |
+|------|-------------|--------|
+| 5.1 | Feed entry types and storage | ✅ Complete (from Session B) |
+| 5.2 | Activity feed view — operator messages in chat, feed polling, styled rendering | ✅ Complete |
+| 5.3 | Updated TUI views — teams modal badges, grid team names, left panel assignments | ✅ Complete |
+| 6.1 | Skill/agent CRUD — `/skills` and `/agents` modals with create/edit/delete | ✅ Complete |
+| 6.2 | Auto-team promotion — `Ctrl+P` in teams modal, agentfmt parsing, toasters-format output | ✅ Complete |
+| 6.3 | Lint fixes (5→0 findings), CLAUDE.md update | ✅ Complete |
+| — | Code review: 3 blockers + 9 suggestions addressed | ✅ Complete |
+
 ### Key Commits
 - `d102c26` — feat: Phase 3 Milestone 1 (tasks 1.1-1.4), agentfmt (task 2.1), operator skeleton (task 4.2)
 - `bea3f99` — feat: delete internal/job package, update CLAUDE.md (Milestone 1 tasks 1.5-1.6)
 - `aa3f5df` — feat: Phase 3 Milestone 2 — agentfmt import/export, agents migration, retire frontmatter
-- (Session B commit pending)
+- `8d7fac8` — feat: Phase 3 Milestones 3-4 — composition system, operator event loop, bootstrap
+- `ec73a86` — fix: address code review findings for Phase 3 Milestones 3-4
+- `641176f` — feat: Phase 3 Milestones 5-6 — activity feed, CRUD modals, auto-team promotion
 
 ---
 
-## Current Codebase State
+## Session C Code Review Findings Addressed
 
-- **`defaults/system/`** — Embedded system team files: team.md, 4 agents (operator, planner, scheduler, blocker-handler), 1 skill (orchestration). Bundled via `go:embed`.
-- **`internal/bootstrap/`** — First-run bootstrap copies embedded defaults to `~/.config/toasters/system/`, creates `user/` directory structure, auto-team detection for `~/.claude/agents/` and `~/.config/opencode/agents/`. Upgrade migration moves old `teams/` to `user/teams/`. Idempotent. 6 tests.
-- **`internal/compose/`** — Runtime composition: loads agent → skills → team culture → merges tools (with denylist) → resolves provider/model cascade → returns `ComposedAgent`. Role-based tools injected (lead, worker, system lead, system worker). 10 tests.
-- **`internal/loader/`** — File-to-DB loader walks `system/` + `user/` dirs, parses `.md` files with agentfmt, resolves agent references (team-local → shared → system), slugifies IDs, calls `RebuildDefinitions`. fsnotify watcher with 200ms debounce, `.md` filtering, dynamic dir watching. 19 tests.
-- **`internal/db/`** — Migration 003 adds skills, team_agents, feed_entries tables. Enriched agents (23 cols) and teams (13 cols). `RebuildDefinitions` transactional rebuild. `AssignTask`, `UpdateTaskResult` methods. 62 tests.
-- **`internal/operator/`** — Full event loop with mechanical handling (task started/completed/progress) + LLM routing (user messages, failures, blockers, recommendations). 9 event types. SystemTools (7 tools for system agents). TeamLeadTools (6 tools). WorkerTools (2 tools). Production `consult_agent` via composition system. Feed entries for all visible events. 62 tests.
-- **`internal/runtime/`** — `SpawnOpts.ToolExecutor` field for custom tool injection (used by consult_agent to give system agents SystemTools instead of CoreTools).
-- **`cmd/root.go`** — Startup wires bootstrap → loader → composer → operator event loop. Definitions watcher runs alongside existing agents watcher. Operator callbacks send TUI messages.
-- **`internal/tui/`** — New messages: `DefinitionsReloadedMsg`, `OperatorTextMsg`, `OperatorEventMsg`. Minimal handlers (log only — activity feed comes in Session C). Model holds `*operator.Operator`.
+### Blockers (3)
+1. **TeamName never populated** — Added `TeamName` to `runtime.SpawnOpts`/`Session`/`SessionSnapshot`, threaded through `cmd/root.go` and `handler_interactive.go`
+2. **Feed entry duplication** — Feed entries block only renders when `m.operator == nil` (operator events come via `OperatorEventMsg`)
+3. **File overwrite without check** — Added `os.Stat` existence check in `createSkillFile`/`createAgentFile`
 
----
-
-## What Comes Next
-
-### Session C (Milestones 5–6): TUI + Polish
-- **5.1**: Define feed entry types and storage (mostly done — FeedEntry types exist, store methods exist)
-- **5.2**: Implement activity feed view (replace chat view with chronological feed)
-- **5.3**: Update remaining TUI views (teams modal, grid view, progress panel, job view)
-- **6.1**: Implement skill/agent/team CRUD via TUI
-- **6.2**: Implement auto-team promotion
-- **6.3**: Final documentation update
+### Suggestions (9)
+4. `Hidden`/`Disabled` already have `omitempty` tags — no change needed
+5. Explicit trailing newline in `writeAgentFile`/`writeTeamFile` via `bytes.TrimRight`
+6. `nHint` no longer dimmed for read-only teams (Ctrl+N always available)
+7. Defensive comma-ok type assertion in `promoteAutoTeam`
+8. `sync.Once`-cached `getCachedHomeDir()` for render-path functions
+9. `slog.Debug` for unhandled operator event types
+10. `Modal*` style aliases for shared modal styles
+11. Edit key gated on left-panel focus in skills/agents modals
+12. `context.WithTimeout` for modal DB queries
 
 ---
 
-## Key Reference Documents
+## Final Codebase State
 
-- **`PHASE_3_PLAN.md`** — Full 30-task implementation plan with 6 milestones
-- **`PHASE_3_DESIGN.md`** — Comprehensive design doc (1,109 lines, 36 decisions)
-- **`PHASE_3.md`** — Roadmap overview
-- **`CLAUDE.md`** — Project conventions and architecture (updated through Session B)
+### New files (Session C)
+- `internal/tui/skills_modal.go` — Skills browse/CRUD modal (create, edit via $EDITOR, delete)
+- `internal/tui/agents_modal.go` — Agents browse/CRUD modal (create, edit via $EDITOR, delete)
+
+### Modified files (Session C, 20 files)
+- `CLAUDE.md` — Updated for Phase 3 completion
+- `cmd/root.go` — Lint fix, TeamName threading
+- `internal/llm/tools/handler_interactive.go` — TeamName in SpawnOpts
+- `internal/runtime/types.go` — TeamName in SpawnOpts/SessionSnapshot
+- `internal/runtime/session.go` — TeamName storage and exposure
+- `internal/tui/` — Activity feed, CRUD modals, auto-team promotion, style aliases, review fixes
+
+### Architecture summary
+- **Three-layer composition**: Skills → Agents → Teams, assembled at runtime by `internal/compose`
+- **Code-driven operator**: Mechanical event handling + selective LLM routing, system team with planner/scheduler/blocker-handler
+- **Activity feed**: Operator events rendered in chat viewport via `OperatorEventMsg`, SQLite feed entries as fallback
+- **CRUD modals**: `/skills`, `/agents`, `/teams` slash commands with full create/edit/delete
+- **Auto-team promotion**: `Ctrl+P` converts auto-detected teams to managed teams with toasters-format files
 
 ---
 
-## How to Resume
+## Phase 3 is Complete
 
-```
-Ready to resume Phase 3 execution. See PHASE_3_RESUME.md for full context.
-
-Current state: Session B complete. Milestones 1-4 done.
-Next: Session C — TUI evolution (activity feed, CRUD, polish).
-
-Use the feature-workflow skill. The plan is already approved — proceed with execution.
-```
+All 6 milestones, 30 tasks, and code review findings are done. The `phase-3` branch is ready for merge to `main`.
