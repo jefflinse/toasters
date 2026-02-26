@@ -5,9 +5,14 @@ type EventType string
 
 const (
 	EventUserMessage     EventType = "user_message"
+	EventTaskStarted     EventType = "task_started"
 	EventTaskCompleted   EventType = "task_completed"
 	EventTaskFailed      EventType = "task_failed"
 	EventBlockerReported EventType = "blocker_reported"
+	EventProgressUpdate  EventType = "progress_update"
+	EventJobComplete     EventType = "job_complete"
+	EventNewTaskRequest  EventType = "new_task_request"
+	EventUserResponse    EventType = "user_response" // response to an ask_user prompt
 )
 
 // Event is a typed message sent to the operator event loop.
@@ -21,20 +26,64 @@ type UserMessagePayload struct {
 	Text string
 }
 
+// TaskStartedPayload carries info about a task that just started.
+type TaskStartedPayload struct {
+	TaskID string
+	JobID  string
+	TeamID string
+	Title  string
+}
+
 // TaskCompletedPayload carries the result of a completed task.
 type TaskCompletedPayload struct {
-	TaskID  string
-	Summary string
+	TaskID          string
+	JobID           string
+	TeamID          string
+	Summary         string
+	Recommendations string // follow-up recommendations from the team
+	HasNextTask     bool   // whether there's a queued next task
 }
 
 // TaskFailedPayload carries information about a failed task.
 type TaskFailedPayload struct {
 	TaskID string
+	JobID  string
+	TeamID string
 	Error  string
 }
 
 // BlockerReportedPayload carries a blocker report from an agent.
 type BlockerReportedPayload struct {
+	TaskID      string
+	TeamID      string
 	AgentID     string
 	Description string
+}
+
+// ProgressUpdatePayload carries a progress report from a team.
+type ProgressUpdatePayload struct {
+	TaskID  string
+	AgentID string
+	Message string
+}
+
+// JobCompletePayload carries info about a completed job.
+type JobCompletePayload struct {
+	JobID   string
+	Title   string
+	Summary string
+}
+
+// NewTaskRequestPayload carries a team's recommendation for a new task.
+type NewTaskRequestPayload struct {
+	JobID       string
+	TeamID      string
+	Description string
+	Reason      string
+}
+
+// UserResponsePayload carries the user's response to an ask_user prompt.
+type UserResponsePayload struct {
+	Text      string
+	RequestID string // correlates with the ask_user request
 }

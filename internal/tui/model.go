@@ -21,6 +21,7 @@ import (
 	"github.com/jefflinse/toasters/internal/gateway"
 	"github.com/jefflinse/toasters/internal/llm/tools"
 	"github.com/jefflinse/toasters/internal/mcp"
+	"github.com/jefflinse/toasters/internal/operator"
 	"github.com/jefflinse/toasters/internal/provider"
 	"github.com/jefflinse/toasters/internal/runtime"
 )
@@ -48,6 +49,7 @@ type ModelConfig struct {
 	Store        db.Store
 	Runtime      *runtime.Runtime
 	MCPManager   *mcp.Manager
+	Operator     *operator.Operator
 }
 
 // streamingState holds all state related to the active LLM stream.
@@ -248,6 +250,9 @@ type Model struct {
 	store           db.Store                // may be nil — graceful degradation
 	runtime         *runtime.Runtime        // may be nil
 	runtimeSessions map[string]*runtimeSlot // keyed by session ID
+
+	// Phase 2 integration: operator event loop.
+	operator *operator.Operator // may be nil — graceful degradation
 }
 
 // runtimeSlot tracks a runtime agent session for TUI display.
@@ -274,6 +279,7 @@ func NewModel(cfg ModelConfig) Model {
 	store := cfg.Store
 	rt := cfg.Runtime
 	mcpMgr := cfg.MCPManager
+	op := cfg.Operator
 	ta := textarea.New()
 	ta.Placeholder = "Type your message here..."
 	ta.Prompt = ""
@@ -315,6 +321,7 @@ func NewModel(cfg ModelConfig) Model {
 		store:        store,
 		runtime:      rt,
 		mcpManager:   mcpMgr,
+		operator:     op,
 		stats: SessionStats{
 			Endpoint:  client.Name(),
 			Connected: false,
@@ -1495,6 +1502,18 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		cmds = append(cmds, toastCmds...)
 		return m, tea.Batch(cmds...)
+
+	case DefinitionsReloadedMsg:
+		slog.Info("definitions reloaded from file watcher")
+		return m, nil
+
+	case OperatorTextMsg:
+		slog.Debug("operator text", "len", len(msg.Text))
+		return m, nil
+
+	case OperatorEventMsg:
+		slog.Debug("operator event", "type", msg.Event.Type)
+		return m, nil
 
 	case progressPollTickMsg:
 		if m.store != nil {

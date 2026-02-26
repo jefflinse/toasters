@@ -264,7 +264,7 @@ func (s *SQLiteStore) CreateTask(ctx context.Context, task *Task) error {
 func (s *SQLiteStore) GetTask(ctx context.Context, id string) (*Task, error) {
 	row := s.db.QueryRowContext(ctx,
 		`SELECT id, job_id, title, status, agent_id, team_id, parent_id, sort_order,
-		        created_at, updated_at, summary, metadata
+		        created_at, updated_at, summary, metadata, result_summary, recommendations
 		 FROM tasks WHERE id = ?`, id)
 
 	return scanTask(row)
@@ -273,7 +273,7 @@ func (s *SQLiteStore) GetTask(ctx context.Context, id string) (*Task, error) {
 func (s *SQLiteStore) ListTasksForJob(ctx context.Context, jobID string) ([]*Task, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, job_id, title, status, agent_id, team_id, parent_id, sort_order,
-		        created_at, updated_at, summary, metadata
+		        created_at, updated_at, summary, metadata, result_summary, recommendations
 		 FROM tasks WHERE job_id = ? ORDER BY sort_order, created_at`, jobID)
 	if err != nil {
 		return nil, fmt.Errorf("listing tasks: %w", err)
@@ -302,6 +302,28 @@ func (s *SQLiteStore) UpdateTaskStatus(ctx context.Context, id string, status Ta
 	return checkRowsAffected(result, "task", id)
 }
 
+func (s *SQLiteStore) UpdateTaskResult(ctx context.Context, id string, resultSummary, recommendations string) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	result, err := s.db.ExecContext(ctx,
+		"UPDATE tasks SET result_summary = ?, recommendations = ?, updated_at = ? WHERE id = ?",
+		resultSummary, recommendations, now, id)
+	if err != nil {
+		return fmt.Errorf("updating task result: %w", err)
+	}
+	return checkRowsAffected(result, "task", id)
+}
+
+func (s *SQLiteStore) AssignTask(ctx context.Context, id string, teamID string) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	result, err := s.db.ExecContext(ctx,
+		"UPDATE tasks SET team_id = ?, status = ?, updated_at = ? WHERE id = ?",
+		teamID, string(TaskStatusInProgress), now, id)
+	if err != nil {
+		return fmt.Errorf("assigning task: %w", err)
+	}
+	return checkRowsAffected(result, "task", id)
+}
+
 func (s *SQLiteStore) AddTaskDependency(ctx context.Context, taskID, dependsOn string) error {
 	_, err := s.db.ExecContext(ctx,
 		"INSERT INTO task_dependencies (task_id, depends_on) VALUES (?, ?)",
@@ -316,7 +338,7 @@ func (s *SQLiteStore) AddTaskDependency(ctx context.Context, taskID, dependsOn s
 func (s *SQLiteStore) GetReadyTasks(ctx context.Context, jobID string) ([]*Task, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT t.id, t.job_id, t.title, t.status, t.agent_id, t.team_id, t.parent_id, t.sort_order,
-		        t.created_at, t.updated_at, t.summary, t.metadata
+		        t.created_at, t.updated_at, t.summary, t.metadata, t.result_summary, t.recommendations
 		 FROM tasks t
 		 WHERE t.job_id = ?
 		   AND t.status = 'pending'
@@ -399,6 +421,77 @@ func (s *SQLiteStore) GetRecentProgress(ctx context.Context, jobID string, limit
 	return reports, rows.Err()
 }
 
+// --- Skills ---
+
+func (s *SQLiteStore) UpsertSkill(ctx context.Context, skill *Skill) error {
+	now := time.Now().UTC()
+	if skill.CreatedAt.IsZero() {
+		skill.CreatedAt = now
+	}
+	if skill.UpdatedAt.IsZero() {
+		skill.UpdatedAt = now
+	}
+
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO skills (id, name, description, tools, prompt, source, source_path,
+		                      created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(id) DO UPDATE SET
+		     name = excluded.name,
+		     description = excluded.description,
+		     tools = excluded.tools,
+		     prompt = excluded.prompt,
+		     source = excluded.source,
+		     source_path = excluded.source_path,
+		     updated_at = excluded.updated_at`,
+		skill.ID, skill.Name, skill.Description, nullableJSON(skill.Tools),
+		skill.Prompt, skill.Source, skill.SourcePath,
+		skill.CreatedAt.Format(time.RFC3339), skill.UpdatedAt.Format(time.RFC3339),
+	)
+	if err != nil {
+		return fmt.Errorf("upserting skill: %w", err)
+	}
+	return nil
+}
+
+func (s *SQLiteStore) GetSkill(ctx context.Context, id string) (*Skill, error) {
+	row := s.db.QueryRowContext(ctx,
+		`SELECT id, name, description, tools, prompt, source, source_path,
+		        created_at, updated_at
+		 FROM skills WHERE id = ?`, id)
+
+	return scanSkill(row)
+}
+
+func (s *SQLiteStore) ListSkills(ctx context.Context) ([]*Skill, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, name, description, tools, prompt, source, source_path,
+		        created_at, updated_at
+		 FROM skills ORDER BY name`)
+	if err != nil {
+		return nil, fmt.Errorf("listing skills: %w", err)
+	}
+	defer rows.Close() //nolint:errcheck
+
+	var skills []*Skill
+	for rows.Next() {
+		sk, err := scanSkill(rows)
+		if err != nil {
+			return nil, err
+		}
+		skills = append(skills, sk)
+	}
+	return skills, rows.Err()
+}
+
+func (s *SQLiteStore) DeleteAllSkills(ctx context.Context) error {
+	_, err := s.db.ExecContext(ctx, "DELETE FROM skills")
+	if err != nil {
+		return fmt.Errorf("deleting all skills: %w", err)
+	}
+	return nil
+}
+
 // --- Agents ---
 
 func (s *SQLiteStore) UpsertAgent(ctx context.Context, agent *Agent) error {
@@ -410,10 +503,21 @@ func (s *SQLiteStore) UpsertAgent(ctx context.Context, agent *Agent) error {
 		agent.UpdatedAt = now
 	}
 
+	var hidden, disabled int
+	if agent.Hidden {
+		hidden = 1
+	}
+	if agent.Disabled {
+		disabled = 1
+	}
+
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO agents (id, name, description, mode, model, provider, temperature,
-		                      system_prompt, tools, created_at, updated_at, source)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		                      system_prompt, tools, disallowed_tools, skills,
+		                      permission_mode, permissions, mcp_servers, max_turns,
+		                      color, hidden, disabled, source, source_path, team_id,
+		                      created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(id) DO UPDATE SET
 		     name = excluded.name,
 		     description = excluded.description,
@@ -423,13 +527,28 @@ func (s *SQLiteStore) UpsertAgent(ctx context.Context, agent *Agent) error {
 		     temperature = excluded.temperature,
 		     system_prompt = excluded.system_prompt,
 		     tools = excluded.tools,
-		     updated_at = excluded.updated_at,
-		     source = excluded.source`,
+		     disallowed_tools = excluded.disallowed_tools,
+		     skills = excluded.skills,
+		     permission_mode = excluded.permission_mode,
+		     permissions = excluded.permissions,
+		     mcp_servers = excluded.mcp_servers,
+		     max_turns = excluded.max_turns,
+		     color = excluded.color,
+		     hidden = excluded.hidden,
+		     disabled = excluded.disabled,
+		     source = excluded.source,
+		     source_path = excluded.source_path,
+		     team_id = excluded.team_id,
+		     updated_at = excluded.updated_at`,
 		agent.ID, agent.Name, agent.Description, agent.Mode,
 		agent.Model, agent.Provider, agent.Temperature,
 		agent.SystemPrompt, nullableJSON(agent.Tools),
+		nullableJSON(agent.DisallowedTools), nullableJSON(agent.Skills),
+		agent.PermissionMode, nullableJSON(agent.Permissions),
+		nullableJSON(agent.MCPServers), agent.MaxTurns,
+		agent.Color, hidden, disabled,
+		agent.Source, agent.SourcePath, agent.TeamID,
 		agent.CreatedAt.Format(time.RFC3339), agent.UpdatedAt.Format(time.RFC3339),
-		agent.Source,
 	)
 	if err != nil {
 		return fmt.Errorf("upserting agent: %w", err)
@@ -440,38 +559,29 @@ func (s *SQLiteStore) UpsertAgent(ctx context.Context, agent *Agent) error {
 func (s *SQLiteStore) GetAgent(ctx context.Context, id string) (*Agent, error) {
 	row := s.db.QueryRowContext(ctx,
 		`SELECT id, name, description, mode, model, provider, temperature,
-		        system_prompt, tools, created_at, updated_at, source
+		        system_prompt, tools, disallowed_tools, skills,
+		        permission_mode, permissions, mcp_servers, max_turns,
+		        color, hidden, disabled, source, source_path, team_id,
+		        created_at, updated_at
 		 FROM agents WHERE id = ?`, id)
 
-	a := &Agent{}
-	var createdAt, updatedAt string
-	var temperature sql.NullFloat64
-	var tools sql.NullString
-
-	if err := row.Scan(&a.ID, &a.Name, &a.Description, &a.Mode,
-		&a.Model, &a.Provider, &temperature,
-		&a.SystemPrompt, &tools, &createdAt, &updatedAt, &a.Source); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
+	a, err := scanAgent(row)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
 			return nil, fmt.Errorf("agent %q: %w", id, ErrNotFound)
 		}
-		return nil, fmt.Errorf("scanning agent: %w", err)
+		return nil, err
 	}
-
-	if temperature.Valid {
-		a.Temperature = &temperature.Float64
-	}
-	if tools.Valid {
-		a.Tools = json.RawMessage(tools.String)
-	}
-	a.CreatedAt = parseTime(createdAt)
-	a.UpdatedAt = parseTime(updatedAt)
 	return a, nil
 }
 
 func (s *SQLiteStore) ListAgents(ctx context.Context) ([]*Agent, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, name, description, mode, model, provider, temperature,
-		        system_prompt, tools, created_at, updated_at, source
+		        system_prompt, tools, disallowed_tools, skills,
+		        permission_mode, permissions, mcp_servers, max_turns,
+		        color, hidden, disabled, source, source_path, team_id,
+		        created_at, updated_at
 		 FROM agents ORDER BY name`)
 	if err != nil {
 		return nil, fmt.Errorf("listing agents: %w", err)
@@ -480,77 +590,86 @@ func (s *SQLiteStore) ListAgents(ctx context.Context) ([]*Agent, error) {
 
 	var agents []*Agent
 	for rows.Next() {
-		a := &Agent{}
-		var createdAt, updatedAt string
-		var temperature sql.NullFloat64
-		var tools sql.NullString
-
-		if err := rows.Scan(&a.ID, &a.Name, &a.Description, &a.Mode,
-			&a.Model, &a.Provider, &temperature,
-			&a.SystemPrompt, &tools, &createdAt, &updatedAt, &a.Source); err != nil {
-			return nil, fmt.Errorf("scanning agent row: %w", err)
+		a, err := scanAgent(rows)
+		if err != nil {
+			return nil, err
 		}
-
-		if temperature.Valid {
-			a.Temperature = &temperature.Float64
-		}
-		if tools.Valid {
-			a.Tools = json.RawMessage(tools.String)
-		}
-		a.CreatedAt = parseTime(createdAt)
-		a.UpdatedAt = parseTime(updatedAt)
 		agents = append(agents, a)
 	}
 	return agents, rows.Err()
 }
 
+func (s *SQLiteStore) DeleteAllAgents(ctx context.Context) error {
+	_, err := s.db.ExecContext(ctx, "DELETE FROM agents")
+	if err != nil {
+		return fmt.Errorf("deleting all agents: %w", err)
+	}
+	return nil
+}
+
 // --- Teams ---
 
-func (s *SQLiteStore) CreateTeam(ctx context.Context, team *Team) error {
+func (s *SQLiteStore) UpsertTeam(ctx context.Context, team *Team) error {
 	now := time.Now().UTC()
 	if team.CreatedAt.IsZero() {
 		team.CreatedAt = now
 	}
+	if team.UpdatedAt.IsZero() {
+		team.UpdatedAt = now
+	}
+
+	var isAuto int
+	if team.IsAuto {
+		isAuto = 1
+	}
 
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO teams (id, name, description, coordinator, created_at, metadata)
-		 VALUES (?, ?, ?, ?, ?, ?)`,
-		team.ID, team.Name, team.Description, team.Coordinator,
-		team.CreatedAt.Format(time.RFC3339), nullableJSON(team.Metadata),
+		`INSERT INTO teams (id, name, description, lead_agent, skills, provider, model,
+		                     culture, source, source_path, is_auto, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(id) DO UPDATE SET
+		     name = excluded.name,
+		     description = excluded.description,
+		     lead_agent = excluded.lead_agent,
+		     skills = excluded.skills,
+		     provider = excluded.provider,
+		     model = excluded.model,
+		     culture = excluded.culture,
+		     source = excluded.source,
+		     source_path = excluded.source_path,
+		     is_auto = excluded.is_auto,
+		     updated_at = excluded.updated_at`,
+		team.ID, team.Name, team.Description, team.LeadAgent,
+		nullableJSON(team.Skills), team.Provider, team.Model,
+		team.Culture, team.Source, team.SourcePath, isAuto,
+		team.CreatedAt.Format(time.RFC3339), team.UpdatedAt.Format(time.RFC3339),
 	)
 	if err != nil {
-		return fmt.Errorf("inserting team: %w", err)
+		return fmt.Errorf("upserting team: %w", err)
 	}
 	return nil
 }
 
 func (s *SQLiteStore) GetTeam(ctx context.Context, id string) (*Team, error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT id, name, description, coordinator, created_at, metadata
+		`SELECT id, name, description, lead_agent, skills, provider, model,
+		        culture, source, source_path, is_auto, created_at, updated_at
 		 FROM teams WHERE id = ?`, id)
 
-	t := &Team{}
-	var createdAt string
-	var metadata sql.NullString
-
-	if err := row.Scan(&t.ID, &t.Name, &t.Description, &t.Coordinator,
-		&createdAt, &metadata); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
+	t, err := scanTeam(row)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
 			return nil, fmt.Errorf("team %q: %w", id, ErrNotFound)
 		}
-		return nil, fmt.Errorf("scanning team: %w", err)
-	}
-
-	t.CreatedAt = parseTime(createdAt)
-	if metadata.Valid {
-		t.Metadata = json.RawMessage(metadata.String)
+		return nil, err
 	}
 	return t, nil
 }
 
 func (s *SQLiteStore) ListTeams(ctx context.Context) ([]*Team, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, name, description, coordinator, created_at, metadata
+		`SELECT id, name, description, lead_agent, skills, provider, model,
+		        culture, source, source_path, is_auto, created_at, updated_at
 		 FROM teams ORDER BY name`)
 	if err != nil {
 		return nil, fmt.Errorf("listing teams: %w", err)
@@ -559,30 +678,239 @@ func (s *SQLiteStore) ListTeams(ctx context.Context) ([]*Team, error) {
 
 	var teams []*Team
 	for rows.Next() {
-		t := &Team{}
-		var createdAt string
-		var metadata sql.NullString
-
-		if err := rows.Scan(&t.ID, &t.Name, &t.Description, &t.Coordinator,
-			&createdAt, &metadata); err != nil {
-			return nil, fmt.Errorf("scanning team row: %w", err)
-		}
-
-		t.CreatedAt = parseTime(createdAt)
-		if metadata.Valid {
-			t.Metadata = json.RawMessage(metadata.String)
+		t, err := scanTeam(rows)
+		if err != nil {
+			return nil, err
 		}
 		teams = append(teams, t)
 	}
 	return teams, rows.Err()
 }
 
-func (s *SQLiteStore) AddTeamMember(ctx context.Context, member *TeamMember) error {
-	_, err := s.db.ExecContext(ctx,
-		"INSERT INTO team_members (team_id, agent_id, role) VALUES (?, ?, ?)",
-		member.TeamID, member.AgentID, member.Role)
+func (s *SQLiteStore) DeleteAllTeams(ctx context.Context) error {
+	_, err := s.db.ExecContext(ctx, "DELETE FROM teams")
 	if err != nil {
-		return fmt.Errorf("adding team member: %w", err)
+		return fmt.Errorf("deleting all teams: %w", err)
+	}
+	return nil
+}
+
+// --- Team Agents ---
+
+func (s *SQLiteStore) AddTeamAgent(ctx context.Context, ta *TeamAgent) error {
+	_, err := s.db.ExecContext(ctx,
+		"INSERT INTO team_agents (team_id, agent_id, role) VALUES (?, ?, ?)",
+		ta.TeamID, ta.AgentID, ta.Role)
+	if err != nil {
+		return fmt.Errorf("adding team agent: %w", err)
+	}
+	return nil
+}
+
+func (s *SQLiteStore) ListTeamAgents(ctx context.Context, teamID string) ([]*TeamAgent, error) {
+	rows, err := s.db.QueryContext(ctx,
+		"SELECT team_id, agent_id, role FROM team_agents WHERE team_id = ? ORDER BY role, agent_id",
+		teamID)
+	if err != nil {
+		return nil, fmt.Errorf("listing team agents: %w", err)
+	}
+	defer rows.Close() //nolint:errcheck
+
+	var teamAgents []*TeamAgent
+	for rows.Next() {
+		ta := &TeamAgent{}
+		if err := rows.Scan(&ta.TeamID, &ta.AgentID, &ta.Role); err != nil {
+			return nil, fmt.Errorf("scanning team agent: %w", err)
+		}
+		teamAgents = append(teamAgents, ta)
+	}
+	return teamAgents, rows.Err()
+}
+
+func (s *SQLiteStore) DeleteAllTeamAgents(ctx context.Context) error {
+	_, err := s.db.ExecContext(ctx, "DELETE FROM team_agents")
+	if err != nil {
+		return fmt.Errorf("deleting all team agents: %w", err)
+	}
+	return nil
+}
+
+// --- Feed ---
+
+func (s *SQLiteStore) CreateFeedEntry(ctx context.Context, entry *FeedEntry) error {
+	now := time.Now().UTC()
+	if entry.CreatedAt.IsZero() {
+		entry.CreatedAt = now
+	}
+
+	result, err := s.db.ExecContext(ctx,
+		`INSERT INTO feed_entries (job_id, entry_type, content, metadata, created_at)
+		 VALUES (?, ?, ?, ?, ?)`,
+		entry.JobID, string(entry.EntryType), entry.Content,
+		nullableJSON(entry.Metadata),
+		entry.CreatedAt.Format(time.RFC3339),
+	)
+	if err != nil {
+		return fmt.Errorf("inserting feed entry: %w", err)
+	}
+
+	id, err := result.LastInsertId()
+	if err != nil {
+		return fmt.Errorf("getting last insert id: %w", err)
+	}
+	entry.ID = id
+	return nil
+}
+
+func (s *SQLiteStore) ListFeedEntries(ctx context.Context, jobID string, limit int) ([]*FeedEntry, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, job_id, entry_type, content, metadata, created_at
+		 FROM feed_entries
+		 WHERE job_id = ?
+		 ORDER BY created_at DESC
+		 LIMIT ?`, jobID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("listing feed entries: %w", err)
+	}
+	defer rows.Close() //nolint:errcheck
+
+	return scanFeedEntries(rows)
+}
+
+func (s *SQLiteStore) ListRecentFeedEntries(ctx context.Context, limit int) ([]*FeedEntry, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, job_id, entry_type, content, metadata, created_at
+		 FROM feed_entries
+		 ORDER BY created_at DESC
+		 LIMIT ?`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("listing recent feed entries: %w", err)
+	}
+	defer rows.Close() //nolint:errcheck
+
+	return scanFeedEntries(rows)
+}
+
+// --- Rebuild ---
+
+func (s *SQLiteStore) RebuildDefinitions(ctx context.Context, skills []*Skill, agents []*Agent, teams []*Team, teamAgents []*TeamAgent) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("beginning rebuild transaction: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	// Delete in dependency order: team_agents first (references teams and agents).
+	for _, table := range []string{"team_agents", "agents", "teams", "skills"} {
+		if _, err := tx.ExecContext(ctx, "DELETE FROM "+table); err != nil {
+			return fmt.Errorf("clearing %s: %w", table, err)
+		}
+	}
+
+	// Insert skills.
+	for _, sk := range skills {
+		now := time.Now().UTC()
+		if sk.CreatedAt.IsZero() {
+			sk.CreatedAt = now
+		}
+		if sk.UpdatedAt.IsZero() {
+			sk.UpdatedAt = now
+		}
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO skills (id, name, description, tools, prompt, source, source_path,
+			                      created_at, updated_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			sk.ID, sk.Name, sk.Description, nullableJSON(sk.Tools),
+			sk.Prompt, sk.Source, sk.SourcePath,
+			sk.CreatedAt.Format(time.RFC3339), sk.UpdatedAt.Format(time.RFC3339),
+		); err != nil {
+			return fmt.Errorf("inserting skill %q: %w", sk.ID, err)
+		}
+	}
+
+	// Insert agents.
+	for _, a := range agents {
+		now := time.Now().UTC()
+		if a.CreatedAt.IsZero() {
+			a.CreatedAt = now
+		}
+		if a.UpdatedAt.IsZero() {
+			a.UpdatedAt = now
+		}
+		var hidden, disabled int
+		if a.Hidden {
+			hidden = 1
+		}
+		if a.Disabled {
+			disabled = 1
+		}
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO agents (id, name, description, mode, model, provider, temperature,
+			                      system_prompt, tools, disallowed_tools, skills,
+			                      permission_mode, permissions, mcp_servers, max_turns,
+			                      color, hidden, disabled, source, source_path, team_id,
+			                      created_at, updated_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			a.ID, a.Name, a.Description, a.Mode,
+			a.Model, a.Provider, a.Temperature,
+			a.SystemPrompt, nullableJSON(a.Tools),
+			nullableJSON(a.DisallowedTools), nullableJSON(a.Skills),
+			a.PermissionMode, nullableJSON(a.Permissions),
+			nullableJSON(a.MCPServers), a.MaxTurns,
+			a.Color, hidden, disabled,
+			a.Source, a.SourcePath, a.TeamID,
+			a.CreatedAt.Format(time.RFC3339), a.UpdatedAt.Format(time.RFC3339),
+		); err != nil {
+			return fmt.Errorf("inserting agent %q: %w", a.ID, err)
+		}
+	}
+
+	// Insert teams.
+	for _, t := range teams {
+		now := time.Now().UTC()
+		if t.CreatedAt.IsZero() {
+			t.CreatedAt = now
+		}
+		if t.UpdatedAt.IsZero() {
+			t.UpdatedAt = now
+		}
+		var isAuto int
+		if t.IsAuto {
+			isAuto = 1
+		}
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO teams (id, name, description, lead_agent, skills, provider, model,
+			                     culture, source, source_path, is_auto, created_at, updated_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			t.ID, t.Name, t.Description, t.LeadAgent,
+			nullableJSON(t.Skills), t.Provider, t.Model,
+			t.Culture, t.Source, t.SourcePath, isAuto,
+			t.CreatedAt.Format(time.RFC3339), t.UpdatedAt.Format(time.RFC3339),
+		); err != nil {
+			return fmt.Errorf("inserting team %q: %w", t.ID, err)
+		}
+	}
+
+	// Insert team agents.
+	for _, ta := range teamAgents {
+		if _, err := tx.ExecContext(ctx,
+			"INSERT INTO team_agents (team_id, agent_id, role) VALUES (?, ?, ?)",
+			ta.TeamID, ta.AgentID, ta.Role,
+		); err != nil {
+			return fmt.Errorf("inserting team agent %s/%s: %w", ta.TeamID, ta.AgentID, err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing rebuild transaction: %w", err)
 	}
 	return nil
 }
@@ -745,7 +1073,8 @@ func scanTask(s scanner) (*Task, error) {
 
 	if err := s.Scan(&t.ID, &t.JobID, &t.Title, &status,
 		&t.AgentID, &t.TeamID, &t.ParentID, &t.SortOrder,
-		&createdAt, &updatedAt, &t.Summary, &metadata); err != nil {
+		&createdAt, &updatedAt, &t.Summary, &metadata,
+		&t.ResultSummary, &t.Recommendations); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrNotFound
 		}
@@ -759,6 +1088,121 @@ func scanTask(s scanner) (*Task, error) {
 		t.Metadata = json.RawMessage(metadata.String)
 	}
 	return t, nil
+}
+
+func scanSkill(s scanner) (*Skill, error) {
+	sk := &Skill{}
+	var createdAt, updatedAt string
+	var tools sql.NullString
+
+	if err := s.Scan(&sk.ID, &sk.Name, &sk.Description, &tools,
+		&sk.Prompt, &sk.Source, &sk.SourcePath,
+		&createdAt, &updatedAt); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("scanning skill: %w", err)
+	}
+
+	if tools.Valid {
+		sk.Tools = json.RawMessage(tools.String)
+	}
+	sk.CreatedAt = parseTime(createdAt)
+	sk.UpdatedAt = parseTime(updatedAt)
+	return sk, nil
+}
+
+func scanAgent(s scanner) (*Agent, error) {
+	a := &Agent{}
+	var createdAt, updatedAt string
+	var temperature sql.NullFloat64
+	var maxTurns sql.NullInt64
+	var tools, disallowedTools, skills, permissions, mcpServers sql.NullString
+	var hidden, disabled int
+
+	if err := s.Scan(&a.ID, &a.Name, &a.Description, &a.Mode,
+		&a.Model, &a.Provider, &temperature,
+		&a.SystemPrompt, &tools, &disallowedTools, &skills,
+		&a.PermissionMode, &permissions, &mcpServers, &maxTurns,
+		&a.Color, &hidden, &disabled, &a.Source, &a.SourcePath, &a.TeamID,
+		&createdAt, &updatedAt); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("scanning agent: %w", err)
+	}
+
+	if temperature.Valid {
+		a.Temperature = &temperature.Float64
+	}
+	if maxTurns.Valid {
+		v := int(maxTurns.Int64)
+		a.MaxTurns = &v
+	}
+	if tools.Valid {
+		a.Tools = json.RawMessage(tools.String)
+	}
+	if disallowedTools.Valid {
+		a.DisallowedTools = json.RawMessage(disallowedTools.String)
+	}
+	if skills.Valid {
+		a.Skills = json.RawMessage(skills.String)
+	}
+	if permissions.Valid {
+		a.Permissions = json.RawMessage(permissions.String)
+	}
+	if mcpServers.Valid {
+		a.MCPServers = json.RawMessage(mcpServers.String)
+	}
+	a.Hidden = hidden != 0
+	a.Disabled = disabled != 0
+	a.CreatedAt = parseTime(createdAt)
+	a.UpdatedAt = parseTime(updatedAt)
+	return a, nil
+}
+
+func scanTeam(s scanner) (*Team, error) {
+	t := &Team{}
+	var createdAt, updatedAt string
+	var skills sql.NullString
+	var isAuto int
+
+	if err := s.Scan(&t.ID, &t.Name, &t.Description, &t.LeadAgent,
+		&skills, &t.Provider, &t.Model,
+		&t.Culture, &t.Source, &t.SourcePath, &isAuto,
+		&createdAt, &updatedAt); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("scanning team: %w", err)
+	}
+
+	if skills.Valid {
+		t.Skills = json.RawMessage(skills.String)
+	}
+	t.IsAuto = isAuto != 0
+	t.CreatedAt = parseTime(createdAt)
+	t.UpdatedAt = parseTime(updatedAt)
+	return t, nil
+}
+
+func scanFeedEntries(rows *sql.Rows) ([]*FeedEntry, error) {
+	var entries []*FeedEntry
+	for rows.Next() {
+		e := &FeedEntry{}
+		var createdAt string
+		var metadata sql.NullString
+		if err := rows.Scan(&e.ID, &e.JobID, &e.EntryType, &e.Content,
+			&metadata, &createdAt); err != nil {
+			return nil, fmt.Errorf("scanning feed entry: %w", err)
+		}
+		if metadata.Valid {
+			e.Metadata = json.RawMessage(metadata.String)
+		}
+		e.CreatedAt = parseTime(createdAt)
+		entries = append(entries, e)
+	}
+	return entries, rows.Err()
 }
 
 func scanSession(s scanner) (*AgentSession, error) {

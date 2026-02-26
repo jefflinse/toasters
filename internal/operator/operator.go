@@ -7,11 +7,14 @@ package operator
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
 
+	"github.com/jefflinse/toasters/internal/compose"
+	"github.com/jefflinse/toasters/internal/db"
 	"github.com/jefflinse/toasters/internal/provider"
 	"github.com/jefflinse/toasters/internal/runtime"
 )
@@ -32,6 +35,7 @@ type Operator struct {
 	prov    provider.Provider
 	model   string
 	tools   *operatorTools
+	store   db.Store
 	eventCh chan Event
 	workDir string
 
@@ -54,6 +58,8 @@ type Config struct {
 	Model        string
 	WorkDir      string
 	SystemPrompt string // optional; uses default if empty
+	Store        db.Store
+	Composer     *compose.Composer
 }
 
 // New creates a new Operator. Call Start to begin processing events.
@@ -63,7 +69,17 @@ func New(cfg Config) *Operator {
 		systemPrompt = defaultSystemPrompt
 	}
 
-	tools := newOperatorTools(cfg.Runtime, cfg.Provider.Name(), cfg.Model, cfg.WorkDir)
+	// Create SystemTools for system agents to use. The event channel is the
+	// operator's own channel so system agent actions (e.g. assign_task) flow
+	// back through the operator event loop. Spawner is nil because system
+	// agents don't spawn team leads directly.
+	eventCh := make(chan Event, eventChSize)
+	var systemTools *SystemTools
+	if cfg.Store != nil && cfg.Composer != nil {
+		systemTools = NewSystemTools(cfg.Store, cfg.Composer, eventCh, nil)
+	}
+
+	tools := newOperatorTools(cfg.Runtime, cfg.Composer, cfg.Store, systemTools, cfg.WorkDir)
 	provTools := operatorToolsToProviderTools(tools.Definitions())
 
 	return &Operator{
@@ -71,7 +87,8 @@ func New(cfg Config) *Operator {
 		prov:         cfg.Provider,
 		model:        cfg.Model,
 		tools:        tools,
-		eventCh:      make(chan Event, eventChSize),
+		store:        cfg.Store,
+		eventCh:      eventCh,
 		workDir:      cfg.WorkDir,
 		systemPrompt: systemPrompt,
 		provTools:    provTools,
@@ -104,8 +121,8 @@ func (o *Operator) run(ctx context.Context) {
 	}
 }
 
-// handleEvent dispatches a single event. User messages go to the LLM;
-// routine events are handled mechanically.
+// handleEvent dispatches a single event. User messages and decision-requiring
+// events go to the LLM; routine events are handled mechanically.
 func (o *Operator) handleEvent(ctx context.Context, ev Event) {
 	// Notify observer.
 	if o.OnEvent != nil {
@@ -119,34 +136,245 @@ func (o *Operator) handleEvent(ctx context.Context, ev Event) {
 			slog.Error("invalid payload for user_message event", "payload", ev.Payload)
 			return
 		}
+		o.postFeedEntry(ctx, db.FeedEntryUserMessage, payload.Text, "")
 		o.handleUserMessage(ctx, payload)
 
+	case EventTaskStarted:
+		// Mechanical: update feed, log.
+		payload, ok := ev.Payload.(TaskStartedPayload)
+		if !ok {
+			slog.Error("invalid payload for task_started event", "payload", ev.Payload)
+			return
+		}
+		content := fmt.Sprintf("⚡ %s started task: %s", payload.TeamID, payload.Title)
+		o.postFeedEntry(ctx, db.FeedEntryTaskStarted, content, payload.JobID)
+		slog.Info("task started", "task_id", payload.TaskID, "job_id", payload.JobID, "team_id", payload.TeamID, "title", payload.Title)
+
 	case EventTaskCompleted:
+		// Conditional: mechanical if next task queued; LLM if recommendations or job may be done.
 		payload, ok := ev.Payload.(TaskCompletedPayload)
 		if !ok {
 			slog.Error("invalid payload for task_completed event", "payload", ev.Payload)
 			return
 		}
-		slog.Info("task completed", "task_id", payload.TaskID, "summary", payload.Summary)
+		content := fmt.Sprintf("✅ %s completed task: %s", payload.TeamID, payload.Summary)
+		o.postFeedEntry(ctx, db.FeedEntryTaskCompleted, content, payload.JobID)
+		slog.Info("task completed", "task_id", payload.TaskID, "job_id", payload.JobID, "team_id", payload.TeamID, "summary", payload.Summary)
+
+		if payload.HasNextTask {
+			// Mechanical: assign the next ready task.
+			o.assignNextTask(ctx, payload.JobID)
+		} else if payload.Recommendations != "" {
+			// LLM: consult scheduler about recommendations.
+			msg := fmt.Sprintf("Task %q completed by team %s. Summary: %s\n\nThe team recommends: %s\n\nPlease decide how to proceed with these recommendations.",
+				payload.TaskID, payload.TeamID, payload.Summary, payload.Recommendations)
+			o.sendToLLM(ctx, msg)
+		} else {
+			// No next task and no recommendations — check if job is done.
+			o.checkJobComplete(ctx, payload.JobID)
+		}
 
 	case EventTaskFailed:
+		// LLM: need to decide next steps.
 		payload, ok := ev.Payload.(TaskFailedPayload)
 		if !ok {
 			slog.Error("invalid payload for task_failed event", "payload", ev.Payload)
 			return
 		}
-		slog.Warn("task failed", "task_id", payload.TaskID, "error", payload.Error)
+		content := fmt.Sprintf("❌ %s failed task: %s", payload.TeamID, payload.Error)
+		o.postFeedEntry(ctx, db.FeedEntryTaskFailed, content, payload.JobID)
+		slog.Warn("task failed", "task_id", payload.TaskID, "job_id", payload.JobID, "team_id", payload.TeamID, "error", payload.Error)
+
+		msg := fmt.Sprintf("Task %q assigned to team %s has failed with error: %s\n\nPlease decide how to proceed.",
+			payload.TaskID, payload.TeamID, payload.Error)
+		o.sendToLLM(ctx, msg)
 
 	case EventBlockerReported:
+		// LLM: need to triage the blocker.
 		payload, ok := ev.Payload.(BlockerReportedPayload)
 		if !ok {
 			slog.Error("invalid payload for blocker_reported event", "payload", ev.Payload)
 			return
 		}
-		slog.Warn("blocker reported", "agent_id", payload.AgentID, "description", payload.Description)
+		content := fmt.Sprintf("🚫 %s reported blocker: %s", payload.TeamID, payload.Description)
+		o.postFeedEntry(ctx, db.FeedEntryBlockerReported, content, "")
+		slog.Warn("blocker reported", "task_id", payload.TaskID, "team_id", payload.TeamID, "agent_id", payload.AgentID, "description", payload.Description)
+
+		msg := fmt.Sprintf("Team %s (task %q) reported a blocker: %s\n\nPlease triage this blocker and decide how to resolve it. Consider consulting the blocker-handler agent.",
+			payload.TeamID, payload.TaskID, payload.Description)
+		o.sendToLLM(ctx, msg)
+
+	case EventProgressUpdate:
+		// Mechanical: DB update already done by tool handler. Debug log only.
+		payload, ok := ev.Payload.(ProgressUpdatePayload)
+		if !ok {
+			slog.Error("invalid payload for progress_update event", "payload", ev.Payload)
+			return
+		}
+		slog.Debug("progress update", "task_id", payload.TaskID, "agent_id", payload.AgentID, "message", payload.Message)
+
+	case EventJobComplete:
+		// Mechanical: mark job done, post feed entry, notify user.
+		payload, ok := ev.Payload.(JobCompletePayload)
+		if !ok {
+			slog.Error("invalid payload for job_complete event", "payload", ev.Payload)
+			return
+		}
+		if o.store != nil {
+			if err := o.store.UpdateJobStatus(ctx, payload.JobID, db.JobStatusCompleted); err != nil {
+				slog.Error("failed to mark job complete", "job_id", payload.JobID, "error", err)
+			}
+		}
+		content := fmt.Sprintf("🎉 Job complete: %s", payload.Title)
+		o.postFeedEntry(ctx, db.FeedEntryJobComplete, content, payload.JobID)
+		slog.Info("job complete", "job_id", payload.JobID, "title", payload.Title, "summary", payload.Summary)
+		o.emitText(fmt.Sprintf("\n%s\n", content))
+
+	case EventNewTaskRequest:
+		// LLM: scheduler decides whether to create the task.
+		payload, ok := ev.Payload.(NewTaskRequestPayload)
+		if !ok {
+			slog.Error("invalid payload for new_task_request event", "payload", ev.Payload)
+			return
+		}
+		content := fmt.Sprintf("Team %s requests new task: %s (reason: %s)", payload.TeamID, payload.Description, payload.Reason)
+		o.postFeedEntry(ctx, db.FeedEntrySystemEvent, content, payload.JobID)
+		slog.Info("new task request", "job_id", payload.JobID, "team_id", payload.TeamID, "description", payload.Description, "reason", payload.Reason)
+
+		msg := fmt.Sprintf("Team %s recommends creating a new task for job %s: %s\n\nReason: %s\n\nPlease decide whether to create this task and assign it.",
+			payload.TeamID, payload.JobID, payload.Description, payload.Reason)
+		o.sendToLLM(ctx, msg)
+
+	case EventUserResponse:
+		// LLM: relay the user's response.
+		payload, ok := ev.Payload.(UserResponsePayload)
+		if !ok {
+			slog.Error("invalid payload for user_response event", "payload", ev.Payload)
+			return
+		}
+		o.postFeedEntry(ctx, db.FeedEntryUserMessage, payload.Text, "")
+		slog.Info("user response", "request_id", payload.RequestID, "text", payload.Text)
+
+		msg := payload.Text
+		if payload.RequestID != "" {
+			msg = fmt.Sprintf("[Response to request %s] %s", payload.RequestID, payload.Text)
+		}
+		o.sendToLLM(ctx, msg)
 
 	default:
 		slog.Warn("unknown event type", "type", ev.Type)
+	}
+}
+
+// postFeedEntry creates a feed entry in the database. If the store is nil,
+// the entry is silently skipped.
+func (o *Operator) postFeedEntry(ctx context.Context, entryType db.FeedEntryType, content string, jobID string) {
+	if o.store == nil {
+		return
+	}
+	entry := &db.FeedEntry{
+		EntryType: entryType,
+		Content:   content,
+		JobID:     jobID,
+	}
+	if err := o.store.CreateFeedEntry(ctx, entry); err != nil {
+		slog.Warn("failed to create feed entry", "type", entryType, "error", err)
+	}
+}
+
+// sendToLLM wraps an event notification as a user message and sends it to the
+// operator LLM for decision-making. This is distinct from handleUserMessage —
+// it injects system-generated context into the conversation.
+func (o *Operator) sendToLLM(ctx context.Context, message string) {
+	o.handleUserMessage(ctx, UserMessagePayload{Text: message})
+}
+
+// assignNextTask finds the next ready task for a job and assigns it using
+// the SystemTools. If no ready tasks exist or the store is unavailable,
+// it logs and returns.
+func (o *Operator) assignNextTask(ctx context.Context, jobID string) {
+	if o.store == nil {
+		slog.Warn("cannot assign next task: no store configured")
+		return
+	}
+
+	readyTasks, err := o.store.GetReadyTasks(ctx, jobID)
+	if err != nil {
+		slog.Error("failed to get ready tasks", "job_id", jobID, "error", err)
+		return
+	}
+	if len(readyTasks) == 0 {
+		slog.Info("no ready tasks to assign", "job_id", jobID)
+		return
+	}
+
+	task := readyTasks[0]
+	if task.TeamID == "" {
+		// No pre-assigned team — need LLM to decide.
+		msg := fmt.Sprintf("Task %q (id: %s) is ready but has no team assigned. Please assign it to an appropriate team.",
+			task.Title, task.ID)
+		o.sendToLLM(ctx, msg)
+		return
+	}
+
+	// Use SystemTools to assign the task (handles spawning, status update, event).
+	if o.tools == nil || o.tools.systemTools == nil {
+		slog.Warn("cannot assign next task: no system tools configured")
+		return
+	}
+
+	args, err := json.Marshal(map[string]string{
+		"task_id": task.ID,
+		"team_id": task.TeamID,
+	})
+	if err != nil {
+		slog.Error("failed to marshal assign_task args", "error", err)
+		return
+	}
+
+	if _, err := o.tools.systemTools.Execute(ctx, "assign_task", args); err != nil {
+		slog.Error("failed to assign next task", "task_id", task.ID, "team_id", task.TeamID, "error", err)
+	}
+}
+
+// checkJobComplete checks if all tasks for a job are done. If so, it sends
+// an EventJobComplete to the event loop.
+func (o *Operator) checkJobComplete(ctx context.Context, jobID string) {
+	if o.store == nil {
+		return
+	}
+
+	tasks, err := o.store.ListTasksForJob(ctx, jobID)
+	if err != nil {
+		slog.Error("failed to list tasks for job completion check", "job_id", jobID, "error", err)
+		return
+	}
+
+	// Check if all tasks are in a terminal state (completed, failed, cancelled).
+	for _, task := range tasks {
+		switch task.Status {
+		case db.TaskStatusCompleted, db.TaskStatusFailed, db.TaskStatusCancelled:
+			continue
+		default:
+			// Still have active/pending tasks.
+			return
+		}
+	}
+
+	// All tasks are done — look up the job for the title.
+	job, err := o.store.GetJob(ctx, jobID)
+	if err != nil {
+		slog.Error("failed to get job for completion", "job_id", jobID, "error", err)
+		return
+	}
+
+	o.eventCh <- Event{
+		Type: EventJobComplete,
+		Payload: JobCompletePayload{
+			JobID:   jobID,
+			Title:   job.Title,
+			Summary: "All tasks completed",
+		},
 	}
 }
 

@@ -12,6 +12,7 @@ type SpawnOpts struct {
 	Model          string
 	SystemPrompt   string
 	Tools          []ToolDef
+	ToolExecutor   ToolExecutor // optional; overrides default CoreTools when set
 	JobID          string
 	TaskID         string
 	InitialMessage string

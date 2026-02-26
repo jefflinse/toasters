@@ -4,39 +4,32 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 
+	"github.com/jefflinse/toasters/internal/compose"
+	"github.com/jefflinse/toasters/internal/db"
 	"github.com/jefflinse/toasters/internal/provider"
 	"github.com/jefflinse/toasters/internal/runtime"
 )
 
 // operatorTools implements runtime.ToolExecutor for the operator's tool set.
-// It provides consult_agent (spawn a system agent) and surface_to_user (relay
-// information to the user).
+// It provides consult_agent (spawn a system agent), surface_to_user (relay
+// information to the user), query_job, and query_teams.
 type operatorTools struct {
-	rt           *runtime.Runtime
-	providerName string
-	model        string
-	workDir      string
-
-	// agentPrompts maps agent names to their system prompts.
-	agentPrompts map[string]string
+	rt          *runtime.Runtime
+	composer    *compose.Composer
+	store       db.Store
+	systemTools *SystemTools
+	workDir     string
 }
 
-func newOperatorTools(rt *runtime.Runtime, providerName, model, workDir string) *operatorTools {
+func newOperatorTools(rt *runtime.Runtime, composer *compose.Composer, store db.Store, systemTools *SystemTools, workDir string) *operatorTools {
 	return &operatorTools{
-		rt:           rt,
-		providerName: providerName,
-		model:        model,
-		workDir:      workDir,
-		agentPrompts: defaultAgentPrompts(),
-	}
-}
-
-// defaultAgentPrompts returns hardcoded system prompts for spike agents.
-func defaultAgentPrompts() map[string]string {
-	return map[string]string{
-		"planner":  "You are a planning agent. Analyze the user's request and describe what tasks would be needed. Be concise and actionable. List concrete steps.",
-		"reviewer": "You are a code review agent. Analyze the provided code or description and provide feedback on quality, correctness, and potential improvements.",
+		rt:          rt,
+		composer:    composer,
+		store:       store,
+		systemTools: systemTools,
+		workDir:     workDir,
 	}
 }
 
@@ -75,6 +68,28 @@ func (ot *operatorTools) Definitions() []runtime.ToolDef {
 				"required": ["text"]
 			}`),
 		},
+		{
+			Name:        "query_job",
+			Description: "Get the current state of a job including all its tasks and their statuses.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"job_id": {
+						"type": "string",
+						"description": "ID of the job to query"
+					}
+				},
+				"required": ["job_id"]
+			}`),
+		},
+		{
+			Name:        "query_teams",
+			Description: "List all available teams with their descriptions, lead agents, and member counts.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {}
+			}`),
+		},
 	}
 }
 
@@ -85,6 +100,10 @@ func (ot *operatorTools) Execute(ctx context.Context, name string, args json.Raw
 		return ot.consultAgent(ctx, args)
 	case "surface_to_user":
 		return ot.surfaceToUser(ctx, args)
+	case "query_job":
+		return ot.queryJob(ctx, args)
+	case "query_teams":
+		return ot.queryTeams(ctx)
 	default:
 		return "", fmt.Errorf("%w: %s", runtime.ErrUnknownTool, name)
 	}
@@ -106,19 +125,36 @@ func (ot *operatorTools) consultAgent(ctx context.Context, args json.RawMessage)
 		return "", fmt.Errorf("message is required")
 	}
 
-	systemPrompt, ok := ot.agentPrompts[params.AgentName]
-	if !ok {
-		return "", fmt.Errorf("unknown agent %q (available: planner, reviewer)", params.AgentName)
+	// Look up and compose the agent from the DB via the Composer.
+	// System agents use teamID="system" for role-based tool injection.
+	composed, err := ot.composer.Compose(ctx, params.AgentName, "system")
+	if err != nil {
+		return "", fmt.Errorf("unknown agent %q: %w", params.AgentName, err)
 	}
 
-	result, err := ot.rt.SpawnAndWait(ctx, runtime.SpawnOpts{
-		AgentID:        params.AgentName,
-		ProviderName:   ot.providerName,
-		Model:          ot.model,
-		SystemPrompt:   systemPrompt,
+	slog.Info("consulting system agent",
+		"agent", params.AgentName,
+		"provider", composed.Provider,
+		"model", composed.Model,
+	)
+
+	// Build SpawnOpts from the composed agent. System agents get SystemTools
+	// as their tool executor (not CoreTools/filesystem tools).
+	opts := runtime.SpawnOpts{
+		AgentID:        composed.AgentID,
+		ProviderName:   composed.Provider,
+		Model:          composed.Model,
+		SystemPrompt:   composed.SystemPrompt,
+		ToolExecutor:   ot.systemTools,
 		InitialMessage: params.Message,
 		WorkDir:        ot.workDir,
-	})
+	}
+
+	if composed.MaxTurns != nil {
+		opts.MaxTurns = *composed.MaxTurns
+	}
+
+	result, err := ot.rt.SpawnAndWait(ctx, opts)
 	if err != nil {
 		return "", fmt.Errorf("consulting agent %q: %w", params.AgentName, err)
 	}
@@ -126,7 +162,7 @@ func (ot *operatorTools) consultAgent(ctx context.Context, args json.RawMessage)
 	return result, nil
 }
 
-func (ot *operatorTools) surfaceToUser(_ context.Context, args json.RawMessage) (string, error) {
+func (ot *operatorTools) surfaceToUser(ctx context.Context, args json.RawMessage) (string, error) {
 	var params struct {
 		Text string `json:"text"`
 	}
@@ -138,10 +174,34 @@ func (ot *operatorTools) surfaceToUser(_ context.Context, args json.RawMessage) 
 		return "", fmt.Errorf("text is required")
 	}
 
-	// The text is returned as the tool result. The operator will see it and
-	// can incorporate it into its response. The OnText callback handles
-	// streaming the operator's final response to the user.
+	// Create a feed entry in the DB so the TUI can display it.
+	if ot.store != nil {
+		entry := &db.FeedEntry{
+			EntryType: db.FeedEntrySystemEvent,
+			Content:   params.Text,
+		}
+		if err := ot.store.CreateFeedEntry(ctx, entry); err != nil {
+			slog.Warn("failed to create feed entry for surface_to_user", "error", err)
+		}
+	}
+
 	return fmt.Sprintf("Surfaced to user: %s", params.Text), nil
+}
+
+// queryJob delegates to SystemTools.queryJob for DB-backed job queries.
+func (ot *operatorTools) queryJob(ctx context.Context, args json.RawMessage) (string, error) {
+	if ot.systemTools == nil {
+		return "", fmt.Errorf("query_job unavailable: no system tools configured")
+	}
+	return ot.systemTools.Execute(ctx, "query_job", args)
+}
+
+// queryTeams delegates to SystemTools.queryTeams for DB-backed team queries.
+func (ot *operatorTools) queryTeams(ctx context.Context) (string, error) {
+	if ot.systemTools == nil {
+		return "", fmt.Errorf("query_teams unavailable: no system tools configured")
+	}
+	return ot.systemTools.Execute(ctx, "query_teams", json.RawMessage(`{}`))
 }
 
 // operatorToolsToProviderTools converts operator tool definitions to provider.Tool format.

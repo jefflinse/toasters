@@ -54,6 +54,12 @@ func (m *mockStore) ListTasksForJob(ctx context.Context, jobID string) ([]*db.Ta
 func (m *mockStore) UpdateTaskStatus(ctx context.Context, id string, status db.TaskStatus, summary string) error {
 	return nil
 }
+func (m *mockStore) UpdateTaskResult(ctx context.Context, id string, resultSummary, recommendations string) error {
+	return nil
+}
+func (m *mockStore) AssignTask(ctx context.Context, id string, teamID string) error {
+	return nil
+}
 func (m *mockStore) AddTaskDependency(ctx context.Context, taskID, dependsOn string) error {
 	return nil
 }
@@ -74,12 +80,34 @@ func (m *mockStore) GetAgent(ctx context.Context, id string) (*db.Agent, error) 
 	return nil, nil
 }
 func (m *mockStore) ListAgents(ctx context.Context) ([]*db.Agent, error) { return nil, nil }
-func (m *mockStore) CreateTeam(ctx context.Context, team *db.Team) error { return nil }
+func (m *mockStore) UpsertTeam(ctx context.Context, team *db.Team) error { return nil }
 func (m *mockStore) GetTeam(ctx context.Context, id string) (*db.Team, error) {
 	return nil, nil
 }
-func (m *mockStore) ListTeams(ctx context.Context) ([]*db.Team, error)              { return nil, nil }
-func (m *mockStore) AddTeamMember(ctx context.Context, member *db.TeamMember) error { return nil }
+func (m *mockStore) ListTeams(ctx context.Context) ([]*db.Team, error)        { return nil, nil }
+func (m *mockStore) DeleteAllTeams(ctx context.Context) error                 { return nil }
+func (m *mockStore) AddTeamAgent(ctx context.Context, ta *db.TeamAgent) error { return nil }
+func (m *mockStore) ListTeamAgents(ctx context.Context, teamID string) ([]*db.TeamAgent, error) {
+	return nil, nil
+}
+func (m *mockStore) DeleteAllTeamAgents(ctx context.Context) error          { return nil }
+func (m *mockStore) UpsertSkill(ctx context.Context, skill *db.Skill) error { return nil }
+func (m *mockStore) GetSkill(ctx context.Context, id string) (*db.Skill, error) {
+	return nil, nil
+}
+func (m *mockStore) ListSkills(ctx context.Context) ([]*db.Skill, error)            { return nil, nil }
+func (m *mockStore) DeleteAllSkills(ctx context.Context) error                      { return nil }
+func (m *mockStore) DeleteAllAgents(ctx context.Context) error                      { return nil }
+func (m *mockStore) CreateFeedEntry(ctx context.Context, entry *db.FeedEntry) error { return nil }
+func (m *mockStore) ListFeedEntries(ctx context.Context, jobID string, limit int) ([]*db.FeedEntry, error) {
+	return nil, nil
+}
+func (m *mockStore) ListRecentFeedEntries(ctx context.Context, limit int) ([]*db.FeedEntry, error) {
+	return nil, nil
+}
+func (m *mockStore) RebuildDefinitions(ctx context.Context, skills []*db.Skill, agents []*db.Agent, teams []*db.Team, teamAgents []*db.TeamAgent) error {
+	return nil
+}
 func (m *mockStore) CreateSession(ctx context.Context, session *db.AgentSession) error {
 	return nil
 }

@@ -1,0 +1,253 @@
+package loader
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"sync/atomic"
+	"testing"
+	"time"
+)
+
+// waitForChan waits for a signal on ch or times out.
+func waitForChan(ch <-chan struct{}, timeout time.Duration) bool {
+	select {
+	case <-ch:
+		return true
+	case <-time.After(timeout):
+		return false
+	}
+}
+
+func TestWatcher_FileChange(t *testing.T) {
+	store := openTestStore(t)
+	configDir := t.TempDir()
+
+	// Set up a user agent file.
+	writeFile(t, filepath.Join(configDir, "user", "agents", "dev.md"), seniorGoDevMD)
+
+	l := New(store, configDir)
+
+	changed := make(chan struct{}, 1)
+	w, err := NewWatcher(l, func() {
+		select {
+		case changed <- struct{}{}:
+		default:
+		}
+	})
+	if err != nil {
+		t.Fatalf("NewWatcher: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go func() { _ = w.Start(ctx) }()
+
+	// Give the watcher time to set up watches.
+	time.Sleep(50 * time.Millisecond)
+
+	// Modify the .md file.
+	writeFile(t, filepath.Join(configDir, "user", "agents", "dev.md"), `---
+name: Updated Dev
+description: Updated description
+mode: worker
+model: claude-sonnet-4-20250514
+---
+Updated prompt.
+`)
+
+	if !waitForChan(changed, 2*time.Second) {
+		t.Fatal("onChange was not called after .md file change")
+	}
+
+	cancel()
+	if err := w.Stop(); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+}
+
+func TestWatcher_Debounce(t *testing.T) {
+	store := openTestStore(t)
+	configDir := t.TempDir()
+
+	writeFile(t, filepath.Join(configDir, "user", "agents", "dev.md"), seniorGoDevMD)
+
+	l := New(store, configDir)
+
+	var callCount atomic.Int32
+	changed := make(chan struct{}, 10)
+	w, err := NewWatcher(l, func() {
+		callCount.Add(1)
+		select {
+		case changed <- struct{}{}:
+		default:
+		}
+	})
+	if err != nil {
+		t.Fatalf("NewWatcher: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go func() { _ = w.Start(ctx) }()
+	time.Sleep(50 * time.Millisecond)
+
+	// Rapid-fire 5 changes within the debounce window.
+	agentPath := filepath.Join(configDir, "user", "agents", "dev.md")
+	for i := range 5 {
+		writeFile(t, agentPath, seniorGoDevMD+"\n"+string(rune('a'+i)))
+		time.Sleep(20 * time.Millisecond) // well within 200ms debounce
+	}
+
+	// Wait for the debounced callback.
+	if !waitForChan(changed, 2*time.Second) {
+		t.Fatal("onChange was not called")
+	}
+
+	// Wait a bit more to ensure no extra callbacks fire.
+	time.Sleep(500 * time.Millisecond)
+
+	count := callCount.Load()
+	if count != 1 {
+		t.Errorf("expected 1 onChange call (debounced), got %d", count)
+	}
+
+	cancel()
+	if err := w.Stop(); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+}
+
+func TestWatcher_IgnoresNonMD(t *testing.T) {
+	store := openTestStore(t)
+	configDir := t.TempDir()
+
+	// Create the user/agents directory so the watcher can watch it.
+	agentsDir := filepath.Join(configDir, "user", "agents")
+	if err := os.MkdirAll(agentsDir, 0o755); err != nil {
+		t.Fatalf("creating agents dir: %v", err)
+	}
+
+	l := New(store, configDir)
+
+	changed := make(chan struct{}, 1)
+	w, err := NewWatcher(l, func() {
+		select {
+		case changed <- struct{}{}:
+		default:
+		}
+	})
+	if err != nil {
+		t.Fatalf("NewWatcher: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go func() { _ = w.Start(ctx) }()
+	time.Sleep(50 * time.Millisecond)
+
+	// Write a .txt file — should be ignored.
+	writeFile(t, filepath.Join(agentsDir, "notes.txt"), "not a definition file")
+
+	// Write a .yaml file — should also be ignored.
+	writeFile(t, filepath.Join(agentsDir, "config.yaml"), "key: value")
+
+	// Wait long enough for a debounce cycle to pass.
+	if waitForChan(changed, 500*time.Millisecond) {
+		t.Fatal("onChange was called for non-.md file change")
+	}
+
+	cancel()
+	if err := w.Stop(); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+}
+
+func TestWatcher_StopCleanup(t *testing.T) {
+	store := openTestStore(t)
+	configDir := t.TempDir()
+
+	writeFile(t, filepath.Join(configDir, "user", "agents", "dev.md"), seniorGoDevMD)
+
+	l := New(store, configDir)
+
+	w, err := NewWatcher(l, func() {})
+	if err != nil {
+		t.Fatalf("NewWatcher: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	done := make(chan struct{})
+	go func() {
+		_ = w.Start(ctx)
+		close(done)
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+
+	// Cancel context and stop watcher.
+	cancel()
+	if err := w.Stop(); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+
+	// Verify the Start goroutine exits.
+	if !waitForChan(done, 2*time.Second) {
+		t.Fatal("Start goroutine did not exit after Stop")
+	}
+}
+
+func TestWatcher_NewTeamDir(t *testing.T) {
+	store := openTestStore(t)
+	configDir := t.TempDir()
+
+	// Create the teams directory but no team subdirs yet.
+	teamsDir := filepath.Join(configDir, "user", "teams")
+	if err := os.MkdirAll(teamsDir, 0o755); err != nil {
+		t.Fatalf("creating teams dir: %v", err)
+	}
+
+	l := New(store, configDir)
+
+	changed := make(chan struct{}, 1)
+	w, err := NewWatcher(l, func() {
+		select {
+		case changed <- struct{}{}:
+		default:
+		}
+	})
+	if err != nil {
+		t.Fatalf("NewWatcher: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go func() { _ = w.Start(ctx) }()
+	time.Sleep(50 * time.Millisecond)
+
+	// Create a new team directory with an agent file.
+	newTeamDir := filepath.Join(teamsDir, "new-team")
+	if err := os.MkdirAll(filepath.Join(newTeamDir, "agents"), 0o755); err != nil {
+		t.Fatalf("creating new team dir: %v", err)
+	}
+
+	// Give the watcher time to pick up the new directory.
+	time.Sleep(100 * time.Millisecond)
+
+	// Write an agent file in the new team directory.
+	writeFile(t, filepath.Join(newTeamDir, "team.md"), devTeamMD)
+
+	if !waitForChan(changed, 2*time.Second) {
+		t.Fatal("onChange was not called after creating .md in new team dir")
+	}
+
+	cancel()
+	if err := w.Stop(); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+}

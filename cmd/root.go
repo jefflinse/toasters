@@ -10,12 +10,17 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/spf13/cobra"
 
+	"github.com/jefflinse/toasters/defaults"
 	"github.com/jefflinse/toasters/internal/agents"
+	"github.com/jefflinse/toasters/internal/bootstrap"
+	"github.com/jefflinse/toasters/internal/compose"
 	"github.com/jefflinse/toasters/internal/config"
 	"github.com/jefflinse/toasters/internal/db"
 	"github.com/jefflinse/toasters/internal/gateway"
 	llmtools "github.com/jefflinse/toasters/internal/llm/tools"
+	"github.com/jefflinse/toasters/internal/loader"
 	"github.com/jefflinse/toasters/internal/mcp"
+	"github.com/jefflinse/toasters/internal/operator"
 	"github.com/jefflinse/toasters/internal/provider"
 	"github.com/jefflinse/toasters/internal/runtime"
 	"github.com/jefflinse/toasters/internal/tui"
@@ -65,6 +70,12 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 		slog.SetDefault(slog.New(slog.NewTextHandler(io.Discard, nil)))
 	}
 
+	// Run bootstrap to ensure system/ and user/ directories exist.
+	if err := bootstrap.Run(configDir, defaults.SystemFiles); err != nil {
+		slog.Warn("bootstrap failed", "error", err)
+		// Non-fatal — continue with whatever exists
+	}
+
 	workspaceDir, err := config.WorkspaceDir(cfg)
 	if err != nil {
 		return err
@@ -96,6 +107,21 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 			store = sqliteStore
 			defer func() { _ = sqliteStore.Close() }()
 		}
+	}
+
+	// Load definitions from files into DB.
+	var ldr *loader.Loader
+	if store != nil {
+		ldr = loader.New(store, configDir)
+		if err := ldr.Load(context.Background()); err != nil {
+			slog.Warn("initial definition load failed", "error", err)
+		}
+	}
+
+	// Create composer for runtime agent composition.
+	var composer *compose.Composer
+	if store != nil {
+		composer = compose.New(store, cfg.Agents.DefaultProvider, cfg.Agents.DefaultModel)
 	}
 
 	// Create provider registry and register configured providers.
@@ -156,6 +182,23 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 		client = provider.NewOpenAI("operator", cfg.Operator.Endpoint, "", cfg.Operator.Model)
 	}
 
+	// Create and start the operator event loop.
+	var op *operator.Operator
+	if store != nil {
+		op = operator.New(operator.Config{
+			Runtime:  rt,
+			Provider: client,
+			Model:    cfg.Operator.Model,
+			WorkDir:  workspaceDir,
+			Store:    store,
+			Composer: composer,
+		})
+
+		opCtx, opCancel := context.WithCancel(context.Background())
+		defer opCancel()
+		op.Start(opCtx)
+	}
+
 	m := tui.NewModel(tui.ModelConfig{
 		Client:       client,
 		ClaudeCfg:    cfg.Claude,
@@ -168,9 +211,20 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 		Store:        store,
 		Runtime:      rt,
 		MCPManager:   mcpManager,
+		Operator:     op,
 	})
 
 	p := tea.NewProgram(&m)
+
+	// Wire operator text output to TUI.
+	if op != nil {
+		op.OnText = func(text string) {
+			p.Send(tui.OperatorTextMsg{Text: text})
+		}
+		op.OnEvent = func(event operator.Event) {
+			p.Send(tui.OperatorEventMsg{Event: event})
+		}
+	}
 
 	gw.SetSend(func(msg gateway.SlotTimeoutMsg) {
 		p.Send(msg)
@@ -249,6 +303,23 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 			slog.Error("teams watcher error", "error", err)
 		}
 	}()
+
+	// Watch for definition file changes and reload.
+	if ldr != nil {
+		defWatcher, defWatchErr := loader.NewWatcher(ldr, func() {
+			p.Send(tui.DefinitionsReloadedMsg{})
+		})
+		if defWatchErr != nil {
+			slog.Warn("failed to create definitions watcher", "error", defWatchErr)
+		} else {
+			go func() {
+				if err := defWatcher.Start(watchCtx); err != nil && watchCtx.Err() == nil {
+					slog.Error("definitions watcher error", "error", err)
+				}
+			}()
+			defer defWatcher.Stop()
+		}
+	}
 
 	_, err = p.Run()
 	return err

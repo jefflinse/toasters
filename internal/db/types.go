@@ -43,6 +43,21 @@ const (
 	SessionStatusCancelled SessionStatus = "cancelled"
 )
 
+// FeedEntryType represents the kind of activity feed entry.
+type FeedEntryType string
+
+const (
+	FeedEntryUserMessage       FeedEntryType = "user_message"
+	FeedEntryOperatorMessage   FeedEntryType = "operator_message"
+	FeedEntrySystemEvent       FeedEntryType = "system_event"
+	FeedEntryConsultationTrace FeedEntryType = "consultation_trace"
+	FeedEntryTaskStarted       FeedEntryType = "task_started"
+	FeedEntryTaskCompleted     FeedEntryType = "task_completed"
+	FeedEntryTaskFailed        FeedEntryType = "task_failed"
+	FeedEntryBlockerReported   FeedEntryType = "blocker_reported"
+	FeedEntryJobComplete       FeedEntryType = "job_complete"
+)
+
 // Job represents a unit of work managed by the orchestrator.
 type Job struct {
 	ID           string
@@ -58,18 +73,20 @@ type Job struct {
 
 // Task represents a single step within a job.
 type Task struct {
-	ID        string
-	JobID     string
-	Title     string
-	Status    TaskStatus
-	AgentID   string // assigned agent (may be empty)
-	TeamID    string // assigned team (may be empty)
-	ParentID  string // DAG edge, empty for root tasks
-	SortOrder int
-	CreatedAt time.Time
-	UpdatedAt time.Time
-	Summary   string          // completion summary or failure reason
-	Metadata  json.RawMessage // extensible JSON blob
+	ID              string
+	JobID           string
+	Title           string
+	Status          TaskStatus
+	AgentID         string // assigned agent (may be empty)
+	TeamID          string // assigned team (may be empty)
+	ParentID        string // DAG edge, empty for root tasks
+	SortOrder       int
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
+	Summary         string          // completion summary or failure reason
+	Metadata        json.RawMessage // extensible JSON blob
+	ResultSummary   string          // structured result summary
+	Recommendations string          // structured recommendations
 }
 
 // ProgressReport records a point-in-time status update for a job or task.
@@ -83,20 +100,44 @@ type ProgressReport struct {
 	CreatedAt time.Time
 }
 
+// Skill represents a reusable capability that can be assigned to agents.
+type Skill struct {
+	ID          string
+	Name        string
+	Description string
+	Tools       json.RawMessage // JSON array of tool names
+	Prompt      string          // the skill's markdown body
+	Source      string          // system, user, builtin
+	SourcePath  string
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+}
+
 // Agent represents a configured LLM agent.
 type Agent struct {
-	ID           string
-	Name         string
-	Description  string
-	Mode         string // coordinator, worker
-	Model        string
-	Provider     string
-	Temperature  *float64
-	SystemPrompt string
-	Tools        json.RawMessage // JSON array of tool names
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
-	Source       string // file, database, template
+	ID              string
+	Name            string
+	Description     string
+	Mode            string // lead, worker
+	Model           string
+	Provider        string
+	Temperature     *float64
+	SystemPrompt    string
+	Tools           json.RawMessage // JSON array of tool names
+	DisallowedTools json.RawMessage // JSON array of disallowed tool names
+	Skills          json.RawMessage // JSON array of skill name references
+	PermissionMode  string
+	Permissions     json.RawMessage // JSON blob
+	MCPServers      json.RawMessage // JSON blob
+	MaxTurns        *int
+	Color           string
+	Hidden          bool
+	Disabled        bool
+	Source          string // system, user, auto
+	SourcePath      string
+	TeamID          string // empty for shared agents
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
 }
 
 // Team represents a group of agents that work together.
@@ -104,16 +145,33 @@ type Team struct {
 	ID          string
 	Name        string
 	Description string
-	Coordinator string // agent ID
+	LeadAgent   string          // agent ID reference
+	Skills      json.RawMessage // JSON array of team-wide skill names
+	Provider    string          // team default
+	Model       string          // team default
+	Culture     string          // team culture document / markdown body
+	Source      string          // system, user, auto
+	SourcePath  string
+	IsAuto      bool
 	CreatedAt   time.Time
-	Metadata    json.RawMessage
+	UpdatedAt   time.Time
 }
 
-// TeamMember represents an agent's membership in a team.
-type TeamMember struct {
+// TeamAgent represents an agent's membership in a team.
+type TeamAgent struct {
 	TeamID  string
 	AgentID string
-	Role    string // coordinator, worker
+	Role    string // lead, worker
+}
+
+// FeedEntry represents a single entry in the activity feed.
+type FeedEntry struct {
+	ID        int64
+	JobID     string // may be empty
+	EntryType FeedEntryType
+	Content   string
+	Metadata  json.RawMessage // JSON blob for extra data
+	CreatedAt time.Time
 }
 
 // AgentSession tracks a single agent execution session.

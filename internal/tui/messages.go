@@ -9,6 +9,7 @@ import (
 	"github.com/jefflinse/toasters/internal/agents"
 	"github.com/jefflinse/toasters/internal/db"
 	"github.com/jefflinse/toasters/internal/mcp"
+	"github.com/jefflinse/toasters/internal/operator"
 	"github.com/jefflinse/toasters/internal/provider"
 	"github.com/jefflinse/toasters/internal/runtime"
 )
@@ -276,6 +277,19 @@ type blockerAnswersSubmittedMsg struct {
 // MCPStatusMsg is sent after MCP connection completes to trigger startup toasts.
 type MCPStatusMsg struct {
 	Servers []mcp.ServerStatus
+}
+
+// DefinitionsReloadedMsg is sent when definition files change and are reloaded.
+type DefinitionsReloadedMsg struct{}
+
+// OperatorTextMsg carries streamed text from the operator LLM.
+type OperatorTextMsg struct {
+	Text string
+}
+
+// OperatorEventMsg carries an operator event for TUI display.
+type OperatorEventMsg struct {
+	Event operator.Event
 }
 
 // ChatEntry consolidates the per-message data that was previously spread

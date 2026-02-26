@@ -59,20 +59,26 @@ func (r *Runtime) SpawnAgent(ctx context.Context, opts SpawnOpts) (*Session, err
 		maxDepth = defaultMaxDepth
 	}
 
-	// Create tool executor with core tools, optionally wrapping with MCP dispatch.
-	coreTools := NewCoreTools(
-		opts.WorkDir,
-		WithShell(true),
-		WithSpawner(r, depth+1, maxDepth),
-		WithStore(r.store),
-		WithSessionContext(id, opts.AgentID, opts.JobID),
-		WithProvider(opts.ProviderName, opts.Model),
-	)
+	// Create tool executor. If the caller provided a custom ToolExecutor, use
+	// it directly (e.g. SystemTools for system agents). Otherwise build the
+	// default CoreTools stack with optional MCP dispatch.
 	var tools ToolExecutor
-	if r.mcpCaller != nil {
-		tools = NewCompositeTools(coreTools, r.mcpCaller, r.mcpDefs)
+	if opts.ToolExecutor != nil {
+		tools = opts.ToolExecutor
 	} else {
-		tools = coreTools
+		coreTools := NewCoreTools(
+			opts.WorkDir,
+			WithShell(true),
+			WithSpawner(r, depth+1, maxDepth),
+			WithStore(r.store),
+			WithSessionContext(id, opts.AgentID, opts.JobID),
+			WithProvider(opts.ProviderName, opts.Model),
+		)
+		if r.mcpCaller != nil {
+			tools = NewCompositeTools(coreTools, r.mcpCaller, r.mcpDefs)
+		} else {
+			tools = coreTools
+		}
 	}
 
 	// If the caller requested a specific tool subset, wrap the executor so that
