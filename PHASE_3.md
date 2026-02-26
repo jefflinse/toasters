@@ -47,7 +47,10 @@ The core Phase 3 deliverable. A complete system for defining, composing, and man
 **Summary of the design:**
 - **Three-layer composition**: Skills → Agents → Teams. Skills are reusable capability building blocks. Agents compose skills into personas. Teams assemble agents with a lead, culture document, and coordination rules.
 - **System team**: Toasters itself runs as a team — the operator is the lead, with internal agents (planner, scheduler, blocker handler) as workers. Uses the same infrastructure as user teams. Fully hackable.
+- **Operator model**: A code-driven event loop handles routine operations mechanically (task assignment, DB updates, feed posts). The operator LLM is only consulted for user messages and situations requiring decisions. The operator is reactive, not omniscient.
+- **Activity feed**: The chat window evolves into a chronological activity feed showing system events (task started/completed, job done) interleaved with LLM interactions (operator responses, system agent consultations). Other TUI views read from DB directly.
 - **Job execution**: The operator delegates planning to a team, then the scheduler creates tasks from the plan and assigns them to teams. Tasks execute serially (parallelism deferred). Task outcomes can spawn new tasks.
+- **Agent definition superset**: Agent definitions are a superset of Claude Code and OpenCode fields, enabling lossless import and lossy export with warnings. Requires switching to proper YAML frontmatter parsing.
 - **File-based source of truth**: All definitions are `.md` files with YAML frontmatter. DB is a runtime cache rebuilt from files. TUI CRUD writes files.
 - **Config layout**: `~/.config/toasters/system/` (toasters internals) + `~/.config/toasters/user/` (user content). No CWD-scoped config.
 - **Auto-team detection**: `~/.claude/agents` and `~/.config/opencode/agents` (user-level) symlinked as auto-teams, promotable to managed teams.
@@ -82,8 +85,10 @@ Phase 3 has a significant design exploration component (deliverable 3.2). The pl
 
 ## Open Questions
 
-- What does the agent composition file format look like? YAML layers? Markdown with includes? Something else?
-- How do shared agents reference each other? By name? By path? Via a registry?
-- Should team definitions be declarative (YAML/config) or imperative (operator creates them at runtime)?
-- How much of team assembly should be automated (operator picks agents) vs. curated (human designs teams)?
-- What's the caching/invalidation strategy for composed agent definitions?
+All original open questions have been resolved in the design doc. See `PHASE_3_DESIGN.md` Decisions Log (#1–#36) for the full record.
+
+- ~~What does the agent composition file format look like?~~ → `.md` with YAML frontmatter, superset of CC + OC fields (Decisions #1, #30, #31)
+- ~~How do shared agents reference each other?~~ → By name, resolved team-local → shared → built-in (Decision #10)
+- ~~Should team definitions be declarative or imperative?~~ → Declarative (file-based, Decision #2)
+- ~~How much of team assembly should be automated vs. curated?~~ → Curated by default, AI generation available via TUI flow
+- ~~What's the caching/invalidation strategy?~~ → DB is runtime cache, rebuilt from files on startup, fsnotify for live updates (Decision #2)

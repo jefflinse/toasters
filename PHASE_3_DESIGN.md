@@ -1,7 +1,7 @@
 # Phase 3.2 Design: Teams & Agents Management System
 
 **Created:** 2026-02-25
-**Status:** Draft — brainstorming complete, ready for refinement
+**Status:** Draft — all 8 open items resolved, ready for implementation planning
 
 ---
 
@@ -32,6 +32,8 @@
 - [First-Run Bootstrap](#first-run-bootstrap)
 - [TUI Integration](#tui-integration)
 - [Decisions Log](#decisions-log)
+- [Operator Event Loop Design](#operator-event-loop-design)
+- [Agent Definition Format (Superset)](#agent-definition-format-superset)
 - [Open Items](#open-items)
 - [Future Ideas (Out of Scope)](#future-ideas-out-of-scope)
 
@@ -709,28 +711,389 @@ System
 | 23 | Auto-team detection | `~/.claude/agents` and `~/.config/opencode/agents` (user-level only) | Symlinked into `user/teams/auto-<tool>/`, used as-is without composition |
 | 24 | Auto-team promotion | Specialized flow translates to toasters format | Preserves behavior, generates team.md + culture, copies files |
 | 25 | Team capability discovery | Team name + description + lead agent description | Injected into system agents that need to pick teams. Simple, sufficient for LLM. |
+| 26 | Operator event loop | Code-driven event loop with selective LLM involvement | A Go event loop receives all events, handles routine ones mechanically (DB updates, feed posts, next-task assignment), and only sends decision-requiring events to the operator LLM session. The operator is reactive to the user and to situations that need decisions — not a monitoring daemon. See [Operator Event Loop Design](#operator-event-loop-design). |
+| 27 | Task-to-team handoff | `assign_task` tool spawns team lead goroutine (fire-and-forget) | System agents (planner/scheduler) call `assign_task`, which spins up the team lead session as a goroutine and returns immediately. Team lead reports back via `complete_task` → event channel. |
+| 28 | `consult_agent` mechanics | Synchronous (blocks operator session) | Operator calls `consult_agent("planner", ...)` which blocks via `SpawnAndWait`. System agents are short-lived — they create jobs/tasks/assignments and return. Need to know if actions succeeded. |
+| 29 | Built-in agent/skill bundling | `go:embed` | Simplest approach. Default system team files embedded in binary, copied to `~/.config/toasters/system/` on first run. |
+| 30 | Agent definition richness | Superset of Claude Code + OpenCode fields | Enables lossless import from both formats. Export is lossy for toasters-specific fields (skills composition, multi-provider, etc.) with warnings. See [Agent Definition Format (Superset)](#agent-definition-format-superset). |
+| 31 | Frontmatter parsing | Proper YAML parsing (`gopkg.in/yaml.v3`) | Current line-by-line parser can't handle nested maps/lists needed for permissions, hooks, mcp_servers. Prerequisite for rich agent definitions. |
+| 32 | TUI role change | Activity feed + direct DB views | Chat window becomes an activity feed showing system events (pure logic) interleaved with LLM interactions. Other TUI views (progress, agent output, team management) read from DB directly — no LLM involved. User chat with the operator is one kind of feed entry among many. |
+| 33 | Team capability injection | System prompt injection (option 1) | Team names + descriptions + lead descriptions baked into system agent's system prompt at session creation. Fresh sessions get fresh data automatically. Operator has `query_teams` as fallback if teams change mid-session. No need for live-update mechanism. |
+| 34 | System agent session lifecycle | Fresh session per consultation | `consult_agent` spins up a new session each time. No token savings from reuse — system prompt (personality + team list) must be sent regardless. Simple, stateless, no history management. Consistent with Decision #22 (fresh session per task). |
+| 35 | Schema strategy | Blow away definition tables, rebuild from files | No migrations for definition tables (agents, teams, skills, etc.) — DB is a runtime cache (Decision #2). Operational tables (jobs, tasks, sessions, progress) preserved where possible, but no backwards-compat guarantees pre-release. |
+| 36 | Upgrade path | Move files, no safety net | On startup: if `system/` missing → bootstrap from `go:embed`. If old `teams/` exists → move to `user/teams/`, generate basic `team.md` where missing, delete old `teams/`. Create `user/skills/` and `user/agents/` if missing. No copies, no markers, not cautious. |
+
+---
+
+## Operator Event Loop Design
+
+### Core Principle
+
+**The operator is reactive to the user and reactive to situations that need decisions. It is not a monitoring daemon that watches everything.**
+
+The operator LLM doesn't see every event. Routine operations (task started, task completed with next task queued, progress updates) are handled mechanically by a code-driven event loop. The operator LLM only gets involved when intelligence is needed — user messages, ambiguous situations, blockers that need triage.
+
+### Architecture
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                     TUI (Bubble Tea)                         │
+│                                                              │
+│  ┌─────────────────────────────────────────────────────┐     │
+│  │              Activity Feed                           │     │
+│  │                                                      │     │
+│  │  You: Build me a production-ready HTTP server        │     │
+│  │                                                      │     │
+│  │  Operator: On it. I've created a job and assigned    │     │
+│  │  planning to the research team.                      │     │
+│  │    ↳ consulting planner...                           │     │
+│  │    ↳ planner created job "Build HTTP server"         │     │
+│  │    ↳ planner assigned task 1 to research-team        │     │
+│  │                                                      │     │
+│  │  ⚡ research-team started task 1: "Plan the work"    │     │
+│  │  ⚡ research-team completed task 1                    │     │
+│  │  ⚡ dev-team started task 2: "Scaffold project"      │     │
+│  │  ⚡ dev-team completed task 2                         │     │
+│  │  ⚡ dev-team started task 3: "Implement routes"      │     │
+│  │                                                      │     │
+│  │  🚫 dev-team reported blocker on task 3              │     │
+│  │    ↳ consulting blocker-handler...                   │     │
+│  │                                                      │     │
+│  │  Operator: The dev team needs your input — which     │     │
+│  │  auth middleware should they use?                     │     │
+│  │  1. JWT    2. OAuth2    3. Basic auth                │     │
+│  │                                                      │     │
+│  │  You: 1                                              │     │
+│  │                                                      │     │
+│  │  ⚡ dev-team resumed task 3                           │     │
+│  │  ⚡ dev-team completed task 3                         │     │
+│  │  ✅ Job "Build HTTP server" complete (3 tasks)       │     │
+│  └─────────────────────────────────────────────────────┘     │
+│                                                              │
+│  Other TUI views (progress, agents, teams) read from DB      │
+│  directly — no LLM involved.                                 │
+└──────────┬──────────────────────────────────────────────────┘
+           │
+           │ user input / events
+           │
+┌──────────▼──────────────────────────────────────────────────┐
+│              Code-Driven Event Loop (goroutine)               │
+│                                                              │
+│  Receives ALL events. Handles routine ones mechanically.     │
+│  Only sends decision-requiring events to the operator LLM.   │
+│                                                              │
+│  for event := range eventCh {                                │
+│      updateDB(event)           // always                     │
+│      postToFeed(event)         // always                     │
+│      if needsDecision(event) {                               │
+│          sendToOperatorLLM(event)                             │
+│      } else {                                                │
+│          handleMechanically(event)                            │
+│      }                                                       │
+│  }                                                           │
+└──────────┬──────────────────────────────────────────────────┘
+           │ (only when decisions needed)
+           │
+┌──────────▼──────────────────────────────────────────────────┐
+│              Operator LLM Session (long-lived)                │
+│                                                              │
+│  Receives: user messages, decision-requiring events          │
+│  Responds: text (displayed in feed) + tool calls             │
+│  Tools: consult_agent, query_job, query_teams, ask_user      │
+│                                                              │
+│  Does NOT receive: routine task starts/completions,          │
+│  progress updates, or any event the code loop handles.       │
+│  Can query DB on demand (e.g., user asks "status of job?")   │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Event Types and Routing
+
+```go
+type OperatorEvent struct {
+    Type    OperatorEventType
+    Payload any // event-specific data
+}
+```
+
+| Event | Needs LLM? | Code-driven handling |
+|-------|-----------|---------------------|
+| User message | **Yes** — always | Post to feed, then send to operator LLM |
+| Task started | **No** | Update DB, post to feed |
+| Task completed, next task queued | **No** | Update DB, post to feed, assign next task |
+| Task completed, job done | **No** | Update DB, mark job complete, post to feed |
+| Task completed with follow-up recommendations | **Yes** — scheduler decides | Update DB, post to feed, consult scheduler to create new tasks |
+| Task failed | **Yes** — need to decide next steps | Update DB, post to feed, send to operator LLM |
+| Blocker reported | **Yes** — need to triage | Update DB, post to feed, consult blocker-handler |
+| Progress update | **No** | Update DB (TUI polls for display) |
+
+### The Activity Feed
+
+The chat window evolves into an **activity feed** — a chronological stream of everything happening. Two kinds of entries:
+
+**System events** (no LLM, pure logic):
+```
+⚡ dev-team started task 2: "Scaffold project"
+⚡ dev-team completed task 2
+✅ Job "Build HTTP server" complete (3 tasks)
+```
+
+**LLM interactions** (operator thinking, consulting agents):
+```
+You: Build me a production-ready HTTP server
+
+Operator: On it. I've created a job and assigned planning to the research team.
+  ↳ consulting planner...
+  ↳ planner created job "Build HTTP server"
+  ↳ planner assigned task 1 to research-team
+```
+
+Both appear interleaved chronologically. Chatting with the operator is just one kind of thing in the feed.
+
+### The `consult_agent` → `assign_task` Chain
+
+When the event loop sends a user message to the operator LLM:
+
+```
+Event loop receives user message: "Build me a todo app"
+  │
+  ├─ [LOGIC] Post to feed: "You: Build me a todo app"
+  ├─ [LOGIC] Send to operator LLM session
+  │
+  ├─ [LLM]  Operator responds: "I'll get this planned out."
+  │          + tool call: consult_agent("planner", "User wants a todo app")
+  │
+  ├─ [LOGIC] Post to feed: "Operator: I'll get this planned out."
+  ├─ [LOGIC] Post to feed: "  ↳ consulting planner..."
+  ├─ [LOGIC] Execute consult_agent → SpawnAndWait("planner", ...)
+  │   │
+  │   ├─ [LLM]  Planner session (fresh, short-lived):
+  │   │          Calls create_job → [LOGIC] SQLite insert
+  │   │          Calls create_task → [LOGIC] SQLite insert
+  │   │          Calls assign_task("research-team", "task-1")
+  │   │            → [LOGIC] SQLite update + spawn team lead goroutine
+  │   │          Returns: "Created job, assigned to research-team"
+  │   │
+  │   └─ [LOGIC] Post to feed: "  ↳ planner created job..."
+  │              Post to feed: "  ↳ planner assigned task 1 to research-team"
+  │
+  ├─ [LLM]  Operator sees planner result, responds with text
+  ├─ [LOGIC] Post to feed: operator's response
+  ├─ [LOGIC] Operator LLM turn complete. Event loop resumes waiting.
+  │
+  │   ... time passes, team works ...
+  │
+  ├─ [LOGIC] Event: research-team completed task 1
+  │          Post to feed: "⚡ research-team completed task 1"
+  │          Task has follow-up recommendations → needs LLM
+  │          Consult scheduler → scheduler creates tasks 2, 3, 4
+  │          Assign task 2 to dev-team (next in queue)
+  │          Post to feed: "⚡ dev-team started task 2"
+  │
+  ├─ [LOGIC] Event: dev-team completed task 2
+  │          Post to feed: "⚡ dev-team completed task 2"
+  │          Next task queued (task 3) → assign mechanically
+  │          Post to feed: "⚡ dev-team started task 3"
+  │
+  └─ ... continues until job complete ...
+```
+
+### Operator LLM Session Details
+
+The operator LLM is a **long-lived `runtime.Session`** but it's not running continuously. It sits idle between interactions. The event loop sends it messages when decisions are needed, and the LLM responds with text and/or tool calls.
+
+**Tools available to the operator LLM:**
+
+| Tool | Description |
+|------|-------------|
+| `consult_agent` | Synchronous — blocks, spawns system agent via `SpawnAndWait`, returns result |
+| `query_job` | Read job state from SQLite |
+| `query_teams` | Read available teams from SQLite |
+| `ask_user` | Send a question to the user via the feed, block on response |
+
+The operator LLM does **not** have `create_job`, `create_task`, or `assign_task` directly. Those are system agent tools (planner, scheduler). The operator delegates to system agents for orchestration actions.
+
+**When the user asks "what's the status of job XYZ?"** — that's a user message, so it goes to the operator LLM. The LLM calls `query_job`, gets the current state from SQLite, and formulates a response. It doesn't need to have "seen" every task event because the DB is the source of truth.
+
+### TUI Integration
+
+**The activity feed** replaces the current chat window. It renders a chronological stream of `FeedEntry` items, each with a type (user message, operator message, system event, LLM interaction trace) and display formatting.
+
+**Other TUI views** (progress panel, agent sessions, team management, grid view) continue to read from SQLite directly. No LLM involved.
+
+**User input** goes to the event loop, which routes it to the operator LLM. The feed shows the user's message immediately (before the LLM responds).
+
+**`ask_user` flow**: Operator LLM calls `ask_user` → tool handler posts the question to the feed via `p.Send()` → TUI enters prompt mode → user responds → response sent back to tool handler via one-shot channel → tool handler unblocks → LLM processes the answer.
+
+### Risks and Mitigations
+
+| Risk | Mitigation |
+|------|------------|
+| Operator LLM quality (routing) | Strong system prompt. Operator only makes high-level decisions; routine routing is code. |
+| Deadlock (operator ↔ team) | `assign_task` is fire-and-forget; only path back is async event channel. Operator LLM is not in the loop for routine events. |
+| TUI responsiveness | Event loop runs in goroutine, communicates via `p.Send()` — TUI never blocked. |
+| `ask_user` response channel lifetime | Operator context cancellation on TUI shutdown unblocks the select. |
+| Conversation history growth | Operator only sees user messages + decision events, not every task update. Much slower growth. Can still add summarization/truncation later. |
+| Token cost | Dramatically reduced — routine events don't touch the LLM. Only user messages and decision points consume tokens. |
+
+---
+
+## Agent Definition Format (Superset)
+
+Toasters agent definitions are a **superset** of Claude Code and OpenCode fields, enabling lossless import from both formats and lossy export with warnings.
+
+### Complete Field Set
+
+**Identity:**
+
+| Field | Type | Default | Source |
+|-------|------|---------|--------|
+| `name` | string | filename stem | CC, OC, T |
+| `description` | string | *(required)* | CC, OC, T |
+
+**Behavior:**
+
+| Field | Type | Default | Source |
+|-------|------|---------|--------|
+| `mode` | string | `worker` | OC, T — values: `lead`, `worker` |
+| `skills` | list[string] | `[]` | CC, T — skill references for composition |
+| `temperature` | float | provider default | OC, T |
+| `top_p` | float | provider default | OC |
+| `max_turns` | int | unlimited | CC (`maxTurns`), OC (`steps`) |
+
+**Provider/Model:**
+
+| Field | Type | Default | Source |
+|-------|------|---------|--------|
+| `provider` | string | team/global default | T — multi-provider support |
+| `model` | string | team/global default | CC, OC, T |
+| `model_options` | map[string]any | `{}` | OC — provider passthrough (e.g., `reasoningEffort`) |
+
+**Tools:**
+
+| Field | Type | Default | Source |
+|-------|------|---------|--------|
+| `tools` | list or map | inherit all | CC (list/allowlist), OC (map/enable-disable) — both accepted |
+| `disallowed_tools` | list[string] | `[]` | CC (`disallowedTools`) — explicit denylist |
+
+**Permissions:**
+
+| Field | Type | Default | Source |
+|-------|------|---------|--------|
+| `permission_mode` | string | `default` | CC (`permissionMode`) — coarse: `default`, `accept_edits`, `plan`, `bypass` |
+| `permissions` | map | `{}` | OC (`permission`) — granular per-tool with glob patterns |
+
+**MCP:**
+
+| Field | Type | Default | Source |
+|-------|------|---------|--------|
+| `mcp_servers` | list or map | `[]` | CC (`mcpServers`) — per-agent MCP server access |
+
+**Memory:**
+
+| Field | Type | Default | Source |
+|-------|------|---------|--------|
+| `memory` | string | none | CC — persistent memory scope: `user`, `project`, `local` |
+
+**UI/Display:**
+
+| Field | Type | Default | Source |
+|-------|------|---------|--------|
+| `color` | string | none | CC, OC, T — hex (`#FF9800`) or named (`blue`), normalized to hex |
+| `hidden` | bool | `false` | OC — hide from UI autocomplete |
+| `disabled` | bool | `false` | OC (`disable`) — disable without deleting |
+
+**Lifecycle (parsed for round-trip fidelity, runtime behavior deferred):**
+
+| Field | Type | Default | Source |
+|-------|------|---------|--------|
+| `hooks` | map | `{}` | CC — lifecycle hooks (`PreToolUse`, `PostToolUse`, `Stop`) |
+| `background` | bool | `false` | CC — always run as background task |
+| `isolation` | string | none | CC — `worktree` for git worktree isolation |
+
+### Example
+
+```markdown
+---
+name: Senior Go Developer
+description: Expert Go developer with deep knowledge of idioms, testing, and architecture
+mode: worker
+skills:
+  - go-development
+  - code-review
+  - git-workflow
+tools:
+  - read_file
+  - write_file
+  - edit_file
+  - glob
+  - grep
+  - shell
+disallowed_tools:
+  - web_fetch
+provider: anthropic
+model: claude-sonnet-4-20250514
+temperature: 0.3
+max_turns: 50
+mcp_servers:
+  - github
+permissions:
+  bash:
+    "*": allow
+    "rm -rf *": deny
+color: "#4CAF50"
+---
+
+You are a senior Go developer with 10+ years of experience...
+```
+
+### Import/Export Mapping
+
+**Import (lossless in both directions):**
+
+| From | Key Transformations |
+|------|-------------------|
+| Claude Code | `maxTurns` → `max_turns`, `disallowedTools` → `disallowed_tools`, `permissionMode` → `permission_mode`, `mcpServers` → `mcp_servers`, named colors → hex, model aliases (`sonnet`) → full model ID + `provider: anthropic` |
+| OpenCode | `steps` → `max_turns`, `disable` → `disabled`, `permission` → `permissions`, `provider/model` string → split into `provider` + `model`, passthrough fields → `model_options` |
+
+**Export (lossy — warnings emitted for dropped fields):**
+
+| To | Lossy Fields |
+|----|-------------|
+| Claude Code | `mode`, `temperature`, `top_p`, `permissions` (granular), `hidden`, `disabled`, `model_options`, non-Anthropic `provider` |
+| OpenCode | `skills` (composition), `mcp_servers`, `permission_mode`, `memory`, `hooks`, `background`, `isolation` |
+
+### Implementation
+
+New `internal/agentfmt` package:
+- `format.go` — Format enum (Toasters, ClaudeCode, OpenCode)
+- `parse.go` — `ParseFile(path)` with auto-detection
+- `toasters.go` / `claudecode.go` / `opencode.go` — per-format import/export
+- Export returns `[]Warning` for lossy fields
+
+**Prerequisite:** Switch frontmatter parsing from line-by-line to `gopkg.in/yaml.v3` (Decision #31).
 
 ---
 
 ## Open Items
 
-These are areas identified during brainstorming that need further design work before or during implementation:
+These areas still need design work before or during implementation:
 
-1. **Operator event loop implementation** — The operator needs to react to multiple event types (user messages, task completions, blockers). How is this implemented? A select loop on channels? A Bubble Tea message type per event? This is an architecture question for the runtime.
+1. ~~**Operator event loop implementation**~~ → Resolved (Decision #26). See [Operator Event Loop Design](#operator-event-loop-design).
 
-2. **Task-to-team session handoff** — When a task is assigned to a team, something needs to spin up the team lead session with the task description. Is this the operator directly? A runtime-level mechanism? How does the lead session get created and connected?
+2. ~~**Task-to-team session handoff**~~ → Resolved (Decision #27). `assign_task` tool spawns team lead goroutine.
 
-3. **`consult_agent` mechanics** — The operator calls `consult_agent` and gets back a response. Is this synchronous (operator blocks until the system agent responds)? Or async (operator gets a callback)? Since system agents are advisory/orchestration and don't do long-running work, synchronous is probably fine.
+3. ~~**`consult_agent` mechanics**~~ → Resolved (Decision #28). Synchronous via `SpawnAndWait`.
 
-4. **Team capability injection** — We decided to inject team names + descriptions + lead descriptions into system agents. When exactly? As part of the session's system prompt? As a tool result from `query_teams`? Both?
+4. ~~**Team capability injection**~~ → Resolved (Decision #33). System prompt injection; fresh sessions get fresh data.
 
-5. **Schema changes** — The DB needs new tables/columns: `skills`, `agent_skills`, `team_culture`, `task.team_id` (currently `task.agent_id`). Need to design the migration.
+5. ~~**Schema changes**~~ → Resolved (Decision #35). Blow away definition tables, rebuild from files. No migrations.
 
-6. **Upgrade path for existing users** — Current users have agents in `~/.config/toasters/teams/` (flat structure). Need a migration to the new `system/` + `user/` layout.
+6. ~~**Upgrade path for existing users**~~ → Resolved (Decision #36). Move files on startup, no safety net.
 
-7. **Built-in agent/skill bundling** — How are default system agents bundled in the binary? Go embed? Copied from a directory at build time?
+7. ~~**Built-in agent/skill bundling**~~ → Resolved (Decision #29). `go:embed`.
 
-8. **Agent definition richness** — We want agent definitions to be a "richer subset" than what other tools provide, enabling translation/export. What additional metadata fields should we support beyond what Claude Code and OpenCode use?
+8. ~~**Agent definition richness**~~ → Resolved (Decision #30). See [Agent Definition Format (Superset)](#agent-definition-format-superset).
 
 ---
 
@@ -743,4 +1106,4 @@ These ideas came up during brainstorming but are explicitly out of scope for Pha
 - **Sophisticated error recovery** — Retry with same team, try different team, partial rollback, ask user.
 - **Blocker escalation policies** — Configurable rules for when/how blockers get surfaced to the user.
 - **Agent self-description for dynamic team assembly** — Agents describe their own capabilities, operator assembles teams on the fly.
-- **Export to other formats** — "Export my Dev Team as OpenCode-compatible agent files."
+- ~~**Export to other formats**~~ — Now in scope as part of the agent definition superset design (Decision #30).
