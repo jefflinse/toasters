@@ -20,8 +20,11 @@ import (
 // configDir is the toasters config directory (e.g. ~/.config/toasters).
 // systemFS is the embedded filesystem containing default system team files
 // rooted at "system/" (e.g. defaults.SystemFiles).
-func Run(configDir string, systemFS embed.FS) error {
-	if err := firstRun(configDir, systemFS); err != nil {
+// defaultConfig is the default config.yaml content to write on first run
+// (e.g. defaults.DefaultConfig). It is only written if config.yaml does not
+// already exist.
+func Run(configDir string, systemFS embed.FS, defaultConfig []byte) error {
+	if err := firstRun(configDir, systemFS, defaultConfig); err != nil {
 		return fmt.Errorf("first-run bootstrap: %w", err)
 	}
 
@@ -41,8 +44,24 @@ func Run(configDir string, systemFS embed.FS) error {
 }
 
 // firstRun copies embedded system files and creates the user directory structure
-// when the system/ directory doesn't exist yet.
-func firstRun(configDir string, systemFS embed.FS) error {
+// when the system/ directory doesn't exist yet. If defaultConfig is non-nil and
+// config.yaml does not already exist, it is written as the initial configuration.
+func firstRun(configDir string, systemFS embed.FS, defaultConfig []byte) error {
+	// Write default config.yaml if it doesn't exist yet (regardless of whether
+	// this is a true first run — safe to do on every startup).
+	if len(defaultConfig) > 0 {
+		configPath := filepath.Join(configDir, "config.yaml")
+		if !fileExists(configPath) {
+			if err := os.MkdirAll(configDir, 0o755); err != nil {
+				return fmt.Errorf("creating config dir: %w", err)
+			}
+			if err := os.WriteFile(configPath, defaultConfig, 0o644); err != nil {
+				return fmt.Errorf("writing default config.yaml: %w", err)
+			}
+			slog.Info("Wrote default config.yaml", "path", configPath)
+		}
+	}
+
 	systemDir := filepath.Join(configDir, "system")
 	if dirExists(systemDir) {
 		return nil

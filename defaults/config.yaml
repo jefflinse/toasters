@@ -1,0 +1,47 @@
+providers:
+  - name: anthropic
+    type: anthropic
+
+operator:
+  provider: anthropic
+  model: claude-haiku-4-5
+
+agents:
+  default_provider: anthropic
+  default_model: claude-sonnet-4-6
+
+mcp:
+  servers:
+    - name: "github"
+      transport: "stdio"
+      command: "npx"
+      args: ["-y", "@modelcontextprotocol/server-github"]
+      env:
+        GITHUB_PERSONAL_ACCESS_TOKEN: "${GITHUB_PERSONAL_ACCESS_TOKEN}"
+      enabled_tools:
+        # - create_or_update_file
+        - search_repositories
+        # - create_repository
+        - get_file_contents
+        # - push_files
+        # - create_issue
+        # - create_pull_request
+        # - fork_repository
+        # - create_branch
+        - list_commits
+        # - list_issues
+        # - update_issue
+        # - add_issue_comment
+        - search_code
+        # - search_issues
+        # - search_users
+        # - get_issue
+        # - get_pull_request
+        # - list_pull_requests
+        # - create_pull_request_review
+        # - merge_pull_request
+        # - get_pull_request_files
+        # - get_pull_request_status
+        # - update_pull_request_branch
+        # - get_pull_request_comments
+        # - get_pull_request_reviews

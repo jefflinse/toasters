@@ -72,7 +72,7 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 	}
 
 	// Run bootstrap to ensure system/ and user/ directories exist.
-	if err := bootstrap.Run(configDir, defaults.SystemFiles); err != nil {
+	if err := bootstrap.Run(configDir, defaults.SystemFiles, defaults.DefaultConfig); err != nil {
 		slog.Warn("bootstrap failed", "error", err)
 		// Non-fatal — continue with whatever exists
 	}

@@ -15,10 +15,15 @@ func testFS() embed.FS {
 	return defaults.SystemFiles
 }
 
+// testDefaultConfig returns the real embedded default config for testing.
+func testDefaultConfig() []byte {
+	return defaults.DefaultConfig
+}
+
 func TestRun_FirstRun(t *testing.T) {
 	configDir := t.TempDir()
 
-	if err := Run(configDir, testFS()); err != nil {
+	if err := Run(configDir, testFS(), testDefaultConfig()); err != nil {
 		t.Fatalf("Run() error: %v", err)
 	}
 
@@ -46,13 +51,47 @@ func TestRun_FirstRun(t *testing.T) {
 	if len(data) == 0 {
 		t.Error("system/team.md is empty")
 	}
+
+	// Verify config.yaml was written.
+	assertFileExists(t, filepath.Join(configDir, "config.yaml"))
+	cfgData, err := os.ReadFile(filepath.Join(configDir, "config.yaml"))
+	if err != nil {
+		t.Fatalf("reading config.yaml: %v", err)
+	}
+	if len(cfgData) == 0 {
+		t.Error("config.yaml is empty")
+	}
+}
+
+func TestRun_DefaultConfigNotOverwritten(t *testing.T) {
+	configDir := t.TempDir()
+
+	// Write a custom config before first run.
+	customConfig := []byte("# my custom config\noperator:\n  provider: local\n")
+	configPath := filepath.Join(configDir, "config.yaml")
+	if err := os.WriteFile(configPath, customConfig, 0o644); err != nil {
+		t.Fatalf("writing custom config: %v", err)
+	}
+
+	if err := Run(configDir, testFS(), testDefaultConfig()); err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+
+	// Verify the custom config was NOT overwritten.
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("reading config.yaml: %v", err)
+	}
+	if string(data) != string(customConfig) {
+		t.Errorf("config.yaml was overwritten: got %q, want %q", string(data), string(customConfig))
+	}
 }
 
 func TestRun_Idempotent(t *testing.T) {
 	configDir := t.TempDir()
 
 	// First run.
-	if err := Run(configDir, testFS()); err != nil {
+	if err := Run(configDir, testFS(), testDefaultConfig()); err != nil {
 		t.Fatalf("first Run() error: %v", err)
 	}
 
@@ -64,7 +103,7 @@ func TestRun_Idempotent(t *testing.T) {
 	}
 
 	// Second run.
-	if err := Run(configDir, testFS()); err != nil {
+	if err := Run(configDir, testFS(), testDefaultConfig()); err != nil {
 		t.Fatalf("second Run() error: %v", err)
 	}
 
@@ -117,7 +156,7 @@ func TestRun_UpgradeMigration(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := Run(configDir, testFS()); err != nil {
+	if err := Run(configDir, testFS(), testDefaultConfig()); err != nil {
 		t.Fatalf("Run() error: %v", err)
 	}
 
@@ -258,7 +297,7 @@ func TestRun_AlreadySetUp(t *testing.T) {
 	configDir := t.TempDir()
 
 	// First run to set everything up.
-	if err := Run(configDir, testFS()); err != nil {
+	if err := Run(configDir, testFS(), testDefaultConfig()); err != nil {
 		t.Fatalf("first Run() error: %v", err)
 	}
 
@@ -270,7 +309,7 @@ func TestRun_AlreadySetUp(t *testing.T) {
 	}
 
 	// Run again — should be a no-op.
-	if err := Run(configDir, testFS()); err != nil {
+	if err := Run(configDir, testFS(), testDefaultConfig()); err != nil {
 		t.Fatalf("second Run() error: %v", err)
 	}
 
