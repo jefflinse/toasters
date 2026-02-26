@@ -167,19 +167,19 @@ func TestOperatorProcessesUserMessage(t *testing.T) {
 		Provider: mp,
 		Model:    "test-model",
 		WorkDir:  t.TempDir(),
+		OnText: func(text string) {
+			mu.Lock()
+			textBuf.WriteString(text)
+			mu.Unlock()
+		},
 	})
-	op.OnText = func(text string) {
-		mu.Lock()
-		textBuf.WriteString(text)
-		mu.Unlock()
-	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	op.Start(ctx)
 
-	op.Send(Event{
+	_ = op.Send(ctx, Event{
 		Type:    EventUserMessage,
 		Payload: UserMessagePayload{Text: "Hello"},
 	})
@@ -228,12 +228,12 @@ func TestOperatorLongLivedSession(t *testing.T) {
 		Provider: mp,
 		Model:    "test-model",
 		WorkDir:  t.TempDir(),
+		OnText: func(text string) {
+			mu.Lock()
+			textBuf.WriteString(text)
+			mu.Unlock()
+		},
 	})
-	op.OnText = func(text string) {
-		mu.Lock()
-		textBuf.WriteString(text)
-		mu.Unlock()
-	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -241,7 +241,7 @@ func TestOperatorLongLivedSession(t *testing.T) {
 	op.Start(ctx)
 
 	// Send first message.
-	op.Send(Event{
+	_ = op.Send(ctx, Event{
 		Type:    EventUserMessage,
 		Payload: UserMessagePayload{Text: "First message"},
 	})
@@ -253,7 +253,7 @@ func TestOperatorLongLivedSession(t *testing.T) {
 	}, 2*time.Second)
 
 	// Send second message.
-	op.Send(Event{
+	_ = op.Send(ctx, Event{
 		Type:    EventUserMessage,
 		Payload: UserMessagePayload{Text: "Second message"},
 	})
@@ -330,10 +330,11 @@ func TestOperatorConsultAgent(t *testing.T) {
 	store := newOperatorTestStore(t)
 	ctx := context.Background()
 
-	// Seed the planner agent in the DB.
+	// Seed the planner agent in the DB (must be source=system for consult_agent).
 	if err := store.UpsertAgent(ctx, &db.Agent{
 		ID:           "planner",
 		Name:         "Planner",
+		Source:       "system",
 		SystemPrompt: "You are a planning agent. Analyze requests and create plans.",
 	}); err != nil {
 		t.Fatalf("upserting planner agent: %v", err)
@@ -352,19 +353,19 @@ func TestOperatorConsultAgent(t *testing.T) {
 		WorkDir:  t.TempDir(),
 		Store:    store,
 		Composer: composer,
+		OnText: func(text string) {
+			mu.Lock()
+			textBuf.WriteString(text)
+			mu.Unlock()
+		},
 	})
-	op.OnText = func(text string) {
-		mu.Lock()
-		textBuf.WriteString(text)
-		mu.Unlock()
-	}
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	op.Start(ctx)
 
-	op.Send(Event{
+	_ = op.Send(ctx, Event{
 		Type:    EventUserMessage,
 		Payload: UserMessagePayload{Text: "Build me a web app"},
 	})
@@ -409,19 +410,19 @@ func TestOperatorEventCallbackFires(t *testing.T) {
 		Provider: mp,
 		Model:    "test-model",
 		WorkDir:  t.TempDir(),
+		OnEvent: func(ev Event) {
+			mu.Lock()
+			events = append(events, ev)
+			mu.Unlock()
+		},
 	})
-	op.OnEvent = func(ev Event) {
-		mu.Lock()
-		events = append(events, ev)
-		mu.Unlock()
-	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	op.Start(ctx)
 
-	op.Send(Event{
+	_ = op.Send(ctx, Event{
 		Type:    EventUserMessage,
 		Payload: UserMessagePayload{Text: "Hello"},
 	})
@@ -462,12 +463,12 @@ func TestOperatorMechanicalEvents(t *testing.T) {
 		Provider: mp,
 		Model:    "test-model",
 		WorkDir:  t.TempDir(),
+		OnEvent: func(ev Event) {
+			mu.Lock()
+			events = append(events, ev)
+			mu.Unlock()
+		},
 	})
-	op.OnEvent = func(ev Event) {
-		mu.Lock()
-		events = append(events, ev)
-		mu.Unlock()
-	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -475,7 +476,7 @@ func TestOperatorMechanicalEvents(t *testing.T) {
 	op.Start(ctx)
 
 	// Send purely mechanical events.
-	op.Send(Event{
+	_ = op.Send(ctx, Event{
 		Type: EventTaskStarted,
 		Payload: TaskStartedPayload{
 			TaskID: "task-0",
@@ -484,7 +485,7 @@ func TestOperatorMechanicalEvents(t *testing.T) {
 			Title:  "Setup",
 		},
 	})
-	op.Send(Event{
+	_ = op.Send(ctx, Event{
 		Type: EventProgressUpdate,
 		Payload: ProgressUpdatePayload{
 			TaskID:  "task-1",
@@ -530,19 +531,19 @@ func TestEventLoop_TaskStarted_CreatesFeedEntry(t *testing.T) {
 		Model:    "test-model",
 		WorkDir:  t.TempDir(),
 		Store:    store,
+		OnEvent: func(ev Event) {
+			mu.Lock()
+			events = append(events, ev)
+			mu.Unlock()
+		},
 	})
-	op.OnEvent = func(ev Event) {
-		mu.Lock()
-		events = append(events, ev)
-		mu.Unlock()
-	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	op.Start(ctx)
 
-	op.Send(Event{
+	_ = op.Send(ctx, Event{
 		Type: EventTaskStarted,
 		Payload: TaskStartedPayload{
 			TaskID: "task-1",
@@ -627,6 +628,9 @@ func TestEventLoop_TaskCompleted_AssignsNextTask(t *testing.T) {
 	tools := newOperatorTools(rt, composer, store, systemTools, t.TempDir())
 	provTools := operatorToolsToProviderTools(tools.Definitions())
 
+	var events []Event
+	var mu sync.Mutex
+
 	op := &Operator{
 		rt:           rt,
 		prov:         mp,
@@ -637,14 +641,11 @@ func TestEventLoop_TaskCompleted_AssignsNextTask(t *testing.T) {
 		workDir:      t.TempDir(),
 		systemPrompt: defaultSystemPrompt,
 		provTools:    provTools,
-	}
-
-	var events []Event
-	var mu sync.Mutex
-	op.OnEvent = func(ev Event) {
-		mu.Lock()
-		events = append(events, ev)
-		mu.Unlock()
+		onEvent: func(ev Event) {
+			mu.Lock()
+			events = append(events, ev)
+			mu.Unlock()
+		},
 	}
 
 	ctx, cancel := context.WithCancel(ctx)
@@ -653,7 +654,7 @@ func TestEventLoop_TaskCompleted_AssignsNextTask(t *testing.T) {
 	op.Start(ctx)
 
 	// Send TaskCompleted with HasNextTask=true.
-	op.Send(Event{
+	_ = op.Send(ctx, Event{
 		Type: EventTaskCompleted,
 		Payload: TaskCompletedPayload{
 			TaskID:      "task-1",
@@ -719,12 +720,12 @@ func TestEventLoop_TaskCompleted_ChecksJobComplete(t *testing.T) {
 		Model:    "test-model",
 		WorkDir:  t.TempDir(),
 		Store:    store,
+		OnText: func(text string) {
+			mu.Lock()
+			textBuf.WriteString(text)
+			mu.Unlock()
+		},
 	})
-	op.OnText = func(text string) {
-		mu.Lock()
-		textBuf.WriteString(text)
-		mu.Unlock()
-	}
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -733,7 +734,7 @@ func TestEventLoop_TaskCompleted_ChecksJobComplete(t *testing.T) {
 
 	// Send TaskCompleted with no next task and no recommendations.
 	// This should trigger checkJobComplete → EventJobComplete.
-	op.Send(Event{
+	_ = op.Send(ctx, Event{
 		Type: EventTaskCompleted,
 		Payload: TaskCompletedPayload{
 			TaskID:      "task-1",
@@ -820,12 +821,12 @@ func TestEventLoop_TaskCompleted_WithRecommendations(t *testing.T) {
 		Model:    "test-model",
 		WorkDir:  t.TempDir(),
 		Store:    store,
+		OnText: func(text string) {
+			mu.Lock()
+			textBuf.WriteString(text)
+			mu.Unlock()
+		},
 	})
-	op.OnText = func(text string) {
-		mu.Lock()
-		textBuf.WriteString(text)
-		mu.Unlock()
-	}
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -833,7 +834,7 @@ func TestEventLoop_TaskCompleted_WithRecommendations(t *testing.T) {
 	op.Start(ctx)
 
 	// Send TaskCompleted with recommendations but no next task.
-	op.Send(Event{
+	_ = op.Send(ctx, Event{
 		Type: EventTaskCompleted,
 		Payload: TaskCompletedPayload{
 			TaskID:          "task-1",
@@ -891,19 +892,19 @@ func TestEventLoop_TaskFailed_RoutesToLLM(t *testing.T) {
 		Model:    "test-model",
 		WorkDir:  t.TempDir(),
 		Store:    store,
+		OnText: func(text string) {
+			mu.Lock()
+			textBuf.WriteString(text)
+			mu.Unlock()
+		},
 	})
-	op.OnText = func(text string) {
-		mu.Lock()
-		textBuf.WriteString(text)
-		mu.Unlock()
-	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	op.Start(ctx)
 
-	op.Send(Event{
+	_ = op.Send(ctx, Event{
 		Type: EventTaskFailed,
 		Payload: TaskFailedPayload{
 			TaskID: "task-1",
@@ -968,19 +969,19 @@ func TestEventLoop_BlockerReported_RoutesToLLM(t *testing.T) {
 		Model:    "test-model",
 		WorkDir:  t.TempDir(),
 		Store:    store,
+		OnText: func(text string) {
+			mu.Lock()
+			textBuf.WriteString(text)
+			mu.Unlock()
+		},
 	})
-	op.OnText = func(text string) {
-		mu.Lock()
-		textBuf.WriteString(text)
-		mu.Unlock()
-	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	op.Start(ctx)
 
-	op.Send(Event{
+	_ = op.Send(ctx, Event{
 		Type: EventBlockerReported,
 		Payload: BlockerReportedPayload{
 			TaskID:      "task-1",
@@ -1038,19 +1039,19 @@ func TestEventLoop_ProgressUpdate_NoFeedEntry(t *testing.T) {
 		Model:    "test-model",
 		WorkDir:  t.TempDir(),
 		Store:    store,
+		OnEvent: func(ev Event) {
+			mu.Lock()
+			events = append(events, ev)
+			mu.Unlock()
+		},
 	})
-	op.OnEvent = func(ev Event) {
-		mu.Lock()
-		events = append(events, ev)
-		mu.Unlock()
-	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	op.Start(ctx)
 
-	op.Send(Event{
+	_ = op.Send(ctx, Event{
 		Type: EventProgressUpdate,
 		Payload: ProgressUpdatePayload{
 			TaskID:  "task-1",
@@ -1107,19 +1108,19 @@ func TestEventLoop_JobComplete_MarksDone(t *testing.T) {
 		Model:    "test-model",
 		WorkDir:  t.TempDir(),
 		Store:    store,
+		OnText: func(text string) {
+			mu.Lock()
+			textBuf.WriteString(text)
+			mu.Unlock()
+		},
 	})
-	op.OnText = func(text string) {
-		mu.Lock()
-		textBuf.WriteString(text)
-		mu.Unlock()
-	}
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	op.Start(ctx)
 
-	op.Send(Event{
+	_ = op.Send(ctx, Event{
 		Type: EventJobComplete,
 		Payload: JobCompletePayload{
 			JobID:   "job-1",
@@ -1188,19 +1189,19 @@ func TestEventLoop_UserResponse_RoutesToLLM(t *testing.T) {
 		Model:    "test-model",
 		WorkDir:  t.TempDir(),
 		Store:    store,
+		OnText: func(text string) {
+			mu.Lock()
+			textBuf.WriteString(text)
+			mu.Unlock()
+		},
 	})
-	op.OnText = func(text string) {
-		mu.Lock()
-		textBuf.WriteString(text)
-		mu.Unlock()
-	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	op.Start(ctx)
 
-	op.Send(Event{
+	_ = op.Send(ctx, Event{
 		Type: EventUserResponse,
 		Payload: UserResponsePayload{
 			Text:      "Yes, proceed with option 2",
@@ -1256,14 +1257,22 @@ func TestOperatorCleanShutdown(t *testing.T) {
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
-	op.Start(ctx)
+
+	done := make(chan struct{})
+	go func() {
+		op.run(ctx)
+		close(done)
+	}()
 
 	// Cancel should cause the event loop to exit cleanly.
 	cancel()
 
-	// Give the goroutine time to exit. If it doesn't, the test will pass
-	// but the goroutine leak detector (if any) would catch it.
-	time.Sleep(50 * time.Millisecond)
+	select {
+	case <-done:
+		// Event loop exited cleanly.
+	case <-time.After(2 * time.Second):
+		t.Fatal("event loop did not exit within timeout")
+	}
 }
 
 func TestOperatorChatStreamError(t *testing.T) {
@@ -1284,19 +1293,19 @@ func TestOperatorChatStreamError(t *testing.T) {
 		Provider: mp,
 		Model:    "test-model",
 		WorkDir:  t.TempDir(),
+		OnText: func(text string) {
+			mu.Lock()
+			textBuf.WriteString(text)
+			mu.Unlock()
+		},
 	})
-	op.OnText = func(text string) {
-		mu.Lock()
-		textBuf.WriteString(text)
-		mu.Unlock()
-	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	op.Start(ctx)
 
-	op.Send(Event{
+	_ = op.Send(ctx, Event{
 		Type:    EventUserMessage,
 		Payload: UserMessagePayload{Text: "Hello"},
 	})
@@ -1336,19 +1345,19 @@ func TestOperatorStreamError(t *testing.T) {
 		Provider: mp,
 		Model:    "test-model",
 		WorkDir:  t.TempDir(),
+		OnText: func(text string) {
+			mu.Lock()
+			textBuf.WriteString(text)
+			mu.Unlock()
+		},
 	})
-	op.OnText = func(text string) {
-		mu.Lock()
-		textBuf.WriteString(text)
-		mu.Unlock()
-	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	op.Start(ctx)
 
-	op.Send(Event{
+	_ = op.Send(ctx, Event{
 		Type:    EventUserMessage,
 		Payload: UserMessagePayload{Text: "Hello"},
 	})
@@ -1400,19 +1409,19 @@ func TestOperatorSurfaceToUser(t *testing.T) {
 		Provider: mp,
 		Model:    "test-model",
 		WorkDir:  t.TempDir(),
+		OnText: func(text string) {
+			mu.Lock()
+			textBuf.WriteString(text)
+			mu.Unlock()
+		},
 	})
-	op.OnText = func(text string) {
-		mu.Lock()
-		textBuf.WriteString(text)
-		mu.Unlock()
-	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	op.Start(ctx)
 
-	op.Send(Event{
+	_ = op.Send(ctx, Event{
 		Type:    EventUserMessage,
 		Payload: UserMessagePayload{Text: "Give me an update"},
 	})
@@ -1431,10 +1440,11 @@ func TestConsultAgent_ComposedAgent(t *testing.T) {
 	store := newOperatorTestStore(t)
 	ctx := context.Background()
 
-	// Seed a planner agent with a specific system prompt.
+	// Seed a planner agent with a specific system prompt (must be source=system).
 	if err := store.UpsertAgent(ctx, &db.Agent{
 		ID:           "planner",
 		Name:         "Planner",
+		Source:       "system",
 		SystemPrompt: "You are a planning agent. Create detailed plans.",
 		Provider:     "custom-provider",
 		Model:        "custom-model",
@@ -1483,19 +1493,19 @@ func TestConsultAgent_ComposedAgent(t *testing.T) {
 		WorkDir:  t.TempDir(),
 		Store:    store,
 		Composer: composer,
+		OnText: func(text string) {
+			mu.Lock()
+			textBuf.WriteString(text)
+			mu.Unlock()
+		},
 	})
-	op.OnText = func(text string) {
-		mu.Lock()
-		textBuf.WriteString(text)
-		mu.Unlock()
-	}
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	op.Start(ctx)
 
-	op.Send(Event{
+	_ = op.Send(ctx, Event{
 		Type:    EventUserMessage,
 		Payload: UserMessagePayload{Text: "Plan a migration"},
 	})

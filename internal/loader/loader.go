@@ -90,6 +90,11 @@ func (l *Loader) Load(ctx context.Context) error {
 	return nil
 }
 
+// maxDefinitionFileSize is the maximum size (in bytes) for agent/skill/team
+// definition files. Files larger than this are skipped to prevent excessive
+// memory allocation from malicious or accidentally large files.
+const maxDefinitionFileSize = 1 << 20 // 1 MiB
+
 // loadSkills parses all .md files in dir as SkillDefs.
 // Uses ParseSkill directly since directory context determines the type.
 func (l *Loader) loadSkills(dir, source string) []*db.Skill {
@@ -105,6 +110,10 @@ func (l *Loader) loadSkills(dir, source string) []*db.Skill {
 			continue
 		}
 		path := filepath.Join(dir, e.Name())
+		if info, err := e.Info(); err == nil && info.Size() > maxDefinitionFileSize {
+			slog.Warn("skipping oversized definition file", "path", path, "size", info.Size())
+			continue
+		}
 		sd, err := agentfmt.ParseSkill(path)
 		if err != nil {
 			slog.Warn("skipping unparseable skill file", "path", path, "error", err)
@@ -129,6 +138,10 @@ func (l *Loader) loadAgents(dir, source, teamID string) []*db.Agent {
 			continue
 		}
 		path := filepath.Join(dir, e.Name())
+		if info, err := e.Info(); err == nil && info.Size() > maxDefinitionFileSize {
+			slog.Warn("skipping oversized definition file", "path", path, "size", info.Size())
+			continue
+		}
 		ad, err := agentfmt.ParseAgent(path)
 		if err != nil {
 			slog.Warn("skipping unparseable agent file", "path", path, "error", err)
@@ -165,10 +178,13 @@ func (l *Loader) loadSystemTeam(systemDir string, systemAgents map[string]string
 		}
 	}
 
-	// Resolve member agents.
+	// Resolve member agents (skip lead — already added above).
 	for _, name := range td.Agents {
 		agentID, ok := resolveAgent(name, nil, systemAgents, nil)
 		if ok {
+			if agentID == team.LeadAgent {
+				continue // already added as lead
+			}
 			teamAgents = append(teamAgents, &db.TeamAgent{
 				TeamID:  team.ID,
 				AgentID: agentID,
@@ -269,10 +285,13 @@ func (l *Loader) loadUserTeams(teamsDir string, sharedAgents, systemAgents map[s
 			}
 		}
 
-		// Resolve member agents.
+		// Resolve member agents (skip lead — already added above).
 		for _, name := range td.Agents {
 			agentID, ok := resolveAgent(name, localAgentIndex, sharedAgents, systemAgents)
 			if ok {
+				if agentID == team.LeadAgent {
+					continue // already added as lead
+				}
 				teamAgents = append(teamAgents, &db.TeamAgent{
 					TeamID:  teamID,
 					AgentID: agentID,

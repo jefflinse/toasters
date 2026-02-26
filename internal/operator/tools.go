@@ -125,11 +125,21 @@ func (ot *operatorTools) consultAgent(ctx context.Context, args json.RawMessage)
 		return "", fmt.Errorf("message is required")
 	}
 
-	// Look up and compose the agent from the DB via the Composer.
-	// System agents use teamID="system" for role-based tool injection.
-	composed, err := ot.composer.Compose(ctx, params.AgentName, "system")
+	// Verify the agent exists and is a system agent before composing.
+	// This prevents user-defined or auto-detected agents from gaining
+	// system-level tools (create_job, assign_task, etc.) via consult_agent.
+	agent, err := ot.store.GetAgent(ctx, params.AgentName)
 	if err != nil {
 		return "", fmt.Errorf("unknown agent %q: %w", params.AgentName, err)
+	}
+	if agent.Source != "system" {
+		return "", fmt.Errorf("agent %q is not a system agent (source: %s)", params.AgentName, agent.Source)
+	}
+
+	// Compose the agent with teamID="system" for role-based tool injection.
+	composed, err := ot.composer.Compose(ctx, params.AgentName, "system")
+	if err != nil {
+		return "", fmt.Errorf("composing agent %q: %w", params.AgentName, err)
 	}
 
 	slog.Info("consulting system agent",

@@ -46,9 +46,9 @@ type Operator struct {
 	messages     []provider.Message
 	provTools    []provider.Tool
 
-	// Callbacks.
-	OnText  func(text string) // called with streamed text from the operator LLM
-	OnEvent func(event Event) // called when the event loop processes an event
+	// Callbacks — set at construction time via Config, immutable after New().
+	onText  func(text string) // called with streamed text from the operator LLM
+	onEvent func(event Event) // called when the event loop processes an event
 }
 
 // Config holds configuration for creating an Operator.
@@ -60,6 +60,8 @@ type Config struct {
 	SystemPrompt string // optional; uses default if empty
 	Store        db.Store
 	Composer     *compose.Composer
+	OnText       func(text string) // called with streamed text from the operator LLM
+	OnEvent      func(event Event) // called when the event loop processes an event
 }
 
 // New creates a new Operator. Call Start to begin processing events.
@@ -92,13 +94,20 @@ func New(cfg Config) *Operator {
 		workDir:      cfg.WorkDir,
 		systemPrompt: systemPrompt,
 		provTools:    provTools,
+		onText:       cfg.OnText,
+		onEvent:      cfg.OnEvent,
 	}
 }
 
-// Send pushes an event into the operator's event channel. Non-blocking if the
-// channel has capacity; blocks if the buffer is full.
-func (o *Operator) Send(event Event) {
-	o.eventCh <- event
+// Send pushes an event into the operator's event channel. It blocks until the
+// event is accepted or the context is cancelled.
+func (o *Operator) Send(ctx context.Context, event Event) error {
+	select {
+	case o.eventCh <- event:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // Start launches the event loop goroutine. It processes events until ctx is
@@ -125,8 +134,8 @@ func (o *Operator) run(ctx context.Context) {
 // events go to the LLM; routine events are handled mechanically.
 func (o *Operator) handleEvent(ctx context.Context, ev Event) {
 	// Notify observer.
-	if o.OnEvent != nil {
-		o.OnEvent(ev)
+	if o.onEvent != nil {
+		o.onEvent(ev)
 	}
 
 	switch ev.Type {
@@ -368,14 +377,17 @@ func (o *Operator) checkJobComplete(ctx context.Context, jobID string) {
 		return
 	}
 
-	o.eventCh <- Event{
+	// Handle job completion inline rather than sending to eventCh, because
+	// checkJobComplete runs on the event loop goroutine (the sole reader).
+	// Sending to eventCh from the reader would self-deadlock if the buffer is full.
+	o.handleEvent(ctx, Event{
 		Type: EventJobComplete,
 		Payload: JobCompletePayload{
 			JobID:   jobID,
 			Title:   job.Title,
 			Summary: "All tasks completed",
 		},
-	}
+	})
 }
 
 // handleUserMessage sends a user message to the operator LLM and processes
@@ -501,8 +513,8 @@ func (o *Operator) collectResponse(ctx context.Context, eventCh <-chan provider.
 
 // emitText calls the OnText callback if set.
 func (o *Operator) emitText(text string) {
-	if o.OnText != nil {
-		o.OnText(text)
+	if o.onText != nil {
+		o.onText(text)
 	}
 }
 

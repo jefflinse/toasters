@@ -59,7 +59,7 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 	// corrupt the TUI's alt-screen. Logs go to ~/.config/toasters/toasters.log.
 	if err := os.MkdirAll(configDir, 0755); err == nil {
 		logPath := filepath.Join(configDir, "toasters.log")
-		if f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644); err == nil {
+		if f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600); err == nil {
 			slog.SetDefault(slog.New(slog.NewTextHandler(f, nil)))
 			defer func() { _ = f.Close() }()
 		} else {
@@ -183,7 +183,12 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 	}
 
 	// Create and start the operator event loop.
+	// The operator is created before the TUI program so we can wire callbacks.
+	// Callbacks use p.Send() which is safe to call before p.Run() — messages
+	// are buffered until the program starts.
 	var op *operator.Operator
+	var p *tea.Program
+
 	if store != nil {
 		op = operator.New(operator.Config{
 			Runtime:  rt,
@@ -192,6 +197,16 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 			WorkDir:  workspaceDir,
 			Store:    store,
 			Composer: composer,
+			OnText: func(text string) {
+				if p != nil {
+					p.Send(tui.OperatorTextMsg{Text: text})
+				}
+			},
+			OnEvent: func(event operator.Event) {
+				if p != nil {
+					p.Send(tui.OperatorEventMsg{Event: event})
+				}
+			},
 		})
 
 		opCtx, opCancel := context.WithCancel(context.Background())
@@ -214,17 +229,7 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 		Operator:     op,
 	})
 
-	p := tea.NewProgram(&m)
-
-	// Wire operator text output to TUI.
-	if op != nil {
-		op.OnText = func(text string) {
-			p.Send(tui.OperatorTextMsg{Text: text})
-		}
-		op.OnEvent = func(event operator.Event) {
-			p.Send(tui.OperatorEventMsg{Event: event})
-		}
-	}
+	p = tea.NewProgram(&m)
 
 	gw.SetSend(func(msg gateway.SlotTimeoutMsg) {
 		p.Send(msg)

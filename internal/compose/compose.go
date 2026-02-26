@@ -15,30 +15,50 @@ import (
 	"github.com/jefflinse/toasters/internal/db"
 )
 
-// Role-based tool sets injected during composition.
-var (
-	leadTools = []string{
-		"spawn_agent",
-		"complete_task",
-		"request_new_task",
-		"report_blocker",
-		"report_progress",
-		"query_job_context",
-		"query_team_context",
-	}
-
-	workerTools = []string{
-		"report_progress",
-		"query_team_context",
-	}
-
-	systemLeadTools = []string{
-		"consult_agent",
-		"query_job",
-		"query_teams",
-		"surface_to_user",
-	}
+// Tool name constants — shared between compose and tool executors to ensure
+// compile-time consistency.
+const (
+	ToolSpawnAgent       = "spawn_agent"
+	ToolCompleteTask     = "complete_task"
+	ToolRequestNewTask   = "request_new_task"
+	ToolReportBlocker    = "report_blocker"
+	ToolReportProgress   = "report_progress"
+	ToolQueryJobContext  = "query_job_context"
+	ToolQueryTeamContext = "query_team_context"
+	ToolConsultAgent     = "consult_agent"
+	ToolQueryJob         = "query_job"
+	ToolQueryTeams       = "query_teams"
+	ToolSurfaceToUser    = "surface_to_user"
 )
+
+// Role-based tool sets injected during composition.
+func leadToolNames() []string {
+	return []string{
+		ToolSpawnAgent,
+		ToolCompleteTask,
+		ToolRequestNewTask,
+		ToolReportBlocker,
+		ToolReportProgress,
+		ToolQueryJobContext,
+		ToolQueryTeamContext,
+	}
+}
+
+func workerToolNames() []string {
+	return []string{
+		ToolReportProgress,
+		ToolQueryTeamContext,
+	}
+}
+
+func systemLeadToolNames() []string {
+	return []string{
+		ToolConsultAgent,
+		ToolQueryJob,
+		ToolQueryTeams,
+		ToolSurfaceToUser,
+	}
+}
 
 // ComposedAgent is the fully resolved agent ready for session creation.
 type ComposedAgent struct {
@@ -269,18 +289,18 @@ func (c *Composer) mergeTools(
 
 		switch {
 		case role == "lead" && isSystem:
-			for _, t := range leadTools {
+			for _, t := range leadToolNames() {
 				addTool(t)
 			}
-			for _, t := range systemLeadTools {
+			for _, t := range systemLeadToolNames() {
 				addTool(t)
 			}
 		case role == "lead":
-			for _, t := range leadTools {
+			for _, t := range leadToolNames() {
 				addTool(t)
 			}
 		case role == "worker" && !isSystem:
-			for _, t := range workerTools {
+			for _, t := range workerToolNames() {
 				addTool(t)
 			}
 			// System workers: no extra role-based tools.

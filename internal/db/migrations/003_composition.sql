@@ -72,6 +72,8 @@ CREATE TABLE team_agents (
     PRIMARY KEY (team_id, agent_id)
 );
 
+CREATE INDEX idx_team_agents_agent_id ON team_agents(agent_id);
+
 -- Activity feed.
 CREATE TABLE feed_entries (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,

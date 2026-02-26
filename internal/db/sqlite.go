@@ -316,8 +316,8 @@ func (s *SQLiteStore) UpdateTaskResult(ctx context.Context, id string, resultSum
 func (s *SQLiteStore) AssignTask(ctx context.Context, id string, teamID string) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 	result, err := s.db.ExecContext(ctx,
-		"UPDATE tasks SET team_id = ?, status = ?, updated_at = ? WHERE id = ?",
-		teamID, string(TaskStatusInProgress), now, id)
+		"UPDATE tasks SET team_id = ?, status = ?, updated_at = ? WHERE id = ? AND status = ?",
+		teamID, string(TaskStatusInProgress), now, id, string(TaskStatusPending))
 	if err != nil {
 		return fmt.Errorf("assigning task: %w", err)
 	}

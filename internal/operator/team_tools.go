@@ -167,7 +167,7 @@ func (tl *TeamLeadTools) completeTask(ctx context.Context, args json.RawMessage)
 	}
 
 	// 4. Send EventTaskCompleted.
-	tl.eventCh <- Event{
+	trySendEvent(ctx, tl.eventCh, Event{
 		Type: EventTaskCompleted,
 		Payload: TaskCompletedPayload{
 			TaskID:          tl.taskID,
@@ -177,12 +177,12 @@ func (tl *TeamLeadTools) completeTask(ctx context.Context, args json.RawMessage)
 			Recommendations: params.Recommendations,
 			HasNextTask:     len(readyTasks) > 0,
 		},
-	}
+	})
 
 	return "Task completed successfully", nil
 }
 
-func (tl *TeamLeadTools) requestNewTask(_ context.Context, args json.RawMessage) (string, error) {
+func (tl *TeamLeadTools) requestNewTask(ctx context.Context, args json.RawMessage) (string, error) {
 	var params struct {
 		Description string `json:"description"`
 		Reason      string `json:"reason"`
@@ -198,7 +198,7 @@ func (tl *TeamLeadTools) requestNewTask(_ context.Context, args json.RawMessage)
 		return "", fmt.Errorf("reason is required")
 	}
 
-	tl.eventCh <- Event{
+	trySendEvent(ctx, tl.eventCh, Event{
 		Type: EventNewTaskRequest,
 		Payload: NewTaskRequestPayload{
 			JobID:       tl.jobID,
@@ -206,7 +206,7 @@ func (tl *TeamLeadTools) requestNewTask(_ context.Context, args json.RawMessage)
 			Description: params.Description,
 			Reason:      params.Reason,
 		},
-	}
+	})
 
 	return fmt.Sprintf("New task request submitted: %s", params.Description), nil
 }
@@ -229,14 +229,14 @@ func (tl *TeamLeadTools) reportBlocker(ctx context.Context, args json.RawMessage
 	}
 
 	// 2. Send EventBlockerReported.
-	tl.eventCh <- Event{
+	trySendEvent(ctx, tl.eventCh, Event{
 		Type: EventBlockerReported,
 		Payload: BlockerReportedPayload{
 			TaskID:      tl.taskID,
 			TeamID:      tl.teamID,
 			Description: params.Description,
 		},
-	}
+	})
 
 	return fmt.Sprintf("Blocker reported: %s", params.Description), nil
 }
@@ -265,13 +265,13 @@ func (tl *TeamLeadTools) reportProgress(ctx context.Context, args json.RawMessag
 	}
 
 	// 2. Send EventProgressUpdate.
-	tl.eventCh <- Event{
+	trySendEvent(ctx, tl.eventCh, Event{
 		Type: EventProgressUpdate,
 		Payload: ProgressUpdatePayload{
 			TaskID:  tl.taskID,
 			Message: params.Message,
 		},
-	}
+	})
 
 	return "Progress reported", nil
 }
@@ -368,13 +368,13 @@ func (wt *WorkerTools) reportProgress(ctx context.Context, args json.RawMessage)
 		return "", fmt.Errorf("reporting progress: %w", err)
 	}
 
-	wt.eventCh <- Event{
+	trySendEvent(ctx, wt.eventCh, Event{
 		Type: EventProgressUpdate,
 		Payload: ProgressUpdatePayload{
 			TaskID:  wt.taskID,
 			Message: params.Message,
 		},
-	}
+	})
 
 	return "Progress reported", nil
 }
@@ -398,25 +398,25 @@ func formatJobContext(ctx context.Context, store db.Store, jobID string) (string
 	}
 
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf("Job: %s\n", job.Title))
-	b.WriteString(fmt.Sprintf("Status: %s\n", job.Status))
+	fmt.Fprintf(&b, "Job: %s\n", job.Title)
+	fmt.Fprintf(&b, "Status: %s\n", job.Status)
 	if job.Description != "" {
-		b.WriteString(fmt.Sprintf("Description: %s\n", job.Description))
+		fmt.Fprintf(&b, "Description: %s\n", job.Description)
 	}
 
 	if len(tasks) == 0 {
 		b.WriteString("\nNo tasks.")
 	} else {
-		b.WriteString(fmt.Sprintf("\nTasks (%d):\n", len(tasks)))
+		fmt.Fprintf(&b, "\nTasks (%d):\n", len(tasks))
 		for _, task := range tasks {
-			line := fmt.Sprintf("  - [%s] %s", task.Status, task.Title)
+			fmt.Fprintf(&b, "  - [%s] %s", task.Status, task.Title)
 			if task.TeamID != "" {
-				line += fmt.Sprintf(" (team: %s)", task.TeamID)
+				fmt.Fprintf(&b, " (team: %s)", task.TeamID)
 			}
 			if task.Summary != "" {
-				line += fmt.Sprintf(" — %s", task.Summary)
+				fmt.Fprintf(&b, " — %s", task.Summary)
 			}
-			b.WriteString(line + "\n")
+			b.WriteString("\n")
 		}
 	}
 

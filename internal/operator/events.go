@@ -1,5 +1,22 @@
 package operator
 
+import (
+	"context"
+	"log/slog"
+)
+
+// trySendEvent sends an event to the operator event channel. It uses a
+// non-blocking select so that sends from the event loop goroutine (which is
+// also the sole reader) cannot self-deadlock, and sends from agent goroutines
+// respect context cancellation instead of blocking indefinitely.
+func trySendEvent(ctx context.Context, ch chan<- Event, ev Event) {
+	select {
+	case ch <- ev:
+	case <-ctx.Done():
+		slog.Warn("event send cancelled", "type", ev.Type, "error", ctx.Err())
+	}
+}
+
 // EventType identifies the kind of event sent to the operator event loop.
 type EventType string
 

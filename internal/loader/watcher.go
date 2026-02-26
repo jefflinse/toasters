@@ -41,10 +41,13 @@ func NewWatcher(loader *Loader, onChange func()) (*Watcher, error) {
 func (w *Watcher) Start(ctx context.Context) error {
 	w.addWatchDirs()
 
-	// A nil channel blocks forever, so debounceTimer starts inactive.
-	// When set to time.After(...), the case arm becomes selectable.
+	// Use a stopped timer for debouncing. Reset it on each .md change.
 	// The reload runs on this goroutine — never concurrently with itself.
-	var debounceTimer <-chan time.Time
+	debounceTimer := time.NewTimer(0)
+	if !debounceTimer.Stop() {
+		<-debounceTimer.C
+	}
+	defer debounceTimer.Stop()
 
 	for {
 		select {
@@ -60,10 +63,15 @@ func (w *Watcher) Start(ctx context.Context) error {
 			}
 			// Only react to .md file changes.
 			if strings.HasSuffix(event.Name, ".md") {
-				debounceTimer = time.After(w.debounce)
+				if !debounceTimer.Stop() {
+					select {
+					case <-debounceTimer.C:
+					default:
+					}
+				}
+				debounceTimer.Reset(w.debounce)
 			}
-		case <-debounceTimer:
-			debounceTimer = nil
+		case <-debounceTimer.C:
 			if err := w.loader.Load(ctx); err != nil {
 				slog.Error("loader watcher reload failed", "error", err)
 				continue

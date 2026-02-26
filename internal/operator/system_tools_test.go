@@ -107,11 +107,13 @@ func TestCreateJob(t *testing.T) {
 	st, store, _, _ := newTestSystemTools(t)
 	ctx := context.Background()
 
-	result, err := st.Execute(ctx, "create_job", json.RawMessage(`{
-		"title": "Build web app",
-		"description": "Create a new web application",
-		"workspace_dir": "/tmp/webapp"
-	}`))
+	workDir := t.TempDir()
+	args, _ := json.Marshal(map[string]string{
+		"title":         "Build web app",
+		"description":   "Create a new web application",
+		"workspace_dir": workDir,
+	})
+	result, err := st.Execute(ctx, "create_job", args)
 	assertNoError(t, err)
 
 	// Parse result to get job_id.
@@ -129,7 +131,7 @@ func TestCreateJob(t *testing.T) {
 	assertNoError(t, err)
 	assertEqual(t, "Build web app", job.Title)
 	assertEqual(t, "Create a new web application", job.Description)
-	assertEqual(t, "/tmp/webapp", job.WorkspaceDir)
+	assertEqual(t, workDir, job.WorkspaceDir)
 	assertEqual(t, string(db.JobStatusPending), string(job.Status))
 }
 

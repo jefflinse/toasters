@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/jefflinse/toasters/internal/compose"
@@ -200,12 +202,29 @@ func (st *SystemTools) createJob(ctx context.Context, args json.RawMessage) (str
 		return "", fmt.Errorf("description is required")
 	}
 
+	// Validate workspace_dir if provided.
+	workspaceDir := params.WorkspaceDir
+	if workspaceDir != "" {
+		absDir, err := filepath.Abs(workspaceDir)
+		if err != nil {
+			return "", fmt.Errorf("invalid workspace_dir: %w", err)
+		}
+		info, err := os.Stat(absDir)
+		if err != nil {
+			return "", fmt.Errorf("workspace_dir does not exist: %w", err)
+		}
+		if !info.IsDir() {
+			return "", fmt.Errorf("workspace_dir is not a directory: %s", absDir)
+		}
+		workspaceDir = absDir
+	}
+
 	job := &db.Job{
 		ID:           newID(),
 		Title:        params.Title,
 		Description:  params.Description,
 		Status:       db.JobStatusPending,
-		WorkspaceDir: params.WorkspaceDir,
+		WorkspaceDir: workspaceDir,
 	}
 
 	if err := st.store.CreateJob(ctx, job); err != nil {
@@ -303,7 +322,7 @@ func (st *SystemTools) assignTask(ctx context.Context, args json.RawMessage) (st
 	}
 
 	// 6. Send EventTaskStarted to the event channel.
-	st.eventCh <- Event{
+	trySendEvent(ctx, st.eventCh, Event{
 		Type: EventTaskStarted,
 		Payload: TaskStartedPayload{
 			TaskID: params.TaskID,
@@ -311,7 +330,7 @@ func (st *SystemTools) assignTask(ctx context.Context, args json.RawMessage) (st
 			TeamID: params.TeamID,
 			Title:  task.Title,
 		},
-	}
+	})
 
 	return fmt.Sprintf("Task assigned to team %s", team.Name), nil
 }
@@ -326,24 +345,26 @@ func (st *SystemTools) queryTeams(ctx context.Context) (string, error) {
 		return "No teams available.", nil
 	}
 
+	// Batch-load all team agents in one query per team. For small team counts
+	// (<10) this is fine; a single JOIN query would be an optimization for
+	// larger scales but isn't needed yet.
 	var b strings.Builder
 	b.WriteString("Available teams:\n")
 
 	for _, team := range teams {
+		fmt.Fprintf(&b, "\n- %s (id: %s)\n", team.Name, team.ID)
+		if team.Description != "" {
+			fmt.Fprintf(&b, "  Description: %s\n", team.Description)
+		}
+		if team.LeadAgent != "" {
+			fmt.Fprintf(&b, "  Lead: %s\n", team.LeadAgent)
+		}
 		members, err := st.store.ListTeamAgents(ctx, team.ID)
 		if err != nil {
 			slog.Warn("failed to list team agents", "team_id", team.ID, "error", err)
-			members = nil
+		} else {
+			fmt.Fprintf(&b, "  Members: %d\n", len(members))
 		}
-
-		b.WriteString(fmt.Sprintf("\n- %s (id: %s)\n", team.Name, team.ID))
-		if team.Description != "" {
-			b.WriteString(fmt.Sprintf("  Description: %s\n", team.Description))
-		}
-		if team.LeadAgent != "" {
-			b.WriteString(fmt.Sprintf("  Lead: %s\n", team.LeadAgent))
-		}
-		b.WriteString(fmt.Sprintf("  Members: %d\n", len(members)))
 	}
 
 	return b.String(), nil
@@ -372,22 +393,22 @@ func (st *SystemTools) queryJob(ctx context.Context, args json.RawMessage) (stri
 	}
 
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf("Job: %s (id: %s)\n", job.Title, job.ID))
-	b.WriteString(fmt.Sprintf("Status: %s\n", job.Status))
+	fmt.Fprintf(&b, "Job: %s (id: %s)\n", job.Title, job.ID)
+	fmt.Fprintf(&b, "Status: %s\n", job.Status)
 	if job.Description != "" {
-		b.WriteString(fmt.Sprintf("Description: %s\n", job.Description))
+		fmt.Fprintf(&b, "Description: %s\n", job.Description)
 	}
 
 	if len(tasks) == 0 {
 		b.WriteString("\nNo tasks.")
 	} else {
-		b.WriteString(fmt.Sprintf("\nTasks (%d):\n", len(tasks)))
+		fmt.Fprintf(&b, "\nTasks (%d):\n", len(tasks))
 		for _, task := range tasks {
-			line := fmt.Sprintf("  - [%s] %s (id: %s)", task.Status, task.Title, task.ID)
+			fmt.Fprintf(&b, "  - [%s] %s (id: %s)", task.Status, task.Title, task.ID)
 			if task.TeamID != "" {
-				line += fmt.Sprintf(" → team %s", task.TeamID)
+				fmt.Fprintf(&b, " → team %s", task.TeamID)
 			}
-			b.WriteString(line + "\n")
+			b.WriteString("\n")
 		}
 	}
 

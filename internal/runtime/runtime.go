@@ -35,9 +35,10 @@ func New(store db.Store, providers *provider.Registry) *Runtime {
 
 // SetMCPCaller wires an MCP caller into the runtime for agent tool dispatch.
 // mcpDefs are the pre-converted tool definitions in runtime.ToolDef format.
-// IMPORTANT: This must be called before any calls to SpawnAgent. It is not
-// safe to call concurrently with SpawnAgent.
+// Safe to call concurrently with SpawnAgent.
 func (r *Runtime) SetMCPCaller(caller MCPCaller, defs []ToolDef) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.mcpCaller = caller
 	r.mcpDefs = defs
 }
@@ -59,6 +60,12 @@ func (r *Runtime) SpawnAgent(ctx context.Context, opts SpawnOpts) (*Session, err
 		maxDepth = defaultMaxDepth
 	}
 
+	// Snapshot MCP state under lock for use below.
+	r.mu.Lock()
+	mcpCaller := r.mcpCaller
+	mcpDefs := r.mcpDefs
+	r.mu.Unlock()
+
 	// Create tool executor. If the caller provided a custom ToolExecutor, use
 	// it directly (e.g. SystemTools for system agents). Otherwise build the
 	// default CoreTools stack with optional MCP dispatch.
@@ -74,8 +81,8 @@ func (r *Runtime) SpawnAgent(ctx context.Context, opts SpawnOpts) (*Session, err
 			WithSessionContext(id, opts.AgentID, opts.JobID),
 			WithProvider(opts.ProviderName, opts.Model),
 		)
-		if r.mcpCaller != nil {
-			tools = NewCompositeTools(coreTools, r.mcpCaller, r.mcpDefs)
+		if mcpCaller != nil {
+			tools = NewCompositeTools(coreTools, mcpCaller, mcpDefs)
 		} else {
 			tools = coreTools
 		}
