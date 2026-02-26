@@ -1616,6 +1616,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.progress.activeSessions = msg.Sessions
 		m.progress.runtimeSnapshots = msg.RuntimeSessions
 		m.progress.feedEntries = msg.FeedEntries
+		// Keep m.jobs in sync so the Jobs panel (which reads m.jobs via
+		// displayJobs) reflects the latest polled state.
+		m.jobs = msg.Jobs
 		return m, scheduleProgressPoll()
 	}
 
