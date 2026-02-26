@@ -432,23 +432,24 @@ func (m *Model) newSession() {
 
 // displayJobs returns the filtered and sorted list of jobs for display in the left panel.
 // Rules:
-//   - Completed jobs updated more than 24 hours ago are hidden.
+//   - Completed, failed, and cancelled jobs updated more than 24 hours ago are hidden.
 //   - Sort order: Active first (by CreatedAt asc), then Paused (by CreatedAt asc),
-//     then Completed (by CreatedAt asc).
+//     then Completed/Failed/Cancelled (by CreatedAt asc).
 func (m Model) displayJobs() []*db.Job {
 	now := time.Now()
 	cutoff := now.Add(-24 * time.Hour)
 
 	var active, paused, done []*db.Job
 	for _, j := range m.jobs {
-		if j.Status == db.JobStatusCompleted {
+		switch j.Status {
+		case db.JobStatusCompleted, db.JobStatusFailed, db.JobStatusCancelled:
 			if !j.UpdatedAt.IsZero() && j.UpdatedAt.Before(cutoff) {
-				continue // hide stale completed jobs
+				continue // hide stale terminal-state jobs
 			}
 			done = append(done, j)
-		} else if j.Status == db.JobStatusPaused {
+		case db.JobStatusPaused:
 			paused = append(paused, j)
-		} else {
+		default:
 			active = append(active, j)
 		}
 	}

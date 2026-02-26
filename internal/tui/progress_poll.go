@@ -21,9 +21,8 @@ func progressPollCmd(store db.Store, rt *runtime.Runtime) tea.Cmd {
 		ctx, cancel := context.WithTimeout(context.Background(), 400*time.Millisecond)
 		defer cancel()
 
-		// Query active jobs.
-		activeStatus := db.JobStatusActive
-		jobs, err := store.ListJobs(ctx, db.JobFilter{Status: &activeStatus})
+		// Query all jobs (display layer filters by status).
+		jobs, err := store.ListJobs(ctx, db.JobFilter{})
 		if err != nil {
 			jobs = nil // graceful degradation
 		}

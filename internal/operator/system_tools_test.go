@@ -616,6 +616,141 @@ func TestSystemToolDefinitions(t *testing.T) {
 	}
 }
 
+// TestAssignTask_PromotesJobToActive is a regression test for the bug where
+// jobs were not appearing in the TUI Jobs panel because assignTask never
+// promoted the job's status from "pending" to "active".
+//
+// Regression: if store.UpdateJobStatus is removed or called with the wrong
+// status, this test will fail.
+func TestAssignTask_PromotesJobToActive(t *testing.T) {
+	st, store, _, _, _ := newTestSystemTools(t)
+	ctx := context.Background()
+
+	// Seed a team so assign_task can look it up.
+	seedTeam(t, ctx, store, "backend", "Backend Team", "lead-agent")
+
+	// Create a job — it starts as "pending".
+	jobResult, err := st.Execute(ctx, "create_job", json.RawMessage(`{
+		"title": "Regression test job",
+		"description": "Verifies job is promoted to active on task assignment"
+	}`))
+	assertNoError(t, err)
+
+	var jobRes map[string]string
+	if err := json.Unmarshal([]byte(jobResult), &jobRes); err != nil {
+		t.Fatalf("parsing job result: %v", err)
+	}
+	jobID := jobRes["job_id"]
+
+	// Confirm the job starts as pending.
+	job, err := store.GetJob(ctx, jobID)
+	assertNoError(t, err)
+	assertEqual(t, string(db.JobStatusPending), string(job.Status))
+
+	// Create a task on the job.
+	taskResult, err := st.Execute(ctx, "create_task", json.RawMessage(`{
+		"job_id": "`+jobID+`",
+		"title": "Do the work"
+	}`))
+	assertNoError(t, err)
+
+	var taskRes map[string]string
+	if err := json.Unmarshal([]byte(taskResult), &taskRes); err != nil {
+		t.Fatalf("parsing task result: %v", err)
+	}
+	taskID := taskRes["task_id"]
+
+	// Assign the task — this is the operation that must promote the job.
+	_, err = st.Execute(ctx, "assign_task", json.RawMessage(`{
+		"task_id": "`+taskID+`",
+		"team_id": "backend"
+	}`))
+	assertNoError(t, err)
+
+	// The job must now be "active" so it appears in the TUI Jobs panel.
+	job, err = store.GetJob(ctx, jobID)
+	assertNoError(t, err)
+	if job.Status != db.JobStatusActive {
+		t.Errorf("job status = %q after assign_task, want %q (regression: job would not appear in TUI Jobs panel)",
+			job.Status, db.JobStatusActive)
+	}
+}
+
+// failingUpdateJobStatusStore wraps a real store and overrides UpdateJobStatus
+// to return a configurable error. All other methods delegate to the real store.
+type failingUpdateJobStatusStore struct {
+	db.Store
+	updateJobStatusErr error
+}
+
+func (f *failingUpdateJobStatusStore) UpdateJobStatus(_ context.Context, _ string, _ db.JobStatus) error {
+	return f.updateJobStatusErr
+}
+
+// TestAssignTask_UpdateJobStatusFailureIsNonFatal verifies that when
+// UpdateJobStatus fails, assignTask still returns success and the task is
+// still assigned. This makes the non-fatal intent explicit and prevents a
+// future change from accidentally making the error fatal.
+func TestAssignTask_UpdateJobStatusFailureIsNonFatal(t *testing.T) {
+	st, store, spawner, _, _ := newTestSystemTools(t)
+	ctx := context.Background()
+
+	// Seed a team.
+	seedTeam(t, ctx, store, "backend", "Backend Team", "lead-agent")
+
+	// Create a job and task via the real store.
+	jobResult, err := st.Execute(ctx, "create_job", json.RawMessage(`{
+		"title": "Test job",
+		"description": "A test job"
+	}`))
+	assertNoError(t, err)
+
+	var jobRes map[string]string
+	if err := json.Unmarshal([]byte(jobResult), &jobRes); err != nil {
+		t.Fatalf("parsing job result: %v", err)
+	}
+	jobID := jobRes["job_id"]
+
+	taskResult, err := st.Execute(ctx, "create_task", json.RawMessage(`{
+		"job_id": "`+jobID+`",
+		"title": "Build API"
+	}`))
+	assertNoError(t, err)
+
+	var taskRes map[string]string
+	if err := json.Unmarshal([]byte(taskResult), &taskRes); err != nil {
+		t.Fatalf("parsing task result: %v", err)
+	}
+	taskID := taskRes["task_id"]
+
+	// Swap in a store wrapper that fails UpdateJobStatus.
+	st.store = &failingUpdateJobStatusStore{
+		Store:              store,
+		updateJobStatusErr: errors.New("simulated DB failure"),
+	}
+
+	// Assign the task — must succeed despite UpdateJobStatus failing.
+	result, err := st.Execute(ctx, "assign_task", json.RawMessage(`{
+		"task_id": "`+taskID+`",
+		"team_id": "backend"
+	}`))
+	assertNoError(t, err)
+	assertContains(t, result, "Backend Team")
+
+	// The task must still be assigned (in_progress) in the real store.
+	task, err := store.GetTask(ctx, taskID)
+	assertNoError(t, err)
+	assertEqual(t, string(db.TaskStatusInProgress), string(task.Status))
+	assertEqual(t, "backend", task.TeamID)
+
+	// The spawner must still have been called.
+	calls := spawner.getCalls()
+	if len(calls) != 1 {
+		t.Fatalf("want 1 spawn call, got %d", len(calls))
+	}
+	assertEqual(t, taskID, calls[0].TaskID)
+}
+
 func TestUUIDv4_Uniqueness(t *testing.T) {
 	seen := make(map[string]bool)
 	for i := 0; i < 1000; i++ {

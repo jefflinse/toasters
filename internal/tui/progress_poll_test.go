@@ -378,7 +378,59 @@ func TestProgressPollCmd_EmptyStore(t *testing.T) {
 	}
 }
 
-func TestProgressPollCmd_ListJobsPassesActiveFilter(t *testing.T) {
+// TestProgressPollCmd_ReturnsPendingJobs is a regression test for the bug
+// where jobs were not appearing in the TUI Jobs panel because progressPollCmd
+// filtered ListJobs to only "active" status, hiding jobs that were still
+// "pending".
+//
+// This test uses a real db.Store backed by a temp SQLite DB so that it catches
+// regressions even if the filter is applied inside the store layer rather than
+// at the call site. A mock store that ignores the filter would pass even if the
+// active-only filter were re-introduced.
+func TestProgressPollCmd_ReturnsPendingJobs(t *testing.T) {
+	t.Parallel()
+
+	// Open a real SQLite store in a temp directory.
+	store, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("opening test store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	ctx := context.Background()
+
+	// Insert a job with status = "pending" directly into the store.
+	pendingJob := &db.Job{
+		ID:     "job-pending",
+		Title:  "Pending Job",
+		Status: db.JobStatusPending,
+	}
+	if err := store.CreateJob(ctx, pendingJob); err != nil {
+		t.Fatalf("creating pending job: %v", err)
+	}
+
+	// Call progressPollCmd with the real store.
+	cmd := progressPollCmd(store, nil)
+	raw := cmd()
+	msg, ok := raw.(progressPollMsg)
+	if !ok {
+		t.Fatalf("cmd() returned %T, want progressPollMsg", raw)
+	}
+
+	// The pending job must appear in the result.
+	if len(msg.Jobs) != 1 {
+		t.Fatalf("Jobs len = %d, want 1 (pending job must be included)", len(msg.Jobs))
+	}
+	if msg.Jobs[0].ID != pendingJob.ID {
+		t.Errorf("Jobs[0].ID = %q, want %q", msg.Jobs[0].ID, pendingJob.ID)
+	}
+	if msg.Jobs[0].Status != db.JobStatusPending {
+		t.Errorf("Jobs[0].Status = %q, want %q (regression: pending jobs must not be filtered out)",
+			msg.Jobs[0].Status, db.JobStatusPending)
+	}
+}
+
+func TestProgressPollCmd_ListJobsPassesNoStatusFilter(t *testing.T) {
 	t.Parallel()
 
 	var capturedFilter db.JobFilter
@@ -392,11 +444,8 @@ func TestProgressPollCmd_ListJobsPassesActiveFilter(t *testing.T) {
 	cmd := progressPollCmd(store, nil)
 	cmd()
 
-	if capturedFilter.Status == nil {
-		t.Fatal("ListJobs called without a Status filter")
-	}
-	if *capturedFilter.Status != db.JobStatusActive {
-		t.Errorf("ListJobs filter Status = %q, want %q", *capturedFilter.Status, db.JobStatusActive)
+	if capturedFilter.Status != nil {
+		t.Errorf("ListJobs called with Status filter %q, want no filter (nil)", *capturedFilter.Status)
 	}
 }
 

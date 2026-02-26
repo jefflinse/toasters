@@ -308,6 +308,15 @@ func (st *SystemTools) assignTask(ctx context.Context, args json.RawMessage) (st
 		return "", fmt.Errorf("spawning team lead: %w", err)
 	}
 
+	// After SpawnTeamLead succeeds, promote the job to active (only if still pending).
+	if job.Status == db.JobStatusPending {
+		if err := st.store.UpdateJobStatus(ctx, task.JobID, db.JobStatusActive); err != nil {
+			slog.Warn("failed to mark job active", "job_id", task.JobID, "error", err)
+			// non-fatal: the task is already assigned and the team lead is already spawned.
+			// The job will not appear in the TUI Jobs panel until the next status transition.
+		}
+	}
+
 	// 7. Send EventTaskStarted to the event channel.
 	trySendEvent(ctx, st.eventCh, Event{
 		Type: EventTaskStarted,
