@@ -254,6 +254,14 @@ var (
 				Foreground(lipgloss.Color("196")).
 				Bold(true)
 
+	// Modal style aliases — shared across teams, skills, and agents modals.
+	ModalStyle         = TeamsModalStyle
+	ModalPanelStyle    = TeamsPanelStyle
+	ModalFocusedPanel  = TeamsFocusedPanel
+	ModalSelectedStyle = TeamsSelectedStyle
+	ModalReadOnlyStyle = TeamsReadOnlyStyle
+	ModalWarningStyle  = TeamsWarningStyle
+
 	// Toast notification styles.
 	ToastBaseStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("255")).
@@ -296,4 +304,13 @@ var (
 	dbTaskFailedStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))  // red
 	dbTaskBlockedStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("11")) // yellow
 	dbTaskCancelledStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+
+	// Activity feed entry styles.
+	FeedSystemEventStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Italic(true)
+	FeedConsultationTraceStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Italic(true)
+	FeedTaskStartedStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("14")) // cyan
+	FeedTaskCompletedStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("10")) // green
+	FeedTaskFailedStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Bold(true)
+	FeedBlockerReportedStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("11")).Bold(true) // yellow/bold
+	FeedJobCompleteStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("10")).Bold(true) // green/bold
 )

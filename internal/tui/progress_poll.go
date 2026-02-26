@@ -56,12 +56,22 @@ func progressPollCmd(store db.Store, rt *runtime.Runtime) tea.Cmd {
 			runtimeSessions = rt.ActiveSessions()
 		}
 
+		// Fetch recent activity feed entries.
+		var feedEntries []*db.FeedEntry
+		if ctx.Err() == nil {
+			feedEntries, err = store.ListRecentFeedEntries(ctx, 50)
+			if err != nil {
+				feedEntries = nil // graceful degradation
+			}
+		}
+
 		return progressPollMsg{
 			Jobs:            jobs,
 			Tasks:           tasks,
 			Progress:        progress,
 			Sessions:        sessions,
 			RuntimeSessions: runtimeSessions,
+			FeedEntries:     feedEntries,
 		}
 	}
 }

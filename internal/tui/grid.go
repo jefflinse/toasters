@@ -389,13 +389,17 @@ func (m *Model) renderRuntimeGridCell(rs *runtimeSlot, cellW, cellH, innerW, inn
 		BorderForeground(borderColor).
 		Padding(0, 1)
 
-	// Header: ⚡ agentName · jobID · elapsed
+	// Header: ⚡ agentName [· teamName] · jobID · elapsed
 	elapsed := time.Since(rs.startTime).Round(time.Second)
 	statusMark := "⚡"
 	if rs.status != "active" {
 		statusMark = "✓"
 	}
-	header := fmt.Sprintf("%s %s · %s · %s", statusMark, rs.agentName, rs.jobID, elapsed)
+	agentLabel := rs.agentName
+	if rs.teamName != "" {
+		agentLabel += " · " + rs.teamName
+	}
+	header := fmt.Sprintf("%s %s · %s · %s", statusMark, agentLabel, rs.jobID, elapsed)
 	var headerLine string
 	if focused {
 		headerLine = rainbowText(truncateStr(header, innerW), m.spinnerFrame)

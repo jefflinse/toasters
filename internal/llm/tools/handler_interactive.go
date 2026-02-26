@@ -52,6 +52,7 @@ func handleAssignTeam(_ context.Context, te *ToolExecutor, call provider.ToolCal
 			Model:          te.DefaultModel,
 			SystemPrompt:   prompt,
 			JobID:          args.JobID,
+			TeamName:       team.Name,
 			InitialMessage: args.Task,
 			WorkDir:        te.WorkspaceDir,
 			MaxDepth:       1, // coordinators may spawn workers; workers may not spawn further

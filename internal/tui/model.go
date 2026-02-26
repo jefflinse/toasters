@@ -143,6 +143,7 @@ type progressState struct {
 	reports          map[string][]*db.ProgressReport
 	activeSessions   []*db.AgentSession
 	runtimeSnapshots []runtime.SessionSnapshot // live snapshots with real token counts
+	feedEntries      []*db.FeedEntry           // recent activity feed entries from SQLite
 }
 
 // chatState holds all state related to the chat conversation history and
@@ -204,6 +205,12 @@ type Model struct {
 	// Teams modal state.
 	teamsModal teamsModalState
 
+	// Skills modal state.
+	skillsModal skillsModalState
+
+	// Agents modal state.
+	agentsModal agentsModalState
+
 	// MCP modal state.
 	mcpModal mcpModalState
 
@@ -259,6 +266,7 @@ type Model struct {
 type runtimeSlot struct {
 	sessionID      string
 	agentName      string
+	teamName       string // team this agent belongs to (may be empty)
 	jobID          string
 	status         string // "active", "completed", "failed", "cancelled"
 	output         strings.Builder
@@ -411,6 +419,16 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Teams modal key handling — intercept all keys when modal is open.
 		if m.teamsModal.show {
 			return m.updateTeamsModal(msg)
+		}
+
+		// Skills modal key handling — intercept all keys when modal is open.
+		if m.skillsModal.show {
+			return m.updateSkillsModal(msg)
+		}
+
+		// Agents modal key handling — intercept all keys when modal is open.
+		if m.agentsModal.show {
+			return m.updateAgentsModal(msg)
 		}
 
 		// Blocker modal key handling — intercept all keys when modal is open.
@@ -871,6 +889,18 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						teamCmd = m.maybeAutoDetectCoordinator(m.teamsModal.teams[0])
 					}
 					return m, teamCmd
+				case "/skills":
+					m.input.Reset()
+					m.cmdPopup.show = false
+					m.skillsModal = skillsModalState{show: true}
+					m.reloadSkillsForModal()
+					return m, nil
+				case "/agents":
+					m.input.Reset()
+					m.cmdPopup.show = false
+					m.agentsModal = agentsModalState{show: true}
+					m.reloadAgentsForModal()
+					return m, nil
 				case "/mcp":
 					m.input.Reset()
 					m.cmdPopup.show = false
@@ -1264,6 +1294,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.runtimeSessions[msg.SessionID] = &runtimeSlot{
 			sessionID:      msg.SessionID,
 			agentName:      msg.AgentName,
+			teamName:       msg.TeamName,
 			jobID:          msg.JobID,
 			status:         "active",
 			startTime:      time.Now(),
@@ -1359,7 +1390,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.MouseClickMsg:
 		// Click-to-focus: route clicks to the appropriate panel.
 		// Don't steal clicks when any overlay is active.
-		if !m.teamsModal.show && !m.mcpModal.show && !m.blockerModal.show && !m.grid.showGrid &&
+		if !m.teamsModal.show && !m.skillsModal.show && !m.agentsModal.show &&
+			!m.mcpModal.show && !m.blockerModal.show && !m.grid.showGrid &&
 			!m.killModal.show && !m.promptModal.show && !m.outputModal.show && !m.loading {
 			showLeftPanel := m.width >= minWidthForLeftPanel && !m.leftPanelHidden
 			showSidebar := m.width >= minWidthForBar && !m.sidebarHidden
@@ -1503,16 +1535,59 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, toastCmds...)
 		return m, tea.Batch(cmds...)
 
+	case editorFinishedMsg:
+		// Editor closed — reload modal data. The fsnotify watcher will also
+		// trigger a DB reload, but we refresh the modal's local copy immediately
+		// so the user sees the change without waiting for the poll.
+		if msg.err != nil {
+			slog.Error("editor exited with error", "error", msg.err)
+		}
+		if m.skillsModal.show {
+			m.reloadSkillsForModal()
+		}
+		if m.agentsModal.show {
+			m.reloadAgentsForModal()
+		}
+		return m, nil
+
 	case DefinitionsReloadedMsg:
 		slog.Info("definitions reloaded from file watcher")
 		return m, nil
 
 	case OperatorTextMsg:
 		slog.Debug("operator text", "len", len(msg.Text))
+		// Append operator text as an assistant chat entry so it appears in the feed.
+		if msg.Text != "" {
+			byline := "operator"
+			if m.stats.ModelName != "" {
+				byline = "operator · " + m.stats.ModelName
+			}
+			m.appendEntry(ChatEntry{
+				Message:    provider.Message{Role: "assistant", Content: msg.Text},
+				Timestamp:  time.Now(),
+				ClaudeMeta: byline,
+			})
+			m.updateViewportContent()
+			if !m.scroll.userScrolled {
+				m.chatViewport.GotoBottom()
+			}
+		}
 		return m, nil
 
 	case OperatorEventMsg:
 		slog.Debug("operator event", "type", msg.Event.Type)
+		// Render visible operator events as styled system entries in the chat.
+		if line := formatOperatorEvent(msg.Event); line != "" {
+			m.appendEntry(ChatEntry{
+				Message:    provider.Message{Role: "assistant", Content: line},
+				Timestamp:  time.Now(),
+				ClaudeMeta: "feed-event",
+			})
+			m.updateViewportContent()
+			if !m.scroll.userScrolled {
+				m.chatViewport.GotoBottom()
+			}
+		}
 		return m, nil
 
 	case progressPollTickMsg:
@@ -1527,6 +1602,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.progress.reports = msg.Progress
 		m.progress.activeSessions = msg.Sessions
 		m.progress.runtimeSnapshots = msg.RuntimeSessions
+		m.progress.feedEntries = msg.FeedEntries
 		return m, scheduleProgressPoll()
 	}
 

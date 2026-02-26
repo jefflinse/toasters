@@ -65,15 +65,18 @@ internal/
   runtime/                  # In-process agent runtime (sessions, core tools, spawn)
     composite_tools.go      # CompositeTools wrapper combining CoreTools + MCP tools
   sse/                      # Shared SSE parsing (reader, Anthropic event types, OpenAI chunk types)
-  tui/                      # Bubble Tea TUI (model, views, grid, modals, streaming, MCP modal)
+  tui/                      # Bubble Tea TUI (model, views, grid, modals, streaming, activity feed, CRUD)
     progress_poll.go        # SQLite polling loop for real-time progress display
+    skills_modal.go         # Skills browse/CRUD modal (create, edit, delete skills)
+    agents_modal.go         # Agents browse/CRUD modal (create, edit, delete agents)
+    teams_modal.go          # Teams browse modal with auto-team promotion (Ctrl+P)
 ```
 
 ## Architecture
 
 - **Operator**: LLM that coordinates work. Receives user messages, decides which team to assign work to, and manages jobs. Can be backed by any configured provider (LM Studio, Anthropic, OpenAI). Runs as a code-driven event loop that handles routine events mechanically (task started/completed, progress updates) and only routes decision-requiring events to the LLM (user messages, failures, blockers, recommendations). Uses `consult_agent` to delegate to system agents (planner, scheduler, blocker-handler).
 - **System Team**: The operator's own team, defined in `~/.config/toasters/system/`. Includes the operator (lead), planner (creates jobs/tasks), scheduler (breaks plans into tasks with assignments), and blocker-handler (triages blockers). System agents have orchestration tools (`create_job`, `create_task`, `assign_task`) but NO filesystem tools. Fully hackable — users can modify any system agent.
-- **Teams**: Groups of agents defined in `~/.config/toasters/user/teams/`. Each team has a lead agent and worker agents. Team leads receive tasks from the operator, delegate to workers via `spawn_agent`, and report results via `complete_task`. Teams can also be auto-detected from `~/.claude/agents/` and `~/.config/opencode/agents/`.
+- **Teams**: Groups of agents defined in `~/.config/toasters/user/teams/`. Each team has a lead agent and worker agents. Team leads receive tasks from the operator, delegate to workers via `spawn_agent`, and report results via `complete_task`. Teams can also be auto-detected from `~/.claude/agents/` and `~/.config/Claude/agents/`. Auto-teams can be promoted to full teams via `Ctrl+P` in the teams modal.
 - **Composition Model**: Three-layer composition: Skills (reusable capabilities with prompts + tools) → Agents (personas with skills, provider/model config) → Teams (agents + culture + lead). At runtime, `internal/compose` assembles the full system prompt, tool set, and provider/model for any agent. Skills are additive, tools are unioned with denylist, provider/model cascades (agent → team → global default).
 - **Agent Runtime**: In-process agent sessions running as goroutines. Each session is a conversation loop: send messages to the LLM → receive response → execute tool calls → loop. Core tools include file I/O, shell, glob, grep, web fetch, subagent spawning, and progress reporting (`report_progress`, `update_task_status`, `report_blocker`, `request_review`, `query_job_context`, `log_artifact`). Sessions are tracked in SQLite and observable via the TUI. `spawn_agent` enforces a max depth of 1 (coordinators may spawn workers; workers may not spawn further agents) and propagates tool filtering via `filteredToolExecutor`.
 - **MCP Client**: `internal/mcp` package manages connections to external MCP servers (GitHub, Jira, Linear, etc.). Tools are namespaced as `{server_name}__{tool_name}` and merged into both the operator and agent tool sets. Failed servers are skipped with a warning. Server connection status is tracked and exposed via `Servers()` accessor. MCP tool results are automatically slimmed (strips nulls, `*_url` fields, API URLs, `node_id`, opaque blobs) and truncated (JSON-aware array shrinking with UTF-8 safe byte fallback, 16KB default) to prevent context window exhaustion.
@@ -85,6 +88,8 @@ internal/
 - **File-to-DB Loader**: `internal/loader` walks `system/` and `user/` directories on startup, parses all `.md` files with `agentfmt`, resolves agent references (team-local → shared → system), and rebuilds definition tables in SQLite via `RebuildDefinitions`. An fsnotify watcher (200ms debounce) triggers re-loads on file changes.
 - **Jobs**: Persisted in SQLite only. Each job has a description, workspace directory, and associated tasks. Toasters is workspace-centric — coordinators start in the job workspace directory; there is no concept of a "current working directory."
 - **Agents**: Defined as `.md` files with YAML frontmatter (superset format supporting Toasters, Claude Code, and OpenCode fields). Key fields: name, description, mode, skills, temperature, max_turns, provider, model, tools, disallowed_tools, permission_mode, permissions, mcp_servers, color, hooks, memory, hidden, disabled. Discovered from directories and hot-reloaded via fsnotify (debounced at 200ms). Parsed via `internal/agentfmt` with auto-detection of source format.
+- **Activity Feed**: Feed entries (task assignments, completions, progress updates, blockers) are persisted in SQLite and rendered in the chat viewport. The TUI polls for new entries and displays them as styled messages.
+- **CRUD Operations**: Skills, agents, and teams can be created, edited, and deleted via TUI modals (`/skills`, `/agents`, `/teams`). Changes write `.md` files to disk, which triggers fsnotify → loader → DB rebuild, keeping the UI in sync.
 
 ## Tech Stack
 
@@ -137,7 +142,7 @@ Key settings:
 - **Shift+Enter**: Newline in input
 - **Ctrl+G**: Toggle grid screen (2×2 agent slot view)
 - **Ctrl+C**: Quit
-- **Slash commands**: `/help`, `/new`, `/exit`, `/quit`, `/claude <prompt>`, `/kill`, `/mcp`, `/teams`, `/anthropic`, `/job`
+- **Slash commands**: `/help`, `/new`, `/exit`, `/quit`, `/claude <prompt>`, `/kill`, `/mcp`, `/teams`, `/skills`, `/agents`, `/anthropic`, `/job`
 - **Prompt mode**: Numbered options when operator asks user a question
 
 ## Testing

@@ -142,7 +142,11 @@ func (m Model) renderLeftPanel(panelWidth, panelHeight int) string {
 				if dbTasks := m.progress.tasks[j.ID]; len(dbTasks) > 0 {
 					for _, task := range dbTasks {
 						indicator, style := taskStatusIndicator(task.Status)
-						taskLine := "  " + indicator + " " + truncateStr(task.Title, contentWidth-5)
+						title := task.Title
+						if task.TeamID != "" {
+							title += " (" + task.TeamID + ")"
+						}
+						taskLine := "  " + indicator + " " + truncateStr(title, contentWidth-5)
 						topLines = append(topLines, style.Render(taskLine))
 					}
 				}
@@ -200,14 +204,14 @@ func (m Model) renderLeftPanel(panelWidth, panelHeight int) string {
 
 		// Task summary from SQLite.
 		if dbTasks := m.progress.tasks[selectedJob.ID]; len(dbTasks) > 0 {
-			var pending []string
+			var pending []*db.Task
 			doneCount := 0
 			for _, task := range dbTasks {
 				switch task.Status {
 				case db.TaskStatusCompleted:
 					doneCount++
 				case db.TaskStatusPending, db.TaskStatusInProgress, db.TaskStatusBlocked:
-					pending = append(pending, task.Title)
+					pending = append(pending, task)
 				}
 			}
 			total := len(pending) + doneCount
@@ -219,7 +223,11 @@ func (m Model) renderLeftPanel(panelWidth, panelHeight int) string {
 					if shown >= 3 {
 						break
 					}
-					middleLines = append(middleLines, DimStyle.Render("· "+truncateStr(task, contentWidth-2)))
+					title := task.Title
+					if task.TeamID != "" {
+						title += " (" + task.TeamID + ")"
+					}
+					middleLines = append(middleLines, DimStyle.Render("· "+truncateStr(title, contentWidth-2)))
 					shown++
 				}
 			}
@@ -243,12 +251,19 @@ func (m Model) renderLeftPanel(panelWidth, panelHeight int) string {
 			}
 			prefix := lipgloss.NewStyle().Foreground(teamColor).Render("◆") + " "
 			workerCount := fmt.Sprintf("(%d workers)", len(t.Workers))
+			// Append badge for system or auto teams.
+			badge := ""
+			if isSystemTeam(t) {
+				badge = " ⚙"
+			} else if isAutoTeam(t) {
+				badge = " ↻"
+			}
 			name := truncateStr(t.Name, contentWidth-2)
 			if m.focused == focusTeams && i == m.selectedTeam {
-				line := JobSelectedStyle.Render(prefix + name + " " + workerCount)
+				line := JobSelectedStyle.Render(prefix + name + badge + " " + workerCount)
 				bottomLines = append(bottomLines, line)
 			} else {
-				line := SidebarValueStyle.Bold(true).Render(prefix+name) + " " + DimStyle.Render(workerCount)
+				line := SidebarValueStyle.Bold(true).Render(prefix+name+badge) + " " + DimStyle.Render(workerCount)
 				bottomLines = append(bottomLines, line)
 			}
 		}

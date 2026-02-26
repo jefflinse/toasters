@@ -120,7 +120,7 @@ func newOperatorTestStore(t *testing.T) db.Store {
 	if err != nil {
 		t.Fatalf("opening test store: %v", err)
 	}
-	t.Cleanup(func() { store.Close() })
+	t.Cleanup(func() { _ = store.Close() })
 	return store
 }
 

@@ -103,6 +103,7 @@ type progressPollMsg struct {
 	Progress        map[string][]*db.ProgressReport
 	Sessions        []*db.AgentSession
 	RuntimeSessions []runtime.SessionSnapshot // live snapshots with real token counts
+	FeedEntries     []*db.FeedEntry           // recent activity feed entries
 }
 
 // progressPollTickMsg is an internal tick that triggers the next poll.
@@ -136,6 +137,7 @@ type AgentOutputMsg struct{}
 type RuntimeSessionStartedMsg struct {
 	SessionID      string
 	AgentName      string
+	TeamName       string // team this agent belongs to (may be empty)
 	JobID          string
 	SystemPrompt   string
 	InitialMessage string

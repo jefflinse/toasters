@@ -3,6 +3,7 @@ package tui
 
 import (
 	"fmt"
+	"log/slog"
 	"slices"
 	"strings"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"github.com/jefflinse/toasters/internal/agents"
 	"github.com/jefflinse/toasters/internal/db"
 	"github.com/jefflinse/toasters/internal/gateway"
+	"github.com/jefflinse/toasters/internal/operator"
 	"github.com/jefflinse/toasters/internal/provider"
 )
 
@@ -373,7 +375,7 @@ func (m *Model) appendEntry(e ChatEntry) {
 //     with ToolCalls set ARE real tool_use records and must be kept.
 func isDisplayOnly(e ChatEntry) bool {
 	switch e.ClaudeMeta {
-	case "ask-user-prompt", "dispatch-confirm", "kill-confirm", "escalate-prompt":
+	case "ask-user-prompt", "dispatch-confirm", "kill-confirm", "escalate-prompt", "feed-event":
 		return true
 	case "tool-call-indicator":
 		// Keep entries that carry actual tool calls; drop text-only indicators.
@@ -512,4 +514,73 @@ func (m *Model) runtimeSessionForGridCell(cellIdx int) *runtimeSlot {
 		// Active gateway slot or no more runtime sessions — skip.
 	}
 	return nil
+}
+
+// formatOperatorEvent returns a styled single-line string for an operator event,
+// or empty string if the event type should not be displayed in the feed.
+func formatOperatorEvent(ev operator.Event) string {
+	switch ev.Type {
+	case operator.EventTaskStarted:
+		if p, ok := ev.Payload.(operator.TaskStartedPayload); ok {
+			return FeedTaskStartedStyle.Render(fmt.Sprintf("⚡ %s started task: %q", p.TeamID, p.Title))
+		}
+		return FeedTaskStartedStyle.Render("⚡ task started")
+
+	case operator.EventTaskCompleted:
+		if p, ok := ev.Payload.(operator.TaskCompletedPayload); ok {
+			return FeedTaskCompletedStyle.Render(fmt.Sprintf("✓ %s completed task", p.TeamID))
+		}
+		return FeedTaskCompletedStyle.Render("✓ task completed")
+
+	case operator.EventTaskFailed:
+		if p, ok := ev.Payload.(operator.TaskFailedPayload); ok {
+			return FeedTaskFailedStyle.Render(fmt.Sprintf("✗ %s failed task: %s", p.TeamID, p.Error))
+		}
+		return FeedTaskFailedStyle.Render("✗ task failed")
+
+	case operator.EventBlockerReported:
+		if p, ok := ev.Payload.(operator.BlockerReportedPayload); ok {
+			return FeedBlockerReportedStyle.Render(fmt.Sprintf("🚫 %s reported blocker: %s", p.TeamID, p.Description))
+		}
+		return FeedBlockerReportedStyle.Render("🚫 blocker reported")
+
+	case operator.EventJobComplete:
+		if p, ok := ev.Payload.(operator.JobCompletePayload); ok {
+			return FeedJobCompleteStyle.Render(fmt.Sprintf("✅ Job %q complete", p.Title))
+		}
+		return FeedJobCompleteStyle.Render("✅ job complete")
+
+	case operator.EventProgressUpdate:
+		// Progress updates are too noisy for the main feed — skip.
+		return ""
+
+	default:
+		slog.Debug("unhandled operator event type in feed", "type", ev.Type)
+		return ""
+	}
+}
+
+// formatFeedEntry returns a styled single-line string for a db.FeedEntry.
+func formatFeedEntry(entry *db.FeedEntry) string {
+	switch entry.EntryType {
+	case db.FeedEntrySystemEvent:
+		return FeedSystemEventStyle.Render("  ⚙ " + entry.Content)
+	case db.FeedEntryConsultationTrace:
+		return FeedConsultationTraceStyle.Render("    ↳ " + entry.Content)
+	case db.FeedEntryTaskStarted:
+		return FeedTaskStartedStyle.Render("⚡ " + entry.Content)
+	case db.FeedEntryTaskCompleted:
+		return FeedTaskCompletedStyle.Render("✓ " + entry.Content)
+	case db.FeedEntryTaskFailed:
+		return FeedTaskFailedStyle.Render("✗ " + entry.Content)
+	case db.FeedEntryBlockerReported:
+		return FeedBlockerReportedStyle.Render("🚫 " + entry.Content)
+	case db.FeedEntryJobComplete:
+		return FeedJobCompleteStyle.Render("✅ " + entry.Content)
+	case db.FeedEntryUserMessage, db.FeedEntryOperatorMessage:
+		// These are already rendered as chat entries; skip to avoid duplication.
+		return ""
+	default:
+		return DimStyle.Render(entry.Content)
+	}
 }

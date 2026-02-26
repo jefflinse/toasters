@@ -18,6 +18,7 @@ const subscriberBufSize = 64
 type Session struct {
 	id           string
 	agentID      string
+	teamName     string // team this agent belongs to (may be empty)
 	jobID        string
 	prov         provider.Provider
 	model        string
@@ -58,6 +59,7 @@ func newSession(id string, p provider.Provider, opts SpawnOpts, toolExec ToolExe
 	s := &Session{
 		id:           id,
 		agentID:      opts.AgentID,
+		teamName:     opts.TeamName,
 		jobID:        opts.JobID,
 		prov:         p,
 		model:        opts.Model,
@@ -274,6 +276,7 @@ func (s *Session) Snapshot() SessionSnapshot {
 	return SessionSnapshot{
 		ID:        s.id,
 		AgentID:   s.agentID,
+		TeamName:  s.teamName,
 		JobID:     s.jobID,
 		Status:    status,
 		Model:     s.model,

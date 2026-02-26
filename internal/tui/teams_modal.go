@@ -1,19 +1,24 @@
-// Teams modal: team management UI including rendering, key handling, and coordinator auto-detection.
+// Teams modal: team management UI including rendering, key handling, coordinator auto-detection, and auto-team promotion.
 package tui
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"gopkg.in/yaml.v3"
 
+	"github.com/jefflinse/toasters/internal/agentfmt"
 	"github.com/jefflinse/toasters/internal/agents"
+	"github.com/jefflinse/toasters/internal/config"
 	"github.com/jefflinse/toasters/internal/provider"
 )
 
@@ -186,15 +191,48 @@ func (m *Model) updateTeamsModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 
+	case "ctrl+p":
+		if m.teamsModal.focus == 0 && len(m.teamsModal.teams) > 0 && m.teamsModal.teamIdx < len(m.teamsModal.teams) {
+			team := m.teamsModal.teams[m.teamsModal.teamIdx]
+			if isAutoTeam(team) && !isSystemTeam(team) {
+				if err := promoteAutoTeam(team); err != nil {
+					slog.Error("failed to promote auto-team", "team", team.Name, "error", err)
+					modalCmds = append(modalCmds, m.addToast("⚠ Promote failed: "+err.Error(), toastWarning))
+				} else {
+					modalCmds = append(modalCmds, m.addToast("✓ Promoted '"+team.Name+"' to managed team", toastSuccess))
+					m.reloadTeamsForModal()
+					// Select the newly promoted team.
+					for i, t := range m.teamsModal.teams {
+						if t.Name == team.Name && !isAutoTeam(t) {
+							m.teamsModal.teamIdx = i
+							break
+						}
+					}
+				}
+			}
+		}
+
 	}
 	return m, tea.Batch(modalCmds...)
+}
+
+var (
+	cachedHomeDir     string
+	cachedHomeDirOnce sync.Once
+)
+
+func getCachedHomeDir() string {
+	cachedHomeDirOnce.Do(func() {
+		cachedHomeDir, _ = os.UserHomeDir()
+	})
+	return cachedHomeDir
 }
 
 // isReadOnlyTeam returns true if the team's directory is one of the well-known
 // auto-detected read-only directories (~/.opencode/agents, ~/.claude/agents).
 func isReadOnlyTeam(team agents.Team) bool {
-	home, err := os.UserHomeDir()
-	if err != nil {
+	home := getCachedHomeDir()
+	if home == "" {
 		return false
 	}
 	readOnlyDirs := []string{
@@ -207,6 +245,184 @@ func isReadOnlyTeam(team agents.Team) bool {
 		}
 	}
 	return false
+}
+
+// isSystemTeam returns true if the team's directory is under ~/.config/toasters/system/.
+func isSystemTeam(team agents.Team) bool {
+	home := getCachedHomeDir()
+	if home == "" {
+		return false
+	}
+	systemDir := filepath.Join(home, ".config", "toasters", "system")
+	return strings.HasPrefix(team.Dir, systemDir)
+}
+
+// isAutoTeam returns true if the team is auto-detected: either from a well-known
+// read-only directory or from a directory containing an .auto-team marker.
+func isAutoTeam(team agents.Team) bool {
+	if isReadOnlyTeam(team) {
+		return true
+	}
+	_, err := os.Stat(filepath.Join(team.Dir, ".auto-team"))
+	return err == nil
+}
+
+// promoteAutoTeam copies an auto-detected team's agent files into a new managed
+// team directory under ~/.config/toasters/user/teams/{team-name}/. Each agent
+// file is parsed with agentfmt (handling Claude Code and OpenCode format
+// detection) and written in toasters format. A team.md is generated with the
+// team definition. The original auto-team is not modified.
+func promoteAutoTeam(team agents.Team) error {
+	configDir, err := config.Dir()
+	if err != nil {
+		return fmt.Errorf("getting config directory: %w", err)
+	}
+	userTeamsDir := filepath.Join(configDir, "user", "teams")
+
+	targetDir := filepath.Join(userTeamsDir, team.Name)
+	targetAgentsDir := filepath.Join(targetDir, "agents")
+
+	// Fail if the target already exists to avoid overwriting.
+	if _, err := os.Stat(targetDir); err == nil {
+		return fmt.Errorf("team directory %q already exists", targetDir)
+	}
+
+	// Determine where agent files live for this auto-team.
+	agentsSourceDir := autoTeamAgentsDir(team)
+
+	// Discover agent .md files in the source directory.
+	matches, err := filepath.Glob(filepath.Join(agentsSourceDir, "*.md"))
+	if err != nil {
+		return fmt.Errorf("globbing agent files in %s: %w", agentsSourceDir, err)
+	}
+	if len(matches) == 0 {
+		return fmt.Errorf("no agent files found in %s", agentsSourceDir)
+	}
+
+	// Parse all agent files before creating any directories — fail fast on errors.
+	type parsedAgent struct {
+		stem string
+		def  *agentfmt.AgentDef
+	}
+	var parsed []parsedAgent
+	for _, path := range matches {
+		defType, def, err := agentfmt.ParseFile(path)
+		if err != nil {
+			slog.Warn("skipping unparseable agent during promotion", "path", path, "error", err)
+			continue
+		}
+		if defType != agentfmt.DefAgent {
+			slog.Warn("skipping non-agent file during promotion", "path", path, "type", defType)
+			continue
+		}
+		agentDef, ok := def.(*agentfmt.AgentDef)
+		if !ok {
+			slog.Warn("unexpected type for agent definition", "path", path)
+			continue
+		}
+		stem := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+		parsed = append(parsed, parsedAgent{stem: stem, def: agentDef})
+	}
+	if len(parsed) == 0 {
+		return fmt.Errorf("no valid agent definitions found in %s", agentsSourceDir)
+	}
+
+	// Create the target directory structure.
+	if err := os.MkdirAll(targetAgentsDir, 0o755); err != nil {
+		return fmt.Errorf("creating target directory %s: %w", targetAgentsDir, err)
+	}
+
+	// Write each agent file in toasters format.
+	var agentNames []string
+	for _, pa := range parsed {
+		agentPath := filepath.Join(targetAgentsDir, pa.stem+".md")
+		if err := writeAgentFile(agentPath, pa.def); err != nil {
+			// Clean up on failure.
+			_ = os.RemoveAll(targetDir)
+			return fmt.Errorf("writing agent file %s: %w", agentPath, err)
+		}
+		agentNames = append(agentNames, pa.def.Name)
+	}
+
+	// Determine the lead agent.
+	lead := ""
+	if team.Coordinator != nil {
+		lead = team.Coordinator.Name
+	}
+
+	// Determine the source label for the description.
+	source := filepath.Base(team.Dir)
+	if isReadOnlyTeam(team) {
+		// For read-only teams, use the parent directory name for clarity.
+		source = filepath.Base(filepath.Dir(team.Dir)) + "/" + filepath.Base(team.Dir)
+	}
+
+	// Generate team.md.
+	teamDef := &agentfmt.TeamDef{
+		Name:        team.Name,
+		Description: fmt.Sprintf("Promoted from %s", source),
+		Lead:        lead,
+		Agents:      agentNames,
+	}
+	teamMDPath := filepath.Join(targetDir, "team.md")
+	if err := writeTeamFile(teamMDPath, teamDef); err != nil {
+		_ = os.RemoveAll(targetDir)
+		return fmt.Errorf("writing team.md: %w", err)
+	}
+
+	slog.Info("promoted auto-team to managed team", "team", team.Name, "target", targetDir, "agents", len(parsed))
+	return nil
+}
+
+// autoTeamAgentsDir returns the directory containing agent .md files for an
+// auto-detected team. For read-only teams (from AutoDetectTeams), team.Dir IS
+// the agents directory. For auto-teams discovered via DiscoverTeams (with
+// .auto-team marker), agents are in team.Dir/agents/.
+func autoTeamAgentsDir(team agents.Team) string {
+	if isReadOnlyTeam(team) {
+		return team.Dir
+	}
+	return filepath.Join(team.Dir, "agents")
+}
+
+// writeAgentFile writes an AgentDef as a toasters-format .md file with YAML
+// frontmatter. Only non-zero fields are included in the frontmatter.
+func writeAgentFile(path string, def *agentfmt.AgentDef) error {
+	fm, err := yaml.Marshal(def)
+	if err != nil {
+		return fmt.Errorf("marshaling agent frontmatter: %w", err)
+	}
+
+	var sb strings.Builder
+	sb.WriteString("---\n")
+	sb.Write(bytes.TrimRight(fm, "\n"))
+	sb.WriteString("\n---\n")
+	if def.Body != "" {
+		sb.WriteString(def.Body)
+		sb.WriteString("\n")
+	}
+
+	return os.WriteFile(path, []byte(sb.String()), 0o644)
+}
+
+// writeTeamFile writes a TeamDef as a toasters-format .md file with YAML
+// frontmatter and an optional body (culture document).
+func writeTeamFile(path string, def *agentfmt.TeamDef) error {
+	fm, err := yaml.Marshal(def)
+	if err != nil {
+		return fmt.Errorf("marshaling team frontmatter: %w", err)
+	}
+
+	var sb strings.Builder
+	sb.WriteString("---\n")
+	sb.Write(bytes.TrimRight(fm, "\n"))
+	sb.WriteString("\n---\n")
+	if def.Body != "" {
+		sb.WriteString(def.Body)
+		sb.WriteString("\n")
+	}
+
+	return os.WriteFile(path, []byte(sb.String()), 0o644)
 }
 
 // reloadTeamsForModal refreshes m.teamsModal.teams from disk.
@@ -336,6 +552,12 @@ func (m *Model) renderTeamsModal() string {
 		}
 		name := truncateStr(t.Name, leftInnerW-4)
 		line := fmt.Sprintf(" %s %s", icon, name)
+		// Append badges for system, auto, and read-only teams.
+		if isSystemTeam(t) {
+			line += " ⚙"
+		} else if isAutoTeam(t) {
+			line += " ↻"
+		}
 		if isReadOnlyTeam(t) {
 			line += " 🔒"
 		}
@@ -379,9 +601,25 @@ func (m *Model) renderTeamsModal() string {
 	} else if m.teamsModal.teamIdx < len(teams) {
 		team := teams[m.teamsModal.teamIdx]
 
-		// Header.
-		rightLines = append(rightLines, HeaderStyle.Render(truncateStr(team.Name, rightInnerW)))
+		// Header with badges.
+		headerText := truncateStr(team.Name, rightInnerW-12)
+		if isSystemTeam(team) {
+			headerText += " " + DimStyle.Render("⚙ system")
+		} else if isAutoTeam(team) {
+			headerText += " " + DimStyle.Render("↻ auto")
+		}
+		rightLines = append(rightLines, HeaderStyle.Render(headerText))
 		rightLines = append(rightLines, DimStyle.Render(strings.Repeat("─", rightInnerW)))
+
+		// Description line (if available).
+		if team.Description != "" {
+			rightLines = append(rightLines, DimStyle.Render(truncateStr(team.Description, rightInnerW)))
+		}
+
+		// Promote hint for auto-teams.
+		if isAutoTeam(team) && !isSystemTeam(team) {
+			rightLines = append(rightLines, DimStyle.Render("⇧ Ctrl+P to promote to managed team"))
+		}
 
 		// Coordinator line.
 		coordName := "(none)"
@@ -393,6 +631,40 @@ func (m *Model) renderTeamsModal() string {
 			coordLine += DimStyle.Render(" [detecting...]")
 		}
 		rightLines = append(rightLines, coordLine)
+
+		// Composition info from team.md (skills, provider/model, culture preview).
+		teamMDPath := filepath.Join(team.Dir, "team.md")
+		if teamDef, err := agentfmt.ParseTeam(teamMDPath); err == nil {
+			if len(teamDef.Skills) > 0 {
+				rightLines = append(rightLines, DimStyle.Render("Skills: "+strings.Join(teamDef.Skills, ", ")))
+			}
+			if teamDef.Provider != "" || teamDef.Model != "" {
+				pmLine := ""
+				if teamDef.Provider != "" {
+					pmLine = teamDef.Provider
+				}
+				if teamDef.Model != "" {
+					if pmLine != "" {
+						pmLine += "/"
+					}
+					pmLine += teamDef.Model
+				}
+				rightLines = append(rightLines, DimStyle.Render("Provider: "+truncateStr(pmLine, rightInnerW-10)))
+			}
+			if teamDef.Body != "" {
+				rightLines = append(rightLines, DimStyle.Render("Culture:"))
+				cultureLines := strings.SplitN(teamDef.Body, "\n", 4)
+				for i, cl := range cultureLines {
+					if i >= 3 {
+						break
+					}
+					cl = strings.TrimSpace(cl)
+					if cl != "" {
+						rightLines = append(rightLines, DimStyle.Render("  "+truncateStr(cl, rightInnerW-2)))
+					}
+				}
+			}
+		}
 		rightLines = append(rightLines, "")
 
 		// Build ordered agent list for right panel: coordinator first, then workers.
@@ -405,13 +677,13 @@ func (m *Model) renderTeamsModal() string {
 		// Workers section — scroll a window around the selected agent so long
 		// lists don't get clipped by the panel height.
 		rightLines = append(rightLines, fmt.Sprintf("Workers (%d)", len(team.Workers)))
-		// How many lines are left for agents after header rows (name, divider,
-		// coordinator, blank, workers-header = 5 lines) and optional confirm (2).
+		// How many lines are left for agents after the header rows we've already
+		// rendered (rightLines so far) and optional confirm (2).
 		confirmExtra := 0
 		if m.teamsModal.confirmDelete {
 			confirmExtra = 2
 		}
-		agentAreaH := panelInnerH - 5 - confirmExtra
+		agentAreaH := panelInnerH - len(rightLines) - confirmExtra
 		if agentAreaH < 1 {
 			agentAreaH = 1
 		}
@@ -477,16 +749,20 @@ func (m *Model) renderTeamsModal() string {
 
 	// Footer with key hints — dim read-only-gated keys when team is read-only.
 	readOnly := len(teams) > 0 && m.teamsModal.teamIdx < len(teams) && isReadOnlyTeam(teams[m.teamsModal.teamIdx])
+	autoTeam := len(teams) > 0 && m.teamsModal.teamIdx < len(teams) && isAutoTeam(teams[m.teamsModal.teamIdx]) && !isSystemTeam(teams[m.teamsModal.teamIdx])
 	nHint := "[Ctrl+N] New"
 	dHint := "[Ctrl+D] Delete"
 	cHint := "[Ctrl+K] Set Coordinator"
+	pHint := "[Ctrl+P] Promote"
 	if readOnly {
-		nHint = DimStyle.Render(nHint)
 		dHint = DimStyle.Render(dHint)
 		cHint = DimStyle.Render(cHint)
 	}
+	if !autoTeam {
+		pHint = DimStyle.Render(pHint)
+	}
 	footer := lipgloss.JoinHorizontal(lipgloss.Left,
-		nHint, "  ", dHint, "  ", cHint, "  ",
+		nHint, "  ", dHint, "  ", cHint, "  ", pHint, "  ",
 		DimStyle.Render("[Tab] Switch"), "  ",
 		DimStyle.Render("[Esc] Close"),
 	)

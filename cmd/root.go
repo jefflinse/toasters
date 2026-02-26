@@ -243,6 +243,7 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 		p.Send(tui.RuntimeSessionStartedMsg{
 			SessionID:      snap.ID,
 			AgentName:      snap.AgentID,
+			TeamName:       snap.TeamName,
 			JobID:          snap.JobID,
 			SystemPrompt:   sess.SystemPrompt(),
 			InitialMessage: sess.InitialMessage(),
@@ -322,7 +323,7 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 					slog.Error("definitions watcher error", "error", err)
 				}
 			}()
-			defer defWatcher.Stop()
+			defer func() { _ = defWatcher.Stop() }()
 		}
 	}
 

@@ -15,6 +15,7 @@ type SpawnOpts struct {
 	ToolExecutor   ToolExecutor // optional; overrides default CoreTools when set
 	JobID          string
 	TaskID         string
+	TeamName       string // team this agent belongs to (may be empty)
 	InitialMessage string
 	WorkDir        string
 	MaxTurns       int // 0 = use default (50)
@@ -38,6 +39,7 @@ type ToolDef struct {
 type SessionSnapshot struct {
 	ID        string
 	AgentID   string
+	TeamName  string // team this agent belongs to (may be empty)
 	JobID     string
 	Status    string
 	Model     string

@@ -201,6 +201,24 @@ func (m *Model) View() tea.View {
 		return v
 	}
 
+	// Skills modal takes over the full terminal as a centered overlay.
+	if m.skillsModal.show {
+		skillsView := m.renderSkillsModal()
+		v := tea.NewView(skillsView)
+		v.AltScreen = true
+		v.MouseMode = tea.MouseModeCellMotion
+		return v
+	}
+
+	// Agents modal takes over the full terminal as a centered overlay.
+	if m.agentsModal.show {
+		agentsView := m.renderAgentsModal()
+		v := tea.NewView(agentsView)
+		v.AltScreen = true
+		v.MouseMode = tea.MouseModeCellMotion
+		return v
+	}
+
 	// MCP modal takes over the full terminal as a centered overlay.
 	if m.mcpModal.show {
 		mcpView := m.renderMCPModal()
@@ -933,6 +951,11 @@ func (m *Model) updateViewportContent() {
 				sb.WriteString(aIndent + HeaderStyle.Render("? "+msg.Content) + "\n\n")
 				continue
 			}
+			// Feed event entries render as styled single-line system events.
+			if entry.ClaudeMeta == "feed-event" {
+				sb.WriteString(aIndent + msg.Content + "\n\n")
+				continue
+			}
 			// Tool-call indicator messages render as collapsible tool blocks.
 			if entry.ClaudeMeta == "tool-call-indicator" {
 				if m.chat.collapsedTools[i] {
@@ -994,6 +1017,18 @@ func (m *Model) updateViewportContent() {
 				sb.WriteString(DimStyle.Render("⚙ tool result ▶") + hint + "\n")
 			}
 		}
+	}
+
+	// Render activity feed entries from SQLite only when no operator is wired
+	// (operator events are already rendered via OperatorEventMsg as chat entries).
+	if len(m.progress.feedEntries) > 0 && m.operator == nil {
+		for _, entry := range m.progress.feedEntries {
+			line := formatFeedEntry(entry)
+			if line != "" {
+				sb.WriteString(line + "\n")
+			}
+		}
+		sb.WriteString("\n")
 	}
 
 	// Show streaming response in progress — re-render markdown incrementally.

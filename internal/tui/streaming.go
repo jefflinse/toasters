@@ -58,9 +58,7 @@ func (m *Model) startStream(msgs []provider.Message) tea.Cmd {
 	if len(systemParts) > 0 {
 		req.System = strings.Join(systemParts, "\n\n")
 	}
-	for _, t := range tools {
-		req.Tools = append(req.Tools, t)
-	}
+	req.Tools = append(req.Tools, tools...)
 
 	return tea.Batch(
 		func() tea.Msg {
