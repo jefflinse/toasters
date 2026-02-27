@@ -480,13 +480,13 @@ func (m *Model) renderGrid() string {
 //	• write: main.go                             ← activity items, newest first
 //	• shell: go test ./...
 func (m *Model) renderRuntimeGridCell(rs *runtimeSlot, cellW, cellH, innerW, innerH int, focused bool) string {
-	// Distinct cyan border for runtime sessions.
+	// Green border for active runtime sessions — matches gateway running slot colors.
 	var borderColor color.Color
 	if rs.status == "active" {
 		if focused {
-			borderColor = lipgloss.Color("#5fd7ff") // bright cyan when focused
+			borderColor = lipgloss.Color("#5fff5f") // bright green when focused
 		} else {
-			borderColor = lipgloss.Color("#0087d7") // medium cyan
+			borderColor = ColorConnected // same green as gateway running slots
 		}
 	} else {
 		if focused {
