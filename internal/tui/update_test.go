@@ -398,6 +398,8 @@ func TestUpdateGrid_ArrowNavigation(t *testing.T) {
 			t.Parallel()
 			m := newMinimalModel(t)
 			m.grid.showGrid = true
+			m.grid.gridCols = 2
+			m.grid.gridRows = 2
 			m.grid.gridFocusCell = tt.startCell
 
 			result, _ := m.updateGrid(tt.key)
@@ -425,10 +427,10 @@ func TestUpdateGrid_PageNavigation(t *testing.T) {
 		wantCell  int
 	}{
 		{"[ from page 1 goes to page 0", keyPress('['), 1, 2, 0, 0},
-		{"[ from page 0 stays at page 0", keyPress('['), 0, 3, 0, 0},
+		{"[ from page 0 (first page) is a no-op — cell unchanged", keyPress('['), 0, 3, 0, 3},
 		{"[ from page 3 goes to page 2", keyPress('['), 3, 1, 2, 0},
 		{"] from page 0 goes to page 1", keyPress(']'), 0, 2, 1, 0},
-		{"] from page 3 stays at page 3", keyPress(']'), 3, 1, 3, 0},
+		{"] from page 3 (last page) is a no-op — cell unchanged", keyPress(']'), 3, 1, 3, 1},
 		{"] from page 2 goes to page 3", keyPress(']'), 2, 3, 3, 0},
 	}
 
@@ -437,6 +439,8 @@ func TestUpdateGrid_PageNavigation(t *testing.T) {
 			t.Parallel()
 			m := newMinimalModel(t)
 			m.grid.showGrid = true
+			m.grid.gridCols = 2
+			m.grid.gridRows = 2
 			m.grid.gridPage = tt.startPage
 			m.grid.gridFocusCell = tt.startCell
 
@@ -511,6 +515,191 @@ func TestUpdateGrid_KillWithNilGateway(t *testing.T) {
 	}
 	if cmd != nil {
 		t.Error("expected nil cmd when gateway is nil")
+	}
+}
+
+func TestUpdateGrid_ArrowNavigationDynamic(t *testing.T) {
+	t.Parallel()
+
+	// Each sub-group exercises a different grid shape.
+	// The cell layout for a cols×rows grid is row-major:
+	//   cell index = row*cols + col
+	//
+	// 3×2 grid (3 cols, 2 rows):
+	//   [0][1][2]
+	//   [3][4][5]
+	//
+	// 2×3 grid (2 cols, 3 rows):
+	//   [0][1]
+	//   [2][3]
+	//   [4][5]
+	//
+	// 4×4 grid (4 cols, 4 rows):
+	//   [ 0][ 1][ 2][ 3]
+	//   [ 4][ 5][ 6][ 7]
+	//   [ 8][ 9][10][11]
+	//   [12][13][14][15]
+
+	type navCase struct {
+		name      string
+		key       tea.KeyPressMsg
+		startCell int
+		wantCell  int
+	}
+
+	gridTests := []struct {
+		gridName string
+		cols     int
+		rows     int
+		cases    []navCase
+	}{
+		{
+			gridName: "2x2",
+			cols:     2,
+			rows:     2,
+			// Layout:
+			//   [0][1]
+			//   [2][3]
+			cases: []navCase{
+				// left
+				{"left from 0 stays at 0 (left edge)", specialKey(tea.KeyLeft), 0, 0},
+				{"left from 1 goes to 0", specialKey(tea.KeyLeft), 1, 0},
+				{"left from 2 stays at 2 (left edge)", specialKey(tea.KeyLeft), 2, 2},
+				{"left from 3 goes to 2", specialKey(tea.KeyLeft), 3, 2},
+				// right
+				{"right from 0 goes to 1", specialKey(tea.KeyRight), 0, 1},
+				{"right from 1 stays at 1 (right edge)", specialKey(tea.KeyRight), 1, 1},
+				{"right from 2 goes to 3", specialKey(tea.KeyRight), 2, 3},
+				{"right from 3 stays at 3 (right edge)", specialKey(tea.KeyRight), 3, 3},
+				// up
+				{"up from 0 stays at 0 (top row)", specialKey(tea.KeyUp), 0, 0},
+				{"up from 1 stays at 1 (top row)", specialKey(tea.KeyUp), 1, 1},
+				{"up from 2 goes to 0", specialKey(tea.KeyUp), 2, 0},
+				{"up from 3 goes to 1", specialKey(tea.KeyUp), 3, 1},
+				// down
+				{"down from 0 goes to 2", specialKey(tea.KeyDown), 0, 2},
+				{"down from 1 goes to 3", specialKey(tea.KeyDown), 1, 3},
+				{"down from 2 stays at 2 (bottom row)", specialKey(tea.KeyDown), 2, 2},
+				{"down from 3 stays at 3 (bottom row)", specialKey(tea.KeyDown), 3, 3},
+			},
+		},
+		{
+			gridName: "3x2",
+			cols:     3,
+			rows:     2,
+			// Layout:
+			//   [0][1][2]
+			//   [3][4][5]
+			cases: []navCase{
+				// left
+				{"left from 0 stays at 0 (left edge)", specialKey(tea.KeyLeft), 0, 0},
+				{"left from 1 goes to 0", specialKey(tea.KeyLeft), 1, 0},
+				{"left from 3 stays at 3 (left edge)", specialKey(tea.KeyLeft), 3, 3},
+				// right
+				{"right from 2 stays at 2 (right edge)", specialKey(tea.KeyRight), 2, 2},
+				{"right from 1 goes to 2", specialKey(tea.KeyRight), 1, 2},
+				{"right from 5 stays at 5 (right edge)", specialKey(tea.KeyRight), 5, 5},
+				// up
+				{"up from 0 stays at 0 (top row)", specialKey(tea.KeyUp), 0, 0},
+				{"up from 3 goes to 0", specialKey(tea.KeyUp), 3, 0},
+				{"up from 4 goes to 1", specialKey(tea.KeyUp), 4, 1},
+				// down
+				{"down from 3 stays at 3 (bottom row)", specialKey(tea.KeyDown), 3, 3},
+				{"down from 0 goes to 3", specialKey(tea.KeyDown), 0, 3},
+				{"down from 2 goes to 5", specialKey(tea.KeyDown), 2, 5},
+			},
+		},
+		{
+			gridName: "2x3",
+			cols:     2,
+			rows:     3,
+			// Layout:
+			//   [0][1]
+			//   [2][3]
+			//   [4][5]
+			cases: []navCase{
+				// left
+				{"left from 0 stays at 0 (left edge)", specialKey(tea.KeyLeft), 0, 0},
+				{"left from 1 goes to 0", specialKey(tea.KeyLeft), 1, 0},
+				// right
+				{"right from 1 stays at 1 (right edge)", specialKey(tea.KeyRight), 1, 1},
+				// up
+				{"up from 0 stays at 0 (top row)", specialKey(tea.KeyUp), 0, 0},
+				{"up from 2 goes to 0", specialKey(tea.KeyUp), 2, 0},
+				{"up from 4 goes to 2", specialKey(tea.KeyUp), 4, 2},
+				// down
+				{"down from 4 stays at 4 (bottom-left corner)", specialKey(tea.KeyDown), 4, 4},
+				{"down from 5 stays at 5 (bottom-right corner)", specialKey(tea.KeyDown), 5, 5},
+				{"down from 0 goes to 2", specialKey(tea.KeyDown), 0, 2},
+				{"down from 2 goes to 4", specialKey(tea.KeyDown), 2, 4},
+			},
+		},
+		{
+			gridName: "4x4",
+			cols:     4,
+			rows:     4,
+			// Layout:
+			//   [ 0][ 1][ 2][ 3]
+			//   [ 4][ 5][ 6][ 7]
+			//   [ 8][ 9][10][11]
+			//   [12][13][14][15]
+			cases: []navCase{
+				// left edge
+				{"left from 0 stays at 0", specialKey(tea.KeyLeft), 0, 0},
+				{"left from 4 stays at 4", specialKey(tea.KeyLeft), 4, 4},
+				{"left from 12 stays at 12", specialKey(tea.KeyLeft), 12, 12},
+				// right edge
+				{"right from 3 stays at 3", specialKey(tea.KeyRight), 3, 3},
+				{"right from 7 stays at 7", specialKey(tea.KeyRight), 7, 7},
+				{"right from 15 stays at 15", specialKey(tea.KeyRight), 15, 15},
+				// top row
+				{"up from 0 stays at 0", specialKey(tea.KeyUp), 0, 0},
+				{"up from 3 stays at 3", specialKey(tea.KeyUp), 3, 3},
+				// bottom row
+				{"down from 12 stays at 12", specialKey(tea.KeyDown), 12, 12},
+				{"down from 15 stays at 15", specialKey(tea.KeyDown), 15, 15},
+				// interior moves
+				{"left from 5 goes to 4", specialKey(tea.KeyLeft), 5, 4},
+				{"right from 5 goes to 6", specialKey(tea.KeyRight), 5, 6},
+				{"up from 5 goes to 1", specialKey(tea.KeyUp), 5, 1},
+				{"down from 5 goes to 9", specialKey(tea.KeyDown), 5, 9},
+				// corner-to-corner
+				{"down from 0 goes to 4", specialKey(tea.KeyDown), 0, 4},
+				{"right from 0 goes to 1", specialKey(tea.KeyRight), 0, 1},
+				{"up from 15 goes to 11", specialKey(tea.KeyUp), 15, 11},
+				{"left from 15 goes to 14", specialKey(tea.KeyLeft), 15, 14},
+			},
+		},
+	}
+
+	for _, gt := range gridTests {
+		gt := gt // capture range variable
+		t.Run(gt.gridName, func(t *testing.T) {
+			t.Parallel()
+			for _, tc := range gt.cases {
+				tc := tc // capture range variable
+				t.Run(tc.name, func(t *testing.T) {
+					t.Parallel()
+					m := newMinimalModel(t)
+					m.grid.showGrid = true
+					m.grid.gridCols = gt.cols
+					m.grid.gridRows = gt.rows
+					m.grid.gridFocusCell = tc.startCell
+
+					result, _ := m.updateGrid(tc.key)
+					got := result.(*Model)
+
+					if got.grid.gridFocusCell != tc.wantCell {
+						t.Errorf("grid %dx%d: key=%s from cell %d: gridFocusCell = %d, want %d",
+							gt.cols, gt.rows, tc.key.String(), tc.startCell,
+							got.grid.gridFocusCell, tc.wantCell)
+					}
+					if !got.grid.showGrid {
+						t.Error("showGrid should remain true during navigation")
+					}
+				})
+			}
+		})
 	}
 }
 

@@ -80,15 +80,18 @@ func wrapText(s string, maxWidth int) string {
 	return result.String()
 }
 
-// truncateStr truncates s to maxLen, adding "..." if truncated.
+// truncateStr truncates s to maxLen runes, adding "..." if truncated.
+// Note: truncation is rune-based, not display-width-based. Characters with
+// display width > 1 (e.g. CJK, emoji) may still overflow the visual budget.
 func truncateStr(s string, maxLen int) string {
 	if maxLen <= 3 {
 		maxLen = 3
 	}
-	if len(s) <= maxLen {
+	r := []rune(s)
+	if len(r) <= maxLen {
 		return s
 	}
-	return s[:maxLen-3] + "..."
+	return string(r[:maxLen-3]) + "..."
 }
 
 // firstLineOf returns the first non-empty line of s.
@@ -499,7 +502,7 @@ func (m *Model) sortedRuntimeSessions() []*runtimeSlot {
 }
 
 // runtimeSessionForGridCell returns the runtime session displayed in the given
-// grid cell index (0-3 within the current page), or nil if the cell does not
+// grid cell index (within the current page), or nil if the cell does not
 // contain a runtime session. This replicates the overlay logic used in renderGrid:
 // iterate gateway slots for the current page (using the same sorted order), and
 // for each inactive slot, assign the next sorted runtime session.
@@ -507,32 +510,51 @@ func (m *Model) sortedRuntimeSessions() []*runtimeSlot {
 // slots and sortedIndices must be the same snapshot/ordering already used by the
 // caller (renderGrid or updateGrid) so that rtIdx arithmetic is consistent.
 func (m *Model) runtimeSessionForGridCell(cellIdx int, slots [gateway.MaxSlots]gateway.SlotSnapshot, sortedIndices []int) *runtimeSlot {
-	sortedRT := m.sortedRuntimeSessions()
-	pageOffset := m.grid.gridPage * 4
+	cols := m.grid.gridCols
+	rows := m.grid.gridRows
+	// Safety floor: mirrors the floor applied in renderGrid and updateGrid.
+	if cols < 1 {
+		cols = 1
+	}
+	if rows < 1 {
+		rows = 1
+	}
+	cellsPerPage := cols * rows
+	pageOffset := m.grid.gridPage * cellsPerPage
 
 	// Pre-skip runtime sessions consumed by earlier pages (mirrors renderGrid).
 	rtIdx := 0
 	for i := range pageOffset {
+		if i >= gateway.MaxSlots {
+			break
+		}
 		snap := slots[sortedIndices[i]]
 		if !snap.Active {
 			rtIdx++
 		}
 	}
 
-	for i := range 4 {
-		absIdx := sortedIndices[pageOffset+i]
-		snap := slots[absIdx]
-		if !snap.Active {
-			if rtIdx < len(sortedRT) {
-				rs := sortedRT[rtIdx]
-				rtIdx++
-				if i == cellIdx {
-					return rs
-				}
-				continue
-			}
+	sortedRT := m.sortedRuntimeSessions()
+
+	// Find the runtime session for cellIdx.
+	for i := range cellsPerPage {
+		absIdxPos := pageOffset + i
+		if absIdxPos >= gateway.MaxSlots {
+			break
 		}
-		// Active gateway slot or no more runtime sessions — skip.
+		snap := slots[sortedIndices[absIdxPos]]
+		if snap.Active {
+			// Gateway slot — skip.
+			continue
+		}
+		// Runtime slot.
+		if i == cellIdx {
+			if rtIdx < len(sortedRT) {
+				return sortedRT[rtIdx]
+			}
+			return nil
+		}
+		rtIdx++
 	}
 	return nil
 }

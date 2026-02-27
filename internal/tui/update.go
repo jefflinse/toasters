@@ -70,10 +70,28 @@ func (m *Model) updateGrid(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.gateway != nil {
 		slots = m.gateway.Slots()
 	}
+
+	cols := m.grid.gridCols
+	rows := m.grid.gridRows
+	// Safety floor: mirrors the floor applied in renderGrid and runtimeSessionForGridCell.
+	if cols < 1 {
+		cols = 1
+	}
+	if rows < 1 {
+		rows = 1
+	}
+	cellsPerPage := cols * rows
+	totalPages := (gateway.MaxSlots + cellsPerPage - 1) / cellsPerPage
+
 	// Compute absSlot using the same sorted index order as renderGrid so that
 	// kill/enter target the slot that is visually focused.
 	sortedIndices := sortedSlotIndicesFrom(slots)
-	absSlot := sortedIndices[m.grid.gridPage*4+m.grid.gridFocusCell]
+	absSlotIdx := m.grid.gridPage*cellsPerPage + m.grid.gridFocusCell
+	if absSlotIdx >= gateway.MaxSlots {
+		absSlotIdx = gateway.MaxSlots - 1
+	}
+	absSlot := sortedIndices[absSlotIdx]
+
 	switch msg.String() {
 	case "ctrl+g", "esc":
 		m.grid.showGrid = false
@@ -139,33 +157,33 @@ func (m *Model) updateGrid(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "[":
 		if m.grid.gridPage > 0 {
 			m.grid.gridPage--
+			m.grid.gridFocusCell = 0
 		}
-		m.grid.gridFocusCell = 0
 		return m, nil
 	case "]":
-		if m.grid.gridPage < 3 {
+		if m.grid.gridPage < totalPages-1 {
 			m.grid.gridPage++
+			m.grid.gridFocusCell = 0
 		}
-		m.grid.gridFocusCell = 0
 		return m, nil
 	case "left":
-		if m.grid.gridFocusCell%2 == 1 {
+		if m.grid.gridFocusCell%cols > 0 {
 			m.grid.gridFocusCell--
 		}
 		return m, nil
 	case "right":
-		if m.grid.gridFocusCell%2 == 0 {
+		if m.grid.gridFocusCell%cols < cols-1 {
 			m.grid.gridFocusCell++
 		}
 		return m, nil
 	case "up":
-		if m.grid.gridFocusCell >= 2 {
-			m.grid.gridFocusCell -= 2
+		if m.grid.gridFocusCell >= cols {
+			m.grid.gridFocusCell -= cols
 		}
 		return m, nil
 	case "down":
-		if m.grid.gridFocusCell < 2 {
-			m.grid.gridFocusCell += 2
+		if m.grid.gridFocusCell < cols*(rows-1) {
+			m.grid.gridFocusCell += cols
 		}
 		return m, nil
 	}

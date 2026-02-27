@@ -9,6 +9,118 @@ import (
 	"github.com/jefflinse/toasters/internal/gateway"
 )
 
+// --------------------------------------------------------------------------
+// TestComputeGridDimensions
+// --------------------------------------------------------------------------
+
+func TestComputeGridDimensions(t *testing.T) {
+	t.Parallel()
+
+	// minCellW = minGridCellInnerW + gridCellBorderW = 40 + 4 = 44
+	// minCellH = minGridCellInnerH + gridCellBorderH = 8  + 2 = 10
+	// availH   = termH - gridHotkeyBarH               = termH - 1
+	// cols     = termW / minCellW  (floor, min 1)
+	// rows     = availH / minCellH (floor, min 1)
+	minCellW := minGridCellInnerW + gridCellBorderW // 44
+	minCellH := minGridCellInnerH + gridCellBorderH // 10
+
+	tests := []struct {
+		name     string
+		termW    int
+		termH    int
+		wantCols int
+		wantRows int
+	}{
+		{
+			// 20/44=0 → clamped to 1; (10-1)/10=0 → clamped to 1
+			name:     "very small terminal (20x10) yields 1x1",
+			termW:    20,
+			termH:    10,
+			wantCols: 1,
+			wantRows: 1,
+		},
+		{
+			// 44/44=1 col; (21-1)/10=2 rows
+			name:     "exactly min cell width (44 wide), tall enough for 2 rows",
+			termW:    minCellW,
+			termH:    2*minCellH + gridHotkeyBarH, // 21
+			wantCols: 1,
+			wantRows: 2,
+		},
+		{
+			// 88/44=2 cols; (11-1)/10=1 row
+			name:     "wide enough for 2 columns (88 wide), tall enough for 1 row",
+			termW:    2 * minCellW,
+			termH:    minCellH + gridHotkeyBarH, // 11
+			wantCols: 2,
+			wantRows: 1,
+		},
+		{
+			// 132/44=3 cols; (31-1)/10=3 rows
+			name:     "wide enough for 3 columns (132 wide), tall enough for 3 rows",
+			termW:    3 * minCellW,
+			termH:    3*minCellH + gridHotkeyBarH, // 31
+			wantCols: 3,
+			wantRows: 3,
+		},
+		{
+			// 220/44=5 cols; (50-1)/10=4 rows
+			name:     "large terminal (220x50) yields 5x4",
+			termW:    220,
+			termH:    50,
+			wantCols: 220 / minCellW,                   // 5
+			wantRows: (50 - gridHotkeyBarH) / minCellH, // 4
+		},
+		{
+			// 0/44=0 → clamped to 1; (0-1)/10=-1/10=0 → clamped to 1
+			name:     "zero width yields 1x1",
+			termW:    0,
+			termH:    0,
+			wantCols: 1,
+			wantRows: 1,
+		},
+		{
+			// minCellW/44=1 col; (0-1)/10=-1/10=0 → clamped to 1 — tests the height-zero path
+			name:     "zero height yields 1x1",
+			termW:    minCellW,
+			termH:    0,
+			wantCols: 1,
+			wantRows: 1,
+		},
+		{
+			// (2*minCellW-1)/44=1 col — one pixel short of fitting 2 columns
+			name:     "one pixel short of 2 columns yields 1 col",
+			termW:    2*minCellW - 1,
+			termH:    minCellH + gridHotkeyBarH,
+			wantCols: 1,
+			wantRows: 1,
+		},
+		{
+			// 44/44=1 col; (11-1)/10=1 row — exactly one cell fits
+			name:     "exactly one cell fits (44x11) yields 1x1",
+			termW:    minCellW,
+			termH:    minCellH + gridHotkeyBarH, // 11
+			wantCols: 1,
+			wantRows: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			gotCols, gotRows := computeGridDimensions(tt.termW, tt.termH)
+			if gotCols != tt.wantCols {
+				t.Errorf("computeGridDimensions(%d, %d) cols = %d, want %d",
+					tt.termW, tt.termH, gotCols, tt.wantCols)
+			}
+			if gotRows != tt.wantRows {
+				t.Errorf("computeGridDimensions(%d, %d) rows = %d, want %d",
+					tt.termW, tt.termH, gotRows, tt.wantRows)
+			}
+		})
+	}
+}
+
 func TestCommaInt(t *testing.T) {
 	t.Parallel()
 
@@ -734,6 +846,8 @@ func TestRuntimeSessionForGridCell(t *testing.T) {
 
 			m := newMinimalModel(t)
 			m.grid.gridPage = tt.gridPage
+			m.grid.gridCols = 2
+			m.grid.gridRows = 2
 			m.runtimeSessions = tt.runtimeSess
 
 			sortedIndices := sortedSlotIndicesFrom(tt.slots)

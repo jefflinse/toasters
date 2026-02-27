@@ -1,4 +1,4 @@
-// Grid screen: 2x2 agent slot grid rendering, context bar, token bar, and reasoning block display.
+// Grid screen: dynamic NxM agent slot grid rendering, context bar, token bar, and reasoning block display.
 package tui
 
 import (
@@ -16,6 +16,55 @@ import (
 
 	"github.com/jefflinse/toasters/internal/gateway"
 )
+
+const (
+	minGridCellInnerW = 40 // minimum inner cell width
+	minGridCellInnerH = 8  // minimum inner cell height
+	gridHotkeyBarH    = 1  // hotkey bar height
+	gridCellBorderW   = 4  // total horizontal border+padding per cell
+	gridCellBorderH   = 2  // total vertical border+padding per cell
+)
+
+// computeGridDimensions returns the number of columns and rows for the grid
+// given the terminal dimensions. Minimum is 1×1.
+func computeGridDimensions(termW, termH int) (cols, rows int) {
+	minCellW := minGridCellInnerW + gridCellBorderW
+	minCellH := minGridCellInnerH + gridCellBorderH
+	availH := termH - gridHotkeyBarH
+	cols = termW / minCellW
+	rows = availH / minCellH
+	if cols < 1 {
+		cols = 1
+	}
+	if rows < 1 {
+		rows = 1
+	}
+	return cols, rows
+}
+
+// renderEmptyCell renders a dim empty placeholder cell with the given dimensions.
+// cellW and cellH are the outer cell dimensions (including border); the safety
+// floor of 1 is enforced by computeGridDimensions and the renderGrid safety floor.
+func renderEmptyCell(cellW, cellH int, focused bool) string {
+	var borderColor color.Color
+	if focused {
+		borderColor = ColorPrimary
+	} else {
+		borderColor = ColorBorder
+	}
+	borderType := lipgloss.RoundedBorder()
+	if focused {
+		borderType = lipgloss.ThickBorder()
+	}
+	cellStyle := lipgloss.NewStyle().
+		Width(cellW).
+		Height(cellH).
+		Border(borderType).
+		BorderForeground(borderColor).
+		Padding(0, 1)
+	emptyContent := DimStyle.Render("empty")
+	return cellStyle.Render(emptyContent)
+}
 
 // slotPriority returns the display priority for a gateway slot snapshot.
 // Lower values sort first: 0 = running, 1 = done, 2 = inactive.
@@ -46,10 +95,22 @@ func sortedSlotIndicesFrom(slots [gateway.MaxSlots]gateway.SlotSnapshot) []int {
 }
 
 func (m *Model) renderGrid() string {
-	cellW := m.width / 2
-	cellH := (m.height - 1) / 2 // -1 to make room for the hotkey bar
+	// Safety floor: ensure cols/rows are at least 1.
+	cols := m.grid.gridCols
+	rows := m.grid.gridRows
+	if cols < 1 {
+		cols = 1
+	}
+	if rows < 1 {
+		rows = 1
+	}
 
-	var cells [4]string
+	cellsPerPage := cols * rows
+	cellW := m.width / cols
+	cellH := (m.height - gridHotkeyBarH) / rows
+
+	cells := make([]string, cellsPerPage)
+
 	// Fetch the snapshot exactly once so the pre-skip loop and sortedSlotIndicesFrom
 	// operate on the same consistent view of gateway state.
 	var slots [gateway.MaxSlots]gateway.SlotSnapshot
@@ -63,26 +124,36 @@ func (m *Model) renderGrid() string {
 	// Collect sorted runtime sessions to overlay into empty grid cells.
 	sortedRT := m.sortedRuntimeSessions()
 
-	pageOffset := m.grid.gridPage * 4
+	pageOffset := m.grid.gridPage * cellsPerPage
 
 	// Pre-skip runtime sessions consumed by earlier pages.
 	// For each inactive slot on pages before the current one, a runtime session
 	// was placed there, so we must advance past it.
 	rtIdx := 0
 	for i := range pageOffset {
+		if i >= gateway.MaxSlots {
+			break
+		}
 		snap := slots[sortedIndices[i]]
 		if !snap.Active {
 			rtIdx++
 		}
 	}
 
-	for i := range 4 {
-		absIdx := sortedIndices[pageOffset+i]
+	for i := range cellsPerPage {
+		absIdxPos := pageOffset + i
+		// Guard: if this page extends beyond MaxSlots, render an empty placeholder.
+		if absIdxPos >= gateway.MaxSlots {
+			cells[i] = renderEmptyCell(cellW, cellH, m.grid.gridFocusCell == i)
+			continue
+		}
+
+		absIdx := sortedIndices[absIdxPos]
 		snap := slots[absIdx]
 		focused := i == m.grid.gridFocusCell
 
-		innerH := cellH - 2 // top + bottom border
-		innerW := cellW - 4 // left + right border + padding
+		innerH := cellH - gridCellBorderH
+		innerW := cellW - gridCellBorderW
 		if innerH < 1 {
 			innerH = 1
 		}
@@ -388,15 +459,20 @@ func (m *Model) renderGrid() string {
 		cells[i] = cellStyle.Render(inner)
 	}
 
+	totalPages := (gateway.MaxSlots + cellsPerPage - 1) / cellsPerPage
 	hotkeyBar := DimStyle.Render(fmt.Sprintf(
-		"  arrows: navigate   ·   k/ctrl+k: kill   ·   enter: view output   ·   p: view prompt   ·   [/]: page %d/4   ·   ctrl+g / esc: close",
-		m.grid.gridPage+1,
+		"  arrows: navigate   ·   k/ctrl+k: kill   ·   enter: view output   ·   p: view prompt   ·   [/]: page %d/%d   ·   ctrl+g / esc: close",
+		m.grid.gridPage+1, totalPages,
 	))
 	hotkeyBar = lipgloss.NewStyle().Width(m.width).Render(hotkeyBar)
 
-	top := lipgloss.JoinHorizontal(lipgloss.Top, cells[0], cells[1])
-	bottom := lipgloss.JoinHorizontal(lipgloss.Top, cells[2], cells[3])
-	return lipgloss.JoinVertical(lipgloss.Left, hotkeyBar, top, bottom)
+	rowStrings := make([]string, rows)
+	for r := range rows {
+		rowCells := cells[r*cols : (r+1)*cols]
+		rowStrings[r] = lipgloss.JoinHorizontal(lipgloss.Top, rowCells...)
+	}
+	gridBody := lipgloss.JoinVertical(lipgloss.Left, rowStrings...)
+	return lipgloss.JoinVertical(lipgloss.Left, hotkeyBar, gridBody)
 }
 
 // renderRuntimeGridCell renders a single runtime session into a grid cell as a
