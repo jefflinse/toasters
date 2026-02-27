@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -341,6 +342,215 @@ func TestMiniTokenBar(t *testing.T) {
 			t.Parallel()
 			result := miniTokenBar(tt.totalTokens)
 			tt.check(t, result)
+		})
+	}
+}
+
+// --------------------------------------------------------------------------
+// TestActivityLabel
+// --------------------------------------------------------------------------
+
+func TestActivityLabel(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		toolName string
+		args     json.RawMessage
+		want     string
+	}{
+		// --- file tools ---
+		{
+			name:     "write_file extracts basename from path",
+			toolName: "write_file",
+			args:     json.RawMessage(`{"path": "/some/dir/main.go"}`),
+			want:     "write: main.go",
+		},
+		{
+			name:     "edit_file extracts basename from path",
+			toolName: "edit_file",
+			args:     json.RawMessage(`{"path": "/some/dir/config.yaml"}`),
+			want:     "edit: config.yaml",
+		},
+		{
+			name:     "read_file extracts basename from path",
+			toolName: "read_file",
+			args:     json.RawMessage(`{"path": "/some/dir/README.md"}`),
+			want:     "read: README.md",
+		},
+
+		// --- shell ---
+		{
+			name:     "shell short command not truncated",
+			toolName: "shell",
+			args:     json.RawMessage(`{"command": "go build ./..."}`),
+			want:     "shell: go build ./...",
+		},
+		{
+			name:     "shell long command truncated with ellipsis",
+			toolName: "shell",
+			// 31 runes — over the 28-rune limit; first 28 = "go test -v -race -count=1 ./"
+			args: json.RawMessage(`{"command": "go test -v -race -count=1 ./..."}`),
+			want: "shell: go test -v -race -count=1 ./…",
+		},
+
+		// --- spawn_agent ---
+		{
+			name:     "spawn_agent with agent_name uses it",
+			toolName: "spawn_agent",
+			args:     json.RawMessage(`{"agent_name": "builder"}`),
+			want:     "spawn: builder",
+		},
+		{
+			name:     "spawn_agent without agent_name falls back to worker",
+			toolName: "spawn_agent",
+			args:     json.RawMessage(`{}`),
+			want:     "spawn: worker",
+		},
+
+		// --- report_progress ---
+		{
+			name:     "report_progress short message not truncated",
+			toolName: "report_progress",
+			args:     json.RawMessage(`{"message": "done"}`),
+			want:     "progress: done",
+		},
+		{
+			name:     "report_progress long message truncated with ellipsis",
+			toolName: "report_progress",
+			// 38 runes — over the 28-rune limit; first 28 = "finished building all core d"
+			args: json.RawMessage(`{"message": "finished building all core data models"}`),
+			want: "progress: finished building all core d…",
+		},
+
+		// --- web_fetch ---
+		{
+			name:     "web_fetch extracts host from valid URL",
+			toolName: "web_fetch",
+			args:     json.RawMessage(`{"url": "https://pkg.go.dev/net/http"}`),
+			want:     "fetch: pkg.go.dev",
+		},
+		{
+			name:     "web_fetch with malformed URL falls back gracefully without panic",
+			toolName: "web_fetch",
+			args:     json.RawMessage(`{"url": "://not-a-valid-url"}`),
+			// url.Parse on "://not-a-valid-url" returns an error, so falls back to trunc(u, 28)
+			want: "fetch: ://not-a-valid-url",
+		},
+
+		// --- glob / grep ---
+		{
+			name:     "glob returns pattern",
+			toolName: "glob",
+			args:     json.RawMessage(`{"pattern": "**/*.go"}`),
+			want:     "glob: **/*.go",
+		},
+		{
+			name:     "grep returns pattern",
+			toolName: "grep",
+			args:     json.RawMessage(`{"pattern": "func.*Error"}`),
+			want:     "grep: func.*Error",
+		},
+
+		// --- task / review / query ---
+		{
+			name:     "update_task_status returns status value",
+			toolName: "update_task_status",
+			args:     json.RawMessage(`{"status": "completed"}`),
+			want:     "task: completed",
+		},
+		{
+			name:     "request_review returns fixed label",
+			toolName: "request_review",
+			args:     json.RawMessage(`{}`),
+			want:     "review: requested",
+		},
+		{
+			name:     "query_job_context returns fixed label",
+			toolName: "query_job_context",
+			args:     json.RawMessage(`{}`),
+			want:     "query: job context",
+		},
+
+		// --- report_blocker ---
+		{
+			name:     "report_blocker with description",
+			toolName: "report_blocker",
+			args:     json.RawMessage(`{"description": "dependency missing"}`),
+			want:     "blocker: dependency missing",
+		},
+		{
+			name:     "report_blocker with empty args returns sentinel",
+			toolName: "report_blocker",
+			args:     json.RawMessage(`{}`),
+			want:     "blocker: (no description)",
+		},
+
+		// --- log_artifact ---
+		{
+			name:     "log_artifact with name",
+			toolName: "log_artifact",
+			args:     json.RawMessage(`{"name": "output.json"}`),
+			want:     "artifact: output.json",
+		},
+
+		// --- MCP-namespaced tools ---
+		{
+			name:     "MCP-namespaced tool formatted as server: tool_name",
+			toolName: "github__create_pull_request",
+			args:     json.RawMessage(`{}`),
+			want:     "github: create_pull_request",
+		},
+
+		// --- unknown tools ---
+		{
+			name:     "unknown tool name passes through unchanged",
+			toolName: "my_custom_tool",
+			args:     json.RawMessage(`{}`),
+			want:     "my_custom_tool",
+		},
+		{
+			name: "unknown tool with very long name truncated at 35 runes",
+			// 36 runes — one over the 35-rune limit
+			toolName: "this_is_a_very_long_custom_tool_name_x",
+			args:     json.RawMessage(`{}`),
+			want:     "this_is_a_very_long_custom_tool_nam…",
+		},
+
+		// --- nil / malformed args ---
+		{
+			name:     "nil args does not panic and returns tool name for unknown tool",
+			toolName: "my_tool",
+			args:     json.RawMessage(nil),
+			want:     "my_tool",
+		},
+		{
+			name:     "malformed JSON args does not panic and returns tool name for unknown tool",
+			toolName: "my_tool",
+			args:     json.RawMessage("not json"),
+			want:     "my_tool",
+		},
+		{
+			name:     "nil args does not panic for known tool",
+			toolName: "request_review",
+			args:     json.RawMessage(nil),
+			want:     "review: requested",
+		},
+		{
+			name:     "malformed JSON args does not panic for known tool",
+			toolName: "request_review",
+			args:     json.RawMessage("not json"),
+			want:     "review: requested",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := activityLabel(tt.toolName, tt.args)
+			if got != tt.want {
+				t.Errorf("activityLabel(%q, %s) = %q, want %q", tt.toolName, tt.args, got, tt.want)
+			}
 		})
 	}
 }

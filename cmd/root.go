@@ -205,6 +205,7 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 				SessionID:      snap.ID,
 				AgentName:      snap.AgentID,
 				TeamName:       snap.TeamName,
+				Task:           sess.Task(),
 				JobID:          snap.JobID,
 				SystemPrompt:   sess.SystemPrompt(),
 				InitialMessage: sess.InitialMessage(),

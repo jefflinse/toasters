@@ -19,6 +19,7 @@ type Session struct {
 	id           string
 	agentID      string
 	teamName     string // team this agent belongs to (may be empty)
+	task         string // short human-readable description of what this agent is doing
 	jobID        string
 	prov         provider.Provider
 	model        string
@@ -60,6 +61,7 @@ func newSession(id string, p provider.Provider, opts SpawnOpts, toolExec ToolExe
 		id:           id,
 		agentID:      opts.AgentID,
 		teamName:     opts.TeamName,
+		task:         opts.Task,
 		jobID:        opts.JobID,
 		prov:         p,
 		model:        opts.Model,
@@ -335,6 +337,10 @@ func (s *Session) InitialMessage() string {
 	}
 	return ""
 }
+
+// Task returns the short human-readable description of what this agent is doing.
+// task is set once at construction and never mutated; no lock is needed.
+func (s *Session) Task() string { return s.task }
 
 // emit sends an event to all subscribers. Non-blocking — slow subscribers miss events.
 func (s *Session) emit(ev SessionEvent) {

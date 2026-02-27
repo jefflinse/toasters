@@ -2,8 +2,11 @@
 package tui
 
 import (
+	"encoding/json"
 	"fmt"
 	"image/color"
+	"net/url"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -396,7 +399,15 @@ func (m *Model) renderGrid() string {
 	return lipgloss.JoinVertical(lipgloss.Left, hotkeyBar, top, bottom)
 }
 
-// renderRuntimeGridCell renders a single runtime session into a grid cell.
+// renderRuntimeGridCell renders a single runtime session into a grid cell as a
+// structured smart card:
+//
+//	⚡ team/agent-name · <uuid-short> · 1m24s   ← header
+//	──────────────────────────────────────────   ← dim separator
+//	building core data models                    ← task description (word-wrapped, ≤2 lines)
+//	──────────────────────────────────────────   ← dim separator (only if task non-empty)
+//	• write: main.go                             ← activity items, newest first
+//	• shell: go test ./...
 func (m *Model) renderRuntimeGridCell(rs *runtimeSlot, cellW, cellH, innerW, innerH int, focused bool) string {
 	// Distinct cyan border for runtime sessions.
 	var borderColor color.Color
@@ -433,7 +444,21 @@ func (m *Model) renderRuntimeGridCell(rs *runtimeSlot, cellW, cellH, innerW, inn
 		BorderForeground(borderColor).
 		Padding(0, 1)
 
-	// Header: ⚡ agentName [· teamName] · jobID · elapsed
+	// Graceful degrade: too narrow to show a useful card.
+	if innerH < 4 {
+		jobID := rs.jobID
+		if len(jobID) > 8 {
+			jobID = jobID[:8]
+		}
+		mini := DimStyle.Render(truncateStr(jobID, innerW))
+		miniLines := strings.Split(mini, "\n")
+		if len(miniLines) > innerH {
+			miniLines = miniLines[:innerH]
+		}
+		return cellStyle.Render(strings.Join(miniLines, "\n"))
+	}
+
+	// --- Header line ---
 	elapsed := time.Since(rs.startTime).Round(time.Second)
 	statusMark := "⚡"
 	if rs.status != "active" {
@@ -444,9 +469,14 @@ func (m *Model) renderRuntimeGridCell(rs *runtimeSlot, cellW, cellH, innerW, inn
 		agentLabel = "runtime"
 	}
 	if rs.teamName != "" {
-		agentLabel += " · " + rs.teamName
+		agentLabel = rs.teamName + "/" + agentLabel
 	}
-	header := fmt.Sprintf("%s %s · %s · %s", statusMark, agentLabel, rs.jobID, elapsed)
+	// Short job ID (first 8 chars).
+	shortJobID := rs.jobID
+	if len(shortJobID) > 8 {
+		shortJobID = shortJobID[:8]
+	}
+	header := fmt.Sprintf("%s %s · %s · %s", statusMark, agentLabel, shortJobID, elapsed)
 	var headerLine string
 	if focused {
 		headerLine = rainbowText(truncateStr(header, innerW), m.spinnerFrame)
@@ -454,52 +484,85 @@ func (m *Model) renderRuntimeGridCell(rs *runtimeSlot, cellW, cellH, innerW, inn
 		headerLine = hdrStyle.Render(truncateStr(header, innerW))
 	}
 
-	// Status line: show agent name (fallback to "runtime" if empty).
-	statusAgentLabel := rs.agentName
-	if statusAgentLabel == "" {
-		statusAgentLabel = "runtime"
-	}
-	runtimeLabel := "⚡ " + statusAgentLabel
-	if rs.status != "active" {
-		runtimeLabel = "✓ " + rs.status
-	}
-	statusLine := lipgloss.NewStyle().Foreground(lipgloss.Color("39")).Render(truncateStr(runtimeLabel, innerW))
-
-	// Separator
+	// --- Separator after header ---
 	separator := DimStyle.Render(strings.Repeat("─", innerW))
 
-	// Output tail: fill remaining height with the last N lines of output.
-	metaLines := 3 // header + status + separator
-	outputH := innerH - metaLines
-	if outputH < 0 {
-		outputH = 0
+	// --- Task description section ---
+	// Word-wrap the task to innerW, cap at 2 lines.
+	var taskLines []string
+	if rs.task != "" {
+		wrapped := wrapText(rs.task, innerW)
+		all := strings.Split(wrapped, "\n")
+		if len(all) > 2 {
+			all = all[:2]
+		}
+		// Style: dim for completed/killed, near-white for active.
+		taskStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
+		if rs.status != "active" {
+			taskStyle = DimStyle
+		}
+		for _, l := range all {
+			taskLines = append(taskLines, taskStyle.Render(l))
+		}
+	}
+	hasTask := len(taskLines) > 0
+
+	// --- Line budget ---
+	// 1 header + 1 separator = 2 fixed lines.
+	// Task section: len(taskLines) + 1 separator (if non-empty).
+	taskSectionLines := 0
+	if hasTask {
+		taskSectionLines = len(taskLines) + 1 // task lines + task separator
+	}
+	// activityH may be 0 when the task section fills the available height;
+	// the hard-clamp below ensures we never overflow innerH.
+	activityH := innerH - 2 - taskSectionLines
+	if activityH < 0 {
+		activityH = 0
 	}
 
-	var outputBody string
-	outStr := rs.output.String()
-	if outStr != "" && outputH > 0 {
-		outLines := strings.Split(outStr, "\n")
-		if len(outLines) > outputH {
-			outLines = outLines[len(outLines)-outputH:]
+	// --- Activity items (newest first) ---
+	bulletStyle := DimStyle
+	labelStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
+	maxLabelW := innerW - 2 // "• " prefix
+	if maxLabelW < 1 {
+		maxLabelW = 1
+	}
+
+	var activityLines []string
+	if len(rs.activities) == 0 && rs.status == "active" {
+		// Waiting state — show a single dim placeholder.
+		if activityH > 0 {
+			activityLines = append(activityLines, DimStyle.Render("waiting for activity…"))
 		}
-		for j, l := range outLines {
-			if len([]rune(l)) > innerW {
-				outLines[j] = string([]rune(l)[:innerW])
+	} else {
+		// Iterate newest-first (activities are oldest-first).
+		for i := len(rs.activities) - 1; i >= 0 && len(activityLines) < activityH; i-- {
+			lbl := rs.activities[i].label
+			if len([]rune(lbl)) > maxLabelW {
+				lbl = string([]rune(lbl)[:maxLabelW])
 			}
+			line := bulletStyle.Render("• ") + labelStyle.Render(lbl)
+			activityLines = append(activityLines, line)
 		}
-		outputBody = strings.Join(outLines, "\n")
 	}
 
-	inner := strings.Join([]string{headerLine, statusLine, separator, outputBody}, "\n")
+	// --- Assemble lines slice ---
+	var lines []string
+	lines = append(lines, headerLine)
+	lines = append(lines, separator)
+	if hasTask {
+		lines = append(lines, taskLines...)
+		lines = append(lines, separator)
+	}
+	lines = append(lines, activityLines...)
 
 	// Hard-clamp to innerH lines.
-	innerLines := strings.Split(inner, "\n")
-	if len(innerLines) > innerH {
-		innerLines = innerLines[:innerH]
+	if len(lines) > innerH {
+		lines = lines[:innerH]
 	}
-	inner = strings.Join(innerLines, "\n")
 
-	return cellStyle.Render(inner)
+	return cellStyle.Render(strings.Join(lines, "\n"))
 }
 
 // commaInt formats an integer with comma-separated thousands (e.g. 200000 → "200,000").
@@ -691,4 +754,76 @@ func renderReasoningBlock(reasoning string, contentWidth int) string {
 	header := ReasoningHeaderStyle.Render("⟳ thinking")
 	body := ReasoningBlockStyle.Width(blockWidth).Render(wrapText(reasoning, blockWidth))
 	return header + "\n" + body
+}
+
+// activityLabel returns a short human-readable label for a tool call,
+// suitable for display in a runtime agent card's activity list.
+func activityLabel(toolName string, args json.RawMessage) string {
+	var a map[string]any
+	_ = json.Unmarshal(args, &a)
+
+	str := func(key string) string {
+		v, _ := a[key].(string)
+		return v
+	}
+	trunc := func(s string, n int) string {
+		r := []rune(s)
+		if len(r) > n {
+			return string(r[:n]) + "…"
+		}
+		return s
+	}
+
+	switch toolName {
+	case "write_file":
+		return "write: " + filepath.Base(str("path"))
+	case "edit_file":
+		return "edit: " + filepath.Base(str("path"))
+	case "read_file":
+		return "read: " + filepath.Base(str("path"))
+	case "shell":
+		return "shell: " + trunc(str("command"), 28)
+	case "spawn_agent":
+		name := str("agent_name")
+		if name == "" {
+			name = "worker"
+		}
+		return "spawn: " + name
+	case "report_progress":
+		msg := str("message")
+		if msg == "" {
+			return "progress: (no message)"
+		}
+		return "progress: " + trunc(msg, 28)
+	case "report_blocker":
+		desc := str("description")
+		if desc == "" {
+			return "blocker: (no description)"
+		}
+		return "blocker: " + trunc(desc, 28)
+	case "web_fetch":
+		u := str("url")
+		if parsed, err := url.Parse(u); err == nil && parsed.Host != "" {
+			return "fetch: " + parsed.Host
+		}
+		return "fetch: " + trunc(u, 28)
+	case "glob":
+		return "glob: " + trunc(str("pattern"), 28)
+	case "grep":
+		return "grep: " + trunc(str("pattern"), 28)
+	case "log_artifact":
+		return "artifact: " + trunc(str("name"), 28)
+	case "update_task_status":
+		return "task: " + str("status")
+	case "request_review":
+		return "review: requested"
+	case "query_job_context":
+		return "query: job context"
+	default:
+		// MCP-namespaced tools: "server__tool_name" → "server: tool_name"
+		if parts := strings.SplitN(toolName, "__", 2); len(parts) == 2 {
+			return trunc(parts[0]+": "+parts[1], 35)
+		}
+		return trunc(toolName, 35)
+	}
 }

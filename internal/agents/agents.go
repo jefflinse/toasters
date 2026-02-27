@@ -17,11 +17,18 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// spawnAgentTaskInstruction is the canonical instruction for populating the
+// "task" field when calling spawn_agent. It is referenced verbatim in both
+// WrapperPrompt and BuildTeamCoordinatorPrompt so the two stay in sync.
+const spawnAgentTaskInstruction = `When calling spawn_agent, always populate the "task" field with a short (≤60 char) description of what the worker is being asked to do. This is shown in the TUI card so the operator can monitor progress at a glance. Example: "building core data models", "performing code review", "writing unit tests".`
+
 // WrapperPrompt is the toasters-owned framing text appended to every coordinator
 // system prompt. The %s placeholder is replaced with the agent roster at runtime.
 const WrapperPrompt = `You are a coordinator agent operating inside toasters, an agentic orchestration tool. You lead a team of specialized workers.
 
 Your job is to take the assigned task, plan the work, and delegate subtasks to your workers using the Task tool. Each worker is a Claude subagent with a specific role — delegate to them by their role/description, not by name. Do not perform domain work yourself; delegate it.
+
+` + spawnAgentTaskInstruction + `
 
 When the job is complete, write a REPORT.md to the job directory summarizing what was done.
 
@@ -633,6 +640,8 @@ func BuildTeamCoordinatorPrompt(team Team, jobDir string) string {
 You are the coordinator for the "%s" team inside toasters, an agentic orchestration tool.
 
 Your job is to take the assigned job and task, plan the work, delegate to your team members using the Task tool, and drive the job to completion autonomously.
+
+`+spawnAgentTaskInstruction+`
 
 ### Your Team
 %s

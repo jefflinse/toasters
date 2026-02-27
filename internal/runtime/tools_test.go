@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/jefflinse/toasters/internal/provider"
 )
 
 func TestReadFile(t *testing.T) {
@@ -882,6 +884,82 @@ func TestSpawnAgentAllUnknownToolsPassesNil(t *testing.T) {
 	if capturing.received.Tools != nil {
 		t.Fatalf("want nil SpawnOpts.Tools when all tool names are unknown, got %v", capturing.received.Tools)
 	}
+}
+
+// TestSpawnAgentTaskParam verifies that when spawn_agent is called with a
+// "task" field, SpawnOpts.Task is set to that value and forwarded to the spawner.
+func TestSpawnAgentTaskParam(t *testing.T) {
+	dir := t.TempDir()
+
+	capturing := &capturingSpawner{result: "ok"}
+	ct := NewCoreTools(dir,
+		WithSpawner(capturing, 0, 3),
+		WithProvider("test-provider", "test-model"),
+	)
+
+	_, err := ct.Execute(context.Background(), "spawn_agent", mustJSON(t, map[string]any{
+		"system_prompt": "you are a builder",
+		"message":       "build the models",
+		"task":          "building core data models",
+	}))
+	assertNoError(t, err)
+
+	if capturing.received == nil {
+		t.Fatal("SpawnAndWait was never called")
+	}
+
+	assertEqual(t, "building core data models", capturing.received.Task)
+}
+
+// TestSpawnAgentTaskOmitted verifies that when spawn_agent is called without a
+// "task" field, SpawnOpts.Task is the empty string.
+func TestSpawnAgentTaskOmitted(t *testing.T) {
+	dir := t.TempDir()
+
+	capturing := &capturingSpawner{result: "ok"}
+	ct := NewCoreTools(dir,
+		WithSpawner(capturing, 0, 3),
+		WithProvider("test-provider", "test-model"),
+	)
+
+	_, err := ct.Execute(context.Background(), "spawn_agent", mustJSON(t, map[string]any{
+		"system_prompt": "you are a helper",
+		"message":       "do the thing",
+		// no "task" key
+	}))
+	assertNoError(t, err)
+
+	if capturing.received == nil {
+		t.Fatal("SpawnAndWait was never called")
+	}
+
+	assertEqual(t, "", capturing.received.Task)
+}
+
+// TestSessionTask verifies that Session.Task() returns the task description
+// that was set via SpawnOpts.Task when the session was created.
+func TestSessionTask(t *testing.T) {
+	mp := &mockProvider{
+		name: "test",
+		responses: []mockResponse{
+			{events: []provider.StreamEvent{
+				{Type: provider.EventText, Text: "Done"},
+				{Type: provider.EventDone},
+			}},
+		},
+	}
+
+	opts := SpawnOpts{
+		AgentID:        "test-agent",
+		Model:          "test-model",
+		InitialMessage: "do the work",
+		MaxTurns:       10,
+		Task:           "test task description",
+	}
+
+	sess := newSession("sess-task", mp, opts, &mockToolExecutor{})
+
+	assertEqual(t, "test task description", sess.Task())
 }
 
 // --- Test helpers ---

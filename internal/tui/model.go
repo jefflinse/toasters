@@ -264,17 +264,25 @@ type Model struct {
 	operator *operator.Operator // may be nil — graceful degradation
 }
 
+// activityItem represents a single tool-call activity for display in a runtime agent card.
+type activityItem struct {
+	label    string // formatted display label, e.g. "write: main.go"
+	toolName string // raw tool name
+}
+
 // runtimeSlot tracks a runtime agent session for TUI display.
 type runtimeSlot struct {
 	sessionID      string
 	agentName      string
 	teamName       string // team this agent belongs to (may be empty)
+	task           string // short human-readable description of what this agent is doing
 	jobID          string
 	status         string // "active", "completed", "failed", "cancelled"
 	output         strings.Builder
 	startTime      time.Time
-	systemPrompt   string // the system prompt given to the LLM
-	initialMessage string // the initial user message / task description
+	systemPrompt   string         // the system prompt given to the LLM
+	initialMessage string         // the initial user message / task description
+	activities     []activityItem // recent tool-call activities; newest appended last, capped at 6
 }
 
 // NewModel returns an initialized root model.
@@ -1309,6 +1317,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			sessionID:      msg.SessionID,
 			agentName:      msg.AgentName,
 			teamName:       msg.TeamName,
+			task:           msg.Task,
 			jobID:          msg.JobID,
 			status:         "active",
 			startTime:      time.Now(),
@@ -1330,6 +1339,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case runtime.SessionEventToolCall:
 			if ev.ToolCall != nil {
 				fmt.Fprintf(&slot.output, "\n⚙ %s\n", ev.ToolCall.Name)
+				label := activityLabel(ev.ToolCall.Name, ev.ToolCall.Arguments)
+				slot.activities = append(slot.activities, activityItem{label: label, toolName: ev.ToolCall.Name})
+				if len(slot.activities) > 6 {
+					slot.activities = slot.activities[len(slot.activities)-6:]
+				}
 			}
 		case runtime.SessionEventToolResult:
 			if ev.ToolResult != nil {

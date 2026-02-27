@@ -293,7 +293,8 @@ func (ct *CoreTools) Definitions() []ToolDef {
 					"system_prompt": {"type": "string", "description": "System prompt for the child agent"},
 					"message":       {"type": "string", "description": "Initial message to send to the child agent"},
 					"tools":         {"type": "array", "items": {"type": "string"}, "description": "Tool names to make available to the child agent"},
-					"agent_name":    {"type": "string", "description": "Short display name for this agent in the TUI (e.g. 'tui-engineer', 'builder'). Omitting this will display the child under the parent agent's name."}
+					"agent_name":    {"type": "string", "description": "Short display name for this agent in the TUI (e.g. 'tui-engineer', 'builder'). Omitting this will display the child under the parent agent's name."},
+					"task":          {"type": "string", "description": "Short human-readable description of what this agent is being asked to do (\u226460 chars), shown in the TUI card. E.g. 'building core data models', 'performing code review'."}
 				},
 				"required": ["system_prompt", "message"]
 			}`),
@@ -826,6 +827,7 @@ func (ct *CoreTools) spawnAgent(ctx context.Context, args json.RawMessage) (stri
 		Message      string   `json:"message"`
 		Tools        []string `json:"tools"`
 		AgentName    string   `json:"agent_name"`
+		Task         string   `json:"task"`
 	}
 	if err := json.Unmarshal(args, &params); err != nil {
 		return "", fmt.Errorf("parsing arguments: %w", err)
@@ -865,6 +867,7 @@ func (ct *CoreTools) spawnAgent(ctx context.Context, args json.RawMessage) (stri
 		Model:          ct.model,
 		AgentID:        childAgentID,
 		JobID:          ct.jobID,
+		Task:           params.Task,
 		Tools:          toolDefs,
 	})
 	if err != nil {

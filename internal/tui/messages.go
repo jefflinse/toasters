@@ -138,6 +138,7 @@ type RuntimeSessionStartedMsg struct {
 	SessionID      string
 	AgentName      string
 	TeamName       string // team this agent belongs to (may be empty)
+	Task           string // short human-readable description of what this agent is doing
 	JobID          string
 	SystemPrompt   string
 	InitialMessage string
