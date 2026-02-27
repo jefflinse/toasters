@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
 	"github.com/jefflinse/toasters/internal/agents"
@@ -410,6 +411,22 @@ func (m *Model) hasConversation() bool {
 		}
 	}
 	return false
+}
+
+// setFocus changes the focused panel and triggers the title burst animation
+// if the panel is actually changing. Returns a spinnerTick cmd to ensure the
+// ticker is running during the animation window.
+func (m *Model) setFocus(p focusedPanel) tea.Cmd {
+	if p == m.focused {
+		return nil
+	}
+	m.focused = p
+	if p == focusJobs || p == focusTeams || p == focusAgents {
+		m.focusAnimPanel = p
+		m.focusAnimFrames = 8
+		return spinnerTick()
+	}
+	return nil
 }
 
 func (m *Model) newSession() {

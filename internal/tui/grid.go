@@ -251,12 +251,7 @@ func (m *Model) renderGrid() string {
 			header += " " + miniTokenBar(totalTokens)
 		}
 
-		var headerLine string
-		if focused {
-			headerLine = rainbowText(truncateStr(header, innerW), m.spinnerFrame)
-		} else {
-			headerLine = headerStyle.Render(truncateStr(header, innerW))
-		}
+		headerLine := headerStyle.Render(truncateStr(header, innerW))
 
 		// 2. Summary (prefer ExitSummary when done)
 		summary := snap.Summary
@@ -553,12 +548,7 @@ func (m *Model) renderRuntimeGridCell(rs *runtimeSlot, cellW, cellH, innerW, inn
 		shortJobID = shortJobID[:8]
 	}
 	header := fmt.Sprintf("%s %s · %s · %s", statusMark, agentLabel, shortJobID, elapsed)
-	var headerLine string
-	if focused {
-		headerLine = rainbowText(truncateStr(header, innerW), m.spinnerFrame)
-	} else {
-		headerLine = hdrStyle.Render(truncateStr(header, innerW))
-	}
+	headerLine := hdrStyle.Render(truncateStr(header, innerW))
 
 	// --- Separator after header ---
 	separator := DimStyle.Render(strings.Repeat("─", innerW))

@@ -97,7 +97,11 @@ func (m Model) renderLeftPanel(panelWidth, panelHeight int) string {
 
 	// --- Top pane: Jobs ---
 	var topLines []string
-	topLines = append(topLines, gradientText("Jobs", [3]uint8{0, 200, 200}, [3]uint8{175, 50, 200}))
+	jobsTitle := gradientText("Jobs", [3]uint8{0, 200, 200}, [3]uint8{175, 50, 200})
+	if m.focused == focusJobs && m.focusAnimFrames > 0 {
+		jobsTitle = rainbowText("Jobs", m.spinnerFrame)
+	}
+	topLines = append(topLines, jobsTitle)
 	if len(displayedJobs) == 0 {
 		topLines = append(topLines, PlaceholderPaneStyle.Render("No jobs"))
 	} else {
@@ -240,7 +244,11 @@ func (m Model) renderLeftPanel(panelWidth, panelHeight int) string {
 
 	// --- Bottom pane: Teams ---
 	var bottomLines []string
-	bottomLines = append(bottomLines, gradientText("Teams", [3]uint8{255, 175, 0}, [3]uint8{0, 200, 200}))
+	teamsTitle := gradientText("Teams", [3]uint8{255, 175, 0}, [3]uint8{0, 200, 200})
+	if m.focused == focusTeams && m.focusAnimFrames > 0 {
+		teamsTitle = rainbowText("Teams", m.spinnerFrame)
+	}
+	bottomLines = append(bottomLines, teamsTitle)
 	if len(m.teams) == 0 {
 		bottomLines = append(bottomLines, PlaceholderPaneStyle.Render("No teams configured"))
 	} else {
@@ -405,7 +413,11 @@ func (m Model) renderSidebar(sbWidth int) string {
 
 	// --- Bottom pane: Agents (auto-sized to content) ---
 	var agentsSB strings.Builder
-	agentsSB.WriteString(gradientText("Agents", [3]uint8{50, 130, 255}, [3]uint8{0, 200, 200}))
+	agentsTitle := gradientText("Agents", [3]uint8{50, 130, 255}, [3]uint8{0, 200, 200})
+	if m.focused == focusAgents && m.focusAnimFrames > 0 {
+		agentsTitle = rainbowText("Agents", m.spinnerFrame)
+	}
+	agentsSB.WriteString(agentsTitle)
 	agentsSB.WriteString("\n")
 
 	hasAnyGateway := false

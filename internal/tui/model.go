@@ -250,6 +250,11 @@ type Model struct {
 	// Shared spinner animation frame counter.
 	spinnerFrame int
 
+	// Focus burst animation: plays rainbowText on the newly-focused sidebar tile
+	// for focusAnimFramesTotal ticks, then stops.
+	focusAnimPanel  focusedPanel // which panel is currently animating
+	focusAnimFrames int          // frames remaining (counts down from 8 to 0)
+
 	// Toast notification state.
 	toasts      []toast
 	nextToastID int
@@ -514,12 +519,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				break
 			}
-			m.focused = next
+			focusCmd := m.setFocus(next)
 			if next == focusChat {
-				return m, m.input.Focus()
+				return m, tea.Batch(m.input.Focus(), focusCmd)
 			}
 			m.input.Blur()
-			return m, nil
+			return m, focusCmd
 
 		case "pgup":
 			// Scroll chat viewport up by one page.
@@ -686,7 +691,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.leftPanelHidden = !m.leftPanelHidden
 			// If hiding the panel while it's focused, switch to chat.
 			if m.leftPanelHidden && (m.focused == focusJobs || m.focused == focusTeams) {
-				m.focused = focusChat
+				cmds = append(cmds, m.setFocus(focusChat))
 				cmds = append(cmds, m.input.Focus())
 			}
 			m.resizeComponents()
@@ -697,7 +702,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.sidebarHidden = !m.sidebarHidden
 			// If hiding the sidebar while it's focused, switch to chat.
 			if m.sidebarHidden && m.focused == focusAgents {
-				m.focused = focusChat
+				cmds = append(cmds, m.setFocus(focusChat))
 				cmds = append(cmds, m.input.Focus())
 			}
 			m.resizeComponents()
@@ -1457,26 +1462,26 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if msg.Y >= teamsPaneY {
 					// Clicked Teams pane.
 					if m.focused != focusTeams {
-						m.focused = focusTeams
+						cmds = append(cmds, m.setFocus(focusTeams))
 						m.input.Blur()
 					}
 				} else {
 					// Clicked Jobs or Job Detail pane.
 					if m.focused != focusJobs {
-						m.focused = focusJobs
+						cmds = append(cmds, m.setFocus(focusJobs))
 						m.input.Blur()
 					}
 				}
 			} else if showSidebar && msg.X >= sidebarStartX {
 				// Clicked sidebar — focus agents pane.
 				if m.focused != focusAgents {
-					m.focused = focusAgents
+					cmds = append(cmds, m.setFocus(focusAgents))
 					m.input.Blur()
 				}
 			} else {
 				// Clicked chat area — focus chat.
 				if m.focused != focusChat {
-					m.focused = focusChat
+					cmds = append(cmds, m.setFocus(focusChat))
 					cmds = append(cmds, m.input.Focus())
 				}
 			}
@@ -1511,6 +1516,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case spinnerTickMsg:
 		m.spinnerFrame++
+		if m.focusAnimFrames > 0 {
+			m.focusAnimFrames--
+		}
 		// Re-arm only if something is animating: operator streaming, tools in flight, or any agent running.
 		needTick := m.stream.streaming || m.toolsInFlight
 		if !needTick && m.gateway != nil {
@@ -1529,8 +1537,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		}
-		// Keep ticking while grid is visible so the rainbow title animates.
-		if !needTick && m.grid.showGrid {
+		if !needTick && m.focusAnimFrames > 0 {
 			needTick = true
 		}
 		if needTick {
