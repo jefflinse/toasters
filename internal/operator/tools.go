@@ -148,6 +148,29 @@ func (ot *operatorTools) consultAgent(ctx context.Context, args json.RawMessage)
 		"model", composed.Model,
 	)
 
+	// Build the filtered tool list from the agent's declared tools. This
+	// ensures each system agent only sees the tools it's supposed to have
+	// (e.g. planner gets create_job/create_task/assign_task/query_job_context,
+	// not surface_to_user or query_teams).
+	var agentTools []runtime.ToolDef
+	if len(composed.Tools) > 0 {
+		allDefs := ot.systemTools.Definitions()
+		defsByName := make(map[string]runtime.ToolDef, len(allDefs))
+		for _, d := range allDefs {
+			defsByName[d.Name] = d
+		}
+		for _, name := range composed.Tools {
+			if d, ok := defsByName[name]; ok {
+				agentTools = append(agentTools, d)
+			} else {
+				slog.Warn("system agent declared unknown tool, skipping",
+					"agent", params.AgentName,
+					"tool", name,
+				)
+			}
+		}
+	}
+
 	// Build SpawnOpts from the composed agent. System agents get SystemTools
 	// as their tool executor (not CoreTools/filesystem tools).
 	opts := runtime.SpawnOpts{
@@ -155,6 +178,7 @@ func (ot *operatorTools) consultAgent(ctx context.Context, args json.RawMessage)
 		ProviderName:   composed.Provider,
 		Model:          composed.Model,
 		SystemPrompt:   composed.SystemPrompt,
+		Tools:          agentTools,
 		ToolExecutor:   ot.systemTools,
 		InitialMessage: params.Message,
 		WorkDir:        ot.workDir,

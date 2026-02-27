@@ -128,6 +128,20 @@ func (st *SystemTools) Definitions() []runtime.ToolDef {
 			}`),
 		},
 		{
+			Name:        "query_job_context",
+			Description: "Query the context of a job, including its tasks and their current status.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"job_id": {
+						"type": "string",
+						"description": "ID of the job to query"
+					}
+				},
+				"required": ["job_id"]
+			}`),
+		},
+		{
 			Name:        "surface_to_user",
 			Description: "Surface information to the user. Use this to relay important findings, summaries, questions, or status updates.",
 			Parameters: json.RawMessage(`{
@@ -157,6 +171,8 @@ func (st *SystemTools) Execute(ctx context.Context, name string, args json.RawMe
 		return st.queryTeams(ctx)
 	case "query_job":
 		return st.queryJob(ctx, args)
+	case "query_job_context":
+		return st.queryJobContext(ctx, args)
 	case "surface_to_user":
 		return st.surfaceToUser(ctx, args)
 	default:
@@ -409,6 +425,19 @@ func (st *SystemTools) queryJob(ctx context.Context, args json.RawMessage) (stri
 	}
 
 	return b.String(), nil
+}
+
+func (st *SystemTools) queryJobContext(ctx context.Context, args json.RawMessage) (string, error) {
+	var params struct {
+		JobID string `json:"job_id"`
+	}
+	if err := json.Unmarshal(args, &params); err != nil {
+		return "", fmt.Errorf("parsing query_job_context args: %w", err)
+	}
+	if params.JobID == "" {
+		return "", fmt.Errorf("job_id is required")
+	}
+	return formatJobContext(ctx, st.store, params.JobID)
 }
 
 func (st *SystemTools) surfaceToUser(ctx context.Context, args json.RawMessage) (string, error) {

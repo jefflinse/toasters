@@ -1678,6 +1678,139 @@ func TestQueryTeamsDelegatesToSystemTools(t *testing.T) {
 	assertContains(t, result, "Alpha Team")
 }
 
+// --- Regression tests for Bug 1: consultAgent tool filtering ---
+
+// TestConsultAgent_ToolFiltering is a regression test for the bug where
+// consultAgent built SpawnOpts without passing composed.Tools, so the spawned
+// system agent always saw ALL system tools instead of only its declared tools.
+//
+// The fix converts composed.Tools ([]string) to []runtime.ToolDef by looking
+// up names in ot.systemTools.Definitions(), then passes them as SpawnOpts.Tools.
+//
+// Without the fix, the planner's ChatStream request would contain all 7 system
+// tools (create_job, create_task, assign_task, query_teams, query_job,
+// query_job_context, surface_to_user) instead of only the 2 declared ones.
+func TestConsultAgent_ToolFiltering(t *testing.T) {
+	store := newOperatorTestStore(t)
+	ctx := context.Background()
+
+	// Seed a planner agent that declares only two tools.
+	// The agent must be source=system for consult_agent to accept it.
+	plannerTools := []string{"create_job", "create_task"}
+	plannerToolsJSON, _ := json.Marshal(plannerTools)
+	if err := store.UpsertAgent(ctx, &db.Agent{
+		ID:           "planner",
+		Name:         "Planner",
+		Source:       "system",
+		SystemPrompt: "You are a planning agent.",
+		Tools:        json.RawMessage(plannerToolsJSON),
+	}); err != nil {
+		t.Fatalf("upserting planner agent: %v", err)
+	}
+
+	mp := &mockProvider{
+		name: "test",
+		responses: []mockResponse{
+			// 1. Operator calls consult_agent.
+			{events: []provider.StreamEvent{
+				{Type: provider.EventToolCall, ToolCall: &provider.ToolCall{
+					ID:        "call-1",
+					Name:      "consult_agent",
+					Arguments: json.RawMessage(`{"agent_name": "planner", "message": "Plan something"}`),
+				}},
+				{Type: provider.EventDone},
+			}},
+			// 2. Planner agent responds (only sees its declared tools).
+			{events: []provider.StreamEvent{
+				{Type: provider.EventText, Text: "Here is the plan."},
+				{Type: provider.EventDone},
+			}},
+			// 3. Operator responds after seeing planner's result.
+			{events: []provider.StreamEvent{
+				{Type: provider.EventText, Text: "Plan received."},
+				{Type: provider.EventDone},
+			}},
+		},
+	}
+
+	reg := provider.NewRegistry()
+	reg.Register("test", mp)
+
+	composer := compose.New(store, "test", "test-model")
+	rt := runtime.New(store, reg)
+
+	var textBuf strings.Builder
+	var mu sync.Mutex
+
+	op := New(Config{
+		Runtime:  rt,
+		Provider: mp,
+		Model:    "test-model",
+		WorkDir:  t.TempDir(),
+		Store:    store,
+		Composer: composer,
+		OnText: func(text string) {
+			mu.Lock()
+			textBuf.WriteString(text)
+			mu.Unlock()
+		},
+	})
+
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	op.Start(ctx)
+
+	_ = op.Send(ctx, Event{
+		Type:    EventUserMessage,
+		Payload: UserMessagePayload{Text: "Plan something"},
+	})
+
+	waitFor(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return strings.Contains(textBuf.String(), "Plan received")
+	}, 5*time.Second)
+
+	// The second ChatStream call is the planner agent's session.
+	// Its Tools list must contain ONLY the two declared tools, not all system tools.
+	reqs := mp.getRequests()
+	if len(reqs) < 2 {
+		t.Fatalf("want at least 2 ChatStream calls, got %d", len(reqs))
+	}
+
+	plannerReq := reqs[1]
+
+	// Build a set of tool names from the planner's request.
+	plannerToolNames := make(map[string]bool, len(plannerReq.Tools))
+	for _, tool := range plannerReq.Tools {
+		plannerToolNames[tool.Name] = true
+	}
+
+	// The planner must see its declared tools.
+	for _, expected := range []string{"create_job", "create_task"} {
+		if !plannerToolNames[expected] {
+			t.Errorf("planner session missing declared tool %q — regression: tool filtering not applied", expected)
+		}
+	}
+
+	// The planner must NOT see tools it did not declare.
+	// Before the fix, all system tools were visible because SpawnOpts.Tools was nil.
+	undeclaredTools := []string{"assign_task", "query_teams", "query_job", "query_job_context", "surface_to_user"}
+	for _, undeclared := range undeclaredTools {
+		if plannerToolNames[undeclared] {
+			t.Errorf("planner session has undeclared tool %q — regression: consultAgent not filtering tools to agent's declared set", undeclared)
+		}
+	}
+
+	// The planner was seeded with exactly these tools; count must match the declaration.
+	wantCount := len(plannerTools)
+	if len(plannerReq.Tools) != wantCount {
+		t.Errorf("planner session has %d tools, want %d (matching declared tools %v); got: %v",
+			len(plannerReq.Tools), wantCount, plannerTools, plannerReq.Tools)
+	}
+}
+
 // --- Helpers ---
 
 func newTestRegistry(mp *mockProvider) *provider.Registry {
