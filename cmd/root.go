@@ -263,10 +263,6 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 				}
 			},
 		})
-
-		opCtx, opCancel := context.WithCancel(context.Background())
-		defer opCancel()
-		op.Start(opCtx)
 	}
 
 	m := tui.NewModel(tui.ModelConfig{
@@ -286,7 +282,16 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 	})
 
 	prog := tea.NewProgram(&m)
+	// Store prog BEFORE starting the operator so that notifySessionStarted and
+	// all operator callbacks can safely call p.Load() and find a non-nil program.
+	// Bubble Tea buffers Send() calls made before Run() starts, so this is safe.
 	p.Store(prog)
+
+	if op != nil {
+		opCtx, opCancel := context.WithCancel(context.Background())
+		defer opCancel()
+		op.Start(opCtx)
+	}
 
 	gw.SetSend(func(msg gateway.SlotTimeoutMsg) {
 		prog.Send(msg)
