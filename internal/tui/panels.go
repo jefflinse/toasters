@@ -173,7 +173,7 @@ func (m Model) renderLeftPanel(panelWidth, panelHeight int) string {
 	// Hint line when jobs pane is focused.
 	if m.focused == focusJobs && len(displayedJobs) > 0 {
 		dj := displayedJobs
-		hint := "↑↓ navigate"
+		hint := "↑↓ · Enter → job details"
 		if m.selectedJob < len(dj) && m.hasBlocker(dj[m.selectedJob]) {
 			hint = "Enter → resolve blocker"
 		}

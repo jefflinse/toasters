@@ -220,6 +220,15 @@ func (m *Model) View() tea.View {
 		return v
 	}
 
+	// Jobs modal takes over the full terminal as a centered overlay.
+	if m.jobsModal.show {
+		jobsView := m.renderJobsModal()
+		v := tea.NewView(jobsView)
+		v.AltScreen = true
+		v.MouseMode = tea.MouseModeCellMotion
+		return v
+	}
+
 	// MCP modal takes over the full terminal as a centered overlay.
 	if m.mcpModal.show {
 		mcpView := m.renderMCPModal()

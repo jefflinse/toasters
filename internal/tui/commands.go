@@ -22,6 +22,7 @@ var allCommands = []SlashCommand{
 	{Name: "/agents", Description: "Browse and manage agents"},
 	{Name: "/mcp", Description: "View MCP server status and tools"},
 	{Name: "/job", Description: "Create a new job"},
+	{Name: "/jobs", Description: "Browse and manage jobs"},
 }
 
 // filterCommands returns commands whose Name has the given prefix.

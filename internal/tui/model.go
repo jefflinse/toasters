@@ -225,6 +225,9 @@ type Model struct {
 	// Blocker modal state.
 	blockerModal blockerModalState
 
+	// Jobs modal state.
+	jobsModal jobsModalState
+
 	// Gateway notify channel — gateway writes to this; TUI polls it.
 	agentNotifyCh chan struct{}
 
@@ -455,6 +458,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Agents modal key handling — intercept all keys when modal is open.
 		if m.agentsModal.show {
 			return m.updateAgentsModal(msg)
+		}
+
+		// Jobs modal key handling — intercept all keys when modal is open.
+		if m.jobsModal.show {
+			return m.updateJobsModal(msg)
 		}
 
 		// Blocker modal key handling — intercept all keys when modal is open.
@@ -872,7 +880,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.blockerModal.inputText = ""
 					return m, nil
 				}
-				// Non-blocked job: no action on Enter for now.
+				// Open jobs modal pre-selected on current job.
+				m.jobsModal = jobsModalState{
+					show:     true,
+					jobIdx:   m.selectedJob,
+					tasks:    make(map[string][]*db.Task),
+					progress: make(map[string][]*db.ProgressReport),
+				}
+				m.loadJobsForModal()
+				m.loadJobDetail()
 				return m, nil
 			}
 			// Open teams modal pre-selected when teams pane is focused.
@@ -974,6 +990,19 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.cmdPopup.show = false
 					m.agentsModal = agentsModalState{show: true}
 					m.reloadAgentsForModal()
+					return m, nil
+				case "/jobs":
+					m.input.Reset()
+					m.cmdPopup.show = false
+					m.jobsModal = jobsModalState{
+						show:     true,
+						tasks:    make(map[string][]*db.Task),
+						progress: make(map[string][]*db.ProgressReport),
+					}
+					m.loadJobsForModal()
+					if len(m.jobsModal.jobs) > 0 {
+						m.loadJobDetail()
+					}
 					return m, nil
 				case "/mcp":
 					m.input.Reset()
