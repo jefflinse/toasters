@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -15,11 +17,13 @@ import (
 	"github.com/atotto/clipboard"
 	"github.com/charmbracelet/glamour"
 
+	"github.com/jefflinse/toasters/internal/agentfmt"
 	"github.com/jefflinse/toasters/internal/agents"
 	"github.com/jefflinse/toasters/internal/config"
 	"github.com/jefflinse/toasters/internal/db"
 	"github.com/jefflinse/toasters/internal/gateway"
 	"github.com/jefflinse/toasters/internal/llm/tools"
+	"github.com/jefflinse/toasters/internal/loader"
 	"github.com/jefflinse/toasters/internal/mcp"
 	"github.com/jefflinse/toasters/internal/operator"
 	"github.com/jefflinse/toasters/internal/provider"
@@ -670,6 +674,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 
+		case "ctrl+v":
+			// Paste clipboard text into the chat input when chat is focused.
+			if m.focused == focusChat && !m.stream.streaming && !m.prompt.promptMode {
+				if text, err := clipboard.ReadAll(); err == nil && text != "" {
+					m.input.InsertString(text)
+				}
+			}
+
 		case "ctrl+y":
 			// Copy the last assistant message to the clipboard when chat is focused.
 			if m.focused == focusChat && !m.stream.streaming && !m.prompt.promptMode {
@@ -1301,6 +1313,110 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, tea.Batch(cmds...)
 
+	case teamGeneratedMsg:
+		m.teamsModal.generating = false
+		if msg.err != nil {
+			cmds = append(cmds, m.addToast("⚠ Team generation failed: "+msg.err.Error(), toastWarning))
+			return m, tea.Batch(cmds...)
+		}
+
+		// Parse the generated team.md to extract the team name.
+		parsed, err := agentfmt.ParseBytes([]byte(msg.content), agentfmt.DefTeam)
+		if err != nil {
+			cmds = append(cmds, m.addToast("⚠ Team generation failed: invalid team definition", toastWarning))
+			return m, tea.Batch(cmds...)
+		}
+		teamDef, ok := parsed.(*agentfmt.TeamDef)
+		if !ok || teamDef.Name == "" {
+			cmds = append(cmds, m.addToast("⚠ Team generation failed: missing team name", toastWarning))
+			return m, tea.Batch(cmds...)
+		}
+
+		// Derive the directory slug from the team name.
+		slug := loader.Slugify(teamDef.Name)
+
+		// Determine the user teams directory.
+		cfgDir, err := config.Dir()
+		if err != nil {
+			cmds = append(cmds, m.addToast("⚠ Team generation failed: "+err.Error(), toastWarning))
+			return m, tea.Batch(cmds...)
+		}
+		userTeamsDir := filepath.Join(cfgDir, "user", "teams")
+		teamDir := filepath.Join(userTeamsDir, slug)
+		agentsSubDir := filepath.Join(teamDir, "agents")
+
+		// Fail if the team directory already exists.
+		if _, statErr := os.Stat(teamDir); statErr == nil {
+			cmds = append(cmds, m.addToast("⚠ Team directory already exists: "+slug, toastWarning))
+			return m, tea.Batch(cmds...)
+		}
+
+		// Create the team directory structure.
+		if err := os.MkdirAll(agentsSubDir, 0o755); err != nil {
+			cmds = append(cmds, m.addToast("⚠ Team generation failed: "+err.Error(), toastWarning))
+			return m, tea.Batch(cmds...)
+		}
+
+		// Write team.md.
+		if err := os.WriteFile(filepath.Join(teamDir, "team.md"), []byte(msg.content), 0o644); err != nil {
+			_ = os.RemoveAll(teamDir)
+			cmds = append(cmds, m.addToast("⚠ Team generation failed: "+err.Error(), toastWarning))
+			return m, tea.Batch(cmds...)
+		}
+
+		// Copy agent files for each named agent.
+		copiedCount := 0
+		if m.store != nil && len(msg.agentNames) > 0 {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			allAgents, listErr := m.store.ListAgents(ctx)
+			cancel()
+			if listErr != nil {
+				slog.Warn("failed to list agents for team generation copy", "error", listErr)
+			} else {
+				// Build a name→agent map for fast lookup.
+				agentByName := make(map[string]*db.Agent, len(allAgents))
+				for _, a := range allAgents {
+					agentByName[a.Name] = a
+				}
+				for _, name := range msg.agentNames {
+					a, found := agentByName[name]
+					if !found {
+						slog.Warn("generated team references unknown agent, skipping", "agent", name)
+						continue
+					}
+					if a.SourcePath == "" {
+						slog.Warn("generated team agent has no source path, skipping", "agent", name)
+						continue
+					}
+					agentSlug := loader.Slugify(a.Name)
+					if agentSlug == "" {
+						agentSlug = loader.Slugify(a.ID)
+					}
+					destPath := filepath.Join(agentsSubDir, agentSlug+".md")
+					if err := copyFile(a.SourcePath, destPath); err != nil {
+						slog.Warn("failed to copy agent file for generated team", "agent", name, "error", err)
+						continue
+					}
+					copiedCount++
+				}
+			}
+		}
+
+		// Reload and select the newly created team.
+		m.reloadTeamsForModal()
+		for i, t := range m.teamsModal.teams {
+			if t.Name == teamDef.Name {
+				m.teamsModal.teamIdx = i
+				break
+			}
+		}
+
+		cmds = append(cmds, m.addToast(
+			fmt.Sprintf("✓ Team '%s' generated with %d agents", teamDef.Name, copiedCount),
+			toastSuccess,
+		))
+		return m, tea.Batch(cmds...)
+
 	case blockerAnswersSubmittedMsg:
 		// Mark answered, close modal.
 		if b, ok := m.blockers[msg.jobID]; ok {
@@ -1608,6 +1724,56 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.reloadAgentsForModal()
 		}
 		return m, nil
+
+	case skillGeneratedMsg:
+		m.skillsModal.generating = false
+		if msg.err != nil {
+			return m, m.addToast("⚠ Generation failed: "+msg.err.Error(), toastWarning)
+		}
+		path, err := writeGeneratedSkillFile(msg.content)
+		if err != nil {
+			slog.Error("failed to write generated skill file", "error", err)
+			return m, m.addToast("⚠ Failed to save skill: "+err.Error(), toastWarning)
+		}
+		m.reloadSkillsForModal()
+		// Select the newly created skill by matching its source path.
+		for i, sk := range m.skillsModal.skills {
+			if sk.SourcePath == path {
+				m.skillsModal.skillIdx = i
+				break
+			}
+		}
+		// Extract the skill name for the toast from the parsed content.
+		skillName := ""
+		if parsed, err := agentfmt.ParseBytes([]byte(msg.content), agentfmt.DefSkill); err == nil {
+			if skillDef, ok := parsed.(*agentfmt.SkillDef); ok {
+				skillName = skillDef.Name
+			}
+		}
+		if skillName == "" {
+			skillName = filepath.Base(path)
+		}
+		return m, m.addToast("✓ Skill '"+skillName+"' generated", toastSuccess)
+
+	case agentGeneratedMsg:
+		m.agentsModal.generating = false
+		if msg.err != nil {
+			return m, m.addToast("⚠ Generation failed: "+msg.err.Error(), toastWarning)
+		}
+		path, agentName, err := writeGeneratedAgentFile(msg.content)
+		if err != nil {
+			slog.Error("failed to write generated agent file", "error", err)
+			return m, m.addToast("⚠ Failed to save agent: "+err.Error(), toastWarning)
+		}
+		m.reloadAgentsForModal()
+		// Select the newly created agent by matching its source path.
+		for i, a := range m.agentsModal.agents {
+			if a.SourcePath == path {
+				m.agentsModal.agentIdx = i
+				break
+			}
+		}
+		return m, m.addToast("✓ Agent '"+agentName+"' generated", toastSuccess)
 
 	case DefinitionsReloadedMsg:
 		slog.Info("definitions reloaded from file watcher")
