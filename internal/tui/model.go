@@ -63,11 +63,13 @@ type streamingState struct {
 	claudeActiveMeta string // formatted byline for the in-progress claude stream; cleared when done
 }
 
-// gridState holds all state for the 2×2 agent grid screen.
+// gridState holds all state for the dynamic NxM agent grid screen.
 type gridState struct {
 	showGrid      bool
-	gridFocusCell int // 0-3 within current page
-	gridPage      int // 0-3 (each page shows 4 slots)
+	gridFocusCell int // 0-(cols*rows-1) within current page
+	gridPage      int // current page index
+	gridCols      int // computed from terminal width
+	gridRows      int // computed from terminal height
 }
 
 // promptModeState holds all state for the interactive prompt mode
@@ -367,6 +369,8 @@ func NewModel(cfg ModelConfig) Model {
 	m.attachedSlot = -1
 	m.selectedAgentSlot = 0
 	m.grid.gridFocusCell = 0
+	m.grid.gridCols = 1
+	m.grid.gridRows = 1
 
 	m.chat.completionMsgIdx = make(map[int]bool)
 	m.chat.expandedMsgs = make(map[int]bool)
@@ -987,6 +991,16 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		m.grid.gridCols, m.grid.gridRows = computeGridDimensions(m.width, m.height)
+		// Clamp page and focus cell to new bounds.
+		cellsPerPage := m.grid.gridCols * m.grid.gridRows
+		totalPages := (gateway.MaxSlots + cellsPerPage - 1) / cellsPerPage
+		if m.grid.gridPage >= totalPages {
+			m.grid.gridPage = totalPages - 1
+		}
+		if m.grid.gridFocusCell >= cellsPerPage {
+			m.grid.gridFocusCell = cellsPerPage - 1
+		}
 		m.resizeComponents()
 
 	case StreamChunkMsg:

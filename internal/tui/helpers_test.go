@@ -242,6 +242,67 @@ func TestTruncateStr(t *testing.T) {
 			maxLen: 10,
 			want:   "abcdefg...",
 		},
+		// --- Unicode / multi-byte rune cases ---
+		{
+			// "é" is 2 bytes (U+00E9) but 1 rune.
+			// "héllo" = 5 runes; maxLen=5 → no truncation.
+			name:   "multi-byte unicode string at exact maxLen not truncated",
+			input:  "héllo",
+			maxLen: 5,
+			want:   "héllo",
+		},
+		{
+			// "héllo" = 5 runes; maxLen=4 → keep first 1 rune + "..."
+			name:   "multi-byte unicode string truncated at rune boundary",
+			input:  "héllo",
+			maxLen: 4,
+			want:   "h...",
+		},
+		{
+			// "héllo" = 5 runes; maxLen=10 → returned unchanged (shorter than max).
+			name:   "multi-byte unicode string shorter than maxLen returned unchanged",
+			input:  "héllo",
+			maxLen: 10,
+			want:   "héllo",
+		},
+		{
+			// "hi 🎉 world" rune breakdown:
+			//   h i   (space) 🎉 (space) w o r l d  = 11 runes
+			//   🎉 is 4 bytes but 1 rune.
+			// maxLen=7 → keep first 4 runes ("hi 🎉") + "..."
+			name:   "emoji string truncated at correct rune boundary",
+			input:  "hi 🎉 world",
+			maxLen: 7,
+			want:   "hi 🎉...",
+		},
+		{
+			// "hi 🎉 world" = 11 runes; maxLen=11 → returned unchanged.
+			name:   "emoji string at exact maxLen not truncated",
+			input:  "hi 🎉 world",
+			maxLen: 11,
+			want:   "hi 🎉 world",
+		},
+		{
+			// "hi 🎉 world" = 11 runes; maxLen=20 → returned unchanged.
+			name:   "emoji string shorter than maxLen returned unchanged",
+			input:  "hi 🎉 world",
+			maxLen: 20,
+			want:   "hi 🎉 world",
+		},
+		{
+			// maxLen <= 3 is clamped to 3; "héllo" (5 runes) > 3 → "..."
+			name:   "maxLen 2 clamped to 3 with unicode input yields only ellipsis",
+			input:  "héllo",
+			maxLen: 2,
+			want:   "...",
+		},
+		{
+			// maxLen <= 3 is clamped to 3; "🎉" (1 rune) <= 3 → returned unchanged.
+			name:   "maxLen 1 clamped to 3 with single emoji shorter than clamped max returned unchanged",
+			input:  "🎉",
+			maxLen: 1,
+			want:   "🎉",
+		},
 	}
 
 	for _, tt := range tests {
