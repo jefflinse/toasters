@@ -4,6 +4,7 @@ package tui
 import (
 	"fmt"
 	"image/color"
+	"log/slog"
 	"math"
 	"strings"
 
@@ -249,7 +250,7 @@ func (m *Model) View() tea.View {
 			v.MouseMode = tea.MouseModeCellMotion
 			return v
 		} else if m.outputModal.show {
-			overlaid, clampedScroll := m.renderScrollableModal("Output", m.outputModal.content, m.outputModal.scroll)
+			overlaid, clampedScroll := m.renderOutputModal("Output", m.outputModal.content, m.outputModal.scroll)
 			m.outputModal.scroll = clampedScroll
 
 			v := tea.NewView(overlaid)
@@ -667,7 +668,7 @@ func (m *Model) renderScrollableModal(title, content string, scroll int) (string
 
 	body := strings.Join(truncated, "\n")
 	scrollInfo := fmt.Sprintf("line %d/%d", scroll+1, len(allLines))
-	footer := DimStyle.Render("↑↓ scroll · Esc to close · " + scrollInfo)
+	footer := DimStyle.Render("↑↓/jk scroll · ctrl+u/d page · Esc to close · " + scrollInfo)
 
 	modalContent := HeaderStyle.Render(title) + "\n\n" + body + "\n\n" + footer
 
@@ -682,6 +683,142 @@ func (m *Model) renderScrollableModal(title, content string, scroll int) (string
 
 	// Place modal centered over the background using lipgloss.Place.
 	// WithWhitespaceStyle sets the background of the surrounding area.
+	overlaid := lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, modal,
+		lipgloss.WithWhitespaceStyle(lipgloss.NewStyle().Background(lipgloss.Color("235"))))
+
+	return overlaid, scroll
+}
+
+// isNumberedListItem returns true if line starts with a markdown numbered list
+// marker: one or more digits immediately followed by ". " (e.g. "1. ", "12. ").
+// This avoids false positives on sentences that merely start with a digit.
+func isNumberedListItem(line string) bool {
+	i := 0
+	for i < len(line) && line[i] >= '0' && line[i] <= '9' {
+		i++
+	}
+	return i > 0 && i+1 < len(line) && line[i] == '.' && line[i+1] == ' '
+}
+
+// looksLikeMarkdown returns true if the content appears to contain markdown
+// formatting. The check is intentionally broad — false positives (plain text
+// rendered as markdown) are acceptable in the fullscreen output modal.
+func looksLikeMarkdown(s string) bool {
+	if strings.Contains(s, "```") {
+		return true
+	}
+	for _, line := range strings.SplitN(s, "\n", 200) {
+		switch {
+		case strings.HasPrefix(line, "#"):
+			return true
+		case strings.HasPrefix(line, "**") || strings.HasPrefix(line, "__"):
+			return true
+		case strings.HasPrefix(line, "- [") || strings.HasPrefix(line, "* ["):
+			return true
+		case strings.HasPrefix(line, "- ") || strings.HasPrefix(line, "* "):
+			return true
+		case strings.HasPrefix(line, "> "): // require space after > to avoid matching git diff / log output
+			return true
+		case isNumberedListItem(line):
+			return true
+		case strings.Count(line, "|") >= 2: // markdown table needs at least two columns
+			return true
+		}
+	}
+	return false
+}
+
+// renderOutputModal renders a fullscreen scrollable modal for agent output.
+// Unlike renderScrollableModal, it uses nearly the full terminal dimensions,
+// renders markdown when detected, and applies distinct styling to tool event lines.
+func (m *Model) renderOutputModal(title, content string, scroll int) (string, int) {
+	modalW := m.width - 4
+	modalH := m.height - 4
+	if modalW < 40 {
+		modalW = 40
+	}
+	if modalH < 10 {
+		modalH = 10
+	}
+
+	innerW := modalW - 4 // account for border + padding
+
+	// Step 1: Apply dim styling to tool event lines on the raw content string,
+	// before any markdown rendering. This avoids nesting ANSI escape sequences
+	// inside Glamour-rendered output (which would corrupt the display).
+	rawLines := strings.Split(content, "\n")
+	for i, line := range rawLines {
+		stripped := strings.TrimSpace(line)
+		if strings.HasPrefix(stripped, "⚙") || strings.HasPrefix(stripped, "→") {
+			rawLines[i] = DimStyle.Render(line)
+		}
+	}
+	dimmedContent := strings.Join(rawLines, "\n")
+
+	// Step 2: Optionally render markdown on the dimmed content, then split into lines.
+	var allLines []string
+	if m.outputMdRender != nil && looksLikeMarkdown(dimmedContent) {
+		rendered, err := m.outputMdRender.Render(dimmedContent)
+		if err == nil {
+			allLines = strings.Split(strings.TrimRight(rendered, "\n"), "\n")
+		} else {
+			slog.Warn("outputMdRender failed, falling back to plain text", "error", err)
+		}
+	}
+	if allLines == nil {
+		allLines = strings.Split(dimmedContent, "\n")
+	}
+
+	// Compute scroll bounds.
+	visibleH := modalH - 4 // -4 for title + footer + borders
+	maxScroll := len(allLines) - visibleH
+	if maxScroll < 0 {
+		maxScroll = 0
+	}
+	if scroll > maxScroll {
+		scroll = maxScroll
+	}
+
+	start := scroll
+	end := start + visibleH
+	if end > len(allLines) {
+		end = len(allLines)
+	}
+	visibleLines := allLines[start:end]
+
+	// Truncate each line to modal inner width.
+	// For Glamour-rendered lines, Glamour already word-wraps to outputW (= m.width-8)
+	// which equals innerW, so this branch rarely triggers on the markdown path.
+	// For plain-text lines (no ANSI codes), rune-slicing is safe and O(1).
+	truncated := make([]string, len(visibleLines))
+	for i, l := range visibleLines {
+		if lipgloss.Width(l) > innerW {
+			runes := []rune(l)
+			if len(runes) > innerW {
+				truncated[i] = string(runes[:innerW])
+			} else {
+				truncated[i] = l
+			}
+		} else {
+			truncated[i] = l
+		}
+	}
+
+	body := strings.Join(truncated, "\n")
+	scrollInfo := fmt.Sprintf("line %d/%d", scroll+1, len(allLines))
+	footer := DimStyle.Render("↑↓/jk scroll · ctrl+u/d page · Esc to close · " + scrollInfo)
+
+	modalContent := HeaderStyle.Render(title) + "\n\n" + body + "\n\n" + footer
+
+	modalStyle := lipgloss.NewStyle().
+		Width(modalW).
+		Height(modalH).
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(ColorPrimary).
+		Padding(0, 2)
+
+	modal := modalStyle.Render(modalContent)
+
 	overlaid := lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, modal,
 		lipgloss.WithWhitespaceStyle(lipgloss.NewStyle().Background(lipgloss.Color("235"))))
 
@@ -732,6 +869,7 @@ func toastersStyle() ansi.StyleConfig {
 }
 
 // ensureMarkdownRenderer creates or recreates the glamour renderer for the current width.
+// It also recreates outputMdRender sized for the fullscreen output modal.
 func (m *Model) ensureMarkdownRenderer() {
 	w := m.chatViewport.Width() - AssistantMsgIndent
 	if w < 1 {
@@ -743,6 +881,20 @@ func (m *Model) ensureMarkdownRenderer() {
 	)
 	if err == nil {
 		m.mdRender = r
+	}
+
+	// Output modal renderer: sized for the fullscreen modal inner width.
+	// Modal is m.width-4 wide; inner width after border+padding is m.width-8.
+	outputW := m.width - 8
+	if outputW < 40 {
+		outputW = 40
+	}
+	or, oerr := glamour.NewTermRenderer(
+		glamour.WithStyles(toastersStyle()),
+		glamour.WithWordWrap(outputW),
+	)
+	if oerr == nil {
+		m.outputMdRender = or
 	}
 }
 

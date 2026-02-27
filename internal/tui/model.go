@@ -167,13 +167,14 @@ type Model struct {
 	width  int
 	height int
 
-	llmClient    provider.Provider
-	claudeCfg    config.ClaudeConfig
-	chatViewport viewport.Model
-	input        textarea.Model
-	stats        SessionStats
-	err          error
-	mdRender     *glamour.TermRenderer
+	llmClient      provider.Provider
+	claudeCfg      config.ClaudeConfig
+	chatViewport   viewport.Model
+	input          textarea.Model
+	stats          SessionStats
+	err            error
+	mdRender       *glamour.TermRenderer
+	outputMdRender *glamour.TermRenderer // separate renderer sized for the fullscreen output modal
 
 	// Sub-models grouping related state.
 	stream      streamingState
@@ -1344,9 +1345,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.outputModal.show && m.outputModal.sessionID == ev.SessionID {
 			m.outputModal.content = slot.output.String()
 			// Auto-tail: keep scroll at bottom if user hasn't scrolled up.
+			// Use fullscreen modal dimensions (m.height - 4) to match renderOutputModal.
 			allLines := strings.Split(m.outputModal.content, "\n")
-			modalH := m.height * 3 / 4
-			maxScroll := len(allLines) - modalH + 4
+			modalH := m.height - 4
+			if modalH < 10 {
+				modalH = 10
+			}
+			// NOTE: maxScroll is computed on raw content lines; after markdown rendering
+			// the actual rendered line count may differ. This is an approximation for auto-tail.
+			maxScroll := len(allLines) - (modalH - 4)
 			if maxScroll < 0 {
 				maxScroll = 0
 			}

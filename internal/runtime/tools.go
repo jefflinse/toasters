@@ -292,7 +292,8 @@ func (ct *CoreTools) Definitions() []ToolDef {
 				"properties": {
 					"system_prompt": {"type": "string", "description": "System prompt for the child agent"},
 					"message":       {"type": "string", "description": "Initial message to send to the child agent"},
-					"tools":         {"type": "array", "items": {"type": "string"}, "description": "Tool names to make available to the child agent"}
+					"tools":         {"type": "array", "items": {"type": "string"}, "description": "Tool names to make available to the child agent"},
+					"agent_name":    {"type": "string", "description": "Short display name for this agent in the TUI (e.g. 'tui-engineer', 'builder'). Omitting this will display the child under the parent agent's name."}
 				},
 				"required": ["system_prompt", "message"]
 			}`),
@@ -824,6 +825,7 @@ func (ct *CoreTools) spawnAgent(ctx context.Context, args json.RawMessage) (stri
 		SystemPrompt string   `json:"system_prompt"`
 		Message      string   `json:"message"`
 		Tools        []string `json:"tools"`
+		AgentName    string   `json:"agent_name"`
 	}
 	if err := json.Unmarshal(args, &params); err != nil {
 		return "", fmt.Errorf("parsing arguments: %w", err)
@@ -846,6 +848,13 @@ func (ct *CoreTools) spawnAgent(ctx context.Context, args json.RawMessage) (stri
 		}
 	}
 
+	// Use agent_name from params if provided; fall back to "worker" so that
+	// anonymous subagents don't inherit the parent's name and appear confusingly in the TUI.
+	childAgentID := params.AgentName
+	if childAgentID == "" {
+		childAgentID = "worker"
+	}
+
 	result, err := ct.spawner.SpawnAndWait(ctx, SpawnOpts{
 		SystemPrompt:   params.SystemPrompt,
 		InitialMessage: params.Message,
@@ -854,7 +863,7 @@ func (ct *CoreTools) spawnAgent(ctx context.Context, args json.RawMessage) (stri
 		Depth:          ct.depth + 1,
 		ProviderName:   ct.providerName,
 		Model:          ct.model,
-		AgentID:        ct.agentID,
+		AgentID:        childAgentID,
 		JobID:          ct.jobID,
 		Tools:          toolDefs,
 	})

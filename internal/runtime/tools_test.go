@@ -693,8 +693,37 @@ func TestSpawnAgentPropagatesProviderAndContext(t *testing.T) {
 	got := *capturing.received
 	assertEqual(t, "test-provider", got.ProviderName)
 	assertEqual(t, "test-model", got.Model)
-	assertEqual(t, "agent-1", got.AgentID)
+	// When agent_name is omitted, AgentID falls back to "worker" (anonymous subagent).
+	assertEqual(t, "worker", got.AgentID)
 	assertEqual(t, "job-1", got.JobID)
+}
+
+// TestSpawnAgentNameParam verifies that when agent_name is provided in the tool
+// call, SpawnOpts.AgentID is set to that name. When agent_name is omitted, the
+// fallback to "worker" is covered by TestSpawnAgentPropagatesProviderAndContext.
+func TestSpawnAgentNameParam(t *testing.T) {
+	dir := t.TempDir()
+
+	capturing := &capturingSpawner{result: "ok"}
+	ct := NewCoreTools(dir,
+		WithSpawner(capturing, 0, 3),
+		WithProvider("test-provider", "test-model"),
+		WithSessionContext("sess-1", "parent-agent", "job-1"),
+	)
+
+	_, err := ct.Execute(context.Background(), "spawn_agent", mustJSON(t, map[string]any{
+		"system_prompt": "you are a specialist",
+		"message":       "do the specialized work",
+		"agent_name":    "tui-engineer",
+	}))
+	assertNoError(t, err)
+
+	if capturing.received == nil {
+		t.Fatal("SpawnAndWait was never called")
+	}
+
+	// agent_name should override the parent's agentID.
+	assertEqual(t, "tui-engineer", capturing.received.AgentID)
 }
 
 // TestSpawnAgentForwardsToolFilter is a regression test for the bug where
