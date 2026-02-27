@@ -30,6 +30,7 @@ internal/
                             #   Supports Toasters, Claude Code, and OpenCode formats with auto-detection
                             #   Import: ImportClaudeCode, ImportOpenCode (lossless)
                             #   Export: ExportClaudeCode, ExportOpenCode (lossy with Warning list)
+                            #   Auto-detection via ParseAgent/ParseFile (inspects frontmatter fields)
   agents/                   # Agent discovery, parsing, team management (uses agentfmt for parsing)
   anthropic/                # Anthropic API client + OAuth/Keychain
   bootstrap/                # First-run bootstrap + upgrade migration
@@ -44,7 +45,7 @@ internal/
                             #   Schema: jobs, tasks, skills, agents, teams, team_agents, feed_entries,
                             #   sessions, progress_reports, artifacts
                             #   RebuildDefinitions: transactional delete-all + insert-all for definition tables
-  gateway/                  # Claude subprocess slot management (4 concurrent slots)
+  gateway/                  # Claude subprocess slot management (up to 16 concurrent slots, MaxSlots=16)
   llm/                      # Legacy LLM types (OpenAI wire format, used by llm/client)
     client/                 # OpenAI-compatible streaming client
     tools/                  # Tool executor with registry-based dispatch (18 handlers in 5 files)
@@ -141,7 +142,7 @@ Key settings:
 
 - **Enter**: Send message
 - **Shift+Enter**: Newline in input
-- **Ctrl+G**: Toggle grid screen (2×2 agent slot view)
+- **Ctrl+G**: Toggle grid screen (dynamic NxM agent slot view, scales with terminal size)
 - **Ctrl+C**: Quit
 - **Slash commands**: `/help`, `/new`, `/exit`, `/quit`, `/claude <prompt>`, `/kill`, `/mcp`, `/teams`, `/skills`, `/agents`, `/anthropic`, `/job`
 - **Prompt mode**: Numbered options when operator asks user a question
