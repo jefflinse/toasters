@@ -184,6 +184,15 @@ func (s *Session) Run(ctx context.Context) (retErr error) {
 				ToolResult: resultEvent,
 			})
 
+			// Cap tool results before storing in message history to prevent
+			// context window overflow when agents read large files or directory
+			// listings. 8KB per result keeps the conversation manageable while
+			// still providing meaningful content to the LLM.
+			const maxToolResultBytes = 8 * 1024
+			if len(result) > maxToolResultBytes {
+				result = result[:maxToolResultBytes] + "\n[... truncated: result exceeded 8KB ...]"
+			}
+
 			s.messages = append(s.messages, provider.Message{
 				Role:       "tool",
 				Content:    result,

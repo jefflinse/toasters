@@ -108,6 +108,19 @@ func (m *Model) resizeLogView() {
 	m.clampLogScroll()
 }
 
+// rewrapLogLines re-wraps the stored lines to the current viewport width.
+// Called after a terminal resize so the line-count-based scroll stays correct.
+func (m *Model) rewrapLogLines() {
+	// We don't have the original raw lines after wrapping, so we join and re-split.
+	// This is a best-effort re-wrap; minor artifacts at wrap boundaries are acceptable.
+	if len(m.logView.viewport.lines) == 0 {
+		return
+	}
+	raw := strings.Join(m.logView.viewport.lines, "\n")
+	rawLines := strings.Split(raw, "\n")
+	m.applyLogContent(rawLines)
+}
+
 // clampLogScroll ensures scrollTop is within valid bounds.
 func (m *Model) clampLogScroll() {
 	vp := &m.logView.viewport
@@ -202,12 +215,46 @@ func (m *Model) handleLogTailTick() (tea.Model, tea.Cmd) {
 }
 
 // applyLogContent updates the viewport lines and optionally auto-tails.
+// Raw file lines are word-wrapped to wrapWidth so the scroll arithmetic
+// (which is line-count-based) stays correct and no content is lost.
 func (m *Model) applyLogContent(lines []string) {
-	m.logView.viewport.lines = lines
+	wrapWidth := m.logView.viewport.viewWidth
+	if wrapWidth < 20 {
+		wrapWidth = 80
+	}
+	wrapped := wrapLogLines(lines, wrapWidth)
+	m.logView.viewport.lines = wrapped
 	m.clampLogScroll()
 	if m.logView.atBottom {
 		m.scrollLogToBottom()
 	}
+}
+
+// wrapLogLines expands each raw log line into one or more screen lines of at
+// most width runes. This keeps the line-count-based scroll arithmetic correct
+// while ensuring no content is truncated.
+func wrapLogLines(lines []string, width int) []string {
+	if width <= 0 {
+		return lines
+	}
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		runes := []rune(line)
+		if len(runes) <= width {
+			out = append(out, line)
+			continue
+		}
+		// Break into chunks of width runes.
+		for len(runes) > 0 {
+			chunk := width
+			if chunk > len(runes) {
+				chunk = len(runes)
+			}
+			out = append(out, string(runes[:chunk]))
+			runes = runes[chunk:]
+		}
+	}
+	return out
 }
 
 // renderLogView renders the fullscreen log tail view.
@@ -271,22 +318,8 @@ func (m *Model) renderLogView() string {
 		visibleLines = append(visibleLines, "")
 	}
 
-	// Truncate long lines to terminal width to avoid wrapping artifacts.
-	maxW := m.width
-	if maxW < 1 {
-		maxW = 80
-	}
-	truncated := make([]string, len(visibleLines))
-	for i, line := range visibleLines {
-		runes := []rune(line)
-		if len(runes) > maxW {
-			truncated[i] = string(runes[:maxW-1]) + "…"
-		} else {
-			truncated[i] = line
-		}
-	}
-
-	content := strings.Join(truncated, "\n")
+	// Lines are already wrapped to terminal width by applyLogContent — render directly.
+	content := strings.Join(visibleLines, "\n")
 
 	return lipgloss.JoinVertical(lipgloss.Left,
 		hotkeyBar,

@@ -1106,6 +1106,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.grid.gridFocusCell = cellsPerPage - 1
 		}
 		m.resizeComponents()
+		m.rewrapLogLines()
 
 	case tea.PasteMsg:
 		// Handle bracketed paste (e.g. macOS Cmd+V in terminal) when chat is focused.

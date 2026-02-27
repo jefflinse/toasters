@@ -810,19 +810,13 @@ func (m *Model) renderOutputModal(title, content string, scroll int) (string, in
 	}
 	visibleLines := allLines[start:end]
 
-	// Truncate each line to modal inner width.
-	// For Glamour-rendered lines, Glamour already word-wraps to outputW (= m.width-8)
-	// which equals innerW, so this branch rarely triggers on the markdown path.
-	// For plain-text lines (no ANSI codes), rune-slicing is safe and O(1).
+	// Truncate each line to modal inner width using an ANSI-aware truncator so
+	// we never slice mid-escape-sequence (which would leave raw codes like
+	// "[38;2;98;98;98m" visible in the terminal).
 	truncated := make([]string, len(visibleLines))
 	for i, l := range visibleLines {
 		if lipgloss.Width(l) > innerW {
-			runes := []rune(l)
-			if len(runes) > innerW {
-				truncated[i] = string(runes[:innerW])
-			} else {
-				truncated[i] = l
-			}
+			truncated[i] = xansi.Truncate(l, innerW, "")
 		} else {
 			truncated[i] = l
 		}
