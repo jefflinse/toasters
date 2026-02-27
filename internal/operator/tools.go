@@ -176,6 +176,17 @@ func (ot *operatorTools) consultAgent(ctx context.Context, args json.RawMessage)
 		return "", fmt.Errorf("message is required")
 	}
 
+	// Guard against oversized messages. The decomposer (and other system agents)
+	// have tools to explore the workspace themselves — the message should be a
+	// brief task description, not embedded file contents.
+	const maxConsultMessageBytes = 32 * 1024 // 32 KB
+	if len(params.Message) > maxConsultMessageBytes {
+		return "", fmt.Errorf(
+			"consult_agent message too large (%d bytes, max %d): provide a brief task description only — the agent has glob/grep/read_file tools to explore the workspace itself",
+			len(params.Message), maxConsultMessageBytes,
+		)
+	}
+
 	// When consulting the decomposer, transition the job to decomposing status.
 	if isDecomposer(params.AgentName) && params.JobID != "" {
 		if err := ot.store.UpdateJobStatus(ctx, params.JobID, db.JobStatusDecomposing); err != nil {
@@ -246,7 +257,7 @@ func (ot *operatorTools) consultAgent(ctx context.Context, args json.RawMessage)
 	// Build SpawnOpts from the composed agent. System agents get SystemTools
 	// as their tool executor (not CoreTools/filesystem tools); the decomposer
 	// gets decomposerToolExecutor which adds read-only filesystem access.
-	// Hidden=true prevents these internal sessions from appearing in the TUI.
+	// Hidden=false so system agent sessions appear in the TUI Agents panel and grid.
 	opts := runtime.SpawnOpts{
 		AgentID:        composed.AgentID,
 		ProviderName:   composed.Provider,
@@ -256,7 +267,6 @@ func (ot *operatorTools) consultAgent(ctx context.Context, args json.RawMessage)
 		ToolExecutor:   toolExecutor,
 		InitialMessage: params.Message,
 		WorkDir:        ot.workDir,
-		Hidden:         true,
 	}
 
 	if composed.MaxTurns != nil {

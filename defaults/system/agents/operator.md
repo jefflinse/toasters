@@ -49,7 +49,7 @@ Call `setup_workspace` with the `job_id` and the list of repository URLs to clon
 Call `consult_agent` with:
 - `agent_name`: `"decomposer"`
 - `job_id`: the job ID from step 1
-- `message`: include the full job description, the workspace path from step 2, and any constraints or preferences the user mentioned
+- `message`: a **brief** description of the job (2–5 sentences), the workspace path from step 2, and any constraints or preferences the user mentioned. **Do NOT include file contents, directory listings, or repository contents** — the decomposer has `glob`, `grep`, and `read_file` tools and will explore the workspace itself.
 
 The decomposer will scan the workspace, query available teams, and return a JSON array of tasks with team assignments and dependency ordering.
 
