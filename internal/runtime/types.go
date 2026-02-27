@@ -19,9 +19,10 @@ type SpawnOpts struct {
 	Task           string // short human-readable description of what this agent is doing (≤60 chars)
 	InitialMessage string
 	WorkDir        string
-	MaxTurns       int // 0 = use default (50)
-	MaxDepth       int // 0 = use default (1); coordinators may spawn workers, workers may not spawn further
-	Depth          int // current spawn depth (set by parent)
+	MaxTurns       int  // 0 = use default (50)
+	MaxDepth       int  // 0 = use default (1); coordinators may spawn workers, workers may not spawn further
+	Depth          int  // current spawn depth (set by parent)
+	Hidden         bool // when true, OnSessionStarted is not called (internal/system sessions)
 }
 
 const (

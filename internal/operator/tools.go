@@ -243,6 +243,7 @@ func (ot *operatorTools) consultAgent(ctx context.Context, args json.RawMessage)
 	// Build SpawnOpts from the composed agent. System agents get SystemTools
 	// as their tool executor (not CoreTools/filesystem tools); the decomposer
 	// gets decomposerToolExecutor which adds read-only filesystem access.
+	// Hidden=true prevents these internal sessions from appearing in the TUI.
 	opts := runtime.SpawnOpts{
 		AgentID:        composed.AgentID,
 		ProviderName:   composed.Provider,
@@ -252,6 +253,7 @@ func (ot *operatorTools) consultAgent(ctx context.Context, args json.RawMessage)
 		ToolExecutor:   toolExecutor,
 		InitialMessage: params.Message,
 		WorkDir:        ot.workDir,
+		Hidden:         true,
 	}
 
 	if composed.MaxTurns != nil {

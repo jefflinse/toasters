@@ -121,8 +121,9 @@ func (r *Runtime) SpawnAgent(ctx context.Context, opts SpawnOpts) (*Session, err
 	}
 
 	// Notify observer before starting the goroutine so the subscriber is set up
-	// before events start flowing.
-	if r.OnSessionStarted != nil {
+	// before events start flowing. Hidden sessions (e.g. internal system agent
+	// calls via consult_agent) skip this to avoid appearing in the TUI.
+	if r.OnSessionStarted != nil && !opts.Hidden {
 		r.OnSessionStarted(sess)
 	}
 

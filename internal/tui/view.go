@@ -13,6 +13,7 @@ import (
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/glamour/ansi"
 	glamourstyles "github.com/charmbracelet/glamour/styles"
+	xansi "github.com/charmbracelet/x/ansi"
 
 	"github.com/jefflinse/toasters/internal/gateway"
 )
@@ -752,13 +753,19 @@ func (m *Model) renderOutputModal(title, content string, scroll int) (string, in
 
 	innerW := modalW - 4 // account for border + padding
 
-	// Step 1: Apply dim styling to tool event lines on the raw content string,
+	// Step 1: Strip any pre-existing ANSI escape codes from the raw content so
+	// that DimStyle.Render() and Glamour start from clean text. Without this,
+	// escape sequences embedded in the content (e.g. from tool output) appear
+	// as literal text in the viewport.
+	cleanContent := xansi.Strip(content)
+
+	// Step 2: Apply dim styling to tool event lines on the clean content string,
 	// before any markdown rendering. This avoids nesting ANSI escape sequences
 	// inside Glamour-rendered output (which would corrupt the display).
-	rawLines := strings.Split(content, "\n")
+	rawLines := strings.Split(cleanContent, "\n")
 	for i, line := range rawLines {
-		stripped := strings.TrimSpace(line)
-		if strings.HasPrefix(stripped, "⚙") || strings.HasPrefix(stripped, "→") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "⚙") || strings.HasPrefix(trimmed, "→") {
 			rawLines[i] = DimStyle.Render(line)
 		}
 	}
