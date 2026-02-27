@@ -292,6 +292,9 @@ type OperatorTextMsg struct {
 	Text string
 }
 
+// OperatorDoneMsg is sent when the operator finishes processing a turn.
+type OperatorDoneMsg struct{}
+
 // OperatorEventMsg carries an operator event for TUI display.
 type OperatorEventMsg struct {
 	Event operator.Event

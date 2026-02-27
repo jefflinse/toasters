@@ -48,8 +48,9 @@ type Operator struct {
 	provTools    []provider.Tool
 
 	// Callbacks — set at construction time via Config, immutable after New().
-	onText  func(text string) // called with streamed text from the operator LLM
-	onEvent func(event Event) // called when the event loop processes an event
+	onText     func(text string) // called with streamed text from the operator LLM
+	onEvent    func(event Event) // called when the event loop processes an event
+	onTurnDone func()            // called when the operator finishes processing a user message turn
 }
 
 // Config holds configuration for creating an Operator.
@@ -64,6 +65,7 @@ type Config struct {
 	Spawner      runtime.TeamLeadSpawner // spawns team lead sessions on task assignment; may be nil
 	OnText       func(text string)       // called with streamed text from the operator LLM
 	OnEvent      func(event Event)       // called when the event loop processes an event
+	OnTurnDone   func()                  // called when the operator finishes processing a user message turn
 }
 
 // New creates a new Operator. Call Start to begin processing events.
@@ -97,6 +99,7 @@ func New(cfg Config) *Operator {
 		provTools:    provTools,
 		onText:       cfg.OnText,
 		onEvent:      cfg.OnEvent,
+		onTurnDone:   cfg.OnTurnDone,
 	}
 }
 
@@ -399,6 +402,8 @@ func (o *Operator) checkJobComplete(ctx context.Context, jobID string) {
 // the response, including any tool calls. This drives the operator's
 // conversation turn by turn.
 func (o *Operator) handleUserMessage(ctx context.Context, payload UserMessagePayload) {
+	defer o.emitTurnDone()
+
 	// Append user message to the long-lived conversation.
 	o.appendMessage(provider.Message{
 		Role:    "user",
@@ -525,6 +530,13 @@ func (o *Operator) collectResponse(ctx context.Context, eventCh <-chan provider.
 func (o *Operator) emitText(text string) {
 	if o.onText != nil {
 		o.onText(text)
+	}
+}
+
+// emitTurnDone calls the OnTurnDone callback if set.
+func (o *Operator) emitTurnDone() {
+	if o.onTurnDone != nil {
+		o.onTurnDone()
 	}
 }
 

@@ -257,6 +257,11 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 					prog.Send(tui.OperatorEventMsg{Event: event})
 				}
 			},
+			OnTurnDone: func() {
+				if prog := p.Load(); prog != nil {
+					prog.Send(tui.OperatorDoneMsg{})
+				}
+			},
 		})
 
 		opCtx, opCancel := context.WithCancel(context.Background())
@@ -287,13 +292,33 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 		prog.Send(msg)
 	})
 
-	// Generate team awareness and pre-fetch the operator greeting in the background
-	// so the TUI appears immediately. Always send AppReadyMsg even on error.
+	// Generate team awareness and (optionally) pre-fetch the operator greeting in
+	// the background so the TUI appears immediately. Always send AppReadyMsg even
+	// on error.
 	go func() {
 		ctx := context.Background()
 		awareness := generateTeamAwareness(ctx, client, teams, configDir)
 
-		// Pre-fetch greeting so it renders instantly when the loading screen clears.
+		if op != nil {
+			// When the operator is active, skip the pre-fetched greeting.
+			// Instead, send a greeting request through the operator so it goes
+			// through the operator's conversation history and streams naturally.
+			prog.Send(tui.AppReadyMsg{Awareness: awareness, Greeting: ""})
+
+			// Send the greeting through the operator after AppReadyMsg so the
+			// TUI is ready to receive OperatorTextMsg / OperatorDoneMsg.
+			if err := op.Send(ctx, operator.Event{
+				Type: operator.EventUserMessage,
+				Payload: operator.UserMessagePayload{
+					Text: "Greet the user briefly. One or two sentences max. Be direct and ready to work.",
+				},
+			}); err != nil {
+				slog.Warn("failed to send greeting through operator", "error", err)
+			}
+			return
+		}
+
+		// Legacy path: pre-fetch greeting via direct API call.
 		systemPrompt := agents.BuildOperatorPrompt(teams, awareness)
 		greeting, err := provider.ChatCompletion(ctx, client, []provider.Message{
 			{Role: "system", Content: systemPrompt},

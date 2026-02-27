@@ -8,6 +8,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/jefflinse/toasters/internal/operator"
 	"github.com/jefflinse/toasters/internal/provider"
 )
 
@@ -77,6 +78,8 @@ func (m *Model) startStream(msgs []provider.Message) tea.Cmd {
 }
 
 // sendMessage takes the current input, appends it to history, and starts streaming.
+// When m.operator is set, the message is routed through the operator event loop
+// instead of the legacy direct-stream path.
 func (m *Model) sendMessage() tea.Cmd {
 	text := strings.TrimSpace(m.input.Value())
 	if text == "" {
@@ -100,6 +103,27 @@ func (m *Model) sendMessage() tea.Cmd {
 
 	m.updateViewportContent()
 	m.chatViewport.GotoBottom()
+
+	// Route through the operator when available; fall back to legacy stream path.
+	if m.operator != nil {
+		m.stream.streaming = true
+		m.stream.currentResponse = ""
+		m.stats.ResponseStart = time.Now()
+		op := m.operator
+		return tea.Batch(
+			func() tea.Msg {
+				ctx := context.Background()
+				_ = op.Send(ctx, operator.Event{
+					Type:    operator.EventUserMessage,
+					Payload: operator.UserMessagePayload{Text: text},
+				})
+				// Send returns immediately — OperatorDoneMsg is fired by the
+				// OnTurnDone callback wired in cmd/root.go when the turn completes.
+				return nil
+			},
+			spinnerTick(),
+		)
+	}
 
 	return m.startStream(m.messagesFromEntries())
 }

@@ -1874,23 +1874,54 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case OperatorTextMsg:
 		slog.Debug("operator text", "len", len(msg.Text))
-		// Append operator text as an assistant chat entry so it appears in the feed.
+		// Accumulate streamed text into currentResponse (same pattern as StreamChunkMsg).
+		// The full response is committed as a single entry when OperatorDoneMsg arrives.
 		if msg.Text != "" {
+			m.stream.currentResponse += msg.Text
+			// Live token estimate (~4 chars/token).
+			m.stats.CompletionTokensLive = len([]rune(m.stream.currentResponse)) / 4
+			if !m.stats.ResponseStart.IsZero() {
+				m.stats.LastResponseTime = time.Since(m.stats.ResponseStart)
+			}
+			m.updateViewportContent()
+			if !m.scroll.userScrolled {
+				m.chatViewport.GotoBottom()
+			} else {
+				m.scroll.hasNewMessages = true
+			}
+		}
+		return m, nil
+
+	case OperatorDoneMsg:
+		slog.Debug("operator turn done")
+		m.stream.streaming = false
+		if !m.stats.ResponseStart.IsZero() {
+			m.stats.LastResponseTime = time.Since(m.stats.ResponseStart)
+			m.stats.TotalResponseTime += m.stats.LastResponseTime
+			m.stats.TotalResponses++
+		}
+		m.stats.CompletionTokens += m.stats.CompletionTokensLive
+		m.stats.CompletionTokensLive = 0
+		if m.stream.currentResponse != "" {
 			byline := "operator"
 			if m.stats.ModelName != "" {
 				byline = "operator · " + m.stats.ModelName
 			}
 			m.appendEntry(ChatEntry{
-				Message:    provider.Message{Role: "assistant", Content: msg.Text},
+				Message:    provider.Message{Role: "assistant", Content: m.stream.currentResponse},
 				Timestamp:  time.Now(),
 				ClaudeMeta: byline,
 			})
-			m.updateViewportContent()
-			if !m.scroll.userScrolled {
-				m.chatViewport.GotoBottom()
-			}
+			m.stream.currentResponse = ""
 		}
-		return m, nil
+		m.updateViewportContent()
+		if !m.scroll.userScrolled {
+			m.chatViewport.GotoBottom()
+		} else {
+			m.scroll.hasNewMessages = true
+		}
+		cmds = append(cmds, m.input.Focus())
+		return m, tea.Batch(cmds...)
 
 	case OperatorEventMsg:
 		slog.Debug("operator event", "type", msg.Event.Type)
