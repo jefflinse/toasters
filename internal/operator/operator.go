@@ -53,7 +53,7 @@ type Config struct {
 	Provider     provider.Provider
 	Model        string
 	WorkDir      string
-	SystemPrompt string // optional; uses default if empty
+	SystemPrompt string // required; system prompt for the operator LLM session
 	Store        db.Store
 	Composer     *compose.Composer
 	Spawner      runtime.TeamLeadSpawner // spawns team lead sessions on task assignment; may be nil
@@ -63,8 +63,10 @@ type Config struct {
 }
 
 // New creates a new Operator. Call Start to begin processing events.
-func New(cfg Config) *Operator {
-	systemPrompt := cfg.SystemPrompt
+func New(cfg Config) (*Operator, error) {
+	if cfg.SystemPrompt == "" {
+		return nil, fmt.Errorf("operator: SystemPrompt is required")
+	}
 
 	// Create SystemTools for system agents to use. The event channel is the
 	// operator's own channel so system agent actions (e.g. assign_task) flow
@@ -86,12 +88,12 @@ func New(cfg Config) *Operator {
 		store:        cfg.Store,
 		eventCh:      eventCh,
 		workDir:      cfg.WorkDir,
-		systemPrompt: systemPrompt,
+		systemPrompt: cfg.SystemPrompt,
 		provTools:    provTools,
 		onText:       cfg.OnText,
 		onEvent:      cfg.OnEvent,
 		onTurnDone:   cfg.OnTurnDone,
-	}
+	}, nil
 }
 
 // Send pushes an event into the operator's event channel. It blocks until the

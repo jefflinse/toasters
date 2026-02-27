@@ -77,7 +77,7 @@ func (m *Model) updatePromptMode(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 }
 
 // handleToolCalls processes a ToolCallMsg — the LLM wants to call tools.
-// It intercepts special tools (kill_slot, assign_team, ask_user, escalate_to_user)
+// It intercepts special tools (assign_team, ask_user, escalate_to_user)
 // for confirmation prompts, then executes remaining tools and re-invokes the stream.
 func (m *Model) handleToolCalls(msg ToolCallMsg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
@@ -86,7 +86,7 @@ func (m *Model) handleToolCalls(msg ToolCallMsg) (tea.Model, tea.Cmd) {
 	// via ToolResultMsg, which re-invokes the stream for the final answer.
 	m.stream.streaming = false
 
-	// Check for kill_slot, assign_team, ask_user, or escalate_to_user — intercept before ExecuteTool.
+	// Check for assign_team, ask_user, or escalate_to_user — intercept before ExecuteTool.
 	for _, call := range msg.Calls {
 
 		if call.Name == "assign_team" {

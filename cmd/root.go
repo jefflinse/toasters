@@ -243,7 +243,8 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 	}
 
 	if store != nil {
-		op = operator.New(operator.Config{
+		var opErr error
+		op, opErr = operator.New(operator.Config{
 			Runtime:      rt,
 			Provider:     client,
 			Model:        cfg.Operator.Model,
@@ -268,6 +269,10 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 				}
 			},
 		})
+		if opErr != nil {
+			slog.Warn("failed to create operator", "error", opErr)
+			// op remains nil — degraded mode, handled in the greeting goroutine
+		}
 	}
 
 	m := tui.NewModel(tui.ModelConfig{
@@ -303,10 +308,9 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 		ctx := context.Background()
 		awareness := generateTeamAwareness(ctx, client, teams, configDir)
 
-		// Send AppReadyMsg so the TUI can initialize the system prompt.
-		prog.Send(tui.AppReadyMsg{Awareness: awareness, Greeting: ""})
-
 		if op != nil {
+			// Send AppReadyMsg so the TUI can initialize the system prompt.
+			prog.Send(tui.AppReadyMsg{Awareness: awareness, Greeting: ""})
 			// Send the greeting through the operator so it goes through the
 			// operator's conversation history and streams naturally.
 			if err := op.Send(ctx, operator.Event{
@@ -317,6 +321,11 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 			}); err != nil {
 				slog.Warn("failed to send greeting through operator", "error", err)
 			}
+		} else {
+			prog.Send(tui.AppReadyMsg{
+				Awareness: awareness,
+				Greeting:  "⚠ Database unavailable — operator is offline. Check ~/.config/toasters/toasters.log for details.",
+			})
 		}
 	}()
 

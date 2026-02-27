@@ -162,17 +162,21 @@ func TestOperatorProcessesUserMessage(t *testing.T) {
 	var textBuf strings.Builder
 	var mu sync.Mutex
 
-	op := New(Config{
-		Runtime:  rt,
-		Provider: mp,
-		Model:    "test-model",
-		WorkDir:  t.TempDir(),
+	op, err := New(Config{
+		Runtime:      rt,
+		Provider:     mp,
+		Model:        "test-model",
+		WorkDir:      t.TempDir(),
+		SystemPrompt: "You are the operator.",
 		OnText: func(text string) {
 			mu.Lock()
 			textBuf.WriteString(text)
 			mu.Unlock()
 		},
 	})
+	if err != nil {
+		t.Fatalf("creating operator: %v", err)
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -223,17 +227,21 @@ func TestOperatorLongLivedSession(t *testing.T) {
 	var textBuf strings.Builder
 	var mu sync.Mutex
 
-	op := New(Config{
-		Runtime:  rt,
-		Provider: mp,
-		Model:    "test-model",
-		WorkDir:  t.TempDir(),
+	op, err := New(Config{
+		Runtime:      rt,
+		Provider:     mp,
+		Model:        "test-model",
+		WorkDir:      t.TempDir(),
+		SystemPrompt: "You are the operator.",
 		OnText: func(text string) {
 			mu.Lock()
 			textBuf.WriteString(text)
 			mu.Unlock()
 		},
 	})
+	if err != nil {
+		t.Fatalf("creating operator: %v", err)
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -346,19 +354,23 @@ func TestOperatorConsultAgent(t *testing.T) {
 	var textBuf strings.Builder
 	var mu sync.Mutex
 
-	op := New(Config{
-		Runtime:  rt,
-		Provider: mp,
-		Model:    "test-model",
-		WorkDir:  t.TempDir(),
-		Store:    store,
-		Composer: composer,
+	op, err := New(Config{
+		Runtime:      rt,
+		Provider:     mp,
+		Model:        "test-model",
+		WorkDir:      t.TempDir(),
+		Store:        store,
+		Composer:     composer,
+		SystemPrompt: "You are the operator.",
 		OnText: func(text string) {
 			mu.Lock()
 			textBuf.WriteString(text)
 			mu.Unlock()
 		},
 	})
+	if err != nil {
+		t.Fatalf("creating operator: %v", err)
+	}
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -405,17 +417,21 @@ func TestOperatorEventCallbackFires(t *testing.T) {
 	var events []Event
 	var mu sync.Mutex
 
-	op := New(Config{
-		Runtime:  rt,
-		Provider: mp,
-		Model:    "test-model",
-		WorkDir:  t.TempDir(),
+	op, err := New(Config{
+		Runtime:      rt,
+		Provider:     mp,
+		Model:        "test-model",
+		WorkDir:      t.TempDir(),
+		SystemPrompt: "You are the operator.",
 		OnEvent: func(ev Event) {
 			mu.Lock()
 			events = append(events, ev)
 			mu.Unlock()
 		},
 	})
+	if err != nil {
+		t.Fatalf("creating operator: %v", err)
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -458,17 +474,21 @@ func TestOperatorMechanicalEvents(t *testing.T) {
 	var events []Event
 	var mu sync.Mutex
 
-	op := New(Config{
-		Runtime:  rt,
-		Provider: mp,
-		Model:    "test-model",
-		WorkDir:  t.TempDir(),
+	op, err := New(Config{
+		Runtime:      rt,
+		Provider:     mp,
+		Model:        "test-model",
+		WorkDir:      t.TempDir(),
+		SystemPrompt: "You are the operator.",
 		OnEvent: func(ev Event) {
 			mu.Lock()
 			events = append(events, ev)
 			mu.Unlock()
 		},
 	})
+	if err != nil {
+		t.Fatalf("creating operator: %v", err)
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -525,18 +545,22 @@ func TestEventLoop_TaskStarted_CreatesFeedEntry(t *testing.T) {
 	var events []Event
 	var mu sync.Mutex
 
-	op := New(Config{
-		Runtime:  rt,
-		Provider: mp,
-		Model:    "test-model",
-		WorkDir:  t.TempDir(),
-		Store:    store,
+	op, err := New(Config{
+		Runtime:      rt,
+		Provider:     mp,
+		Model:        "test-model",
+		WorkDir:      t.TempDir(),
+		Store:        store,
+		SystemPrompt: "You are the operator.",
 		OnEvent: func(ev Event) {
 			mu.Lock()
 			events = append(events, ev)
 			mu.Unlock()
 		},
 	})
+	if err != nil {
+		t.Fatalf("creating operator: %v", err)
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -714,18 +738,22 @@ func TestEventLoop_TaskCompleted_ChecksJobComplete(t *testing.T) {
 	var textBuf strings.Builder
 	var mu sync.Mutex
 
-	op := New(Config{
-		Runtime:  rt,
-		Provider: mp,
-		Model:    "test-model",
-		WorkDir:  t.TempDir(),
-		Store:    store,
+	op, err := New(Config{
+		Runtime:      rt,
+		Provider:     mp,
+		Model:        "test-model",
+		WorkDir:      t.TempDir(),
+		Store:        store,
+		SystemPrompt: "You are the operator.",
 		OnText: func(text string) {
 			mu.Lock()
 			textBuf.WriteString(text)
 			mu.Unlock()
 		},
 	})
+	if err != nil {
+		t.Fatalf("creating operator: %v", err)
+	}
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -815,18 +843,22 @@ func TestEventLoop_TaskCompleted_WithRecommendations(t *testing.T) {
 	var textBuf strings.Builder
 	var mu sync.Mutex
 
-	op := New(Config{
-		Runtime:  rt,
-		Provider: mp,
-		Model:    "test-model",
-		WorkDir:  t.TempDir(),
-		Store:    store,
+	op, err := New(Config{
+		Runtime:      rt,
+		Provider:     mp,
+		Model:        "test-model",
+		WorkDir:      t.TempDir(),
+		Store:        store,
+		SystemPrompt: "You are the operator.",
 		OnText: func(text string) {
 			mu.Lock()
 			textBuf.WriteString(text)
 			mu.Unlock()
 		},
 	})
+	if err != nil {
+		t.Fatalf("creating operator: %v", err)
+	}
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -886,18 +918,22 @@ func TestEventLoop_TaskFailed_RoutesToLLM(t *testing.T) {
 	var textBuf strings.Builder
 	var mu sync.Mutex
 
-	op := New(Config{
-		Runtime:  rt,
-		Provider: mp,
-		Model:    "test-model",
-		WorkDir:  t.TempDir(),
-		Store:    store,
+	op, err := New(Config{
+		Runtime:      rt,
+		Provider:     mp,
+		Model:        "test-model",
+		WorkDir:      t.TempDir(),
+		Store:        store,
+		SystemPrompt: "You are the operator.",
 		OnText: func(text string) {
 			mu.Lock()
 			textBuf.WriteString(text)
 			mu.Unlock()
 		},
 	})
+	if err != nil {
+		t.Fatalf("creating operator: %v", err)
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -963,18 +999,22 @@ func TestEventLoop_BlockerReported_RoutesToLLM(t *testing.T) {
 	var textBuf strings.Builder
 	var mu sync.Mutex
 
-	op := New(Config{
-		Runtime:  rt,
-		Provider: mp,
-		Model:    "test-model",
-		WorkDir:  t.TempDir(),
-		Store:    store,
+	op, err := New(Config{
+		Runtime:      rt,
+		Provider:     mp,
+		Model:        "test-model",
+		WorkDir:      t.TempDir(),
+		Store:        store,
+		SystemPrompt: "You are the operator.",
 		OnText: func(text string) {
 			mu.Lock()
 			textBuf.WriteString(text)
 			mu.Unlock()
 		},
 	})
+	if err != nil {
+		t.Fatalf("creating operator: %v", err)
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -1033,18 +1073,22 @@ func TestEventLoop_ProgressUpdate_NoFeedEntry(t *testing.T) {
 	var events []Event
 	var mu sync.Mutex
 
-	op := New(Config{
-		Runtime:  rt,
-		Provider: mp,
-		Model:    "test-model",
-		WorkDir:  t.TempDir(),
-		Store:    store,
+	op, err := New(Config{
+		Runtime:      rt,
+		Provider:     mp,
+		Model:        "test-model",
+		WorkDir:      t.TempDir(),
+		Store:        store,
+		SystemPrompt: "You are the operator.",
 		OnEvent: func(ev Event) {
 			mu.Lock()
 			events = append(events, ev)
 			mu.Unlock()
 		},
 	})
+	if err != nil {
+		t.Fatalf("creating operator: %v", err)
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -1102,18 +1146,22 @@ func TestEventLoop_JobComplete_MarksDone(t *testing.T) {
 	var textBuf strings.Builder
 	var mu sync.Mutex
 
-	op := New(Config{
-		Runtime:  rt,
-		Provider: mp,
-		Model:    "test-model",
-		WorkDir:  t.TempDir(),
-		Store:    store,
+	op, err := New(Config{
+		Runtime:      rt,
+		Provider:     mp,
+		Model:        "test-model",
+		WorkDir:      t.TempDir(),
+		Store:        store,
+		SystemPrompt: "You are the operator.",
 		OnText: func(text string) {
 			mu.Lock()
 			textBuf.WriteString(text)
 			mu.Unlock()
 		},
 	})
+	if err != nil {
+		t.Fatalf("creating operator: %v", err)
+	}
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -1183,18 +1231,22 @@ func TestEventLoop_UserResponse_RoutesToLLM(t *testing.T) {
 	var textBuf strings.Builder
 	var mu sync.Mutex
 
-	op := New(Config{
-		Runtime:  rt,
-		Provider: mp,
-		Model:    "test-model",
-		WorkDir:  t.TempDir(),
-		Store:    store,
+	op, err := New(Config{
+		Runtime:      rt,
+		Provider:     mp,
+		Model:        "test-model",
+		WorkDir:      t.TempDir(),
+		Store:        store,
+		SystemPrompt: "You are the operator.",
 		OnText: func(text string) {
 			mu.Lock()
 			textBuf.WriteString(text)
 			mu.Unlock()
 		},
 	})
+	if err != nil {
+		t.Fatalf("creating operator: %v", err)
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -1249,12 +1301,16 @@ func TestOperatorCleanShutdown(t *testing.T) {
 
 	rt := runtime.New(nil, newTestRegistry(mp))
 
-	op := New(Config{
-		Runtime:  rt,
-		Provider: mp,
-		Model:    "test-model",
-		WorkDir:  t.TempDir(),
+	op, err := New(Config{
+		Runtime:      rt,
+		Provider:     mp,
+		Model:        "test-model",
+		WorkDir:      t.TempDir(),
+		SystemPrompt: "You are the operator.",
 	})
+	if err != nil {
+		t.Fatalf("creating operator: %v", err)
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -1288,17 +1344,21 @@ func TestOperatorChatStreamError(t *testing.T) {
 	var textBuf strings.Builder
 	var mu sync.Mutex
 
-	op := New(Config{
-		Runtime:  rt,
-		Provider: mp,
-		Model:    "test-model",
-		WorkDir:  t.TempDir(),
+	op, err := New(Config{
+		Runtime:      rt,
+		Provider:     mp,
+		Model:        "test-model",
+		WorkDir:      t.TempDir(),
+		SystemPrompt: "You are the operator.",
 		OnText: func(text string) {
 			mu.Lock()
 			textBuf.WriteString(text)
 			mu.Unlock()
 		},
 	})
+	if err != nil {
+		t.Fatalf("creating operator: %v", err)
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -1340,17 +1400,21 @@ func TestOperatorStreamError(t *testing.T) {
 	var textBuf strings.Builder
 	var mu sync.Mutex
 
-	op := New(Config{
-		Runtime:  rt,
-		Provider: mp,
-		Model:    "test-model",
-		WorkDir:  t.TempDir(),
+	op, err := New(Config{
+		Runtime:      rt,
+		Provider:     mp,
+		Model:        "test-model",
+		WorkDir:      t.TempDir(),
+		SystemPrompt: "You are the operator.",
 		OnText: func(text string) {
 			mu.Lock()
 			textBuf.WriteString(text)
 			mu.Unlock()
 		},
 	})
+	if err != nil {
+		t.Fatalf("creating operator: %v", err)
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -1404,17 +1468,21 @@ func TestOperatorSurfaceToUser(t *testing.T) {
 	var textBuf strings.Builder
 	var mu sync.Mutex
 
-	op := New(Config{
-		Runtime:  rt,
-		Provider: mp,
-		Model:    "test-model",
-		WorkDir:  t.TempDir(),
+	op, err := New(Config{
+		Runtime:      rt,
+		Provider:     mp,
+		Model:        "test-model",
+		WorkDir:      t.TempDir(),
+		SystemPrompt: "You are the operator.",
 		OnText: func(text string) {
 			mu.Lock()
 			textBuf.WriteString(text)
 			mu.Unlock()
 		},
 	})
+	if err != nil {
+		t.Fatalf("creating operator: %v", err)
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -1486,19 +1554,23 @@ func TestConsultAgent_ComposedAgent(t *testing.T) {
 	var textBuf strings.Builder
 	var mu sync.Mutex
 
-	op := New(Config{
-		Runtime:  rt,
-		Provider: mp,
-		Model:    "default-model",
-		WorkDir:  t.TempDir(),
-		Store:    store,
-		Composer: composer,
+	op, err := New(Config{
+		Runtime:      rt,
+		Provider:     mp,
+		Model:        "default-model",
+		WorkDir:      t.TempDir(),
+		Store:        store,
+		Composer:     composer,
+		SystemPrompt: "You are the operator.",
 		OnText: func(text string) {
 			mu.Lock()
 			textBuf.WriteString(text)
 			mu.Unlock()
 		},
 	})
+	if err != nil {
+		t.Fatalf("creating operator: %v", err)
+	}
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -1742,19 +1814,23 @@ func TestConsultAgent_ToolFiltering(t *testing.T) {
 	var textBuf strings.Builder
 	var mu sync.Mutex
 
-	op := New(Config{
-		Runtime:  rt,
-		Provider: mp,
-		Model:    "test-model",
-		WorkDir:  t.TempDir(),
-		Store:    store,
-		Composer: composer,
+	op, err := New(Config{
+		Runtime:      rt,
+		Provider:     mp,
+		Model:        "test-model",
+		WorkDir:      t.TempDir(),
+		Store:        store,
+		Composer:     composer,
+		SystemPrompt: "You are the operator.",
 		OnText: func(text string) {
 			mu.Lock()
 			textBuf.WriteString(text)
 			mu.Unlock()
 		},
 	})
+	if err != nil {
+		t.Fatalf("creating operator: %v", err)
+	}
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()

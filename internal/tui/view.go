@@ -412,9 +412,6 @@ func (m *Model) View() tea.View {
 		chatContent = strings.Join(lines[:trimTo], "\n")
 	}
 
-	// Kill modal is no longer used (gateway removed).
-	var killPopupView string
-
 	// Trim chatContent when in prompt option-selection mode to prevent overflow.
 	// The prompt widget is taller than the normal input area; subtract the extra lines.
 	if m.prompt.promptMode && !m.prompt.promptCustom {
@@ -441,11 +438,8 @@ func (m *Model) View() tea.View {
 		metaStrip = OperatorMetaStyle.Width(mainWidth).Render("⬡ " + m.stream.operatorByline)
 	}
 
-	// overlayView is whichever popup is active (cmd popup or kill modal), if any.
+	// overlayView is whichever popup is active (cmd popup), if any.
 	overlayView := popupView
-	if killPopupView != "" {
-		overlayView = killPopupView
-	}
 
 	// Join chat + overlay (if any) + meta strip (if any) + input/status vertically.
 	var mainColumn string

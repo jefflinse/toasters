@@ -502,7 +502,7 @@ func TestUpdateGrid_UnhandledKillKey(t *testing.T) {
 	m.grid.showGrid = true
 	m.grid.gridFocusCell = 0
 
-	// 'k' is no longer a kill key in grid mode (kill was removed with gateway).
+	// 'k' is not a grid navigation key.
 	result, cmd := m.updateGrid(keyPress('k'))
 	got := result.(*Model)
 

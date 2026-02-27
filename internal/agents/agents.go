@@ -31,7 +31,7 @@ type Agent struct {
 	Color         string          // from frontmatter "color" field (hex color, e.g. "#FF9800")
 	Temperature   float64         // from frontmatter "temperature" field (0 if absent)
 	Body          string          // the system prompt text (everything after the closing --- of frontmatter)
-	Tools         map[string]bool // legacy enable/disable map for ClaudePermissionArgs compat
+	Tools         map[string]bool // tool enable/disable map from agent frontmatter (populated by agentfmt)
 	HasToolsBlock bool            // true if allowed or disallowed tools were specified
 
 	// Superset fields from agentfmt.

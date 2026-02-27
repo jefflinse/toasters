@@ -1424,7 +1424,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		slot.status = msg.Status
 
-		// Build completion notification for the operator (same pattern as gateway).
+		// Build completion notification for the operator from the runtime session output.
 		outputTail := slot.output.String()
 		const maxTail = 2000
 		if len(outputTail) > maxTail {
