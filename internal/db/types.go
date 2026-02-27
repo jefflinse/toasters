@@ -13,12 +13,14 @@ var ErrNotFound = errors.New("not found")
 type JobStatus string
 
 const (
-	JobStatusPending   JobStatus = "pending"
-	JobStatusActive    JobStatus = "active"
-	JobStatusPaused    JobStatus = "paused"
-	JobStatusCompleted JobStatus = "completed"
-	JobStatusFailed    JobStatus = "failed"
-	JobStatusCancelled JobStatus = "cancelled"
+	JobStatusPending     JobStatus = "pending"
+	JobStatusSettingUp   JobStatus = "setting_up"
+	JobStatusDecomposing JobStatus = "decomposing"
+	JobStatusActive      JobStatus = "active"
+	JobStatusPaused      JobStatus = "paused"
+	JobStatusCompleted   JobStatus = "completed"
+	JobStatusFailed      JobStatus = "failed"
+	JobStatusCancelled   JobStatus = "cancelled"
 )
 
 // TaskStatus represents the lifecycle state of a task.

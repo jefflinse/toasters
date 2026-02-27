@@ -128,7 +128,8 @@ func (m *Model) updateJobsModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "ctrl+x":
 		if m.jobsModal.focus == 0 && len(m.jobsModal.jobs) > 0 && m.jobsModal.jobIdx < len(m.jobsModal.jobs) {
 			job := m.jobsModal.jobs[m.jobsModal.jobIdx]
-			if job.Status == db.JobStatusActive || job.Status == db.JobStatusPending {
+			if job.Status == db.JobStatusActive || job.Status == db.JobStatusPending ||
+				job.Status == db.JobStatusSettingUp || job.Status == db.JobStatusDecomposing {
 				m.jobsModal.confirmCancel = true
 			}
 		}
@@ -224,6 +225,10 @@ func (m *Model) renderJobsModal() string {
 				icon = "✓"
 			case db.JobStatusFailed:
 				icon = "✗"
+			case db.JobStatusSettingUp:
+				icon = "⚙"
+			case db.JobStatusDecomposing:
+				icon = "◈"
 			default:
 				icon = "·"
 			}
@@ -284,6 +289,12 @@ func (m *Model) renderJobsModal() string {
 			statusStr = lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Bold(true).Render(string(job.Status))
 		case db.JobStatusPaused:
 			statusStr = lipgloss.NewStyle().Foreground(lipgloss.Color("11")).Render(string(job.Status))
+		case db.JobStatusSettingUp:
+			// Muted yellow: system is preparing the job (e.g. cloning repos).
+			statusStr = lipgloss.NewStyle().Foreground(lipgloss.Color("178")).Render(string(job.Status))
+		case db.JobStatusDecomposing:
+			// Muted cyan: LLM is decomposing the work into tasks.
+			statusStr = lipgloss.NewStyle().Foreground(lipgloss.Color("38")).Render(string(job.Status))
 		default:
 			statusStr = DimStyle.Render(string(job.Status))
 		}
@@ -357,7 +368,8 @@ func (m *Model) renderJobsModal() string {
 	// Footer with key hints.
 	cancelHint := "[Ctrl+X] Cancel Job"
 	canCancel := len(jobs) > 0 && m.jobsModal.jobIdx < len(jobs) &&
-		(jobs[m.jobsModal.jobIdx].Status == db.JobStatusActive || jobs[m.jobsModal.jobIdx].Status == db.JobStatusPending)
+		(jobs[m.jobsModal.jobIdx].Status == db.JobStatusActive || jobs[m.jobsModal.jobIdx].Status == db.JobStatusPending ||
+			jobs[m.jobsModal.jobIdx].Status == db.JobStatusSettingUp || jobs[m.jobsModal.jobIdx].Status == db.JobStatusDecomposing)
 	if !canCancel {
 		cancelHint = DimStyle.Render(cancelHint)
 	}
