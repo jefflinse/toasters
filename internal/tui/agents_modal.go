@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -303,7 +304,10 @@ func (m *Model) addSkillToAgent(a *db.Agent, skill *db.Skill) tea.Cmd {
 	return m.addToast("Added skill '"+skill.Name+"' to agent", toastSuccess)
 }
 
-// reloadAgentsForModal refreshes m.agentsModal.agents from the DB.
+// reloadAgentsForModal refreshes m.agentsModal.agents from the DB, ordered as:
+//  1. Shared (non-team) agents, alphabetically by name
+//  2. Team-local agents, alphabetically by "team/agent"
+//  3. System agents, alphabetically by name
 func (m *Model) reloadAgentsForModal() {
 	if m.store == nil {
 		return
@@ -315,7 +319,25 @@ func (m *Model) reloadAgentsForModal() {
 		slog.Error("failed to list agents for modal", "error", err)
 		return
 	}
-	m.agentsModal.agents = agents
+	var shared, teamLocal, system []*db.Agent
+	for _, a := range agents {
+		switch {
+		case a.Source == "system":
+			system = append(system, a)
+		case a.TeamID != "":
+			teamLocal = append(teamLocal, a)
+		default:
+			shared = append(shared, a)
+		}
+	}
+	// Each group arrives pre-sorted by name from the DB (ORDER BY name).
+	// Team-local needs sorting by the composite "team/agent" key.
+	slices.SortFunc(teamLocal, func(a, b *db.Agent) int {
+		ka := a.TeamID + "/" + a.Name
+		kb := b.TeamID + "/" + b.Name
+		return strings.Compare(ka, kb)
+	})
+	m.agentsModal.agents = append(append(shared, teamLocal...), system...)
 }
 
 // createAgentFile writes a template .md file for a new shared agent.
@@ -423,12 +445,25 @@ func (m *Model) renderAgentsModal() string {
 		innerW = 10
 	}
 
-	leftInnerW := 30
-	leftPanelW := leftInnerW + ModalPanelStyle.GetHorizontalFrameSize()
-	if leftPanelW > innerW/2 {
-		leftPanelW = innerW / 2
-		leftInnerW = leftPanelW - ModalPanelStyle.GetHorizontalFrameSize()
+	// Size the left column to fit the longest display name, with a min of 20
+	// and a max of 40% of the available width so the detail panel always gets
+	// meaningful space.
+	leftInnerW := 20
+	for _, a := range agents {
+		displayName := a.Name
+		if a.TeamID != "" {
+			displayName = a.TeamID + "/" + a.Name
+		}
+		// +3 for icon + space + trailing badge room
+		if w := len([]rune(displayName)) + 3; w > leftInnerW {
+			leftInnerW = w
+		}
 	}
+	maxLeftInnerW := innerW * 2 / 5
+	if leftInnerW > maxLeftInnerW {
+		leftInnerW = maxLeftInnerW
+	}
+	leftPanelW := leftInnerW + ModalPanelStyle.GetHorizontalFrameSize()
 
 	rightPanelW := innerW - leftPanelW - 1
 	rightInnerW := rightPanelW - ModalPanelStyle.GetHorizontalFrameSize()
@@ -460,13 +495,14 @@ func (m *Model) renderAgentsModal() string {
 			if a.Mode == "lead" {
 				icon = "◆"
 			}
-			name := truncateStr(a.Name, leftInnerW-8)
+			displayName := a.Name
+			if a.TeamID != "" {
+				displayName = a.TeamID + "/" + a.Name
+			}
+			name := truncateStr(displayName, leftInnerW-3)
 			line := fmt.Sprintf(" %s %s", icon, name)
 			if a.Source == "system" {
 				line += " ⚙"
-			}
-			if a.TeamID != "" {
-				line += " ↻" // team-local indicator
 			}
 			if a.Source == "system" {
 				line += " 🔒"
