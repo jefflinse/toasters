@@ -1022,6 +1022,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.resizeComponents()
 
+	case tea.PasteMsg:
+		// Handle bracketed paste (e.g. macOS Cmd+V in terminal) when chat is focused.
+		if m.focused == focusChat && !m.stream.streaming && !m.prompt.promptMode {
+			if msg.Content != "" {
+				m.input.InsertString(msg.Content)
+			}
+		}
+		return m, nil
+
 	case StreamChunkMsg:
 		m.stream.currentResponse += msg.Content
 		m.stream.currentReasoning += msg.Reasoning
