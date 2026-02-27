@@ -122,9 +122,10 @@ func (ot *operatorTools) Definitions() []runtime.ToolDef {
 		},
 	}
 
-	// Append create_task and assign_task from SystemTools so the operator can
-	// act directly on decomposer output without routing through the planner.
-	wantFromSystem := map[string]bool{"create_task": true, "assign_task": true}
+	// Append create_job, create_task, and assign_task from SystemTools so the
+	// operator can create jobs and act directly on decomposer output without
+	// routing through the planner.
+	wantFromSystem := map[string]bool{"create_job": true, "create_task": true, "assign_task": true}
 	for _, td := range ot.systemTools.Definitions() {
 		if wantFromSystem[td.Name] {
 			defs = append(defs, td)
@@ -147,6 +148,8 @@ func (ot *operatorTools) Execute(ctx context.Context, name string, args json.Raw
 		return ot.queryTeams(ctx)
 	case "setup_workspace":
 		return ot.setupWorkspace(ctx, args)
+	case "create_job":
+		return ot.systemTools.Execute(ctx, "create_job", args)
 	case "create_task":
 		return ot.systemTools.Execute(ctx, "create_task", args)
 	case "assign_task":
