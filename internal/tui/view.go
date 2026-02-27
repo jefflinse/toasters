@@ -14,8 +14,6 @@ import (
 	"github.com/charmbracelet/glamour/ansi"
 	glamourstyles "github.com/charmbracelet/glamour/styles"
 	xansi "github.com/charmbracelet/x/ansi"
-
-	"github.com/jefflinse/toasters/internal/gateway"
 )
 
 // loadingBarWidth is the number of cells in the bouncing bar track.
@@ -317,28 +315,10 @@ func (m *Model) View() tea.View {
 		flashLine = DimStyle.Render(m.flashText)
 	}
 
-	// Determine chat content and input area — swapped when attached to an agent slot.
+	// Determine chat content and input area.
 	var chatContent string
 	var inputOrStatus string
-	if m.attachedSlot >= 0 && m.gateway != nil {
-		slots := m.gateway.Slots()
-		snap := slots[m.attachedSlot]
-		header := fmt.Sprintf("⬡ %s · %s", snap.AgentName, snap.JobID)
-		if snap.Status == gateway.SlotDone {
-			header += " [done]"
-		} else {
-			header += " [running]"
-		}
-		chatContent = m.agentViewport.View()
-		inputArea := inputStyle.Width(mainWidth).Render(
-			DimStyle.Render(header + "  ·  Esc to detach · d to dismiss"),
-		)
-		if flashLine != "" {
-			inputOrStatus = lipgloss.JoinVertical(lipgloss.Left, flashLine, inputArea)
-		} else {
-			inputOrStatus = inputArea
-		}
-	} else {
+	{
 		chatContent = m.chatViewport.View()
 
 		// Render scrollbar column alongside the chat content.
@@ -432,42 +412,8 @@ func (m *Model) View() tea.View {
 		chatContent = strings.Join(lines[:trimTo], "\n")
 	}
 
-	// Build kill modal popup (if active) — mutually exclusive with cmd popup.
+	// Kill modal is no longer used (gateway removed).
 	var killPopupView string
-	if m.killModal.show && m.gateway != nil {
-		slots := m.gateway.Slots()
-		var rows []string
-		for i, slotIdx := range m.killModal.slots {
-			snap := slots[slotIdx]
-			label := fmt.Sprintf("[%d] %s · %s", slotIdx, snap.AgentName, snap.JobID)
-			if i == m.killModal.selectedIdx {
-				row := CmdPopupSelectedStyle.Width(mainWidth).Render(
-					CmdPopupNameSelectedStyle.Render(label),
-				)
-				rows = append(rows, row)
-			} else {
-				row := CmdPopupRowStyle.Width(mainWidth).Render(
-					CmdPopupNameStyle.Render(label),
-				)
-				rows = append(rows, row)
-			}
-		}
-		footer := CmdPopupRowStyle.Width(mainWidth).Render(
-			DimStyle.Render("Enter to kill · Esc to cancel"),
-		)
-		rows = append(rows, footer)
-		killPopupView = CmdPopupContainerStyle.Width(mainWidth).Render(
-			lipgloss.JoinVertical(lipgloss.Left, rows...),
-		)
-		// Trim chatContent to make room for the modal.
-		killPopupHeight := len(m.killModal.slots) + 1 // +1 for footer
-		lines := strings.Split(chatContent, "\n")
-		trimTo := len(lines) - killPopupHeight
-		if trimTo < 0 {
-			trimTo = 0
-		}
-		chatContent = strings.Join(lines[:trimTo], "\n")
-	}
 
 	// Trim chatContent when in prompt option-selection mode to prevent overflow.
 	// The prompt widget is taller than the normal input area; subtract the extra lines.
@@ -489,10 +435,10 @@ func (m *Model) View() tea.View {
 
 	chatView := ChatAreaStyle.Width(mainWidth).Render(chatContent)
 
-	// Build claude meta strip (shown while a claude stream is active).
+	// Build operator byline strip (shown while the operator stream is active).
 	var metaStrip string
-	if m.stream.claudeActiveMeta != "" {
-		metaStrip = ClaudeMetaStyle.Width(mainWidth).Render("⬡ " + m.stream.claudeActiveMeta)
+	if m.stream.operatorByline != "" {
+		metaStrip = OperatorMetaStyle.Width(mainWidth).Render("⬡ " + m.stream.operatorByline)
 	}
 
 	// overlayView is whichever popup is active (cmd popup or kill modal), if any.
@@ -959,10 +905,6 @@ func (m *Model) resizeComponents() {
 	m.chatViewport.SetWidth(vpWidth)
 	m.chatViewport.SetHeight(vpHeight)
 
-	// Agent viewport mirrors chat viewport dimensions.
-	m.agentViewport.SetWidth(vpWidth)
-	m.agentViewport.SetHeight(vpHeight)
-
 	// Log view viewport.
 	m.resizeLogView()
 
@@ -1152,7 +1094,7 @@ func (m *Model) updateViewportContent() {
 			// Render claude byline (if any) above the response, with timestamp.
 			indent := strings.Repeat(" ", AssistantMsgIndent)
 			if entry.ClaudeMeta != "" {
-				byline := ClaudeBylineStyle.Render("⬡ " + entry.ClaudeMeta)
+				byline := OperatorBylineStyle.Render("⬡ " + entry.ClaudeMeta)
 				if ts != "" {
 					byline += DimStyle.Render(ts)
 				}

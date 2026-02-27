@@ -639,7 +639,7 @@ func TestEventLoop_TaskCompleted_AssignsNextTask(t *testing.T) {
 		store:        store,
 		eventCh:      eventCh,
 		workDir:      t.TempDir(),
-		systemPrompt: defaultSystemPrompt,
+		systemPrompt: "You are the operator.",
 		provTools:    provTools,
 		onEvent: func(ev Event) {
 			mu.Lock()

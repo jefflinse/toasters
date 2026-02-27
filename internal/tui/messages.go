@@ -132,9 +132,6 @@ type ModelsMsg struct {
 	Err    error
 }
 
-// AgentOutputMsg is sent by the gateway notify callback when any slot output changes.
-type AgentOutputMsg struct{}
-
 // RuntimeSessionStartedMsg is sent when a new runtime session begins.
 type RuntimeSessionStartedMsg struct {
 	SessionID      string
@@ -231,17 +228,6 @@ func (m *Model) showScrollbar() tea.Cmd {
 	return scrollbarHide()
 }
 
-// SlotTimeoutPromptExpiredMsg fires when the 1-minute user-response window elapses.
-type SlotTimeoutPromptExpiredMsg struct{ SlotID int }
-
-// claudeMetaMsg carries model/mode info parsed from the claude CLI system/init event.
-type claudeMetaMsg struct {
-	Model          string
-	PermissionMode string
-	Version        string
-	SessionID      string
-}
-
 // ToolCallMsg is emitted when the LLM requests one or more tool calls.
 type ToolCallMsg struct {
 	Calls []provider.ToolCall
@@ -309,20 +295,4 @@ type ChatEntry struct {
 	Timestamp  time.Time
 	Reasoning  string
 	ClaudeMeta string
-}
-
-// waitForAgentUpdate blocks until the gateway signals an output update.
-func waitForAgentUpdate(ch <-chan struct{}) tea.Cmd {
-	return func() tea.Msg {
-		<-ch
-		return AgentOutputMsg{}
-	}
-}
-
-// slotTimeoutPromptCmd fires SlotTimeoutPromptExpiredMsg after 1 minute,
-// giving the user a window to respond before auto-continuing.
-func slotTimeoutPromptCmd(slotID int) tea.Cmd {
-	return tea.Tick(time.Minute, func(time.Time) tea.Msg {
-		return SlotTimeoutPromptExpiredMsg{SlotID: slotID}
-	})
 }

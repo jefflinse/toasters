@@ -2,14 +2,9 @@
 package tui
 
 import (
-	"fmt"
 	"strings"
-	"time"
 
 	tea "charm.land/bubbletea/v2"
-
-	"github.com/jefflinse/toasters/internal/gateway"
-	"github.com/jefflinse/toasters/internal/provider"
 )
 
 // updatePromptModal handles key events when the prompt modal is visible.
@@ -64,13 +59,6 @@ func (m *Model) updateOutputModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 // updateGrid handles key events when the grid screen is visible.
 func (m *Model) updateGrid(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	// Fetch the gateway snapshot exactly once so sortedSlotIndicesFrom and
-	// runtimeSessionForGridCell operate on the same consistent view of state.
-	var slots [gateway.MaxSlots]gateway.SlotSnapshot
-	if m.gateway != nil {
-		slots = m.gateway.Slots()
-	}
-
 	cols := m.grid.gridCols
 	rows := m.grid.gridRows
 	// Safety floor: mirrors the floor applied in renderGrid and runtimeSessionForGridCell.
@@ -81,39 +69,15 @@ func (m *Model) updateGrid(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		rows = 1
 	}
 	cellsPerPage := cols * rows
-	totalPages := (gateway.MaxSlots + cellsPerPage - 1) / cellsPerPage
-
-	// Compute absSlot using the same sorted index order as renderGrid so that
-	// kill/enter target the slot that is visually focused.
-	sortedIndices := sortedSlotIndicesFrom(slots)
-	absSlotIdx := m.grid.gridPage*cellsPerPage + m.grid.gridFocusCell
-	if absSlotIdx >= gateway.MaxSlots {
-		absSlotIdx = gateway.MaxSlots - 1
-	}
-	absSlot := sortedIndices[absSlotIdx]
+	totalPages := (maxGridSlots + cellsPerPage - 1) / cellsPerPage
 
 	switch msg.String() {
 	case "ctrl+g", "esc":
 		m.grid.showGrid = false
 		return m, nil
-	case "k", "ctrl+k":
-		if m.gateway != nil {
-			_ = m.gateway.Kill(absSlot)
-		}
-		return m, nil
 	case "enter":
-		if m.gateway != nil {
-			snap := slots[absSlot]
-			if snap.Active && snap.Output != "" {
-				m.outputModal.show = true
-				m.outputModal.content = snap.Output
-				m.outputModal.scroll = len(strings.Split(snap.Output, "\n")) // auto-tail: start at bottom
-				m.outputModal.sessionID = ""
-				return m, nil
-			}
-		}
 		// Check for runtime session in this cell.
-		if rs := m.runtimeSessionForGridCell(m.grid.gridFocusCell, slots, sortedIndices); rs != nil {
+		if rs := m.runtimeSessionForGridCell(m.grid.gridFocusCell); rs != nil {
 			output := rs.output.String()
 			if output != "" {
 				m.outputModal.show = true
@@ -124,17 +88,8 @@ func (m *Model) updateGrid(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case "p":
-		if m.gateway != nil {
-			snap := slots[absSlot]
-			if snap.Active && snap.Prompt != "" {
-				m.promptModal.show = true
-				m.promptModal.content = snap.Prompt
-				m.promptModal.scroll = 0
-				return m, nil
-			}
-		}
 		// Check for runtime session in this cell.
-		if rs := m.runtimeSessionForGridCell(m.grid.gridFocusCell, slots, sortedIndices); rs != nil {
+		if rs := m.runtimeSessionForGridCell(m.grid.gridFocusCell); rs != nil {
 			// Build a combined prompt view: system prompt + initial message.
 			var promptContent strings.Builder
 			if rs.systemPrompt != "" {
@@ -190,32 +145,6 @@ func (m *Model) updateGrid(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// updateKillModal handles key events when the kill confirmation modal is visible.
-func (m *Model) updateKillModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "up":
-		if len(m.killModal.slots) > 0 {
-			m.killModal.selectedIdx = (m.killModal.selectedIdx - 1 + len(m.killModal.slots)) % len(m.killModal.slots)
-		}
-		return m, nil
-	case "down":
-		if len(m.killModal.slots) > 0 {
-			m.killModal.selectedIdx = (m.killModal.selectedIdx + 1) % len(m.killModal.slots)
-		}
-		return m, nil
-	case "enter":
-		if m.gateway != nil && len(m.killModal.slots) > 0 {
-			_ = m.gateway.Kill(m.killModal.slots[m.killModal.selectedIdx])
-		}
-		m.killModal.show = false
-		return m, nil
-	case "esc":
-		m.killModal.show = false
-		return m, nil
-	}
-	return m, nil
-}
-
 // updateCmdPopup handles key events when the slash command popup is visible.
 // Returns (true, cmd) if the key was consumed, (false, nil) if it should fall through.
 func (m *Model) updateCmdPopup(msg tea.KeyPressMsg) (bool, tea.Cmd) {
@@ -241,86 +170,4 @@ func (m *Model) updateCmdPopup(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 		return true, nil
 	}
 	return false, nil
-}
-
-// handleAgentOutput processes AgentOutputMsg — detects slot transitions and
-// notifies the operator LLM when agents complete.
-func (m *Model) handleAgentOutput(msg AgentOutputMsg) (tea.Model, tea.Cmd) {
-	var cmds []tea.Cmd
-
-	// Re-arm the poller.
-	if m.agentNotifyCh != nil {
-		cmds = append(cmds, waitForAgentUpdate(m.agentNotifyCh))
-	}
-
-	if m.gateway != nil {
-		slots := m.gateway.Slots()
-
-		// Detect Running→Done transitions and notify the operator LLM.
-		for i, snap := range slots {
-			wasRunning := m.prevSlotActive[i] && m.prevSlotStatus[i] == gateway.SlotRunning
-			isDone := snap.Active && snap.Status == gateway.SlotDone
-			if wasRunning && isDone {
-				// Build a concise completion notification for the operator.
-				outputTail := snap.Output
-				const maxTail = 2000
-				if len(outputTail) > maxTail {
-					outputTail = "…" + outputTail[len(outputTail)-maxTail:]
-				}
-				var notification string
-				if snap.ExitSummary != "" {
-					notification = fmt.Sprintf(
-						"Team '%s' in slot %d has completed (job: %s).\n\nExit Summary:\n%s\n\nOutput (last 2000 chars):\n%s",
-						snap.AgentName, i, snap.JobID, snap.ExitSummary, outputTail,
-					)
-				} else {
-					notification = fmt.Sprintf(
-						"Team '%s' in slot %d has completed (job: %s).\n\nOutput (last 2000 chars):\n%s",
-						snap.AgentName, i, snap.JobID, outputTail,
-					)
-				}
-
-				// Toast: agent completed.
-				cmds = append(cmds, m.addToast("🍞 "+snap.AgentName+" is done. Extra crispy.", toastSuccess))
-
-				if m.stream.streaming {
-					// Buffer the notification — drain it after the current stream ends.
-					m.chat.pendingCompletions = append(m.chat.pendingCompletions, pendingCompletion{
-						notification: notification,
-					})
-				} else {
-					// Inject immediately and start a new stream.
-					m.appendEntry(ChatEntry{
-						Message:   provider.Message{Role: "user", Content: notification},
-						Timestamp: time.Now(),
-					})
-					// Tag this message as a collapsible completion entry and auto-select it.
-					completionIdx := len(m.chat.entries) - 1
-					m.chat.completionMsgIdx[completionIdx] = true
-					m.chat.selectedMsgIdx = completionIdx
-					m.updateViewportContent()
-					if !m.scroll.userScrolled {
-						m.chatViewport.GotoBottom()
-					}
-					cmds = append(cmds, m.startStream(m.messagesFromEntries()))
-				}
-
-				// Blocker detection and task status management are handled
-				// via SQLite tools in the agent runtime.
-			}
-			// Update tracked state.
-			m.prevSlotActive[i] = snap.Active
-			m.prevSlotStatus[i] = snap.Status
-		}
-
-		// If attached to a slot, update the agent viewport.
-		if m.attachedSlot >= 0 {
-			snap := slots[m.attachedSlot]
-			if snap.Active {
-				m.agentViewport.SetContent(m.renderMarkdown(snap.Output))
-				m.agentViewport.GotoBottom()
-			}
-		}
-	}
-	return m, tea.Batch(cmds...)
 }

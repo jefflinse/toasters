@@ -11,9 +11,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
-	"github.com/jefflinse/toasters/internal/agents"
 	"github.com/jefflinse/toasters/internal/db"
-	"github.com/jefflinse/toasters/internal/gateway"
 	"github.com/jefflinse/toasters/internal/operator"
 	"github.com/jefflinse/toasters/internal/provider"
 )
@@ -355,10 +353,6 @@ func (m *Model) initMessages() {
 	m.prompt.confirmDispatch = false
 	m.prompt.changingTeam = false
 	m.prompt.pendingDispatch = provider.ToolCall{}
-	m.prompt.confirmKill = false
-	m.prompt.pendingKillSlot = 0
-	m.prompt.confirmTimeout = false
-	m.prompt.pendingTimeoutSlot = 0
 }
 
 // appendEntry adds a new chat entry to the conversation history.
@@ -437,10 +431,9 @@ func (m *Model) setFocus(p focusedPanel) tea.Cmd {
 }
 
 func (m *Model) newSession() {
-	m.systemPrompt = agents.BuildOperatorPrompt(m.teams, m.awareness)
 	m.initMessages()
 	// entries is already reset by initMessages.
-	m.stream.claudeActiveMeta = ""
+	m.stream.operatorByline = ""
 	m.stream.currentResponse = ""
 	m.stream.currentReasoning = ""
 	m.stats.MessageCount = 0
@@ -527,16 +520,11 @@ func (m *Model) sortedRuntimeSessions() []*runtimeSlot {
 
 // runtimeSessionForGridCell returns the runtime session displayed in the given
 // grid cell index (within the current page), or nil if the cell does not
-// contain a runtime session. This replicates the overlay logic used in renderGrid:
-// iterate gateway slots for the current page (using the same sorted order), and
-// for each inactive slot, assign the next sorted runtime session.
-//
-// slots and sortedIndices must be the same snapshot/ordering already used by the
-// caller (renderGrid or updateGrid) so that rtIdx arithmetic is consistent.
-func (m *Model) runtimeSessionForGridCell(cellIdx int, slots [gateway.MaxSlots]gateway.SlotSnapshot, sortedIndices []int) *runtimeSlot {
+// contain a runtime session.
+func (m *Model) runtimeSessionForGridCell(cellIdx int) *runtimeSlot {
 	cols := m.grid.gridCols
 	rows := m.grid.gridRows
-	// Safety floor: mirrors the floor applied in renderGrid and updateGrid.
+	// Safety floor: mirrors the floor applied in renderGrid.
 	if cols < 1 {
 		cols = 1
 	}
@@ -546,39 +534,12 @@ func (m *Model) runtimeSessionForGridCell(cellIdx int, slots [gateway.MaxSlots]g
 	cellsPerPage := cols * rows
 	pageOffset := m.grid.gridPage * cellsPerPage
 
-	// Pre-skip runtime sessions consumed by earlier pages (mirrors renderGrid).
-	rtIdx := 0
-	for i := range pageOffset {
-		if i >= gateway.MaxSlots {
-			break
-		}
-		snap := slots[sortedIndices[i]]
-		if !snap.Active {
-			rtIdx++
-		}
-	}
-
 	sortedRT := m.sortedRuntimeSessions()
 
-	// Find the runtime session for cellIdx.
-	for i := range cellsPerPage {
-		absIdxPos := pageOffset + i
-		if absIdxPos >= gateway.MaxSlots {
-			break
-		}
-		snap := slots[sortedIndices[absIdxPos]]
-		if snap.Active {
-			// Gateway slot — skip.
-			continue
-		}
-		// Runtime slot.
-		if i == cellIdx {
-			if rtIdx < len(sortedRT) {
-				return sortedRT[rtIdx]
-			}
-			return nil
-		}
-		rtIdx++
+	// The absolute index into the sorted runtime session list for the given cell.
+	absIdx := pageOffset + cellIdx
+	if absIdx < len(sortedRT) {
+		return sortedRT[absIdx]
 	}
 	return nil
 }

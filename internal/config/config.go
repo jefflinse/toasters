@@ -15,7 +15,6 @@ type Config struct {
 	WorkspaceDir string           `mapstructure:"workspace_dir"`
 	DatabasePath string           `mapstructure:"database_path"`
 	Operator     OperatorConfig   `mapstructure:"operator"`
-	Claude       ClaudeConfig     `mapstructure:"claude"`
 	Providers    []ProviderConfig `mapstructure:"providers"`
 	Agents       AgentsConfig     `mapstructure:"agents"`
 	MCP          MCPConfig        `mapstructure:"mcp"`
@@ -62,14 +61,6 @@ type OperatorConfig struct {
 	TeamsDir string `mapstructure:"teams_dir"`
 }
 
-// ClaudeConfig holds configuration for the Claude CLI.
-type ClaudeConfig struct {
-	Path               string `mapstructure:"path"`
-	DefaultModel       string `mapstructure:"default_model"`
-	PermissionMode     string `mapstructure:"permission_mode"`
-	SlotTimeoutMinutes int    `mapstructure:"slot_timeout_minutes"`
-}
-
 // Load reads configuration from ~/.config/toasters/config.yaml, applying
 // defaults for any values not present in the file.
 func Load() (*Config, error) {
@@ -89,10 +80,6 @@ func Load() (*Config, error) {
 	viper.SetDefault("operator.api_key", "")
 	viper.SetDefault("operator.model", "")
 	viper.SetDefault("operator.teams_dir", filepath.Join(home, ".config", "toasters", "teams"))
-	viper.SetDefault("claude.path", "claude")
-	viper.SetDefault("claude.default_model", "")
-	viper.SetDefault("claude.permission_mode", "")
-	viper.SetDefault("claude.slot_timeout_minutes", 15)
 	viper.SetDefault("agents.default_provider", "")
 	viper.SetDefault("agents.default_model", "")
 
@@ -197,5 +184,4 @@ func DatabasePath(cfg *Config) (string, error) {
 // BindFlags binds relevant cobra pflags to their Viper configuration keys.
 func BindFlags(cmd *cobra.Command) {
 	viper.BindPFlag("operator.endpoint", cmd.Flags().Lookup("operator-endpoint")) //nolint:errcheck
-	viper.BindPFlag("claude.path", cmd.Flags().Lookup("claude-path"))             //nolint:errcheck
 }

@@ -18,24 +18,9 @@ import (
 )
 
 // spawnAgentTaskInstruction is the canonical instruction for populating the
-// "task" field when calling spawn_agent. It is referenced verbatim in both
-// WrapperPrompt and BuildTeamCoordinatorPrompt so the two stay in sync.
+// "task" field when calling spawn_agent. It is referenced verbatim in
+// BuildTeamCoordinatorPrompt so the two stay in sync.
 const spawnAgentTaskInstruction = `When calling spawn_agent, always populate the "task" field with a short (≤60 char) description of what the worker is being asked to do. This is shown in the TUI card so the operator can monitor progress at a glance. Example: "building core data models", "performing code review", "writing unit tests".`
-
-// WrapperPrompt is the toasters-owned framing text appended to every coordinator
-// system prompt. The %s placeholder is replaced with the agent roster at runtime.
-const WrapperPrompt = `You are a coordinator agent operating inside toasters, an agentic orchestration tool. You lead a team of specialized workers.
-
-Your job is to take the assigned task, plan the work, and delegate subtasks to your workers using the Task tool. Each worker is a Claude subagent with a specific role — delegate to them by their role/description, not by name. Do not perform domain work yourself; delegate it.
-
-` + spawnAgentTaskInstruction + `
-
-When the job is complete, write a REPORT.md to the job directory summarizing what was done.
-
-If you hit a genuine blocker that requires human input, write a BLOCKER.md to the job directory and stop.
-
-Available workers:
-%s`
 
 // Agent represents a single agent loaded from a Markdown file.
 type Agent struct {
@@ -67,55 +52,6 @@ type Agent struct {
 	Hooks           map[string]any // lifecycle hooks
 	Background      bool           // run in background
 	Isolation       string         // isolation mode (e.g. "container")
-}
-
-// ClaudePermissionArgs returns the Claude CLI permission flags for this agent.
-//
-// If the agent has a tools: block in its frontmatter, the denied tools are
-// translated to a --allowedTools allow-list (full set minus denied tools).
-// If no tools: block is present, --dangerously-skip-permissions is used
-// (full access — appropriate for agents like builder that need everything).
-//
-// Note: when --allowedTools is used, the prompt MUST be passed via stdin
-// rather than as a positional argument, as the flag greedily consumes
-// subsequent positional args as tool names. The gateway handles this.
-func (a Agent) ClaudePermissionArgs() []string {
-	if !a.HasToolsBlock {
-		return []string{"--dangerously-skip-permissions"}
-	}
-
-	// Full set of Claude Code built-in tools.
-	fullSet := []string{"Bash", "Read", "Write", "Edit", "Glob", "Grep", "WebFetch", "TodoRead", "TodoWrite"}
-
-	// OpenCode tools: key → Claude Code tool name.
-	openCodeToClaudeCode := map[string]string{
-		"bash":  "Bash",
-		"write": "Write",
-		"edit":  "Edit",
-	}
-
-	denied := map[string]bool{}
-	for ocKey, allowed := range a.Tools {
-		if !allowed {
-			if ccName, ok := openCodeToClaudeCode[ocKey]; ok {
-				denied[ccName] = true
-			}
-		}
-	}
-
-	var allowed []string
-	for _, tool := range fullSet {
-		if !denied[tool] {
-			allowed = append(allowed, tool)
-		}
-	}
-
-	if len(allowed) == 0 {
-		return []string{"--permission-mode", "bypassPermissions"}
-	}
-	// --permission-mode acceptEdits prevents the interactive plan-approval prompt
-	// while still respecting the --allowedTools constraint.
-	return []string{"--permission-mode", "acceptEdits", "--allowedTools", strings.Join(allowed, ",")}
 }
 
 // Registry holds a set of agents split into a coordinator and workers.
@@ -492,30 +428,6 @@ type Team struct {
 	Workers     []Agent // all non-coordinator agents
 }
 
-// BuildSystemPrompt assembles the full system prompt for the coordinator by
-// appending the toasters wrapper (with agent roster) to the coordinator's body.
-//
-// Workers with an empty description are omitted from the roster. If no workers
-// are present, the roster section reads "No worker agents discovered."
-func BuildSystemPrompt(coordinator Agent, workers []Agent) string {
-	var rosterLines []string
-	for _, w := range workers {
-		if w.Description == "" {
-			continue
-		}
-		rosterLines = append(rosterLines, fmt.Sprintf("- `%s`: %s", w.Name, w.Description))
-	}
-
-	var roster string
-	if len(rosterLines) == 0 {
-		roster = "No worker agents discovered."
-	} else {
-		roster = strings.Join(rosterLines, "\n")
-	}
-
-	return coordinator.Body + "\n\n---\n\n" + fmt.Sprintf(WrapperPrompt, roster)
-}
-
 // DiscoverTeams loads all teams from subdirectories of teamsDir.
 //
 // Each subdirectory (excluding hidden dirs starting with ".") is treated as a
@@ -877,56 +789,4 @@ func rewriteMode(content, mode string) string {
 	sb.WriteString("\n" + delim)
 	sb.WriteString(afterClose)
 	return sb.String()
-}
-
-// BuildOperatorPrompt returns the hardcoded toasters operator system prompt,
-// listing all available teams.
-//
-// When awareness is non-empty it is used verbatim as the body of the
-// "## Available Teams" section. When awareness is empty the fallback
-// one-liner-per-team list is used instead.
-func BuildOperatorPrompt(teams []Team, awareness string) string {
-	var teamsSection string
-	if awareness != "" {
-		teamsSection = awareness
-	} else {
-		var teamList strings.Builder
-		if len(teams) == 0 {
-			teamList.WriteString("No teams configured.")
-		} else {
-			for _, t := range teams {
-				if t.Coordinator != nil {
-					fmt.Fprintf(&teamList, "- `%s`: %s\n", t.Name, t.Coordinator.Description)
-				} else {
-					fmt.Fprintf(&teamList, "- `%s`: %d workers\n", t.Name, len(t.Workers))
-				}
-			}
-		}
-		teamsSection = strings.TrimRight(teamList.String(), "\n")
-	}
-
-	return fmt.Sprintf(`You are the Operator. You receive user requests, manage jobs, and assign tasks to teams. You do NOT do domain work yourself. Never ask the user for a job ID — you create jobs yourself with `+"`create_job`"+`.
-
-## Decision Tree
-
-**Simple or greenfield request** (no existing codebase): `+"`create_job`"+` → `+"`create_task`"+` (one per phase) → `+"`assign_task`"+` for each.
-
-**Work on an existing repo/project** (any mention of a repo, project, or existing code): use the decomposition path below. This is the default for real work.
-
-## Decomposition Path
-
-1. `+"`create_job`"+` — returns a job_id. Save it.
-2. `+"`setup_workspace`"+` — clone the repo(s) into the job workspace. Pass the job_id and repo URLs. Returns the workspace path.
-3. `+"`consult_agent`"+` with agent_name="decomposer", job_id, and a message containing the job description and workspace path. Returns a JSON task list.
-4. For each task in the JSON: call `+"`create_task`"+` (returns a task_id), then `+"`assign_task`"+` with the task_id and team_id.
-5. Tell the user: job created, N tasks decomposed, first task dispatched.
-
-## Ongoing Management
-
-- Status: `+"`query_job`"+`
-- Blocker: `+"`surface_to_user`"+`
-- Teams: `+"`query_teams`"+`
-
-## Available Teams
-%s`, teamsSection)
 }

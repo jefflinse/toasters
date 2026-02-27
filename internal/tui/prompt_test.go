@@ -8,8 +8,6 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/jefflinse/toasters/internal/agents"
-	"github.com/jefflinse/toasters/internal/config"
-	"github.com/jefflinse/toasters/internal/gateway"
 	"github.com/jefflinse/toasters/internal/provider"
 )
 
@@ -274,63 +272,6 @@ func TestUpdatePromptMode_CustomModeDelegatesKeyToTextarea(t *testing.T) {
 // handleToolCalls tests
 // --------------------------------------------------------------------------
 
-func TestHandleToolCalls_KillSlot(t *testing.T) {
-	t.Parallel()
-
-	claudeCfg := config.ClaudeConfig{Path: "/usr/bin/true"}
-	gw := gateway.New(claudeCfg, t.TempDir(), func() {})
-
-	m := newMinimalModel(t)
-	m.gateway = gw
-
-	args, _ := json.Marshal(map[string]int{"slot_id": 2})
-	msg := ToolCallMsg{
-		Calls: []provider.ToolCall{
-			{
-				ID:       "call-kill-1",
-				Name:      "kill_slot",
-				Arguments: args,
-			},
-		},
-	}
-
-	result, _ := m.handleToolCalls(msg)
-	got := result.(*Model)
-
-	if !got.prompt.promptMode {
-		t.Error("promptMode should be true for kill confirmation")
-	}
-	if !got.prompt.confirmKill {
-		t.Error("confirmKill should be true")
-	}
-	if got.prompt.confirmDispatch {
-		t.Error("confirmDispatch should be false")
-	}
-	if got.prompt.pendingKillSlot != 2 {
-		t.Errorf("pendingKillSlot = %d, want 2", got.prompt.pendingKillSlot)
-	}
-	if got.prompt.promptPendingCall.ID != "call-kill-1" {
-		t.Errorf("promptPendingCall.ID = %q, want %q", got.prompt.promptPendingCall.ID, "call-kill-1")
-	}
-	if len(got.prompt.promptOptions) != 2 || got.prompt.promptOptions[0] != "Yes, kill" || got.prompt.promptOptions[1] != "Cancel" {
-		t.Errorf("promptOptions = %v, want [Yes, kill Cancel]", got.prompt.promptOptions)
-	}
-	if got.prompt.promptSelected != 0 {
-		t.Errorf("promptSelected = %d, want 0", got.prompt.promptSelected)
-	}
-	// Verify a chat entry was appended for the kill confirmation question.
-	found := false
-	for _, entry := range got.chat.entries {
-		if strings.Contains(entry.Message.Content, "Kill slot 2") {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Error("expected a chat entry containing 'Kill slot 2'")
-	}
-}
-
 func TestHandleToolCalls_AssignTeam(t *testing.T) {
 	t.Parallel()
 
@@ -340,7 +281,7 @@ func TestHandleToolCalls_AssignTeam(t *testing.T) {
 	msg := ToolCallMsg{
 		Calls: []provider.ToolCall{
 			{
-				ID:       "call-assign-1",
+				ID:        "call-assign-1",
 				Name:      "assign_team",
 				Arguments: args,
 			},
@@ -355,9 +296,6 @@ func TestHandleToolCalls_AssignTeam(t *testing.T) {
 	}
 	if !got.prompt.confirmDispatch {
 		t.Error("confirmDispatch should be true")
-	}
-	if got.prompt.confirmKill {
-		t.Error("confirmKill should be false")
 	}
 	if got.prompt.changingTeam {
 		t.Error("changingTeam should be false initially")
@@ -399,7 +337,7 @@ func TestHandleToolCalls_AskUser(t *testing.T) {
 	msg := ToolCallMsg{
 		Calls: []provider.ToolCall{
 			{
-				ID:       "call-ask-1",
+				ID:        "call-ask-1",
 				Name:      "ask_user",
 				Arguments: args,
 			},
@@ -412,8 +350,8 @@ func TestHandleToolCalls_AskUser(t *testing.T) {
 	if !got.prompt.promptMode {
 		t.Error("promptMode should be true for ask_user")
 	}
-	if got.prompt.confirmKill || got.prompt.confirmDispatch {
-		t.Error("confirmKill and confirmDispatch should be false for ask_user")
+	if got.prompt.confirmDispatch {
+		t.Error("confirmDispatch should be false for ask_user")
 	}
 	if got.prompt.promptQuestion != "Which database?" {
 		t.Errorf("promptQuestion = %q, want %q", got.prompt.promptQuestion, "Which database?")
@@ -449,7 +387,7 @@ func TestHandleToolCalls_AskUser_InvalidJSON(t *testing.T) {
 	msg := ToolCallMsg{
 		Calls: []provider.ToolCall{
 			{
-				ID:       "call-ask-bad",
+				ID:        "call-ask-bad",
 				Name:      "ask_user",
 				Arguments: json.RawMessage("not-json"),
 			},
@@ -483,7 +421,7 @@ func TestHandleToolCalls_EscalateToUser(t *testing.T) {
 	msg := ToolCallMsg{
 		Calls: []provider.ToolCall{
 			{
-				ID:       "call-escalate-1",
+				ID:        "call-escalate-1",
 				Name:      "escalate_to_user",
 				Arguments: args,
 			},
@@ -530,7 +468,7 @@ func TestHandleToolCalls_EscalateToUser_InvalidJSON(t *testing.T) {
 	msg := ToolCallMsg{
 		Calls: []provider.ToolCall{
 			{
-				ID:       "call-escalate-bad",
+				ID:        "call-escalate-bad",
 				Name:      "escalate_to_user",
 				Arguments: json.RawMessage("bad-json"),
 			},
@@ -561,7 +499,7 @@ func TestHandleToolCalls_EscalateToUser_NoContext(t *testing.T) {
 	msg := ToolCallMsg{
 		Calls: []provider.ToolCall{
 			{
-				ID:       "call-escalate-nocontext",
+				ID:        "call-escalate-nocontext",
 				Name:      "escalate_to_user",
 				Arguments: args,
 			},
@@ -587,7 +525,7 @@ func TestHandleToolCalls_NormalToolExecution(t *testing.T) {
 	msg := ToolCallMsg{
 		Calls: []provider.ToolCall{
 			{
-				ID:       "call-joblist-1",
+				ID:        "call-joblist-1",
 				Name:      "job_list",
 				Arguments: json.RawMessage("{}"),
 			},
@@ -642,7 +580,7 @@ func TestHandleToolCalls_StreamingSetToFalse(t *testing.T) {
 	msg := ToolCallMsg{
 		Calls: []provider.ToolCall{
 			{
-				ID:       "call-ask-stream",
+				ID:        "call-ask-stream",
 				Name:      "ask_user",
 				Arguments: args,
 			},
@@ -658,214 +596,9 @@ func TestHandleToolCalls_StreamingSetToFalse(t *testing.T) {
 	}
 }
 
-func TestHandleToolCalls_MultipleCallsFirstSpecialWins(t *testing.T) {
-	t.Parallel()
-
-	m := newMinimalModel(t)
-
-	killArgs, _ := json.Marshal(map[string]int{"slot_id": 0})
-	askArgs, _ := json.Marshal(map[string]any{"question": "test?", "options": []string{}})
-
-	claudeCfg := config.ClaudeConfig{Path: "/usr/bin/true"}
-	gw := gateway.New(claudeCfg, t.TempDir(), func() {})
-	m.gateway = gw
-
-	msg := ToolCallMsg{
-		Calls: []provider.ToolCall{
-			{
-				ID:       "call-kill-first",
-				Name:      "kill_slot",
-				Arguments: killArgs,
-			},
-			{
-				ID:       "call-ask-second",
-				Name:      "ask_user",
-				Arguments: askArgs,
-			},
-		},
-	}
-
-	result, _ := m.handleToolCalls(msg)
-	got := result.(*Model)
-
-	// The first special tool (kill_slot) should be intercepted; the second should be ignored.
-	if !got.prompt.confirmKill {
-		t.Error("confirmKill should be true — kill_slot was first")
-	}
-	if got.prompt.promptPendingCall.ID != "call-kill-first" {
-		t.Errorf("promptPendingCall.ID = %q, want %q", got.prompt.promptPendingCall.ID, "call-kill-first")
-	}
-}
-
 // --------------------------------------------------------------------------
 // handleAskUserResponse tests
 // --------------------------------------------------------------------------
-
-func TestHandleAskUserResponse_TimeoutConfirm_Continue(t *testing.T) {
-	t.Parallel()
-
-	claudeCfg := config.ClaudeConfig{Path: "/usr/bin/true"}
-	gw := gateway.New(claudeCfg, t.TempDir(), func() {})
-
-	m := newMinimalModel(t)
-	m.gateway = gw
-	m.prompt.confirmTimeout = true
-	m.prompt.promptMode = true
-	m.prompt.pendingTimeoutSlot = 1
-	m.prompt.promptOptions = []string{"Continue (+15m)", "Kill"}
-
-	msg := AskUserResponseMsg{Result: "Continue (+15m)"}
-
-	result, cmd := m.handleAskUserResponse(msg)
-	got := result.(*Model)
-
-	if got.prompt.confirmTimeout {
-		t.Error("confirmTimeout should be false after response")
-	}
-	if got.prompt.promptMode {
-		t.Error("promptMode should be false after timeout response")
-	}
-	if got.prompt.promptOptions != nil {
-		t.Errorf("promptOptions should be nil, got %v", got.prompt.promptOptions)
-	}
-
-	// Should have appended an entry about extending.
-	found := false
-	for _, entry := range got.chat.entries {
-		if strings.Contains(entry.Message.Content, "Slot 1 extended") {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Error("expected entry about slot extension")
-	}
-
-	// cmd should be input focus.
-	if cmd == nil {
-		t.Error("expected non-nil cmd (input focus)")
-	}
-}
-
-func TestHandleAskUserResponse_TimeoutConfirm_Kill(t *testing.T) {
-	t.Parallel()
-
-	claudeCfg := config.ClaudeConfig{Path: "/usr/bin/true"}
-	gw := gateway.New(claudeCfg, t.TempDir(), func() {})
-
-	m := newMinimalModel(t)
-	m.gateway = gw
-	m.prompt.confirmTimeout = true
-	m.prompt.promptMode = true
-	m.prompt.pendingTimeoutSlot = 2
-	m.prompt.promptOptions = []string{"Continue (+15m)", "Kill"}
-
-	msg := AskUserResponseMsg{Result: "Kill"}
-
-	result, _ := m.handleAskUserResponse(msg)
-	got := result.(*Model)
-
-	if got.prompt.confirmTimeout {
-		t.Error("confirmTimeout should be false after response")
-	}
-	if got.prompt.promptMode {
-		t.Error("promptMode should be false after timeout response")
-	}
-
-	// Should have appended an entry about killing.
-	found := false
-	for _, entry := range got.chat.entries {
-		if strings.Contains(entry.Message.Content, "Slot 2 killed") {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Error("expected entry about slot being killed")
-	}
-}
-
-func TestHandleAskUserResponse_KillConfirm_Yes(t *testing.T) {
-	t.Parallel()
-
-	claudeCfg := config.ClaudeConfig{Path: "/usr/bin/true"}
-	gw := gateway.New(claudeCfg, t.TempDir(), func() {})
-
-	m := newMinimalModel(t)
-	m.gateway = gw
-	m.prompt.confirmKill = true
-	m.prompt.promptMode = true
-	m.prompt.pendingKillSlot = 0
-	m.prompt.promptPendingCall = provider.ToolCall{ID: "call-kill-confirm"}
-
-	msg := AskUserResponseMsg{Result: "Yes, kill"}
-
-	result, cmd := m.handleAskUserResponse(msg)
-	got := result.(*Model)
-
-	if got.prompt.confirmKill {
-		t.Error("confirmKill should be false after response")
-	}
-	if got.prompt.promptMode {
-		t.Error("promptMode should be false after kill response")
-	}
-
-	// Should have appended a tool result entry with "killed slot 0".
-	found := false
-	for _, entry := range got.chat.entries {
-		if entry.Message.Role == "tool" && strings.Contains(entry.Message.Content, "killed slot 0") {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Error("expected tool result entry containing 'killed slot 0'")
-	}
-
-	// Should return a cmd to start a new stream.
-	if cmd == nil {
-		t.Error("expected non-nil cmd (startStream) after kill confirmation")
-	}
-}
-
-func TestHandleAskUserResponse_KillConfirm_Cancel(t *testing.T) {
-	t.Parallel()
-
-	claudeCfg := config.ClaudeConfig{Path: "/usr/bin/true"}
-	gw := gateway.New(claudeCfg, t.TempDir(), func() {})
-
-	m := newMinimalModel(t)
-	m.gateway = gw
-	m.prompt.confirmKill = true
-	m.prompt.promptMode = true
-	m.prompt.pendingKillSlot = 1
-	m.prompt.promptPendingCall = provider.ToolCall{ID: "call-kill-cancel"}
-
-	msg := AskUserResponseMsg{Result: "Cancel"}
-
-	result, cmd := m.handleAskUserResponse(msg)
-	got := result.(*Model)
-
-	if got.prompt.confirmKill {
-		t.Error("confirmKill should be false after cancel")
-	}
-
-	// Should have appended a tool result entry with "User cancelled the kill."
-	found := false
-	for _, entry := range got.chat.entries {
-		if entry.Message.Role == "tool" && strings.Contains(entry.Message.Content, "User cancelled the kill") {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Error("expected tool result entry containing 'User cancelled the kill'")
-	}
-
-	if cmd == nil {
-		t.Error("expected non-nil cmd (startStream) after kill cancellation")
-	}
-}
 
 func TestHandleAskUserResponse_DispatchConfirm_YesDispatch(t *testing.T) {
 	t.Parallel()
@@ -875,7 +608,7 @@ func TestHandleAskUserResponse_DispatchConfirm_YesDispatch(t *testing.T) {
 	m.prompt.confirmDispatch = true
 	m.prompt.promptMode = true
 	m.prompt.pendingDispatch = provider.ToolCall{
-		ID:       "call-dispatch-yes",
+		ID:        "call-dispatch-yes",
 		Name:      "assign_team",
 		Arguments: json.RawMessage(`{"team_name":"alpha","job_id":"job-1","task":"do stuff"}`),
 	}
@@ -922,7 +655,7 @@ func TestHandleAskUserResponse_DispatchConfirm_Cancel(t *testing.T) {
 	m.prompt.confirmDispatch = true
 	m.prompt.promptMode = true
 	m.prompt.pendingDispatch = provider.ToolCall{
-		ID:       "call-dispatch-cancel",
+		ID:        "call-dispatch-cancel",
 		Name:      "assign_team",
 		Arguments: json.RawMessage(`{"team_name":"beta","job_id":"job-2"}`),
 	}
@@ -965,7 +698,7 @@ func TestHandleAskUserResponse_DispatchConfirm_ChangeTeam(t *testing.T) {
 		{Name: "gamma"},
 	}
 	m.prompt.pendingDispatch = provider.ToolCall{
-		ID:       "call-dispatch-change",
+		ID:        "call-dispatch-change",
 		Name:      "assign_team",
 		Arguments: json.RawMessage(`{"team_name":"alpha","job_id":"job-3"}`),
 	}
@@ -1013,7 +746,7 @@ func TestHandleAskUserResponse_DispatchConfirm_ChangingTeamSelection(t *testing.
 	m.prompt.changingTeam = true
 	m.prompt.promptMode = true
 	m.prompt.pendingDispatch = provider.ToolCall{
-		ID:       "call-dispatch-changed",
+		ID:        "call-dispatch-changed",
 		Name:      "assign_team",
 		Arguments: json.RawMessage(`{"team_name":"alpha","job_id":"job-4","task":"do stuff"}`),
 	}
@@ -1063,7 +796,7 @@ func TestHandleAskUserResponse_NormalAskUser(t *testing.T) {
 	t.Parallel()
 
 	m := newMinimalModel(t)
-	// No confirmTimeout, confirmKill, or confirmDispatch flags set.
+	// No confirmDispatch flag set.
 	m.prompt.promptMode = true
 	m.prompt.promptCustom = true
 	m.prompt.promptQuestion = "What color?"
@@ -1072,7 +805,7 @@ func TestHandleAskUserResponse_NormalAskUser(t *testing.T) {
 	m.input.SetValue("some leftover text")
 
 	pendingCall := provider.ToolCall{
-		ID:       "call-normal-ask",
+		ID:   "call-normal-ask",
 		Name: "ask_user",
 	}
 
@@ -1142,7 +875,7 @@ func TestPromptMode_FullFlow_SelectAndRespond(t *testing.T) {
 	m.prompt.promptOptions = []string{"Yes", "No"}
 	m.prompt.promptSelected = 0
 	m.prompt.promptPendingCall = provider.ToolCall{
-		ID:       "call-flow-1",
+		ID:   "call-flow-1",
 		Name: "ask_user",
 	}
 
@@ -1197,7 +930,7 @@ func TestPromptMode_FullFlow_CustomResponse(t *testing.T) {
 	m.prompt.promptOptions = []string{"Option A"}
 	m.prompt.promptSelected = 0
 	m.prompt.promptPendingCall = provider.ToolCall{
-		ID:       "call-flow-custom",
+		ID:   "call-flow-custom",
 		Name: "ask_user",
 	}
 

@@ -457,64 +457,61 @@ func TestUpdateGrid_PageNavigation(t *testing.T) {
 	}
 }
 
-func TestUpdateGrid_EnterWithNilGateway(t *testing.T) {
+func TestUpdateGrid_EnterWithNoSession(t *testing.T) {
 	t.Parallel()
 
 	m := newMinimalModel(t)
 	m.grid.showGrid = true
-	m.gateway = nil
 	m.grid.gridFocusCell = 0
 
 	result, cmd := m.updateGrid(specialKey(tea.KeyEnter))
 	got := result.(*Model)
 
-	// Should not panic with nil gateway, and should not open output modal.
+	// Should not panic with no session, and should not open output modal.
 	if got.outputModal.show {
-		t.Error("showOutputModal should be false when gateway is nil")
+		t.Error("showOutputModal should be false when no session is focused")
 	}
 	if cmd != nil {
-		t.Error("expected nil cmd when gateway is nil")
+		t.Error("expected nil cmd when no session is focused")
 	}
 }
 
-func TestUpdateGrid_PromptWithNilGateway(t *testing.T) {
+func TestUpdateGrid_PromptWithNoSession(t *testing.T) {
 	t.Parallel()
 
 	m := newMinimalModel(t)
 	m.grid.showGrid = true
-	m.gateway = nil
 	m.grid.gridFocusCell = 0
 
 	result, cmd := m.updateGrid(keyPress('p'))
 	got := result.(*Model)
 
-	// Should not panic with nil gateway, and should not open prompt modal.
+	// Should not panic with no session, and should not open prompt modal.
 	if got.promptModal.show {
-		t.Error("showPromptModal should be false when gateway is nil")
+		t.Error("showPromptModal should be false when no session is focused")
 	}
 	if cmd != nil {
-		t.Error("expected nil cmd when gateway is nil")
+		t.Error("expected nil cmd when no session is focused")
 	}
 }
 
-func TestUpdateGrid_KillWithNilGateway(t *testing.T) {
+func TestUpdateGrid_UnhandledKillKey(t *testing.T) {
 	t.Parallel()
 
 	m := newMinimalModel(t)
 	m.grid.showGrid = true
-	m.gateway = nil
 	m.grid.gridFocusCell = 0
 
-	// 'k' and 'ctrl+k' are kill keys in grid mode.
+	// 'k' is no longer a kill key in grid mode (kill was removed with gateway).
 	result, cmd := m.updateGrid(keyPress('k'))
 	got := result.(*Model)
 
-	// Should not panic with nil gateway.
+	// 'k' should be an unhandled key — grid stays open, no cmd.
 	if !got.grid.showGrid {
-		t.Error("showGrid should remain true after kill with nil gateway")
+		t.Error("showGrid should remain true for unhandled key")
 	}
 	if cmd != nil {
-		t.Error("expected nil cmd when gateway is nil")
+		t.Error("expected nil cmd for unhandled key")
 	}
 }
 
@@ -722,160 +719,6 @@ func TestUpdateGrid_UnhandledKey(t *testing.T) {
 	}
 	if !got.grid.showGrid {
 		t.Error("showGrid should remain true for unhandled key")
-	}
-	if cmd != nil {
-		t.Error("expected nil cmd for unhandled key")
-	}
-}
-
-// --------------------------------------------------------------------------
-// updateKillModal tests
-// --------------------------------------------------------------------------
-
-func TestUpdateKillModal_Dismiss(t *testing.T) {
-	t.Parallel()
-
-	m := newMinimalModel(t)
-	m.killModal.show = true
-	m.killModal.slots = []int{0, 2}
-	m.killModal.selectedIdx = 1
-
-	result, cmd := m.updateKillModal(specialKey(tea.KeyEscape))
-	got := result.(*Model)
-
-	if got.killModal.show {
-		t.Error("showKillModal should be false after esc")
-	}
-	if cmd != nil {
-		t.Error("expected nil cmd on dismiss")
-	}
-}
-
-func TestUpdateKillModal_Navigation(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name     string
-		key      tea.KeyPressMsg
-		slots    []int
-		startIdx int
-		wantIdx  int
-	}{
-		// Down wraps around.
-		{"down from 0 of 3", specialKey(tea.KeyDown), []int{0, 1, 2}, 0, 1},
-		{"down from 2 of 3 wraps to 0", specialKey(tea.KeyDown), []int{0, 1, 2}, 2, 0},
-		{"down from 0 of 1 wraps to 0", specialKey(tea.KeyDown), []int{5}, 0, 0},
-		// Up wraps around.
-		{"up from 1 of 3", specialKey(tea.KeyUp), []int{0, 1, 2}, 1, 0},
-		{"up from 0 of 3 wraps to 2", specialKey(tea.KeyUp), []int{0, 1, 2}, 0, 2},
-		{"up from 0 of 1 wraps to 0", specialKey(tea.KeyUp), []int{5}, 0, 0},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			m := newMinimalModel(t)
-			m.killModal.show = true
-			m.killModal.slots = tt.slots
-			m.killModal.selectedIdx = tt.startIdx
-
-			result, _ := m.updateKillModal(tt.key)
-			got := result.(*Model)
-
-			if got.killModal.selectedIdx != tt.wantIdx {
-				t.Errorf("selectedKillIdx = %d, want %d", got.killModal.selectedIdx, tt.wantIdx)
-			}
-			if !got.killModal.show {
-				t.Error("showKillModal should remain true during navigation")
-			}
-		})
-	}
-}
-
-func TestUpdateKillModal_NavigationEmptySlots(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name string
-		key  tea.KeyPressMsg
-	}{
-		{"up with empty slots", specialKey(tea.KeyUp)},
-		{"down with empty slots", specialKey(tea.KeyDown)},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			m := newMinimalModel(t)
-			m.killModal.show = true
-			m.killModal.slots = nil
-			m.killModal.selectedIdx = 0
-
-			result, _ := m.updateKillModal(tt.key)
-			got := result.(*Model)
-
-			if got.killModal.selectedIdx != 0 {
-				t.Errorf("selectedKillIdx = %d, want 0 (unchanged for empty slots)", got.killModal.selectedIdx)
-			}
-		})
-	}
-}
-
-func TestUpdateKillModal_EnterDismisses(t *testing.T) {
-	t.Parallel()
-
-	// With nil gateway, enter should still dismiss the modal.
-	m := newMinimalModel(t)
-	m.killModal.show = true
-	m.killModal.slots = []int{0, 2}
-	m.killModal.selectedIdx = 1
-	m.gateway = nil
-
-	result, cmd := m.updateKillModal(specialKey(tea.KeyEnter))
-	got := result.(*Model)
-
-	if got.killModal.show {
-		t.Error("showKillModal should be false after enter")
-	}
-	if cmd != nil {
-		t.Error("expected nil cmd when gateway is nil")
-	}
-}
-
-func TestUpdateKillModal_EnterWithEmptySlots(t *testing.T) {
-	t.Parallel()
-
-	m := newMinimalModel(t)
-	m.killModal.show = true
-	m.killModal.slots = nil
-	m.killModal.selectedIdx = 0
-	m.gateway = nil
-
-	result, _ := m.updateKillModal(specialKey(tea.KeyEnter))
-	got := result.(*Model)
-
-	// Should dismiss even with empty slots.
-	if got.killModal.show {
-		t.Error("showKillModal should be false after enter with empty slots")
-	}
-}
-
-func TestUpdateKillModal_UnhandledKey(t *testing.T) {
-	t.Parallel()
-
-	m := newMinimalModel(t)
-	m.killModal.show = true
-	m.killModal.slots = []int{0, 1}
-	m.killModal.selectedIdx = 0
-
-	result, cmd := m.updateKillModal(keyPress('x'))
-	got := result.(*Model)
-
-	if !got.killModal.show {
-		t.Error("showKillModal should remain true for unhandled key")
-	}
-	if got.killModal.selectedIdx != 0 {
-		t.Errorf("selectedKillIdx = %d, want 0 (unchanged)", got.killModal.selectedIdx)
 	}
 	if cmd != nil {
 		t.Error("expected nil cmd for unhandled key")

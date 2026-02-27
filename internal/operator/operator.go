@@ -22,12 +22,6 @@ import (
 const (
 	eventChSize = 256
 	maxMessages = 200
-
-	defaultSystemPrompt = `You are the operator — an orchestration agent that coordinates work.
-When a user sends a message, analyze it and decide how to proceed.
-You can consult specialized agents using the consult_agent tool.
-Available agents: planner, reviewer.
-Be concise and helpful.`
 )
 
 // Operator manages the event loop and long-lived operator LLM session.
@@ -71,9 +65,6 @@ type Config struct {
 // New creates a new Operator. Call Start to begin processing events.
 func New(cfg Config) *Operator {
 	systemPrompt := cfg.SystemPrompt
-	if systemPrompt == "" {
-		systemPrompt = defaultSystemPrompt
-	}
 
 	// Create SystemTools for system agents to use. The event channel is the
 	// operator's own channel so system agent actions (e.g. assign_task) flow

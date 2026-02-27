@@ -17,7 +17,6 @@ import (
 	"github.com/jefflinse/toasters/internal/compose"
 	"github.com/jefflinse/toasters/internal/config"
 	"github.com/jefflinse/toasters/internal/db"
-	"github.com/jefflinse/toasters/internal/gateway"
 	llmtools "github.com/jefflinse/toasters/internal/llm/tools"
 	"github.com/jefflinse/toasters/internal/loader"
 	"github.com/jefflinse/toasters/internal/mcp"
@@ -35,7 +34,6 @@ var rootCmd = &cobra.Command{
 
 func init() {
 	rootCmd.Flags().String("operator-endpoint", "", "LM Studio endpoint URL (overrides config)")
-	rootCmd.Flags().String("claude-path", "", "Path to the claude binary (overrides config)")
 }
 
 // Execute runs the root command.
@@ -165,13 +163,7 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 		rt.SetMCPCaller(truncatingCaller, mcp.ToRuntimeToolDefs(mcpManager.Tools()))
 	}
 
-	// Create the gateway with a no-op notify for now.
-	// The TUI will replace this with a real notify after the program starts.
-	gw := gateway.New(cfg.Claude, workspaceDir, func() {})
-	if dbPath != "" {
-		gw.SetDBPath(dbPath)
-	}
-	toolExec := llmtools.NewToolExecutor(gw, teams, workspaceDir, store, rt)
+	toolExec := llmtools.NewToolExecutor(teams, workspaceDir, store, rt)
 	toolExec.DefaultProvider = cfg.Agents.DefaultProvider
 	toolExec.DefaultModel = cfg.Agents.DefaultModel
 
@@ -238,15 +230,28 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 	// are forwarded to the TUI through a single path.
 	rt.OnSessionStarted = notifySessionStarted
 
+	// Compose the operator agent from its .md file definition so the system
+	// prompt is file-driven (like all other system agents) rather than hard-coded.
+	var operatorPrompt string
+	if composer != nil {
+		composedOperator, composeErr := composer.Compose(context.Background(), "operator", "system")
+		if composeErr != nil {
+			slog.Warn("failed to compose operator agent, using empty prompt", "error", composeErr)
+		} else {
+			operatorPrompt = composedOperator.SystemPrompt
+		}
+	}
+
 	if store != nil {
 		op = operator.New(operator.Config{
-			Runtime:  rt,
-			Provider: client,
-			Model:    cfg.Operator.Model,
-			WorkDir:  workspaceDir,
-			Store:    store,
-			Composer: composer,
-			Spawner:  rt,
+			Runtime:      rt,
+			Provider:     client,
+			Model:        cfg.Operator.Model,
+			WorkDir:      workspaceDir,
+			Store:        store,
+			Composer:     composer,
+			Spawner:      rt,
+			SystemPrompt: operatorPrompt,
 			OnText: func(text string) {
 				if prog := p.Load(); prog != nil {
 					prog.Send(tui.OperatorTextMsg{Text: text})
@@ -266,19 +271,18 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 	}
 
 	m := tui.NewModel(tui.ModelConfig{
-		Client:        client,
-		ClaudeCfg:     cfg.Claude,
-		WorkspaceDir:  workspaceDir,
-		Gateway:       gw,
-		TeamsDir:      teamsDir,
-		Teams:         teams,
-		Awareness:     "",
-		ToolExec:      toolExec,
-		Store:         store,
-		Runtime:       rt,
-		MCPManager:    mcpManager,
-		Operator:      op,
-		OperatorModel: cfg.Operator.Model,
+		Client:         client,
+		WorkspaceDir:   workspaceDir,
+		TeamsDir:       teamsDir,
+		Teams:          teams,
+		Awareness:      "",
+		ToolExec:       toolExec,
+		Store:          store,
+		Runtime:        rt,
+		MCPManager:     mcpManager,
+		Operator:       op,
+		OperatorModel:  cfg.Operator.Model,
+		OperatorPrompt: operatorPrompt,
 	})
 
 	prog := tea.NewProgram(&m)
@@ -293,25 +297,18 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 		op.Start(opCtx)
 	}
 
-	gw.SetSend(func(msg gateway.SlotTimeoutMsg) {
-		prog.Send(msg)
-	})
-
-	// Generate team awareness and (optionally) pre-fetch the operator greeting in
-	// the background so the TUI appears immediately. Always send AppReadyMsg even
-	// on error.
+	// Generate team awareness and send the operator greeting in the background
+	// so the TUI appears immediately. Always send AppReadyMsg even on error.
 	go func() {
 		ctx := context.Background()
 		awareness := generateTeamAwareness(ctx, client, teams, configDir)
 
-		if op != nil {
-			// When the operator is active, skip the pre-fetched greeting.
-			// Instead, send a greeting request through the operator so it goes
-			// through the operator's conversation history and streams naturally.
-			prog.Send(tui.AppReadyMsg{Awareness: awareness, Greeting: ""})
+		// Send AppReadyMsg so the TUI can initialize the system prompt.
+		prog.Send(tui.AppReadyMsg{Awareness: awareness, Greeting: ""})
 
-			// Send the greeting through the operator after AppReadyMsg so the
-			// TUI is ready to receive OperatorTextMsg / OperatorDoneMsg.
+		if op != nil {
+			// Send the greeting through the operator so it goes through the
+			// operator's conversation history and streams naturally.
 			if err := op.Send(ctx, operator.Event{
 				Type: operator.EventUserMessage,
 				Payload: operator.UserMessagePayload{
@@ -320,20 +317,7 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 			}); err != nil {
 				slog.Warn("failed to send greeting through operator", "error", err)
 			}
-			return
 		}
-
-		// Legacy path: pre-fetch greeting via direct API call.
-		systemPrompt := agents.BuildOperatorPrompt(teams, awareness)
-		greeting, err := provider.ChatCompletion(ctx, client, []provider.Message{
-			{Role: "system", Content: systemPrompt},
-			{Role: "user", Content: "Greet the user briefly. One or two sentences max. Be direct and ready to work."},
-		})
-		if err != nil {
-			slog.Warn("failed to pre-fetch greeting", "error", err)
-		}
-
-		prog.Send(tui.AppReadyMsg{Awareness: awareness, Greeting: greeting})
 	}()
 
 	watchCtx, watchCancel := context.WithCancel(context.Background())

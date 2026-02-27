@@ -23,7 +23,7 @@ func newToolExecTestExecutor(t *testing.T) *tools.ToolExecutor {
 		t.Fatalf("opening test store: %v", err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	return tools.NewToolExecutor(nil, nil, t.TempDir(), store, nil)
+	return tools.NewToolExecutor(nil, t.TempDir(), store, nil)
 }
 
 func TestExecuteToolsCmd_BasicResults(t *testing.T) {
@@ -98,7 +98,7 @@ func TestExecuteToolsCmd_MultipleTools(t *testing.T) {
 func TestExecuteToolsCmd_ErrorHandling(t *testing.T) {
 	t.Parallel()
 
-	executor := tools.NewToolExecutor(nil, nil, t.TempDir(), nil, nil)
+	executor := tools.NewToolExecutor(nil, t.TempDir(), nil, nil)
 
 	calls := []provider.ToolCall{
 		{

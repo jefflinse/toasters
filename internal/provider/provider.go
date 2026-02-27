@@ -53,24 +53,6 @@ type StreamEvent struct {
 
 	// StopReason carries the stop reason from message_delta (e.g. "end_turn", "tool_use").
 	StopReason string
-
-	// Gateway-specific fields — used only by the Claude CLI subprocess path.
-	// These are populated by the gateway/claude.go streaming code and consumed
-	// by the TUI. They will be removed when the gateway path is retired.
-	Meta             *ClaudeMeta // non-nil only for the claude CLI system/init event
-	PendingTool      string      // tool name when a tool_use content_block_start fires
-	ClearPendingTool bool        // true when content_block_stop fires (clears PendingTool)
-	ExitSummary      string      // final result text from a clean claude result event
-	SubagentSpawned  bool        // true when a Task tool call was made
-	SubagentResult   string      // non-empty when a tool_result for a subagent arrived
-}
-
-// ClaudeMeta carries metadata from the claude CLI system/init event.
-type ClaudeMeta struct {
-	Model          string
-	PermissionMode string
-	Version        string
-	SessionID      string
 }
 
 // ChatRequest contains all parameters for a chat completion request.

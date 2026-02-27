@@ -22,7 +22,6 @@ import (
 	"github.com/jefflinse/toasters/internal/agents"
 	"github.com/jefflinse/toasters/internal/config"
 	"github.com/jefflinse/toasters/internal/db"
-	"github.com/jefflinse/toasters/internal/gateway"
 	"github.com/jefflinse/toasters/internal/llm/tools"
 	"github.com/jefflinse/toasters/internal/loader"
 	"github.com/jefflinse/toasters/internal/mcp"
@@ -43,19 +42,18 @@ const (
 // ModelConfig holds all dependencies and configuration needed to create a Model.
 // It replaces the 11-parameter NewModel constructor signature.
 type ModelConfig struct {
-	Client        provider.Provider
-	ClaudeCfg     config.ClaudeConfig
-	WorkspaceDir  string
-	Gateway       *gateway.Gateway
-	TeamsDir      string
-	Teams         []agents.Team
-	Awareness     string
-	ToolExec      *tools.ToolExecutor
-	Store         db.Store
-	Runtime       *runtime.Runtime
-	MCPManager    *mcp.Manager
-	Operator      *operator.Operator
-	OperatorModel string // configured operator model name; shown in sidebar before first response
+	Client         provider.Provider
+	WorkspaceDir   string
+	TeamsDir       string
+	Teams          []agents.Team
+	Awareness      string
+	ToolExec       *tools.ToolExecutor
+	Store          db.Store
+	Runtime        *runtime.Runtime
+	MCPManager     *mcp.Manager
+	Operator       *operator.Operator
+	OperatorModel  string // configured operator model name; shown in sidebar before first response
+	OperatorPrompt string // system prompt for the operator, composed from operator.md
 }
 
 // streamingState holds all state related to the active LLM stream.
@@ -65,7 +63,7 @@ type streamingState struct {
 	currentReasoning string
 	streamCh         <-chan provider.StreamEvent
 	cancelStream     context.CancelFunc
-	claudeActiveMeta string // formatted byline for the in-progress claude stream; cleared when done
+	operatorByline   string // formatted byline for the in-progress operator stream; cleared when done
 }
 
 // gridState holds all state for the dynamic NxM agent grid screen.
@@ -78,7 +76,7 @@ type gridState struct {
 }
 
 // promptModeState holds all state for the interactive prompt mode
-// (active when the operator calls ask_user, kill_slot, assign_team, etc.).
+// (active when the operator calls ask_user, assign_team, etc.).
 type promptModeState struct {
 	promptMode        bool
 	promptQuestion    string
@@ -90,19 +88,6 @@ type promptModeState struct {
 	confirmDispatch bool              // true when promptMode is a dispatch confirmation
 	changingTeam    bool              // true when promptMode is the "change team" sub-prompt
 	pendingDispatch provider.ToolCall // the assign_team call awaiting confirmation
-
-	confirmKill     bool // true when promptMode is a kill confirmation
-	pendingKillSlot int  // slot index awaiting kill confirmation
-
-	confirmTimeout     bool // true when promptMode is a slot-timeout confirmation
-	pendingTimeoutSlot int  // slot index awaiting timeout confirmation
-}
-
-// killModalState holds all state for the /kill confirmation modal.
-type killModalState struct {
-	show        bool
-	slots       []int // actual slot indices (0-3) of running slots
-	selectedIdx int   // index into slots
 }
 
 // promptModalState holds all state for the prompt-viewing modal overlay.
@@ -117,7 +102,7 @@ type outputModalState struct {
 	show      bool
 	content   string // the full output text being displayed
 	scroll    int    // scroll offset in lines
-	sessionID string // runtime session ID being viewed (empty = gateway slot)
+	sessionID string // runtime session ID being viewed
 }
 
 // blockerModalState holds all state for the blocker Q&A modal.
@@ -175,7 +160,6 @@ type Model struct {
 	height int
 
 	llmClient      provider.Provider
-	claudeCfg      config.ClaudeConfig
 	chatViewport   viewport.Model
 	input          textarea.Model
 	stats          SessionStats
@@ -187,7 +171,6 @@ type Model struct {
 	stream      streamingState
 	grid        gridState
 	prompt      promptModeState
-	killModal   killModalState
 	promptModal promptModalState
 	outputModal outputModalState
 	cmdPopup    cmdPopupState
@@ -201,7 +184,6 @@ type Model struct {
 	selectedTeam int
 	focused      focusedPanel
 
-	gateway        *gateway.Gateway
 	toolExec       *tools.ToolExecutor
 	toolsInFlight  bool
 	toolCancelFunc context.CancelFunc
@@ -229,13 +211,8 @@ type Model struct {
 	// Jobs modal state.
 	jobsModal jobsModalState
 
-	// Gateway notify channel — gateway writes to this; TUI polls it.
-	agentNotifyCh chan struct{}
-
 	// Agent pane state.
-	selectedAgentSlot int            // which slot is highlighted in the agents pane (0-3)
-	attachedSlot      int            // -1 = not attached; 0-3 = viewing this slot's output
-	agentViewport     viewport.Model // viewport for attached slot output
+	selectedAgentSlot int // which slot is highlighted in the agents pane
 
 	loading      bool // true while waiting for AppReadyMsg before initializing the conversation
 	loadingFrame int  // current animation frame index (0..numLoadingFrames-1)
@@ -249,11 +226,6 @@ type Model struct {
 	leftPanelHidden        bool // true when user has toggled the left panel off via ctrl+l
 	sidebarHidden          bool // true when user has toggled the sidebar off via ctrl+b
 	leftPanelWidthOverride int  // 0 = use default computed width; >0 = user-resized width
-
-	// prevSlotActive/Status track the last-seen state of each gateway slot so
-	// AgentOutputMsg can detect Running→Done transitions and notify the operator.
-	prevSlotActive [gateway.MaxSlots]bool
-	prevSlotStatus [gateway.MaxSlots]gateway.SlotStatus
 
 	// Shared spinner animation frame counter.
 	spinnerFrame   int
@@ -307,8 +279,6 @@ type runtimeSlot struct {
 // NewModel returns an initialized root model.
 func NewModel(cfg ModelConfig) Model {
 	client := cfg.Client
-	claudeCfg := cfg.ClaudeCfg
-	gw := cfg.Gateway
 	teamsDir := cfg.TeamsDir
 	teams := cfg.Teams
 	awareness := cfg.Awareness
@@ -351,7 +321,6 @@ func NewModel(cfg ModelConfig) Model {
 
 	m := Model{
 		llmClient:    client,
-		claudeCfg:    claudeCfg,
 		chatViewport: vp,
 		input:        ta,
 		toolExec:     toolExec,
@@ -370,20 +339,17 @@ func NewModel(cfg ModelConfig) Model {
 	m.blockers = make(map[string]*Blocker)
 	m.selectedJob = 0
 	m.focused = focusChat
-	m.gateway = gw
 
 	m.teamsDir = teamsDir
 	m.teams = teams
 	m.awareness = awareness
+	m.systemPrompt = cfg.OperatorPrompt
 	if awareness == "" {
 		m.loading = true
 	} else {
-		m.systemPrompt = agents.BuildOperatorPrompt(teams, awareness)
 		m.initMessages()
 	}
 
-	m.agentNotifyCh = make(chan struct{}, 8) // buffered to avoid blocking gateway goroutines
-	m.attachedSlot = -1
 	m.selectedAgentSlot = 0
 	m.grid.gridFocusCell = 0
 	m.grid.gridCols = 1
@@ -396,21 +362,6 @@ func NewModel(cfg ModelConfig) Model {
 	m.chat.collapsedTools = make(map[int]bool)
 	m.runtimeSessions = make(map[string]*runtimeSlot)
 
-	agentVP := viewport.New()
-	agentVP.MouseWheelEnabled = true
-	agentVP.KeyMap = viewport.KeyMap{}
-	m.agentViewport = agentVP
-
-	if gw != nil {
-		notifyCh := m.agentNotifyCh
-		gw.SetNotify(func() {
-			select {
-			case notifyCh <- struct{}{}:
-			default: // drop if full — next render will catch up
-			}
-		})
-	}
-
 	return m
 }
 
@@ -421,9 +372,6 @@ func (m *Model) Init() tea.Cmd {
 		m.fetchModels(),
 		loadingTick(), // drive the loading screen animation
 		spinnerTick(), // drive braille spinner animations
-	}
-	if m.agentNotifyCh != nil {
-		cmds = append(cmds, waitForAgentUpdate(m.agentNotifyCh))
 	}
 	if m.store != nil {
 		cmds = append(cmds, scheduleProgressPoll())
@@ -497,11 +445,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// When the log view is visible, handle navigation and dismiss it.
 		if m.logView.show {
 			return m.updateLogView(msg)
-		}
-
-		// When the kill modal is visible, intercept all keys before any other handling.
-		if m.killModal.show {
-			return m.updateKillModal(msg)
 		}
 
 		// When the slash command popup is visible, intercept navigation keys
@@ -692,7 +635,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			// Navigate agent slots when agents pane is focused.
 			if m.focused == focusAgents {
-				if m.selectedAgentSlot < gateway.MaxSlots-1 {
+				if m.selectedAgentSlot < maxGridSlots-1 {
 					m.selectedAgentSlot++
 				}
 				return m, nil
@@ -838,11 +781,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, m.input.Focus()
 			}
-			// Detach from agent slot first.
-			if m.attachedSlot >= 0 {
-				m.attachedSlot = -1
-				return m, nil
-			}
 			// Exit grid screen.
 			if m.grid.showGrid {
 				m.grid.showGrid = false
@@ -859,9 +797,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						Message:    provider.Message{Role: "assistant", Content: m.stream.currentResponse},
 						Timestamp:  time.Now(),
 						Reasoning:  m.stream.currentReasoning,
-						ClaudeMeta: m.stream.claudeActiveMeta,
+						ClaudeMeta: m.stream.operatorByline,
 					})
-					m.stream.claudeActiveMeta = ""
+					m.stream.operatorByline = ""
 					m.stream.currentResponse = ""
 					m.stream.currentReasoning = ""
 				}
@@ -869,16 +807,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.stats.ReasoningTokensLive = 0
 				m.updateViewportContent()
 				return m, m.input.Focus()
-			}
-
-		case "d":
-			// Dismiss a completed agent slot when the agents pane is focused.
-			if m.focused == focusAgents && m.gateway != nil {
-				_ = m.gateway.Dismiss(m.selectedAgentSlot)
-				if m.attachedSlot == m.selectedAgentSlot {
-					m.attachedSlot = -1
-				}
-				return m, nil
 			}
 
 		case "enter":
@@ -958,34 +886,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.cmdPopup.show = false
 					m.newSession()
 					return m, nil
-				case "/kill":
-					m.input.Reset()
-					m.cmdPopup.show = false
-					if m.gateway == nil {
-						return m, nil
-					}
-					slots := m.gateway.Slots()
-					var running []int
-					for i, s := range slots {
-						if s.Active && s.Status == gateway.SlotRunning {
-							running = append(running, i)
-						}
-					}
-					if len(running) == 0 {
-						m.appendEntry(ChatEntry{
-							Message:   provider.Message{Role: "assistant", Content: "No running agents."},
-							Timestamp: time.Now(),
-						})
-						m.updateViewportContent()
-						if !m.scroll.userScrolled {
-							m.chatViewport.GotoBottom()
-						}
-					} else {
-						m.killModal.slots = running
-						m.killModal.selectedIdx = 0
-						m.killModal.show = true
-					}
-					return m, nil
 				case "/teams":
 					m.input.Reset()
 					m.cmdPopup.show = false
@@ -1042,18 +942,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.input.SetValue("[JOB REQUEST] " + prompt)
 					return m, m.sendMessage()
 				}
-				// /claude <prompt> — stream via the claude CLI subprocess.
-				if strings.HasPrefix(text, "/claude ") {
-					prompt := strings.TrimSpace(strings.TrimPrefix(text, "/claude "))
-					if prompt == "" {
-						m.input.Reset()
-						m.cmdPopup.show = false
-						return m, nil
-					}
-					m.cmdPopup.show = false
-					m.input.Reset()
-					return m, m.sendClaudeMessage(prompt)
-				}
 				// /anthropic <prompt> — stream via the Anthropic API directly.
 				if strings.HasPrefix(text, "/anthropic ") {
 					prompt := strings.TrimSpace(strings.TrimPrefix(text, "/anthropic "))
@@ -1099,7 +987,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.grid.gridCols, m.grid.gridRows = computeGridDimensions(m.width, m.height)
 		// Clamp page and focus cell to new bounds.
 		cellsPerPage := m.grid.gridCols * m.grid.gridRows
-		totalPages := (gateway.MaxSlots + cellsPerPage - 1) / cellsPerPage
+		totalPages := (maxGridSlots + cellsPerPage - 1) / cellsPerPage
 		if m.grid.gridPage >= totalPages {
 			m.grid.gridPage = totalPages - 1
 		}
@@ -1156,8 +1044,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.stats.TotalResponses++
 		}
 		if m.stream.currentResponse != "" {
-			// For LM Studio (operator) turns, claudeActiveMeta is empty — fill in the operator byline.
-			byline := m.stream.claudeActiveMeta
+			// Fill in the operator byline if not already set.
+			byline := m.stream.operatorByline
 			if byline == "" && m.stats.ModelName != "" {
 				byline = "operator · " + m.stats.ModelName
 			}
@@ -1167,7 +1055,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				Reasoning:  m.stream.currentReasoning,
 				ClaudeMeta: byline,
 			})
-			m.stream.claudeActiveMeta = ""
+			m.stream.operatorByline = ""
 		}
 		m.stream.currentResponse = ""
 		m.stream.currentReasoning = ""
@@ -1242,7 +1130,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.stream.streamCh = nil
 		m.stream.cancelStream = nil
 		if m.stream.currentResponse != "" {
-			byline := m.stream.claudeActiveMeta
+			byline := m.stream.operatorByline
 			if byline == "" && m.stats.ModelName != "" {
 				byline = "operator · " + m.stats.ModelName
 			}
@@ -1252,7 +1140,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				Reasoning:  m.stream.currentReasoning,
 				ClaudeMeta: byline,
 			})
-			m.stream.claudeActiveMeta = ""
+			m.stream.operatorByline = ""
 			m.stream.currentResponse = ""
 			m.stream.currentReasoning = ""
 		}
@@ -1298,10 +1186,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.stream.streamCh = msg.ch
 		cmds = append(cmds, waitForChunk(m.stream.streamCh))
 
-	case claudeMetaMsg:
-		m.stream.claudeActiveMeta = formatClaudeMeta(msg)
-		return m, waitForChunk(m.stream.streamCh)
-
 	case TeamsReloadedMsg:
 		m.teams = msg.Teams
 		if m.selectedTeam >= len(m.teams) && len(m.teams) > 0 {
@@ -1310,14 +1194,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.selectedTeam = 0
 		}
 		m.awareness = msg.Awareness
-		m.systemPrompt = agents.BuildOperatorPrompt(m.teams, m.awareness)
-		m.stats.SystemPromptTokens = estimateTokens(m.systemPrompt)
+		// The operator's system prompt is composed from operator.md at startup and
+		// does not change when teams reload. The operator discovers teams at runtime
+		// via the query_teams tool.
 		m.toolExec.SetTeams(m.teams)
-		if m.hasConversation() {
-			m.chat.entries[0].Message.Content = m.systemPrompt
-		} else {
-			m.initMessages()
-		}
 		return m, tea.Batch(cmds...)
 
 	case JobsReloadedMsg:
@@ -1334,7 +1214,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case AppReadyMsg:
 		m.awareness = msg.Awareness
-		m.systemPrompt = agents.BuildOperatorPrompt(m.teams, m.awareness)
+		// System prompt is already set from cfg.OperatorPrompt in NewModel().
 		m.initMessages()
 		m.loading = false
 		// Inject the pre-fetched greeting directly — no stream, no flash.
@@ -1346,59 +1226,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.updateViewportContent()
 		}
 		return m, tea.Batch(cmds...)
-
-	case gateway.SlotTimeoutMsg:
-		// Look up the slot snapshot to get team/job info for the prompt message.
-		snapshots := m.gateway.Slots()
-		snap := snapshots[msg.SlotID]
-		slotDesc := fmt.Sprintf("slot %d", msg.SlotID)
-		if snap.Active {
-			slotDesc = fmt.Sprintf("slot %d (%s on %s)", msg.SlotID, snap.AgentName, snap.JobID)
-		}
-		promptText := fmt.Sprintf("⏱ %s has been running for 15m. Continue for another 15m, or kill it?\n\n(Auto-continuing in 1 minute...)", slotDesc)
-		// Append as an assistant message so it shows in the chat.
-		m.appendEntry(ChatEntry{
-			Message:    provider.Message{Role: "assistant", Content: promptText},
-			Timestamp:  time.Now(),
-			ClaudeMeta: "ask-user-prompt",
-		})
-		// Enter prompt mode.
-		m.prompt.promptMode = true
-		m.prompt.confirmTimeout = true
-		m.prompt.pendingTimeoutSlot = msg.SlotID
-		m.prompt.promptOptions = []string{"Continue (+15m)", "Kill"}
-		m.prompt.promptSelected = 0
-		// Zero out the pending tool call so the AskUserResponseMsg handler
-		// doesn't try to execute a real tool.
-		m.prompt.promptPendingCall = provider.ToolCall{}
-		m.updateViewportContent()
-		if !m.scroll.userScrolled {
-			m.chatViewport.GotoBottom()
-		}
-		return m, tea.Batch(m.input.Focus(), slotTimeoutPromptCmd(msg.SlotID))
-
-	case SlotTimeoutPromptExpiredMsg:
-		// Only act if this prompt is still active for this slot.
-		if !m.prompt.confirmTimeout || m.prompt.pendingTimeoutSlot != msg.SlotID {
-			return m, nil
-		}
-		// Auto-continue: extend the slot.
-		m.prompt.confirmTimeout = false
-		m.prompt.promptMode = false
-		m.prompt.promptOptions = nil
-		m.prompt.promptSelected = 0
-		m.prompt.promptPendingCall = provider.ToolCall{}
-		_ = m.gateway.ExtendSlot(msg.SlotID)
-		m.appendEntry(ChatEntry{
-			Message:    provider.Message{Role: "assistant", Content: fmt.Sprintf("Slot %d auto-continued (no response within 1m).", msg.SlotID)},
-			Timestamp:  time.Now(),
-			ClaudeMeta: "tool-call-indicator",
-		})
-		m.updateViewportContent()
-		if !m.scroll.userScrolled {
-			m.chatViewport.GotoBottom()
-		}
-		return m, m.input.Focus()
 
 	case TeamsAutoDetectDoneMsg:
 		m.teamsModal.autoDetecting = false
@@ -1520,28 +1347,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.blockerModal.show = false
 		m.blockerModal.inputText = ""
 
-		// Re-spawn the team with blocker context.
-		job, ok := m.jobByID(msg.jobID)
-		if ok && m.gateway != nil {
-			spawnPrompt := fmt.Sprintf("A blocker was encountered on job '%s' and the user has provided responses. Resume the job addressing the blocker.", msg.jobID)
-
-			// Use the team from the blocker directly.
-			teamName := msg.blocker.Team
-
-			// Find the team by name.
-			var matchedTeam agents.Team
-			for _, t := range m.teams {
-				if t.Name == teamName {
-					matchedTeam = t
-					break
-				}
-			}
-			if _, _, err := m.gateway.SpawnTeam(teamName, msg.jobID, spawnPrompt, matchedTeam, job.WorkspaceDir); err != nil {
-				slog.Error("failed to re-spawn team after blocker", "team", teamName, "job", msg.jobID, "error", err)
-			} else {
-				return m, spinnerTick() // re-arm spinner for agent heartbeat
-			}
-		}
+		// Blocker re-spawn is handled by the operator/runtime; nothing to do here.
+		_ = m.jobByID // suppress unused warning
 		return m, nil
 
 	case RuntimeSessionStartedMsg:
@@ -1650,15 +1457,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, tea.Batch(cmds...)
 
-	case AgentOutputMsg:
-		return m.handleAgentOutput(msg)
-
 	case tea.MouseClickMsg:
 		// Click-to-focus: route clicks to the appropriate panel.
 		// Don't steal clicks when any overlay is active.
 		if !m.teamsModal.show && !m.skillsModal.show && !m.agentsModal.show &&
 			!m.mcpModal.show && !m.blockerModal.show && !m.grid.showGrid &&
-			!m.killModal.show && !m.promptModal.show && !m.outputModal.show && !m.loading {
+			!m.promptModal.show && !m.outputModal.show && !m.loading {
 			showLeftPanel := m.width >= minWidthForLeftPanel && !m.leftPanelHidden
 			showSidebar := m.width >= minWidthForBar && !m.sidebarHidden
 			sidebarStartX := m.width - m.sbWidth
@@ -1749,14 +1553,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		// Re-arm only if something is animating: operator streaming, tools in flight, or any agent running.
 		needTick := m.stream.streaming || m.toolsInFlight
-		if !needTick && m.gateway != nil {
-			for _, snap := range m.gateway.Slots() {
-				if snap.Status == gateway.SlotRunning {
-					needTick = true
-					break
-				}
-			}
-		}
 		if !needTick {
 			for _, rs := range m.runtimeSessions {
 				if rs.status == "active" {

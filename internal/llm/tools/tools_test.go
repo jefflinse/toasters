@@ -17,7 +17,6 @@ import (
 
 	"github.com/jefflinse/toasters/internal/agents"
 	"github.com/jefflinse/toasters/internal/db"
-	"github.com/jefflinse/toasters/internal/orchestration"
 	"github.com/jefflinse/toasters/internal/provider"
 	"github.com/jefflinse/toasters/internal/runtime"
 )
@@ -73,7 +72,7 @@ func newTestExecutor(t *testing.T) (*ToolExecutor, string) {
 	}
 
 	store := openTestStore(t)
-	te := NewToolExecutor(nil, nil, configDir, store, nil)
+	te := NewToolExecutor(nil, configDir, store, nil)
 	return te, configDir
 }
 
@@ -90,7 +89,7 @@ func newTestExecutorNilStore(t *testing.T) *ToolExecutor {
 		t.Fatalf("creating config dir: %v", err)
 	}
 
-	te := NewToolExecutor(nil, nil, configDir, nil, nil)
+	te := NewToolExecutor(nil, configDir, nil, nil)
 	return te
 }
 
@@ -123,32 +122,6 @@ func createTestTask(t *testing.T, store db.Store, jobID, title string, status db
 		t.Fatalf("creating test task %q: %v", title, err)
 	}
 	return task
-}
-
-// --- Mock GatewaySpawner ---
-
-type mockSpawner struct {
-	spawnTeamFn   func(teamName, jobID, task string, team agents.Team, jobDir string) (int, bool, error)
-	slotSummaries []orchestration.GatewaySlot
-	killFn        func(slotID int) error
-}
-
-func (m *mockSpawner) SpawnTeam(teamName, jobID, task string, team agents.Team, jobDir string) (int, bool, error) {
-	if m.spawnTeamFn != nil {
-		return m.spawnTeamFn(teamName, jobID, task, team, jobDir)
-	}
-	return 0, false, nil
-}
-
-func (m *mockSpawner) SlotSummaries() []orchestration.GatewaySlot {
-	return m.slotSummaries
-}
-
-func (m *mockSpawner) Kill(slotID int) error {
-	if m.killFn != nil {
-		return m.killFn(slotID)
-	}
-	return nil
 }
 
 // ============================================================================
@@ -1047,133 +1020,6 @@ func TestListDirectory_AllowsRelativePath(t *testing.T) {
 }
 
 // ============================================================================
-// list_slots tests
-// ============================================================================
-
-func TestListSlots_NilGateway(t *testing.T) {
-	te, _ := newTestExecutor(t)
-	// Gateway is nil by default from newTestExecutor.
-
-	call := makeToolCall("list_slots", map[string]any{})
-	result, err := te.ExecuteTool(context.Background(), call)
-	if err != nil {
-		t.Fatalf("ExecuteTool returned error: %v", err)
-	}
-	if result != "gateway not initialized" {
-		t.Errorf("expected 'gateway not initialized', got %q", result)
-	}
-}
-
-func TestListSlots_NoActiveSlots(t *testing.T) {
-	te, _ := newTestExecutor(t)
-	te.Gateway = &mockSpawner{slotSummaries: nil}
-
-	call := makeToolCall("list_slots", map[string]any{})
-	result, err := te.ExecuteTool(context.Background(), call)
-	if err != nil {
-		t.Fatalf("ExecuteTool returned error: %v", err)
-	}
-	if result != "no active slots" {
-		t.Errorf("expected 'no active slots', got %q", result)
-	}
-}
-
-func TestListSlots_WithActiveSlots(t *testing.T) {
-	te, _ := newTestExecutor(t)
-	te.Gateway = &mockSpawner{
-		slotSummaries: []orchestration.GatewaySlot{
-			{Index: 0, Team: "coding", JobID: "job-1", Status: "running", Elapsed: "2m30s"},
-			{Index: 1, Team: "testing", JobID: "job-2", Status: "running", Elapsed: "1m15s"},
-		},
-	}
-
-	call := makeToolCall("list_slots", map[string]any{})
-	result, err := te.ExecuteTool(context.Background(), call)
-	if err != nil {
-		t.Fatalf("ExecuteTool returned error: %v", err)
-	}
-	if !strings.Contains(result, "slot 0: coding on job-1") {
-		t.Errorf("expected slot 0 info, got %q", result)
-	}
-	if !strings.Contains(result, "slot 1: testing on job-2") {
-		t.Errorf("expected slot 1 info, got %q", result)
-	}
-	if !strings.Contains(result, "2m30s") {
-		t.Errorf("expected elapsed time, got %q", result)
-	}
-}
-
-// ============================================================================
-// kill_slot tests
-// ============================================================================
-
-func TestKillSlot_NilGateway(t *testing.T) {
-	te, _ := newTestExecutor(t)
-
-	call := makeToolCall("kill_slot", map[string]any{"slot_id": 0})
-	result, err := te.ExecuteTool(context.Background(), call)
-	if err != nil {
-		t.Fatalf("ExecuteTool returned error: %v", err)
-	}
-	if result != "gateway not initialized" {
-		t.Errorf("expected 'gateway not initialized', got %q", result)
-	}
-}
-
-func TestKillSlot_Success(t *testing.T) {
-	killedSlot := -1
-	te, _ := newTestExecutor(t)
-	te.Gateway = &mockSpawner{
-		killFn: func(slotID int) error {
-			killedSlot = slotID
-			return nil
-		},
-	}
-
-	call := makeToolCall("kill_slot", map[string]any{"slot_id": 2})
-	result, err := te.ExecuteTool(context.Background(), call)
-	if err != nil {
-		t.Fatalf("ExecuteTool returned error: %v", err)
-	}
-	if result != "killed slot 2" {
-		t.Errorf("expected 'killed slot 2', got %q", result)
-	}
-	if killedSlot != 2 {
-		t.Errorf("expected Kill called with slot 2, got %d", killedSlot)
-	}
-}
-
-func TestKillSlot_Error(t *testing.T) {
-	te, _ := newTestExecutor(t)
-	te.Gateway = &mockSpawner{
-		killFn: func(slotID int) error {
-			return fmt.Errorf("slot %d not found", slotID)
-		},
-	}
-
-	call := makeToolCall("kill_slot", map[string]any{"slot_id": 99})
-	result, err := te.ExecuteTool(context.Background(), call)
-	if err != nil {
-		t.Fatalf("ExecuteTool returned error: %v", err)
-	}
-	// kill_slot returns the error as a result string, not as an error.
-	if !strings.Contains(result, "error killing slot 99") {
-		t.Errorf("expected error message in result, got %q", result)
-	}
-}
-
-func TestKillSlot_BadJSON(t *testing.T) {
-	te, _ := newTestExecutor(t)
-	te.Gateway = &mockSpawner{}
-
-	call := makeToolCallRaw("kill_slot", "bad")
-	_, err := te.ExecuteTool(context.Background(), call)
-	if err == nil {
-		t.Fatal("expected error for bad JSON, got nil")
-	}
-}
-
-// ============================================================================
 // ask_user tests
 // ============================================================================
 
@@ -1528,8 +1374,11 @@ func TestFetchWebpage_TruncatesLongContent(t *testing.T) {
 // assign_team tests
 // ============================================================================
 
-func TestAssignTeam_NilGateway(t *testing.T) {
+func TestAssignTeam_RuntimeUnavailable(t *testing.T) {
 	te, _ := newTestExecutor(t)
+	// Runtime is nil and no provider configured — should return error.
+	te.SetTeams([]agents.Team{{Name: "coding"}})
+	createTestJob(t, te.Store, "some-job", "Some Job", "Test", db.JobStatusActive)
 
 	call := makeToolCall("assign_team", map[string]string{
 		"team_name": "coding",
@@ -1539,16 +1388,15 @@ func TestAssignTeam_NilGateway(t *testing.T) {
 
 	_, err := te.ExecuteTool(context.Background(), call)
 	if err == nil {
-		t.Fatal("expected error for nil gateway, got nil")
+		t.Fatal("expected error when runtime unavailable, got nil")
 	}
-	if !strings.Contains(err.Error(), "gateway not initialized") {
-		t.Errorf("expected 'gateway not initialized' error, got: %v", err)
+	if !strings.Contains(err.Error(), "runtime not available") {
+		t.Errorf("expected 'runtime not available' error, got: %v", err)
 	}
 }
 
 func TestAssignTeam_JobDoesNotExist(t *testing.T) {
 	te, _ := newTestExecutor(t)
-	te.Gateway = &mockSpawner{}
 	te.SetTeams([]agents.Team{{Name: "coding"}})
 
 	call := makeToolCall("assign_team", map[string]string{
@@ -1572,7 +1420,6 @@ func TestAssignTeam_JobDoesNotExist(t *testing.T) {
 
 func TestAssignTeam_TeamNotFound(t *testing.T) {
 	te, _ := newTestExecutor(t)
-	te.Gateway = &mockSpawner{}
 	te.SetTeams([]agents.Team{{Name: "coding"}})
 
 	createTestJob(t, te.Store, "team-test", "Team Test", "Test", db.JobStatusActive)
@@ -1592,102 +1439,8 @@ func TestAssignTeam_TeamNotFound(t *testing.T) {
 	}
 }
 
-func TestAssignTeam_SuccessfulDispatch(t *testing.T) {
-	te, _ := newTestExecutor(t)
-
-	spawnCalled := false
-	te.Gateway = &mockSpawner{
-		spawnTeamFn: func(teamName, jobID, task string, team agents.Team, jobDir string) (int, bool, error) {
-			spawnCalled = true
-			if teamName != "coding" {
-				t.Errorf("expected team 'coding', got %q", teamName)
-			}
-			if jobID != "dispatch-job" {
-				t.Errorf("expected job 'dispatch-job', got %q", jobID)
-			}
-			return 1, false, nil
-		},
-	}
-	te.SetTeams([]agents.Team{{Name: "coding"}})
-
-	createTestJob(t, te.Store, "dispatch-job", "Dispatch Job", "Test", db.JobStatusActive)
-
-	call := makeToolCall("assign_team", map[string]string{
-		"team_name": "coding",
-		"job_id":    "dispatch-job",
-		"task":      "Implement feature X",
-	})
-
-	result, err := te.ExecuteTool(context.Background(), call)
-	if err != nil {
-		t.Fatalf("ExecuteTool returned error: %v", err)
-	}
-	if !spawnCalled {
-		t.Error("expected SpawnTeam to be called")
-	}
-	if !strings.Contains(result, "started: slot 1") {
-		t.Errorf("expected 'started: slot 1', got %q", result)
-	}
-}
-
-func TestAssignTeam_AlreadyRunning(t *testing.T) {
-	te, _ := newTestExecutor(t)
-	te.Gateway = &mockSpawner{
-		spawnTeamFn: func(_, _, _ string, _ agents.Team, _ string) (int, bool, error) {
-			return 3, true, nil
-		},
-	}
-	te.SetTeams([]agents.Team{{Name: "coding"}})
-
-	createTestJob(t, te.Store, "running-job", "Running Job", "Test", db.JobStatusActive)
-
-	call := makeToolCall("assign_team", map[string]string{
-		"team_name": "coding",
-		"job_id":    "running-job",
-		"task":      "Continue work",
-	})
-
-	result, err := te.ExecuteTool(context.Background(), call)
-	if err != nil {
-		t.Fatalf("ExecuteTool returned error: %v", err)
-	}
-	if !strings.Contains(result, "already running") {
-		t.Errorf("expected 'already running' message, got %q", result)
-	}
-	if !strings.Contains(result, "slot 3") {
-		t.Errorf("expected slot 3 in result, got %q", result)
-	}
-}
-
-func TestAssignTeam_SpawnError(t *testing.T) {
-	te, _ := newTestExecutor(t)
-	te.Gateway = &mockSpawner{
-		spawnTeamFn: func(_, _, _ string, _ agents.Team, _ string) (int, bool, error) {
-			return 0, false, fmt.Errorf("no available slots")
-		},
-	}
-	te.SetTeams([]agents.Team{{Name: "coding"}})
-
-	createTestJob(t, te.Store, "spawn-err-job", "Spawn Error Job", "Test", db.JobStatusActive)
-
-	call := makeToolCall("assign_team", map[string]string{
-		"team_name": "coding",
-		"job_id":    "spawn-err-job",
-		"task":      "Do work",
-	})
-
-	_, err := te.ExecuteTool(context.Background(), call)
-	if err == nil {
-		t.Fatal("expected error from spawn failure, got nil")
-	}
-	if !strings.Contains(err.Error(), "spawning team") {
-		t.Errorf("expected 'spawning team' error, got: %v", err)
-	}
-}
-
 func TestAssignTeam_BadJSON(t *testing.T) {
 	te, _ := newTestExecutor(t)
-	te.Gateway = &mockSpawner{}
 
 	call := makeToolCallRaw("assign_team", "bad")
 	_, err := te.ExecuteTool(context.Background(), call)
@@ -1698,7 +1451,6 @@ func TestAssignTeam_BadJSON(t *testing.T) {
 
 func TestAssignTeam_NilStore(t *testing.T) {
 	te := newTestExecutorNilStore(t)
-	te.Gateway = &mockSpawner{}
 	te.SetTeams([]agents.Team{{Name: "coding"}})
 
 	call := makeToolCall("assign_team", map[string]string{
@@ -1741,14 +1493,10 @@ func TestUnknownTool_ReturnsError(t *testing.T) {
 // ============================================================================
 
 func TestNewToolExecutor_SetsFields(t *testing.T) {
-	spawner := &mockSpawner{}
 	teams := []agents.Team{{Name: "test-team"}}
 
-	te := NewToolExecutor(spawner, teams, "/tmp/workspace", nil, nil)
+	te := NewToolExecutor(teams, "/tmp/workspace", nil, nil)
 
-	if te.Gateway != spawner {
-		t.Error("expected Gateway to be set")
-	}
 	if teams := te.getTeams(); len(teams) != 1 || teams[0].Name != "test-team" {
 		t.Error("expected teams to be set")
 	}
@@ -1809,14 +1557,6 @@ func TestAssignTeam_UsesRuntimeWhenProviderConfigured(t *testing.T) {
 		mu.Unlock()
 	}
 
-	// Set up a gateway mock that should NOT be called.
-	gatewayCalled := false
-	te.Gateway = &mockSpawner{
-		spawnTeamFn: func(_, _, _ string, _ agents.Team, _ string) (int, bool, error) {
-			gatewayCalled = true
-			return 0, false, nil
-		},
-	}
 	te.SetTeams([]agents.Team{{Name: "coding"}})
 
 	// Create a job in SQLite.
@@ -1844,18 +1584,13 @@ func TestAssignTeam_UsesRuntimeWhenProviderConfigured(t *testing.T) {
 	if !started {
 		t.Error("expected OnSessionStarted callback to be called")
 	}
-
-	// Verify gateway was NOT called.
-	if gatewayCalled {
-		t.Error("expected gateway NOT to be called when runtime path succeeds")
-	}
 }
 
 // ============================================================================
-// Test: assign_team falls back to gateway when no provider configured
+// Test: assign_team returns error when no provider configured
 // ============================================================================
 
-func TestAssignTeam_FallsBackToGatewayWhenNoProvider(t *testing.T) {
+func TestAssignTeam_ReturnsErrorWhenNoProvider(t *testing.T) {
 	te, _ := newTestExecutor(t)
 
 	// Set up runtime but leave DefaultProvider empty.
@@ -1864,44 +1599,30 @@ func TestAssignTeam_FallsBackToGatewayWhenNoProvider(t *testing.T) {
 	te.Runtime = rt
 	// te.DefaultProvider is "" — runtime path should be skipped.
 
-	gatewayCalled := false
-	te.Gateway = &mockSpawner{
-		spawnTeamFn: func(teamName, jobID, task string, _ agents.Team, _ string) (int, bool, error) {
-			gatewayCalled = true
-			if teamName != "coding" {
-				t.Errorf("expected team 'coding', got %q", teamName)
-			}
-			return 2, false, nil
-		},
-	}
 	te.SetTeams([]agents.Team{{Name: "coding"}})
 
-	createTestJob(t, te.Store, "gateway-fallback-job", "Gateway Fallback Job", "Test", db.JobStatusActive)
+	createTestJob(t, te.Store, "no-provider-job", "No Provider Job", "Test", db.JobStatusActive)
 
 	call := makeToolCall("assign_team", map[string]string{
 		"team_name": "coding",
-		"job_id":    "gateway-fallback-job",
-		"task":      "Do work via gateway",
+		"job_id":    "no-provider-job",
+		"task":      "Do work",
 	})
 
-	result, err := te.ExecuteTool(context.Background(), call)
-	if err != nil {
-		t.Fatalf("ExecuteTool returned error: %v", err)
+	_, err := te.ExecuteTool(context.Background(), call)
+	if err == nil {
+		t.Fatal("expected error when no provider configured, got nil")
 	}
-
-	if !gatewayCalled {
-		t.Error("expected gateway SpawnTeam to be called")
-	}
-	if !strings.Contains(result, "started: slot 2") {
-		t.Errorf("expected 'started: slot 2', got %q", result)
+	if !strings.Contains(err.Error(), "runtime not available") {
+		t.Errorf("expected 'runtime not available' error, got: %v", err)
 	}
 }
 
 // ============================================================================
-// Test: assign_team falls back to gateway when runtime spawn fails
+// Test: assign_team returns error when runtime spawn fails
 // ============================================================================
 
-func TestAssignTeam_FallsBackToGatewayOnRuntimeError(t *testing.T) {
+func TestAssignTeam_ReturnsErrorOnRuntimeSpawnFailure(t *testing.T) {
 	te, _ := newTestExecutor(t)
 
 	// Set up runtime with a provider that doesn't exist in the registry.
@@ -1912,13 +1633,6 @@ func TestAssignTeam_FallsBackToGatewayOnRuntimeError(t *testing.T) {
 	te.DefaultProvider = "nonexistent"
 	te.DefaultModel = "some-model"
 
-	gatewayCalled := false
-	te.Gateway = &mockSpawner{
-		spawnTeamFn: func(_, _, _ string, _ agents.Team, _ string) (int, bool, error) {
-			gatewayCalled = true
-			return 5, false, nil
-		},
-	}
 	te.SetTeams([]agents.Team{{Name: "coding"}})
 
 	createTestJob(t, te.Store, "runtime-fail-job", "Runtime Fail Job", "Test", db.JobStatusActive)
@@ -1926,19 +1640,15 @@ func TestAssignTeam_FallsBackToGatewayOnRuntimeError(t *testing.T) {
 	call := makeToolCall("assign_team", map[string]string{
 		"team_name": "coding",
 		"job_id":    "runtime-fail-job",
-		"task":      "Do work with fallback",
+		"task":      "Do work with failing runtime",
 	})
 
-	result, err := te.ExecuteTool(context.Background(), call)
-	if err != nil {
-		t.Fatalf("ExecuteTool returned error: %v", err)
+	_, err := te.ExecuteTool(context.Background(), call)
+	if err == nil {
+		t.Fatal("expected error when runtime spawn fails, got nil")
 	}
-
-	if !gatewayCalled {
-		t.Error("expected gateway SpawnTeam to be called as fallback")
-	}
-	if !strings.Contains(result, "started: slot 5") {
-		t.Errorf("expected 'started: slot 5', got %q", result)
+	if !strings.Contains(err.Error(), "spawning team") {
+		t.Errorf("expected 'spawning team' error, got: %v", err)
 	}
 }
 
@@ -2046,15 +1756,6 @@ func TestAssignTeam_RuntimePath_WorkDirIsWorkspaceDir(t *testing.T) {
 		sessionMu.Unlock()
 	}
 
-	// Gateway must be non-nil (assign_team checks te.Gateway == nil first),
-	// but it should NOT be called when the runtime path succeeds.
-	gatewayCalled := false
-	te.Gateway = &mockSpawner{
-		spawnTeamFn: func(_, _, _ string, _ agents.Team, _ string) (int, bool, error) {
-			gatewayCalled = true
-			return 0, false, nil
-		},
-	}
 	te.SetTeams([]agents.Team{{Name: "coding"}})
 
 	// Create the job in SQLite with a known WorkspaceDir.
@@ -2079,12 +1780,9 @@ func TestAssignTeam_RuntimePath_WorkDirIsWorkspaceDir(t *testing.T) {
 		t.Fatalf("ExecuteTool returned error: %v", err)
 	}
 
-	// Confirm the runtime path was taken (not the gateway fallback).
+	// Confirm the runtime path was taken.
 	if !strings.Contains(result, "started runtime session") {
 		t.Errorf("expected runtime path result, got %q", result)
-	}
-	if gatewayCalled {
-		t.Error("gateway should not be called when runtime path succeeds")
 	}
 
 	// Retrieve the captured session.

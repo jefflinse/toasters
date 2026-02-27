@@ -9,7 +9,6 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/jefflinse/toasters/internal/db"
-	"github.com/jefflinse/toasters/internal/gateway"
 	"github.com/jefflinse/toasters/internal/mcp"
 )
 
@@ -69,17 +68,9 @@ func (m Model) renderLeftPanel(panelWidth, panelHeight int) string {
 	}
 
 	// Middle pane (Agents): content-driven height.
-	// Count active gateway slots + runtime sessions for the agents pane.
-	agentCount := 0
-	if m.gateway != nil {
-		for _, snap := range m.gateway.Slots() {
-			if snap.Active {
-				agentCount++
-			}
-		}
-	}
+	// Count active runtime sessions for the agents pane.
 	sortedRT := m.sortedRuntimeSessions()
-	agentCount += len(sortedRT)
+	agentCount := len(sortedRT)
 	middleContentH := 1 + agentCount // "Agents" header + one line per agent
 	if agentCount == 0 {
 		middleContentH = 2 // header + "No agents running"
@@ -200,32 +191,6 @@ func (m Model) renderLeftPanel(panelWidth, panelHeight int) string {
 	}
 	agentLines = append(agentLines, agentsTitle)
 
-	hasAnyGateway := false
-	if m.gateway != nil {
-		slots := m.gateway.Slots()
-		for i, snap := range slots {
-			if !snap.Active {
-				continue
-			}
-			hasAnyGateway = true
-			label := snap.AgentName + " · " + snap.JobID
-			var statusIcon string
-			if snap.Status == gateway.SlotRunning {
-				statusIcon = string(spinnerChars[m.spinnerFrame%len(spinnerChars)]) + " "
-			} else {
-				statusIcon = "✓ "
-			}
-			line := statusIcon + truncateStr(label, contentWidth-2)
-			if m.focused == focusAgents && i == m.selectedAgentSlot {
-				agentLines = append(agentLines, JobSelectedStyle.Render("🍞 "+truncateStr(label, contentWidth-3)))
-			} else if snap.Status == gateway.SlotDone {
-				agentLines = append(agentLines, DimStyle.Render(statusIcon+truncateStr(label, contentWidth-2)))
-			} else {
-				agentLines = append(agentLines, SidebarValueStyle.Render(line))
-			}
-		}
-	}
-
 	// Runtime sessions.
 	runtimeStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("39"))
 	hasAnyRuntime := len(sortedRT) > 0
@@ -248,7 +213,7 @@ func (m Model) renderLeftPanel(panelWidth, panelHeight int) string {
 		}
 	}
 
-	if !hasAnyGateway && !hasAnyRuntime {
+	if !hasAnyRuntime {
 		agentLines = append(agentLines, DimStyle.Italic(true).Render("No agents running"))
 	}
 	if m.focused == focusAgents {
@@ -316,16 +281,8 @@ func (m Model) renderLeftPanel(panelWidth, panelHeight int) string {
 // in the left panel, for use in mouse hit-testing.
 func (m *Model) leftPanelAgentsPaneHeight() int {
 	paneFrameV := FocusedPaneStyle.GetVerticalBorderSize()
-	agentCount := 0
-	if m.gateway != nil {
-		for _, snap := range m.gateway.Slots() {
-			if snap.Active {
-				agentCount++
-			}
-		}
-	}
 	sortedRT := m.sortedRuntimeSessions()
-	agentCount += len(sortedRT)
+	agentCount := len(sortedRT)
 	middleContentH := 1 + agentCount
 	if agentCount == 0 {
 		middleContentH = 2
