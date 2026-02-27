@@ -277,6 +277,9 @@ type Model struct {
 
 	// Phase 2 integration: operator event loop.
 	operator *operator.Operator // may be nil — graceful degradation
+
+	// Log view state.
+	logView logViewState
 }
 
 // activityItem represents a single tool-call activity for display in a runtime agent card.
@@ -488,6 +491,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// When the grid screen is visible, handle navigation and dismiss it.
 		if m.grid.showGrid {
 			return m.updateGrid(msg)
+		}
+
+		// When the log view is visible, handle navigation and dismiss it.
+		if m.logView.show {
+			return m.updateLogView(msg)
 		}
 
 		// When the kill modal is visible, intercept all keys before any other handling.
@@ -750,6 +758,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "ctrl+g":
 			m.grid.showGrid = !m.grid.showGrid
 			return m, nil
+
+		case `ctrl+\`:
+			if m.logView.show {
+				m.closeLogView()
+				return m, nil
+			}
+			cmd := m.openLogView()
+			return m, cmd
 
 		case "ctrl+l":
 			// Toggle left panel visibility.
@@ -1956,6 +1972,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// displayJobs) reflects the latest polled state.
 		m.jobs = msg.Jobs
 		return m, scheduleProgressPoll()
+
+	case logTailTickMsg:
+		return m.handleLogTailTick()
+
+	case logContentMsg:
+		m.applyLogContent(msg.lines)
+		return m, nil
 	}
 
 	return m, tea.Batch(cmds...)

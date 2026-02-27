@@ -248,6 +248,14 @@ func (m *Model) View() tea.View {
 		return v
 	}
 
+	// Log view takes over the full terminal.
+	if m.logView.show {
+		v := tea.NewView(m.renderLogView())
+		v.AltScreen = true
+		v.MouseMode = tea.MouseModeCellMotion
+		return v
+	}
+
 	// Grid screen takes over the full terminal.
 	if m.grid.showGrid {
 		gridView := m.renderGrid()
@@ -960,6 +968,9 @@ func (m *Model) resizeComponents() {
 	// Agent viewport mirrors chat viewport dimensions.
 	m.agentViewport.SetWidth(vpWidth)
 	m.agentViewport.SetHeight(vpHeight)
+
+	// Log view viewport.
+	m.resizeLogView()
 
 	m.input.SetWidth(mainWidth - InputAreaStyle.GetHorizontalFrameSize())
 	m.input.SetHeight(inputHeight)
