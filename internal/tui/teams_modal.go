@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -19,6 +20,8 @@ import (
 	"github.com/jefflinse/toasters/internal/agentfmt"
 	"github.com/jefflinse/toasters/internal/agents"
 	"github.com/jefflinse/toasters/internal/config"
+	"github.com/jefflinse/toasters/internal/db"
+	"github.com/jefflinse/toasters/internal/loader"
 	"github.com/jefflinse/toasters/internal/provider"
 )
 
@@ -34,11 +37,49 @@ type teamsModalState struct {
 	confirmDelete     bool            // true when delete confirmation is showing
 	autoDetectPending map[string]bool // keyed by team.Dir; prevents re-firing
 	autoDetecting     bool            // true while LLM call is in flight
+
+	// Picker sub-modal: select an agent to add to the current team.
+	pickerMode   bool        // true when the add-agent picker overlay is active
+	pickerAgents []*db.Agent // agents available to add (filtered: not already in team)
+	pickerIdx    int         // currently highlighted picker item
+
+	// LLM generation state.
+	generateMode   bool        // true when user is typing a generation prompt
+	generateInput  string      // the prompt text being typed
+	generating     bool        // true while LLM call is in flight
+	generateAgents []*db.Agent // available agents captured when generateMode was entered
 }
 
 // updateTeamsModal handles all key presses when the teams modal is open.
 func (m *Model) updateTeamsModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	var modalCmds []tea.Cmd
+
+	// When typing a generation prompt, intercept all keys.
+	if m.teamsModal.generateMode {
+		switch msg.String() {
+		case "esc":
+			m.teamsModal.generateMode = false
+			m.teamsModal.generateInput = ""
+		case "enter":
+			if strings.TrimSpace(m.teamsModal.generateInput) != "" {
+				m.teamsModal.generating = true
+				m.teamsModal.generateMode = false
+				prompt := m.teamsModal.generateInput
+				m.teamsModal.generateInput = ""
+				return m, generateTeamCmd(m.llmClient, prompt, m.teamsModal.generateAgents)
+			}
+		case "backspace":
+			if len(m.teamsModal.generateInput) > 0 {
+				runes := []rune(m.teamsModal.generateInput)
+				m.teamsModal.generateInput = string(runes[:len(runes)-1])
+			}
+		default:
+			if msg.Text != "" {
+				m.teamsModal.generateInput += msg.Text
+			}
+		}
+		return m, tea.Batch(modalCmds...)
+	}
 
 	// When typing a new team name, only esc/enter/backspace have special
 	// meaning. Everything else — including named keys like "space" — feeds
@@ -76,6 +117,43 @@ func (m *Model) updateTeamsModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			// non-printable keys (arrows, function keys, etc.).
 			if msg.Text != "" {
 				m.teamsModal.nameInput += msg.Text
+			}
+		}
+		return m, tea.Batch(modalCmds...)
+	}
+
+	// Picker mode: intercept navigation and selection keys.
+	if m.teamsModal.pickerMode {
+		switch msg.String() {
+		case "esc":
+			m.teamsModal.pickerMode = false
+			m.teamsModal.pickerAgents = nil
+			m.teamsModal.pickerIdx = 0
+		case "up":
+			if m.teamsModal.pickerIdx > 0 {
+				m.teamsModal.pickerIdx--
+			}
+		case "down":
+			if m.teamsModal.pickerIdx < len(m.teamsModal.pickerAgents)-1 {
+				m.teamsModal.pickerIdx++
+			}
+		case "enter":
+			if len(m.teamsModal.pickerAgents) > 0 && m.teamsModal.pickerIdx < len(m.teamsModal.pickerAgents) {
+				agent := m.teamsModal.pickerAgents[m.teamsModal.pickerIdx]
+				if agent.SourcePath == "" {
+					modalCmds = append(modalCmds, m.addToast("Cannot add agent: source file unknown", toastWarning))
+				} else if len(m.teamsModal.teams) > 0 && m.teamsModal.teamIdx < len(m.teamsModal.teams) {
+					team := m.teamsModal.teams[m.teamsModal.teamIdx]
+					if err := addAgentToTeam(team, agent); err != nil {
+						modalCmds = append(modalCmds, m.addToast("⚠ Add failed: "+err.Error(), toastWarning))
+					} else {
+						m.teamsModal.pickerMode = false
+						m.teamsModal.pickerAgents = nil
+						m.teamsModal.pickerIdx = 0
+						m.reloadTeamsForModal()
+						modalCmds = append(modalCmds, m.addToast("✓ Added '"+agent.Name+"' to team", toastSuccess))
+					}
+				}
 			}
 		}
 		return m, tea.Batch(modalCmds...)
@@ -193,8 +271,13 @@ func (m *Model) updateTeamsModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				agentList = append(agentList, team.Workers...)
 				if m.teamsModal.agentIdx < len(agentList) {
 					target := agentList[m.teamsModal.agentIdx]
-					_ = agents.SetCoordinator(team.Dir, target.Name)
-					m.reloadTeamsForModal()
+					if err := agents.SetCoordinator(team.Dir, target.Name); err != nil {
+						slog.Error("failed to set coordinator", "team", team.Name, "agent", target.Name, "error", err)
+						modalCmds = append(modalCmds, m.addToast("⚠ Set coordinator failed: "+err.Error(), toastWarning))
+					} else {
+						m.reloadTeamsForModal()
+						modalCmds = append(modalCmds, m.addToast("✓ Coordinator set to '"+target.Name+"'", toastSuccess))
+					}
 				}
 			}
 		}
@@ -220,8 +303,71 @@ func (m *Model) updateTeamsModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 
+	case "ctrl+a":
+		// Open the add-agent picker when a non-system, non-read-only team is selected.
+		if !m.teamsModal.inputMode && len(m.teamsModal.teams) > 0 && m.teamsModal.teamIdx < len(m.teamsModal.teams) {
+			team := m.teamsModal.teams[m.teamsModal.teamIdx]
+			if !isReadOnlyTeam(team) && !isSystemTeam(team) && m.store != nil {
+				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+				allAgents, err := m.store.ListAgents(ctx)
+				cancel()
+				if err != nil {
+					slog.Error("failed to list agents for picker", "error", err)
+					modalCmds = append(modalCmds, m.addToast("⚠ Failed to load agents", toastWarning))
+				} else {
+					available := filterAgentsForTeam(team, allAgents)
+					if len(available) == 0 {
+						modalCmds = append(modalCmds, m.addToast("No additional agents available", toastInfo))
+					} else {
+						m.teamsModal.pickerMode = true
+						m.teamsModal.pickerAgents = available
+						m.teamsModal.pickerIdx = 0
+					}
+				}
+			}
+		}
+
+	case "ctrl+g":
+		// Enter LLM generation mode (only when idle and not in any sub-mode).
+		if !m.teamsModal.inputMode && !m.teamsModal.generating && !m.teamsModal.pickerMode {
+			if m.llmClient == nil {
+				modalCmds = append(modalCmds, m.addToast("⚠ No LLM provider configured", toastWarning))
+			} else if m.store != nil {
+				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+				allAgents, err := m.store.ListAgents(ctx)
+				cancel()
+				if err != nil {
+					slog.Error("failed to list agents for team generation", "error", err)
+					modalCmds = append(modalCmds, m.addToast("⚠ Failed to load agents", toastWarning))
+				} else {
+					m.teamsModal.generateMode = true
+					m.teamsModal.generateInput = ""
+					m.teamsModal.generateAgents = allAgents
+				}
+			}
+		}
+
 	}
 	return m, tea.Batch(modalCmds...)
+}
+
+// filterAgentsForTeam returns agents from available that are not already in the
+// team (neither coordinator nor workers). Comparison is by agent name (case-sensitive).
+func filterAgentsForTeam(team agents.Team, available []*db.Agent) []*db.Agent {
+	inTeam := make(map[string]bool)
+	if team.Coordinator != nil {
+		inTeam[team.Coordinator.Name] = true
+	}
+	for _, w := range team.Workers {
+		inTeam[w.Name] = true
+	}
+	var result []*db.Agent
+	for _, a := range available {
+		if !inTeam[a.Name] {
+			result = append(result, a)
+		}
+	}
+	return result
 }
 
 var (
@@ -440,6 +586,82 @@ func (m *Model) reloadTeamsForModal() {
 	m.teamsModal.teams = append(discovered, auto...)
 }
 
+// addAgentToTeam adds the given agent to the team by:
+//  1. Appending the agent name to the team's team.md agents list.
+//  2. Copying the agent's source .md file into <team.Dir>/agents/<slug>.md.
+func addAgentToTeam(team agents.Team, agent *db.Agent) error {
+	teamMDPath := filepath.Join(team.Dir, "team.md")
+
+	// Parse the existing team.md (or create a minimal one if absent).
+	teamDef, err := agentfmt.ParseTeam(teamMDPath)
+	if err != nil {
+		// If team.md doesn't exist yet, start with a minimal definition.
+		teamDef = &agentfmt.TeamDef{Name: team.Name}
+	}
+
+	// Append the agent name if not already present.
+	alreadyListed := false
+	for _, n := range teamDef.Agents {
+		if n == agent.Name {
+			alreadyListed = true
+			break
+		}
+	}
+	if !alreadyListed {
+		teamDef.Agents = append(teamDef.Agents, agent.Name)
+	}
+
+	// Write the updated team.md back to disk.
+	if err := writeTeamFile(teamMDPath, teamDef); err != nil {
+		return fmt.Errorf("writing team.md: %w", err)
+	}
+
+	// Copy the agent's source file into the team's agents directory.
+	agentsDir := filepath.Join(team.Dir, "agents")
+	if err := os.MkdirAll(agentsDir, 0o755); err != nil {
+		return fmt.Errorf("creating agents directory: %w", err)
+	}
+
+	slug := loader.Slugify(agent.Name)
+	if slug == "" {
+		slug = loader.Slugify(agent.ID)
+	}
+	destPath := filepath.Join(agentsDir, slug+".md")
+
+	if err := copyFile(agent.SourcePath, destPath); err != nil {
+		return fmt.Errorf("copying agent file: %w", err)
+	}
+
+	return nil
+}
+
+// copyFile copies the file at src to dst, creating dst if it does not exist.
+func copyFile(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return fmt.Errorf("opening source file: %w", err)
+	}
+
+	out, err := os.Create(dst)
+	if err != nil {
+		_ = in.Close()
+		return fmt.Errorf("creating destination file: %w", err)
+	}
+
+	if _, err := io.Copy(out, in); err != nil {
+		_ = in.Close()
+		_ = out.Close()
+		return fmt.Errorf("copying file contents: %w", err)
+	}
+
+	if err := in.Close(); err != nil {
+		_ = out.Close()
+		return fmt.Errorf("closing source file: %w", err)
+	}
+
+	return out.Close()
+}
+
 // maybeAutoDetectCoordinator fires an LLM call to pick a coordinator for team
 // if the team has no coordinator, is not read-only, and hasn't been attempted yet.
 func (m *Model) maybeAutoDetectCoordinator(team agents.Team) tea.Cmd {
@@ -585,6 +807,20 @@ func (m *Model) renderTeamsModal() string {
 		leftLines = append(leftLines, "  "+cursor)
 	}
 
+	// Generate mode: show generation prompt input at the bottom.
+	if m.teamsModal.generateMode {
+		leftLines = append(leftLines, "")
+		leftLines = append(leftLines, DimStyle.Render("> Describe the team:"))
+		cursor := m.teamsModal.generateInput + "█"
+		leftLines = append(leftLines, "  "+cursor)
+	}
+
+	// Generating: show status indicator at the bottom.
+	if m.teamsModal.generating {
+		leftLines = append(leftLines, "")
+		leftLines = append(leftLines, DimStyle.Render("⟳ Generating team..."))
+	}
+
 	// Pad left panel to fill height.
 	for len(leftLines) < panelInnerH {
 		leftLines = append(leftLines, "")
@@ -601,9 +837,50 @@ func (m *Model) renderTeamsModal() string {
 		leftPanel = TeamsPanelStyle.Width(leftPanelW).Height(panelH).Render(leftContent)
 	}
 
-	// --- Right panel: team detail ---
+	// --- Right panel: team detail or picker overlay ---
 	var rightLines []string
-	if len(teams) == 0 {
+	if m.teamsModal.pickerMode {
+		// Picker overlay: show selectable list of agents to add.
+		rightLines = append(rightLines, HeaderStyle.Render("Select an agent to add:"))
+		rightLines = append(rightLines, DimStyle.Render(strings.Repeat("─", rightInnerW)))
+		rightLines = append(rightLines, "")
+
+		if len(m.teamsModal.pickerAgents) == 0 {
+			rightLines = append(rightLines, DimStyle.Render("No agents available."))
+		} else {
+			// Compute scroll window so selected item stays visible.
+			agentAreaH := panelInnerH - 3 // 3 lines for header + separator + blank
+			if agentAreaH < 1 {
+				agentAreaH = 1
+			}
+			scrollOffset := 0
+			if len(m.teamsModal.pickerAgents) > agentAreaH {
+				scrollOffset = m.teamsModal.pickerIdx - agentAreaH/2
+				if scrollOffset < 0 {
+					scrollOffset = 0
+				}
+				if scrollOffset > len(m.teamsModal.pickerAgents)-agentAreaH {
+					scrollOffset = len(m.teamsModal.pickerAgents) - agentAreaH
+				}
+			}
+			end := scrollOffset + agentAreaH
+			if end > len(m.teamsModal.pickerAgents) {
+				end = len(m.teamsModal.pickerAgents)
+			}
+			for vi, a := range m.teamsModal.pickerAgents[scrollOffset:end] {
+				i := vi + scrollOffset
+				icon := "■"
+				if a.Mode == "lead" {
+					icon = "◆"
+				}
+				line := fmt.Sprintf(" %s %s", icon, truncateStr(a.Name, rightInnerW-4))
+				if i == m.teamsModal.pickerIdx {
+					line = TeamsSelectedStyle.Width(rightInnerW).Render(line)
+				}
+				rightLines = append(rightLines, line)
+			}
+		}
+	} else if len(teams) == 0 {
 		rightLines = append(rightLines, DimStyle.Render("No teams configured."))
 		rightLines = append(rightLines, DimStyle.Render("Press [Ctrl+N] to create one."))
 	} else if m.teamsModal.teamIdx < len(teams) {
@@ -758,10 +1035,14 @@ func (m *Model) renderTeamsModal() string {
 	// Footer with key hints — dim read-only-gated keys when team is read-only.
 	readOnly := len(teams) > 0 && m.teamsModal.teamIdx < len(teams) && isReadOnlyTeam(teams[m.teamsModal.teamIdx])
 	autoTeam := len(teams) > 0 && m.teamsModal.teamIdx < len(teams) && isAutoTeam(teams[m.teamsModal.teamIdx]) && !isSystemTeam(teams[m.teamsModal.teamIdx])
+	systemTeam := len(teams) > 0 && m.teamsModal.teamIdx < len(teams) && isSystemTeam(teams[m.teamsModal.teamIdx])
+	noTeamSelected := len(teams) == 0
 	nHint := "[Ctrl+N] New"
 	dHint := "[Ctrl+D] Delete"
 	cHint := "[Ctrl+K] Set Coordinator"
 	pHint := "[Ctrl+P] Promote"
+	aHint := "[Ctrl+A] Add Agent"
+	gHint := "[Ctrl+G] Generate"
 	if readOnly {
 		dHint = DimStyle.Render(dHint)
 		cHint = DimStyle.Render(cHint)
@@ -769,11 +1050,27 @@ func (m *Model) renderTeamsModal() string {
 	if !autoTeam {
 		pHint = DimStyle.Render(pHint)
 	}
-	footer := lipgloss.JoinHorizontal(lipgloss.Left,
-		nHint, "  ", dHint, "  ", cHint, "  ", pHint, "  ",
-		DimStyle.Render("[Tab] Switch"), "  ",
-		DimStyle.Render("[Esc] Close"),
-	)
+	// Dim the add-agent hint when: no team selected, team is system/read-only, or picker is already active.
+	if noTeamSelected || readOnly || systemTeam || m.teamsModal.pickerMode {
+		aHint = DimStyle.Render(aHint)
+	}
+	// Dim the generate hint when: no LLM client configured, or generation is in progress.
+	if m.llmClient == nil || m.teamsModal.generating {
+		gHint = DimStyle.Render(gHint)
+	}
+	var footer string
+	if m.teamsModal.pickerMode {
+		footer = lipgloss.JoinHorizontal(lipgloss.Left,
+			"[Enter] Add", "  ",
+			"[Esc] Cancel",
+		)
+	} else {
+		footer = lipgloss.JoinHorizontal(lipgloss.Left,
+			nHint, "  ", dHint, "  ", cHint, "  ", pHint, "  ", aHint, "  ", gHint, "  ",
+			DimStyle.Render("[Tab] Switch"), "  ",
+			DimStyle.Render("[Esc] Close"),
+		)
+	}
 
 	inner := lipgloss.JoinVertical(lipgloss.Left, panels, footer)
 

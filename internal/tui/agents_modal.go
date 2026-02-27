@@ -14,6 +14,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
+	"github.com/jefflinse/toasters/internal/agentfmt"
 	"github.com/jefflinse/toasters/internal/config"
 	"github.com/jefflinse/toasters/internal/db"
 	"github.com/jefflinse/toasters/internal/loader"
@@ -28,10 +29,80 @@ type agentsModalState struct {
 	nameInput     string      // text being typed for new agent name
 	inputMode     bool        // true when typing a new agent name
 	confirmDelete bool        // true when delete confirmation is showing
+
+	// Skill picker sub-modal state.
+	pickerMode   bool        // true when the skill picker overlay is active
+	pickerSkills []*db.Skill // skills available to add (filtered: not already on agent)
+	pickerIdx    int         // currently highlighted picker item
+
+	// LLM generation state.
+	generateMode  bool   // true when user is typing a generation prompt
+	generateInput string // the prompt text being typed
+	generating    bool   // true while LLM call is in flight
 }
 
 // updateAgentsModal handles all key presses when the agents modal is open.
 func (m *Model) updateAgentsModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	// When the skill picker is active, intercept all keys for picker navigation.
+	if m.agentsModal.pickerMode {
+		switch msg.String() {
+		case "esc":
+			m.agentsModal.pickerMode = false
+			m.agentsModal.pickerSkills = nil
+			m.agentsModal.pickerIdx = 0
+		case "up":
+			if m.agentsModal.pickerIdx > 0 {
+				m.agentsModal.pickerIdx--
+			}
+		case "down":
+			if m.agentsModal.pickerIdx < len(m.agentsModal.pickerSkills)-1 {
+				m.agentsModal.pickerIdx++
+			}
+		case "enter":
+			if len(m.agentsModal.pickerSkills) > 0 && m.agentsModal.pickerIdx < len(m.agentsModal.pickerSkills) {
+				skill := m.agentsModal.pickerSkills[m.agentsModal.pickerIdx]
+				a := m.agentsModal.agents[m.agentsModal.agentIdx]
+				if cmd := m.addSkillToAgent(a, skill); cmd != nil {
+					m.agentsModal.pickerMode = false
+					m.agentsModal.pickerSkills = nil
+					m.agentsModal.pickerIdx = 0
+					return m, cmd
+				}
+				m.agentsModal.pickerMode = false
+				m.agentsModal.pickerSkills = nil
+				m.agentsModal.pickerIdx = 0
+			}
+		}
+		return m, nil
+	}
+
+	// When typing a generation prompt, intercept all keys.
+	if m.agentsModal.generateMode {
+		switch msg.String() {
+		case "esc":
+			m.agentsModal.generateMode = false
+			m.agentsModal.generateInput = ""
+		case "enter":
+			if strings.TrimSpace(m.agentsModal.generateInput) != "" {
+				m.agentsModal.generating = true
+				m.agentsModal.generateMode = false
+				prompt := m.agentsModal.generateInput
+				m.agentsModal.generateInput = ""
+				return m, generateAgentCmd(m.llmClient, prompt)
+			}
+		case "backspace":
+			if len(m.agentsModal.generateInput) > 0 {
+				runes := []rune(m.agentsModal.generateInput)
+				m.agentsModal.generateInput = string(runes[:len(runes)-1])
+			}
+		default:
+			if msg.Text != "" {
+				m.agentsModal.generateInput += msg.Text
+			}
+		}
+		return m, nil
+	}
+
 	// When typing a new agent name, only esc/enter/backspace have special meaning.
 	if m.agentsModal.inputMode {
 		switch msg.String() {
@@ -104,6 +175,24 @@ func (m *Model) updateAgentsModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.agentsModal.inputMode = true
 		m.agentsModal.nameInput = ""
 
+	case "ctrl+g":
+		if !m.agentsModal.inputMode && !m.agentsModal.generating && !m.agentsModal.pickerMode {
+			if m.llmClient == nil {
+				return m, m.addToast("⚠ No LLM provider configured", toastWarning)
+			}
+			m.agentsModal.generateMode = true
+			m.agentsModal.generateInput = ""
+		}
+
+	case "ctrl+a":
+		// Open the skill picker for the selected agent (non-system agents only).
+		if len(m.agentsModal.agents) > 0 && m.agentsModal.agentIdx < len(m.agentsModal.agents) {
+			a := m.agentsModal.agents[m.agentsModal.agentIdx]
+			if a.Source != "system" {
+				return m, m.openSkillPicker(a)
+			}
+		}
+
 	case "ctrl+d":
 		if !m.agentsModal.confirmDelete && len(m.agentsModal.agents) > 0 && m.agentsModal.agentIdx < len(m.agentsModal.agents) {
 			a := m.agentsModal.agents[m.agentsModal.agentIdx]
@@ -140,6 +229,78 @@ func (m *Model) updateAgentsModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 	return m, nil
+}
+
+// filterSkillsForAgent returns skills from available that are not already
+// assigned to the agent. The agent's Skills field is a JSON array of skill
+// names; malformed or absent JSON is treated as an empty list (all skills
+// are returned). Comparison is by skill name (case-sensitive).
+func filterSkillsForAgent(a *db.Agent, available []*db.Skill) []*db.Skill {
+	var existing []string
+	if len(a.Skills) > 0 {
+		_ = json.Unmarshal(a.Skills, &existing)
+	}
+	existingSet := make(map[string]bool, len(existing))
+	for _, s := range existing {
+		existingSet[s] = true
+	}
+	var result []*db.Skill
+	for _, sk := range available {
+		if !existingSet[sk.Name] {
+			result = append(result, sk)
+		}
+	}
+	return result
+}
+
+// openSkillPicker loads all skills from the DB, filters out those already on the
+// agent, and either shows a toast (if none available) or activates picker mode.
+func (m *Model) openSkillPicker(a *db.Agent) tea.Cmd {
+	if m.store == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	allSkills, err := m.store.ListSkills(ctx)
+	if err != nil {
+		slog.Error("failed to list skills for picker", "error", err)
+		return nil
+	}
+
+	available := filterSkillsForAgent(a, allSkills)
+	if len(available) == 0 {
+		return m.addToast("No additional skills available", toastInfo)
+	}
+
+	m.agentsModal.pickerMode = true
+	m.agentsModal.pickerSkills = available
+	m.agentsModal.pickerIdx = 0
+	return nil
+}
+
+// addSkillToAgent appends the given skill to the agent's .md file and reloads.
+// Returns a tea.Cmd (toast) on success or failure, or nil if nothing to do.
+func (m *Model) addSkillToAgent(a *db.Agent, skill *db.Skill) tea.Cmd {
+	if a.SourcePath == "" {
+		return m.addToast("Cannot add skill: agent source file unknown", toastWarning)
+	}
+
+	def, err := agentfmt.ParseAgent(a.SourcePath)
+	if err != nil {
+		slog.Error("failed to parse agent file for skill addition", "path", a.SourcePath, "error", err)
+		return m.addToast("Cannot add skill: "+err.Error(), toastWarning)
+	}
+
+	def.Skills = append(def.Skills, skill.Name)
+
+	if err := writeAgentFile(a.SourcePath, def); err != nil {
+		slog.Error("failed to write agent file after skill addition", "path", a.SourcePath, "error", err)
+		return m.addToast("Failed to save: "+err.Error(), toastWarning)
+	}
+
+	m.reloadAgentsForModal()
+	return m.addToast("Added skill '"+skill.Name+"' to agent", toastSuccess)
 }
 
 // reloadAgentsForModal refreshes m.agentsModal.agents from the DB.
@@ -190,6 +351,54 @@ Your agent system prompt goes here.
 `, name)
 
 	return os.WriteFile(path, []byte(template), 0o644)
+}
+
+// writeGeneratedAgentFile writes LLM-generated agent content to the user agents
+// directory. It derives the filename from the agent name in the content, and
+// appends -2, -3, etc. if the file already exists. Returns the written path and
+// the agent name extracted from the content.
+func writeGeneratedAgentFile(content string) (string, string, error) {
+	cfgDir, err := config.Dir()
+	if err != nil {
+		return "", "", fmt.Errorf("getting config dir: %w", err)
+	}
+	agentsDir := filepath.Join(cfgDir, "user", "agents")
+	if err := os.MkdirAll(agentsDir, 0o755); err != nil {
+		return "", "", fmt.Errorf("creating agents dir: %w", err)
+	}
+
+	// Parse the content to extract the agent name for the filename.
+	slug := "generated-agent"
+	agentName := ""
+	if parsed, err := agentfmt.ParseBytes([]byte(content), agentfmt.DefAgent); err == nil {
+		if agentDef, ok := parsed.(*agentfmt.AgentDef); ok && agentDef.Name != "" {
+			agentName = agentDef.Name
+			s := loader.Slugify(agentDef.Name)
+			if s != "" {
+				slug = s
+			}
+		}
+	}
+	if agentName == "" {
+		agentName = slug
+	}
+
+	// Find a free filename, appending -2, -3, etc. if needed.
+	path := filepath.Join(agentsDir, slug+".md")
+	if _, err := os.Stat(path); err == nil {
+		for i := 2; ; i++ {
+			candidate := filepath.Join(agentsDir, fmt.Sprintf("%s-%d.md", slug, i))
+			if _, err := os.Stat(candidate); os.IsNotExist(err) {
+				path = candidate
+				break
+			}
+		}
+	}
+
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		return "", "", fmt.Errorf("writing agent file: %w", err)
+	}
+	return path, agentName, nil
 }
 
 // renderAgentsModal renders the full-screen agents management modal.
@@ -279,6 +488,20 @@ func (m *Model) renderAgentsModal() string {
 		leftLines = append(leftLines, "  "+cursor)
 	}
 
+	// Generate mode: show generation prompt input at the bottom.
+	if m.agentsModal.generateMode {
+		leftLines = append(leftLines, "")
+		leftLines = append(leftLines, DimStyle.Render("> Describe the agent:"))
+		cursor := m.agentsModal.generateInput + "█"
+		leftLines = append(leftLines, "  "+cursor)
+	}
+
+	// Generating: show status indicator at the bottom.
+	if m.agentsModal.generating {
+		leftLines = append(leftLines, "")
+		leftLines = append(leftLines, DimStyle.Render("⟳ Generating agent..."))
+	}
+
 	for len(leftLines) < panelInnerH {
 		leftLines = append(leftLines, "")
 	}
@@ -294,9 +517,29 @@ func (m *Model) renderAgentsModal() string {
 		leftPanel = ModalPanelStyle.Width(leftPanelW).Height(panelH).Render(leftContent)
 	}
 
-	// --- Right panel: agent detail ---
+	// --- Right panel: agent detail or skill picker ---
 	var rightLines []string
-	if len(agents) == 0 {
+	if m.agentsModal.pickerMode {
+		// Skill picker overlay: replace right panel content with the picker list.
+		rightLines = append(rightLines, HeaderStyle.Render("Select a skill to add:"))
+		rightLines = append(rightLines, DimStyle.Render(strings.Repeat("─", rightInnerW)))
+		rightLines = append(rightLines, "")
+
+		for i, sk := range m.agentsModal.pickerSkills {
+			icon := "◇"
+			if sk.Source == "system" {
+				icon = "⚙"
+			}
+			line := fmt.Sprintf(" %s %s", icon, truncateStr(sk.Name, rightInnerW-4))
+			if sk.Description != "" {
+				line += DimStyle.Render("  " + truncateStr(sk.Description, rightInnerW-len(sk.Name)-6))
+			}
+			if i == m.agentsModal.pickerIdx {
+				line = ModalSelectedStyle.Width(rightInnerW).Render(line)
+			}
+			rightLines = append(rightLines, line)
+		}
+	} else if len(agents) == 0 {
 		rightLines = append(rightLines, DimStyle.Render("No agents configured."))
 		rightLines = append(rightLines, DimStyle.Render("Press [Ctrl+N] to create one."))
 	} else if m.agentsModal.agentIdx < len(agents) {
@@ -401,23 +644,40 @@ func (m *Model) renderAgentsModal() string {
 
 	panels := lipgloss.JoinHorizontal(lipgloss.Top, leftPanel, " ", rightPanel)
 
-	// Footer with key hints — dim edit/delete keys when agent is read-only.
+	// Footer with key hints — dim edit/delete/add-skill keys when not applicable.
 	canEdit := len(agents) > 0 && m.agentsModal.agentIdx < len(agents) && agents[m.agentsModal.agentIdx].Source != "system"
 	canDelete := canEdit && agents[m.agentsModal.agentIdx].TeamID == ""
+	canAddSkill := canEdit && !m.agentsModal.pickerMode
 	nHint := "[Ctrl+N] New"
 	dHint := "[Ctrl+D] Delete"
 	eHint := "[e] Edit"
+	aHint := "[Ctrl+A] Add Skill"
+	gHint := "[Ctrl+G] Generate"
 	if !canEdit {
 		eHint = DimStyle.Render(eHint)
 	}
 	if !canDelete {
 		dHint = DimStyle.Render(dHint)
 	}
-	footer := lipgloss.JoinHorizontal(lipgloss.Left,
-		nHint, "  ", eHint, "  ", dHint, "  ",
-		DimStyle.Render("[Tab] Switch"), "  ",
-		DimStyle.Render("[Esc] Close"),
-	)
+	if !canAddSkill {
+		aHint = DimStyle.Render(aHint)
+	}
+	if m.llmClient == nil || m.agentsModal.generating {
+		gHint = DimStyle.Render(gHint)
+	}
+	var footer string
+	if m.agentsModal.pickerMode {
+		footer = lipgloss.JoinHorizontal(lipgloss.Left,
+			"[Enter] Add", "  ",
+			DimStyle.Render("[Esc] Cancel"),
+		)
+	} else {
+		footer = lipgloss.JoinHorizontal(lipgloss.Left,
+			nHint, "  ", eHint, "  ", dHint, "  ", aHint, "  ", gHint, "  ",
+			DimStyle.Render("[Tab] Switch"), "  ",
+			DimStyle.Render("[Esc] Close"),
+		)
+	}
 
 	inner := lipgloss.JoinVertical(lipgloss.Left, panels, footer)
 	modal := ModalStyle.Width(modalW).Render(inner)

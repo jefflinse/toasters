@@ -15,6 +15,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
+	"github.com/jefflinse/toasters/internal/agentfmt"
 	"github.com/jefflinse/toasters/internal/config"
 	"github.com/jefflinse/toasters/internal/db"
 	"github.com/jefflinse/toasters/internal/loader"
@@ -29,6 +30,11 @@ type skillsModalState struct {
 	nameInput     string      // text being typed for new skill name
 	inputMode     bool        // true when typing a new skill name
 	confirmDelete bool        // true when delete confirmation is showing
+
+	// LLM generation state.
+	generateMode  bool   // true when user is typing a generation prompt
+	generateInput string // the prompt text being typed
+	generating    bool   // true while LLM call is in flight
 }
 
 // editorFinishedMsg is sent when an external $EDITOR process completes.
@@ -38,6 +44,33 @@ type editorFinishedMsg struct {
 
 // updateSkillsModal handles all key presses when the skills modal is open.
 func (m *Model) updateSkillsModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	// When typing a generation prompt, intercept all keys.
+	if m.skillsModal.generateMode {
+		switch msg.String() {
+		case "esc":
+			m.skillsModal.generateMode = false
+			m.skillsModal.generateInput = ""
+		case "enter":
+			if strings.TrimSpace(m.skillsModal.generateInput) != "" {
+				m.skillsModal.generating = true
+				m.skillsModal.generateMode = false
+				prompt := m.skillsModal.generateInput
+				m.skillsModal.generateInput = ""
+				return m, generateSkillCmd(m.llmClient, prompt)
+			}
+		case "backspace":
+			if len(m.skillsModal.generateInput) > 0 {
+				runes := []rune(m.skillsModal.generateInput)
+				m.skillsModal.generateInput = string(runes[:len(runes)-1])
+			}
+		default:
+			if msg.Text != "" {
+				m.skillsModal.generateInput += msg.Text
+			}
+		}
+		return m, nil
+	}
+
 	// When typing a new skill name, only esc/enter/backspace have special meaning.
 	if m.skillsModal.inputMode {
 		switch msg.String() {
@@ -109,6 +142,15 @@ func (m *Model) updateSkillsModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "ctrl+n":
 		m.skillsModal.inputMode = true
 		m.skillsModal.nameInput = ""
+
+	case "ctrl+g":
+		if !m.skillsModal.generating {
+			if m.llmClient == nil {
+				return m, m.addToast("⚠ No LLM provider configured", toastWarning)
+			}
+			m.skillsModal.generateMode = true
+			m.skillsModal.generateInput = ""
+		}
 
 	case "ctrl+d":
 		if !m.skillsModal.confirmDelete && len(m.skillsModal.skills) > 0 && m.skillsModal.skillIdx < len(m.skillsModal.skills) {
@@ -193,6 +235,48 @@ Your skill prompt goes here. This text will be injected into agents that use thi
 `, name)
 
 	return os.WriteFile(path, []byte(template), 0o644)
+}
+
+// writeGeneratedSkillFile writes LLM-generated skill content to the user skills
+// directory. It derives the filename from the skill name in the content, and
+// appends -2, -3, etc. if the file already exists. Returns the written path.
+func writeGeneratedSkillFile(content string) (string, error) {
+	cfgDir, err := config.Dir()
+	if err != nil {
+		return "", fmt.Errorf("getting config dir: %w", err)
+	}
+	skillsDir := filepath.Join(cfgDir, "user", "skills")
+	if err := os.MkdirAll(skillsDir, 0o755); err != nil {
+		return "", fmt.Errorf("creating skills dir: %w", err)
+	}
+
+	// Parse the content to extract the skill name for the filename.
+	slug := "generated-skill"
+	if parsed, err := agentfmt.ParseBytes([]byte(content), agentfmt.DefSkill); err == nil {
+		if skillDef, ok := parsed.(*agentfmt.SkillDef); ok && skillDef.Name != "" {
+			s := loader.Slugify(skillDef.Name)
+			if s != "" {
+				slug = s
+			}
+		}
+	}
+
+	// Find a free filename, appending -2, -3, etc. if needed.
+	path := filepath.Join(skillsDir, slug+".md")
+	if _, err := os.Stat(path); err == nil {
+		for i := 2; ; i++ {
+			candidate := filepath.Join(skillsDir, fmt.Sprintf("%s-%d.md", slug, i))
+			if _, err := os.Stat(candidate); os.IsNotExist(err) {
+				path = candidate
+				break
+			}
+		}
+	}
+
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		return "", fmt.Errorf("writing skill file: %w", err)
+	}
+	return path, nil
 }
 
 // openInEditor launches $EDITOR (or vi) for the given file path, suspending the TUI.
@@ -286,6 +370,20 @@ func (m *Model) renderSkillsModal() string {
 		leftLines = append(leftLines, DimStyle.Render("> New skill name:"))
 		cursor := m.skillsModal.nameInput + "█"
 		leftLines = append(leftLines, "  "+cursor)
+	}
+
+	// Generate mode: show generation prompt input at the bottom.
+	if m.skillsModal.generateMode {
+		leftLines = append(leftLines, "")
+		leftLines = append(leftLines, DimStyle.Render("> Describe the skill:"))
+		cursor := m.skillsModal.generateInput + "█"
+		leftLines = append(leftLines, "  "+cursor)
+	}
+
+	// Generating: show spinner status line.
+	if m.skillsModal.generating {
+		leftLines = append(leftLines, "")
+		leftLines = append(leftLines, DimStyle.Render("⟳ Generating skill..."))
 	}
 
 	for len(leftLines) < panelInnerH {
@@ -391,12 +489,16 @@ func (m *Model) renderSkillsModal() string {
 	nHint := "[Ctrl+N] New"
 	dHint := "[Ctrl+D] Delete"
 	eHint := "[e] Edit"
+	gHint := "[Ctrl+G] Generate"
 	if readOnly {
 		dHint = DimStyle.Render(dHint)
 		eHint = DimStyle.Render(eHint)
 	}
+	if m.llmClient == nil || m.skillsModal.generating {
+		gHint = DimStyle.Render(gHint)
+	}
 	footer := lipgloss.JoinHorizontal(lipgloss.Left,
-		nHint, "  ", eHint, "  ", dHint, "  ",
+		nHint, "  ", eHint, "  ", dHint, "  ", gHint, "  ",
 		DimStyle.Render("[Tab] Switch"), "  ",
 		DimStyle.Render("[Esc] Close"),
 	)

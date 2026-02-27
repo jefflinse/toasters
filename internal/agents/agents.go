@@ -708,10 +708,16 @@ Write BLOCKER.md to: %s/BLOCKER.md`, jobDir, jobDir, jobDir, jobDir)
 	return sb.String()
 }
 
-// SetCoordinator atomically rewrites all .md files in teamDir so that exactly
-// one agent — the one whose filename stem matches agentName — has mode: primary.
-// All other agents are set to mode: worker. Partial updates are acceptable on
-// write failure (prototype behaviour).
+// SetCoordinator updates a team so that exactly one agent — the one whose
+// frontmatter name field matches agentName (case-insensitive) — is the
+// coordinator. It does two things:
+//
+//  1. Rewrites team.md's lead: field to agentName so that DiscoverTeams picks
+//     up the change immediately (lead: takes precedence over mode: in agent files).
+//  2. Rewrites all agent .md files in teamDir/agents/ so that the target agent
+//     has mode: primary and all others have mode: worker.
+//
+// Partial updates are acceptable on write failure (prototype behaviour).
 func SetCoordinator(teamDir, agentName string) error {
 	agentsDir := filepath.Join(teamDir, "agents")
 	matches, err := filepath.Glob(filepath.Join(agentsDir, "*.md"))
@@ -722,11 +728,28 @@ func SetCoordinator(teamDir, agentName string) error {
 		return fmt.Errorf("no agent files found in %s", agentsDir)
 	}
 
-	// Verify the target agent exists.
-	found := false
+	// Parse each agent file to get its frontmatter name, then match
+	// case-insensitively against agentName. This is consistent with how
+	// BuildRegistry resolves the lead: field from team.md.
+	needle := strings.ToLower(agentName)
+	type agentFile struct {
+		path string
+		name string // frontmatter name (falls back to filename stem)
+	}
+	var agentFiles []agentFile
 	for _, p := range matches {
 		stem := strings.TrimSuffix(filepath.Base(p), ".md")
-		if stem == agentName {
+		name := stem // default: filename stem
+		if a, parseErr := ParseFile(p); parseErr == nil && a.Name != "" {
+			name = a.Name
+		}
+		agentFiles = append(agentFiles, agentFile{path: p, name: name})
+	}
+
+	// Verify the target agent exists.
+	found := false
+	for _, af := range agentFiles {
+		if strings.ToLower(af.name) == needle {
 			found = true
 			break
 		}
@@ -735,16 +758,29 @@ func SetCoordinator(teamDir, agentName string) error {
 		return fmt.Errorf("agent %q not found in %s", agentName, agentsDir)
 	}
 
-	for _, p := range matches {
-		stem := strings.TrimSuffix(filepath.Base(p), ".md")
+	// Update team.md's lead: field so DiscoverTeams picks up the change.
+	// lead: takes precedence over mode: in agent files, so this is the
+	// authoritative way to set the coordinator.
+	teamMDPath := filepath.Join(teamDir, "team.md")
+	if teamDef, parseErr := agentfmt.ParseTeam(teamMDPath); parseErr == nil {
+		teamDef.Lead = agentName
+		if writeErr := writeTeamFileTo(teamMDPath, teamDef); writeErr != nil {
+			return fmt.Errorf("updating team.md lead: %w", writeErr)
+		}
+	}
+	// If team.md doesn't exist or can't be parsed, fall through to mode rewriting
+	// as a best-effort fallback.
+
+	// Rewrite mode: in each agent file.
+	for _, af := range agentFiles {
 		targetMode := "worker"
-		if stem == agentName {
+		if strings.ToLower(af.name) == needle {
 			targetMode = "primary"
 		}
 
-		data, err := os.ReadFile(p)
+		data, err := os.ReadFile(af.path)
 		if err != nil {
-			return fmt.Errorf("reading %s: %w", p, err)
+			return fmt.Errorf("reading %s: %w", af.path, err)
 		}
 
 		newContent := rewriteMode(string(data), targetMode)
@@ -764,13 +800,35 @@ func SetCoordinator(teamDir, agentName string) error {
 			_ = os.Remove(tmpName)
 			return fmt.Errorf("closing temp file %s: %w", tmpName, err)
 		}
-		if err := os.Rename(tmpName, p); err != nil {
+		if err := os.Rename(tmpName, af.path); err != nil {
 			_ = os.Remove(tmpName)
-			return fmt.Errorf("renaming %s to %s: %w", tmpName, p, err)
+			return fmt.Errorf("renaming %s to %s: %w", tmpName, af.path, err)
 		}
 	}
 
 	return nil
+}
+
+// writeTeamFileTo writes a TeamDef as a toasters-format .md file. It is the
+// agents-package equivalent of the TUI's writeTeamFile helper, used by
+// SetCoordinator to update team.md without importing the tui package.
+func writeTeamFileTo(path string, def *agentfmt.TeamDef) error {
+	data, err := yaml.Marshal(def)
+	if err != nil {
+		return fmt.Errorf("marshaling team frontmatter: %w", err)
+	}
+
+	var sb strings.Builder
+	sb.WriteString("---\n")
+	// Trim trailing newline that yaml.Marshal appends, then add our own.
+	sb.WriteString(strings.TrimRight(string(data), "\n"))
+	sb.WriteString("\n---\n")
+	if def.Body != "" {
+		sb.WriteString(def.Body)
+		sb.WriteString("\n")
+	}
+
+	return os.WriteFile(path, []byte(sb.String()), 0o644)
 }
 
 // rewriteMode returns content with the frontmatter mode: field set to mode.
