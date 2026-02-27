@@ -305,6 +305,16 @@ func (st *SystemTools) assignTask(ctx context.Context, args json.RawMessage) (st
 		return "", fmt.Errorf("getting team: %w", err)
 	}
 
+	// 3a. Reject assignments to the system team — it handles orchestration only.
+	if team.Source == "system" {
+		return "", fmt.Errorf("cannot assign job tasks to system team %q; use a user or auto team", team.Name)
+	}
+
+	// 3b. Validate that the team has a lead agent before we modify the task.
+	if team.LeadAgent == "" {
+		return "", fmt.Errorf("team %q has no lead agent configured; cannot assign task", team.Name)
+	}
+
 	// 4. Update task: set status to in_progress and assign team.
 	if err := st.store.AssignTask(ctx, params.TaskID, params.TeamID); err != nil {
 		return "", fmt.Errorf("assigning task: %w", err)
@@ -348,9 +358,17 @@ func (st *SystemTools) assignTask(ctx context.Context, args json.RawMessage) (st
 }
 
 func (st *SystemTools) queryTeams(ctx context.Context) (string, error) {
-	teams, err := st.store.ListTeams(ctx)
+	allTeams, err := st.store.ListTeams(ctx)
 	if err != nil {
 		return "", fmt.Errorf("listing teams: %w", err)
+	}
+
+	// Filter out the system team — it handles orchestration, not job tasks.
+	var teams []*db.Team
+	for _, t := range allTeams {
+		if t.Source != "system" {
+			teams = append(teams, t)
+		}
 	}
 
 	if len(teams) == 0 {

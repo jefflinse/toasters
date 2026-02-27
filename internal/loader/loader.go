@@ -264,13 +264,17 @@ func (l *Loader) loadUserTeams(teamsDir string, sharedAgents, systemAgents map[s
 				}
 				teams = append(teams, team)
 
-				// All local agents become workers.
+				// Assign roles based on agent mode; track the first lead as team lead.
 				for _, a := range localAgents {
+					role := agentRole(a.Mode)
 					teamAgents = append(teamAgents, &db.TeamAgent{
 						TeamID:  teamID,
 						AgentID: a.ID,
-						Role:    agentRole(a.Mode),
+						Role:    role,
 					})
+					if role == "lead" && team.LeadAgent == "" {
+						team.LeadAgent = a.ID
+					}
 				}
 				continue
 			}
@@ -342,11 +346,14 @@ func resolveAgent(name string, local, shared, system map[string]string) (string,
 }
 
 // agentRole returns the role string for a db.TeamAgent based on agent mode.
+// Recognizes both "lead" (Toasters-native) and "primary" (OpenCode vocabulary).
 func agentRole(mode string) string {
-	if mode == "lead" {
+	switch mode {
+	case "lead", "primary":
 		return "lead"
+	default:
+		return "worker"
 	}
-	return "worker"
 }
 
 // --- Conversion helpers ---
