@@ -28,11 +28,11 @@ type logViewState struct {
 // the terminal can select and copy text freely (viewport.Model wraps content
 // in a clipped region that can interfere with selection in some terminals).
 // Scrolling is line-based; the viewport renders a window of lines.
+// The visible height is computed dynamically via logViewContentH().
 type logViewport struct {
-	lines      []string // all lines of the log file
-	scrollTop  int      // index of the first visible line
-	viewHeight int      // number of visible lines (set by resizeComponents)
-	viewWidth  int      // width of the view area
+	lines     []string // all lines of the log file (pre-wrapped to viewWidth)
+	scrollTop int      // index of the first visible line
+	viewWidth int      // width of the view area (used for pre-wrapping)
 }
 
 // logTailTickMsg fires every 500ms while the log view is open to re-read the file.
@@ -96,38 +96,36 @@ func (m *Model) closeLogView() {
 	m.logView.show = false
 }
 
+// logViewContentH is the number of lines available for log content:
+// full height minus hotkey bar (1) minus title bar (1).
+func (m *Model) logViewContentH() int {
+	h := m.height - 2 // hotkeyBar + titleBar
+	if h < 1 {
+		h = 1
+	}
+	return h
+}
+
 // resizeLogView updates the viewport dimensions from the current terminal size.
 func (m *Model) resizeLogView() {
-	const hotkeyBarH = 1
-	m.logView.viewport.viewHeight = m.height - hotkeyBarH
-	if m.logView.viewport.viewHeight < 1 {
-		m.logView.viewport.viewHeight = 1
-	}
 	m.logView.viewport.viewWidth = m.width
 	// Re-clamp scroll after resize.
 	m.clampLogScroll()
 }
 
-// rewrapLogLines re-wraps the stored lines to the current viewport width.
-// Called after a terminal resize so the line-count-based scroll stays correct.
-func (m *Model) rewrapLogLines() {
-	// We don't have the original raw lines after wrapping, so we join and re-split.
-	// This is a best-effort re-wrap; minor artifacts at wrap boundaries are acceptable.
-	if len(m.logView.viewport.lines) == 0 {
-		return
+// logMaxScrollTop returns the maximum valid scrollTop for the current content and viewport.
+func (m *Model) logMaxScrollTop() int {
+	max := len(m.logView.viewport.lines) - m.logViewContentH()
+	if max < 0 {
+		max = 0
 	}
-	raw := strings.Join(m.logView.viewport.lines, "\n")
-	rawLines := strings.Split(raw, "\n")
-	m.applyLogContent(rawLines)
+	return max
 }
 
 // clampLogScroll ensures scrollTop is within valid bounds.
 func (m *Model) clampLogScroll() {
 	vp := &m.logView.viewport
-	maxTop := len(vp.lines) - vp.viewHeight
-	if maxTop < 0 {
-		maxTop = 0
-	}
+	maxTop := m.logMaxScrollTop()
 	if vp.scrollTop > maxTop {
 		vp.scrollTop = maxTop
 	}
@@ -138,12 +136,7 @@ func (m *Model) clampLogScroll() {
 
 // scrollLogToBottom scrolls the log view to the last line.
 func (m *Model) scrollLogToBottom() {
-	vp := &m.logView.viewport
-	maxTop := len(vp.lines) - vp.viewHeight
-	if maxTop < 0 {
-		maxTop = 0
-	}
-	vp.scrollTop = maxTop
+	m.logView.viewport.scrollTop = m.logMaxScrollTop()
 	m.logView.atBottom = true
 }
 
@@ -162,17 +155,14 @@ func (m *Model) updateLogView(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.logView.atBottom = false
 
 	case "down", "j":
-		maxTop := len(vp.lines) - vp.viewHeight
-		if maxTop < 0 {
-			maxTop = 0
-		}
+		maxTop := m.logMaxScrollTop()
 		if vp.scrollTop < maxTop {
 			vp.scrollTop++
 		}
 		m.logView.atBottom = (vp.scrollTop >= maxTop)
 
 	case "pgup", "ctrl+u":
-		half := vp.viewHeight / 2
+		half := m.logViewContentH() / 2
 		vp.scrollTop -= half
 		if vp.scrollTop < 0 {
 			vp.scrollTop = 0
@@ -180,11 +170,8 @@ func (m *Model) updateLogView(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.logView.atBottom = false
 
 	case "pgdown", "ctrl+d":
-		half := vp.viewHeight / 2
-		maxTop := len(vp.lines) - vp.viewHeight
-		if maxTop < 0 {
-			maxTop = 0
-		}
+		half := m.logViewContentH() / 2
+		maxTop := m.logMaxScrollTop()
 		vp.scrollTop += half
 		if vp.scrollTop > maxTop {
 			vp.scrollTop = maxTop
@@ -259,20 +246,18 @@ func wrapLogLines(lines []string, width int) []string {
 
 // renderLogView renders the fullscreen log tail view.
 func (m *Model) renderLogView() string {
-	const hotkeyBarH = 1
-
 	vp := &m.logView.viewport
-	viewH := m.height - hotkeyBarH
-	if viewH < 1 {
-		viewH = 1
-	}
+	contentH := m.logViewContentH()
 
-	// Hotkey bar — same pattern as the grid view.
+	// Hotkey bar.
 	scrollInfo := ""
 	if len(vp.lines) > 0 {
 		pct := 0
-		if len(vp.lines) > vp.viewHeight {
-			pct = vp.scrollTop * 100 / (len(vp.lines) - vp.viewHeight)
+		if len(vp.lines) > contentH {
+			pct = vp.scrollTop * 100 / (len(vp.lines) - contentH)
+			if pct > 100 {
+				pct = 100
+			}
 		} else {
 			pct = 100
 		}
@@ -282,7 +267,7 @@ func (m *Model) renderLogView() string {
 	}
 
 	hotkeyBar := lipgloss.NewStyle().Width(m.width).Render(
-		DimStyle.Render("ctrl+\\: close") +
+		DimStyle.Render(`ctrl+\: close`) +
 			DimStyle.Render(" · ") +
 			DimStyle.Render("↑↓/jk: scroll") +
 			DimStyle.Render(" · ") +
@@ -297,11 +282,6 @@ func (m *Model) renderLogView() string {
 	titleBar := lipgloss.NewStyle().Width(m.width).Render(title)
 
 	// Content area: slice the visible window of lines.
-	contentH := viewH - 1 // subtract title bar
-	if contentH < 1 {
-		contentH = 1
-	}
-
 	var visibleLines []string
 	if len(vp.lines) == 0 {
 		visibleLines = []string{DimStyle.Render("(log file is empty or does not exist yet)")}

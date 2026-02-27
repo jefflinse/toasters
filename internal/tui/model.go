@@ -16,6 +16,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/atotto/clipboard"
 	"github.com/charmbracelet/glamour"
+	xansi "github.com/charmbracelet/x/ansi"
 
 	"github.com/jefflinse/toasters/internal/agentfmt"
 	"github.com/jefflinse/toasters/internal/agents"
@@ -1106,7 +1107,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.grid.gridFocusCell = cellsPerPage - 1
 		}
 		m.resizeComponents()
-		m.rewrapLogLines()
 
 	case tea.PasteMsg:
 		// Handle bracketed paste (e.g. macOS Cmd+V in terminal) when chat is focused.
@@ -1579,7 +1579,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case runtime.SessionEventToolResult:
 			if ev.ToolResult != nil {
-				result := ev.ToolResult.Result
+				result := xansi.Strip(ev.ToolResult.Result)
 				if len(result) > 200 {
 					result = result[:200] + "..."
 				}
