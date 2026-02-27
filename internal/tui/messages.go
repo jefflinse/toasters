@@ -62,10 +62,12 @@ type pendingCompletion struct {
 type focusedPanel int
 
 const (
-	focusChat   focusedPanel = iota
-	focusJobs   focusedPanel = iota
-	focusTeams  focusedPanel = iota
-	focusAgents focusedPanel = iota
+	focusChat     focusedPanel = iota
+	focusJobs     focusedPanel = iota
+	focusTeams    focusedPanel = iota
+	focusAgents   focusedPanel = iota
+	focusOperator focusedPanel = iota
+	focusMCP      focusedPanel = iota
 )
 
 // SessionStats tracks session-level statistics displayed in the sidebar.

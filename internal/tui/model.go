@@ -500,7 +500,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 
 		case "tab":
-			// Cycle focus: chat → jobs → teams → agents → chat.
+			// Cycle focus: chat → jobs → agents → teams → operator → mcp → chat.
 			// Skip hidden panels.
 			// (Tab inside the slash command popup is handled above and returns early.)
 			next := m.focused
@@ -509,18 +509,61 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				case focusChat:
 					next = focusJobs
 				case focusJobs:
+					next = focusAgents
+				case focusAgents:
+					next = focusTeams
+				case focusTeams:
+					next = focusOperator
+				case focusOperator:
+					next = focusMCP
+				case focusMCP:
+					next = focusChat
+				default:
+					next = focusChat
+				}
+				// Skip left-panel targets when left panel is hidden.
+				if m.leftPanelHidden && (next == focusJobs || next == focusAgents || next == focusTeams) {
+					continue
+				}
+				// Skip sidebar targets when sidebar is hidden.
+				if m.sidebarHidden && (next == focusOperator || next == focusMCP) {
+					continue
+				}
+				break
+			}
+			focusCmd := m.setFocus(next)
+			if next == focusChat {
+				return m, tea.Batch(m.input.Focus(), focusCmd)
+			}
+			m.input.Blur()
+			return m, focusCmd
+
+		case "shift+tab":
+			// Reverse cycle: chat → mcp → operator → teams → agents → jobs → chat.
+			next := m.focused
+			for {
+				switch next {
+				case focusChat:
+					next = focusMCP
+				case focusMCP:
+					next = focusOperator
+				case focusOperator:
 					next = focusTeams
 				case focusTeams:
 					next = focusAgents
 				case focusAgents:
+					next = focusJobs
+				case focusJobs:
+					next = focusChat
+				default:
 					next = focusChat
 				}
 				// Skip left-panel targets when left panel is hidden.
-				if m.leftPanelHidden && (next == focusJobs || next == focusTeams) {
+				if m.leftPanelHidden && (next == focusJobs || next == focusAgents || next == focusTeams) {
 					continue
 				}
-				// Skip sidebar target when sidebar is hidden.
-				if m.sidebarHidden && next == focusAgents {
+				// Skip sidebar targets when sidebar is hidden.
+				if m.sidebarHidden && (next == focusOperator || next == focusMCP) {
 					continue
 				}
 				break
@@ -704,7 +747,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Toggle left panel visibility.
 			m.leftPanelHidden = !m.leftPanelHidden
 			// If hiding the panel while it's focused, switch to chat.
-			if m.leftPanelHidden && (m.focused == focusJobs || m.focused == focusTeams) {
+			if m.leftPanelHidden && (m.focused == focusJobs || m.focused == focusTeams || m.focused == focusAgents) {
 				cmds = append(cmds, m.setFocus(focusChat))
 				cmds = append(cmds, m.input.Focus())
 			}
@@ -715,7 +758,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Toggle sidebar visibility.
 			m.sidebarHidden = !m.sidebarHidden
 			// If hiding the sidebar while it's focused, switch to chat.
-			if m.sidebarHidden && m.focused == focusAgents {
+			if m.sidebarHidden && (m.focused == focusOperator || m.focused == focusMCP) {
 				cmds = append(cmds, m.setFocus(focusChat))
 				cmds = append(cmds, m.input.Focus())
 			}
@@ -854,20 +897,17 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, teamCmd
 			}
-			// Attach to an agent slot when the agents pane is focused.
-			if m.focused == focusAgents && m.gateway != nil {
-				slots := m.gateway.Slots()
-				snap := slots[m.selectedAgentSlot]
-				if snap.Active {
-					m.attachedSlot = m.selectedAgentSlot
-					m.agentViewport.SetContent(m.renderMarkdown(snap.Output))
-					m.agentViewport.GotoBottom()
-					// Resize agent viewport to match chat viewport dimensions.
-					m.agentViewport.SetWidth(m.chatViewport.Width())
-					m.agentViewport.SetHeight(m.chatViewport.Height())
-				}
+			// Open grid view when agents pane is focused.
+			if m.focused == focusAgents {
+				m.grid.showGrid = true
 				return m, nil
 			}
+			// Open MCP modal when MCP pane is focused.
+			if m.focused == focusMCP {
+				m.mcpModal = mcpModalState{show: true}
+				return m, nil
+			}
+			// focusJobs, focusOperator, focusChat: handled above or fall through to send.
 			// Send message on Enter when not streaming and input has content.
 			// Shift+enter inserts a newline (handled by textarea).
 			if !m.stream.streaming && strings.TrimSpace(m.input.Value()) != "" {
@@ -1577,33 +1617,48 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			showSidebar := m.width >= minWidthForBar && !m.sidebarHidden
 			sidebarStartX := m.width - m.sbWidth
 			if showLeftPanel && msg.X < m.lpWidth {
-				// Clicked left panel — determine if Teams (bottom) or Jobs (top) pane.
-				// Compute the Y row where the Teams pane begins.
-				paneFrameV := FocusedPaneStyle.GetVerticalBorderSize()
-				bottomContentH := 1 + len(m.teams)
-				if len(m.teams) == 0 {
-					bottomContentH = 2
-				}
-				teamsPaneH := bottomContentH + paneFrameV
+				// Clicked left panel — determine which of the three panes was clicked.
+				// Pane order (top to bottom): Jobs, Agents, Teams.
+				teamsPaneH := m.leftPanelTeamsPaneHeight()
+				agentsPaneH := m.leftPanelAgentsPaneHeight()
 				teamsPaneY := m.height - teamsPaneH
+				agentsPaneY := teamsPaneY - agentsPaneH
 				if msg.Y >= teamsPaneY {
 					// Clicked Teams pane.
 					if m.focused != focusTeams {
 						cmds = append(cmds, m.setFocus(focusTeams))
 						m.input.Blur()
 					}
+				} else if msg.Y >= agentsPaneY {
+					// Clicked Agents pane.
+					if m.focused != focusAgents {
+						cmds = append(cmds, m.setFocus(focusAgents))
+						m.input.Blur()
+					}
 				} else {
-					// Clicked Jobs or Job Detail pane.
+					// Clicked Jobs pane.
 					if m.focused != focusJobs {
 						cmds = append(cmds, m.setFocus(focusJobs))
 						m.input.Blur()
 					}
 				}
 			} else if showSidebar && msg.X >= sidebarStartX {
-				// Clicked sidebar — focus agents pane.
-				if m.focused != focusAgents {
-					cmds = append(cmds, m.setFocus(focusAgents))
-					m.input.Blur()
+				// Clicked sidebar — determine if Operator (top) or MCP (bottom) pane.
+				// MCP pane sits at the bottom; compute its start Y.
+				minMCPH := inputHeight + InputAreaStyle.GetVerticalFrameSize()
+				mcpPaneY := m.height - minMCPH
+				if msg.Y >= mcpPaneY {
+					// Clicked MCP pane.
+					if m.focused != focusMCP {
+						cmds = append(cmds, m.setFocus(focusMCP))
+						m.input.Blur()
+					}
+				} else {
+					// Clicked Operator pane.
+					if m.focused != focusOperator {
+						cmds = append(cmds, m.setFocus(focusOperator))
+						m.input.Blur()
+					}
 				}
 			} else {
 				// Clicked chat area — focus chat.

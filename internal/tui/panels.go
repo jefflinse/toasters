@@ -68,6 +68,26 @@ func (m Model) renderLeftPanel(panelWidth, panelHeight int) string {
 		bottomContentH++ // hint line
 	}
 
+	// Middle pane (Agents): content-driven height.
+	// Count active gateway slots + runtime sessions for the agents pane.
+	agentCount := 0
+	if m.gateway != nil {
+		for _, snap := range m.gateway.Slots() {
+			if snap.Active {
+				agentCount++
+			}
+		}
+	}
+	sortedRT := m.sortedRuntimeSessions()
+	agentCount += len(sortedRT)
+	middleContentH := 1 + agentCount // "Agents" header + one line per agent
+	if agentCount == 0 {
+		middleContentH = 2 // header + "No agents running"
+	}
+	if m.focused == focusAgents {
+		middleContentH++ // hint line
+	}
+
 	// Jobs hint line appears when the jobs pane is focused.
 	jobsHintH := 0
 	if m.focused == focusJobs && len(m.displayJobs()) > 0 {
@@ -80,17 +100,10 @@ func (m Model) renderLeftPanel(panelWidth, panelHeight int) string {
 		availableH = 6
 	}
 
-	// Middle pane: fixed 30% of available content height.
-	middleContentH := availableH * 30 / 100
 	// Top pane gets whatever is left after middle + bottom + jobs hint.
 	topContentH := availableH - middleContentH - bottomContentH - jobsHintH
 	if topContentH < 3 {
 		topContentH = 3
-		// Re-derive middleContentH so the total still fits.
-		middleContentH = availableH - topContentH - bottomContentH - jobsHintH
-		if middleContentH < 2 {
-			middleContentH = 2
-		}
 	}
 
 	displayedJobs := m.displayJobs()
@@ -175,72 +188,77 @@ func (m Model) renderLeftPanel(panelWidth, panelHeight int) string {
 	}
 	topPane := topPaneStyle.Width(panelWidth).Render(topContent)
 
-	// --- Middle pane: Job details (always unfocused) ---
-	var middleLines []string
-	if len(displayedJobs) == 0 || m.selectedJob >= len(displayedJobs) {
-		middleLines = append(middleLines, LeftPanelHeaderStyle.Render("Job"))
-		middleLines = append(middleLines, PlaceholderPaneStyle.Render("—"))
-	} else {
-		selectedJob := displayedJobs[m.selectedJob]
-		middleLines = append(middleLines, LeftPanelHeaderStyle.Render(truncateStr(selectedJob.Title, contentWidth)))
+	// --- Middle pane: Agents ---
+	var agentLines []string
+	agentsTitle := gradientText("Agents", [3]uint8{50, 130, 255}, [3]uint8{0, 200, 200})
+	if m.focused == focusAgents && m.focusAnimFrames > 0 {
+		agentsTitle = rainbowText("Agents", m.spinnerFrame)
+	}
+	agentLines = append(agentLines, agentsTitle)
 
-		// Status badge
-		var statusStyle lipgloss.Style
-		switch selectedJob.Status {
-		case db.JobStatusActive:
-			statusStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("76"))
-		case db.JobStatusPaused:
-			statusStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("226"))
-		default:
-			statusStyle = DimStyle
-		}
-		statusWord := statusStyle.Render(string(selectedJob.Status))
-		badge := DimStyle.Render("[") + statusWord + DimStyle.Render("]")
-		middleLines = append(middleLines, badge)
-
-		// Description (word-wrapped)
-		if selectedJob.Description != "" {
-			wrapped := wrapText(selectedJob.Description, contentWidth)
-			for _, line := range strings.Split(wrapped, "\n") {
-				middleLines = append(middleLines, DimStyle.Render(line))
+	hasAnyGateway := false
+	if m.gateway != nil {
+		slots := m.gateway.Slots()
+		for i, snap := range slots {
+			if !snap.Active {
+				continue
 			}
-		}
-
-		// Task summary from SQLite.
-		if dbTasks := m.progress.tasks[selectedJob.ID]; len(dbTasks) > 0 {
-			var pending []*db.Task
-			doneCount := 0
-			for _, task := range dbTasks {
-				switch task.Status {
-				case db.TaskStatusCompleted:
-					doneCount++
-				case db.TaskStatusPending, db.TaskStatusInProgress, db.TaskStatusBlocked:
-					pending = append(pending, task)
-				}
+			hasAnyGateway = true
+			label := snap.AgentName + " · " + snap.JobID
+			var statusIcon string
+			if snap.Status == gateway.SlotRunning {
+				statusIcon = string(spinnerChars[m.spinnerFrame%len(spinnerChars)]) + " "
+			} else {
+				statusIcon = "✓ "
 			}
-			total := len(pending) + doneCount
-			if total > 0 {
-				summary := fmt.Sprintf("Tasks: %d/%d done", doneCount, total)
-				middleLines = append(middleLines, DimStyle.Render(summary))
-				shown := 0
-				for _, task := range pending {
-					if shown >= 3 {
-						break
-					}
-					title := task.Title
-					if task.TeamID != "" {
-						title += " (" + task.TeamID + ")"
-					}
-					middleLines = append(middleLines, DimStyle.Render("· "+truncateStr(title, contentWidth-2)))
-					shown++
-				}
+			line := statusIcon + truncateStr(label, contentWidth-2)
+			if m.focused == focusAgents && i == m.selectedAgentSlot {
+				agentLines = append(agentLines, JobSelectedStyle.Render("🍞 "+truncateStr(label, contentWidth-3)))
+			} else if snap.Status == gateway.SlotDone {
+				agentLines = append(agentLines, DimStyle.Render(statusIcon+truncateStr(label, contentWidth-2)))
+			} else {
+				agentLines = append(agentLines, SidebarValueStyle.Render(line))
 			}
 		}
 	}
+
+	// Runtime sessions.
+	runtimeStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("39"))
+	hasAnyRuntime := len(sortedRT) > 0
+	if hasAnyRuntime {
+		for _, rs := range sortedRT {
+			label := rs.agentName + " · " + rs.jobID
+			var statusIcon string
+			if rs.status == "active" {
+				statusIcon = string(spinnerChars[m.spinnerFrame%len(spinnerChars)]) + " "
+			} else {
+				statusIcon = "✓ "
+			}
+			prefix := runtimeStyle.Render("⚡")
+			line := prefix + statusIcon + truncateStr(label, contentWidth-4)
+			if rs.status != "active" {
+				agentLines = append(agentLines, DimStyle.Render("⚡"+statusIcon+truncateStr(label, contentWidth-4)))
+			} else {
+				agentLines = append(agentLines, line)
+			}
+		}
+	}
+
+	if !hasAnyGateway && !hasAnyRuntime {
+		agentLines = append(agentLines, DimStyle.Italic(true).Render("No agents running"))
+	}
+	if m.focused == focusAgents {
+		agentLines = append(agentLines, DimStyle.Render("Enter → grid view"))
+	}
+
 	middleContent := lipgloss.NewStyle().Height(middleContentH).Render(
-		lipgloss.JoinVertical(lipgloss.Left, middleLines...),
+		lipgloss.JoinVertical(lipgloss.Left, agentLines...),
 	)
-	middlePane := UnfocusedPaneStyle.Width(panelWidth).Render(middleContent)
+	middlePaneStyle := UnfocusedPaneStyle
+	if m.focused == focusAgents {
+		middlePaneStyle = FocusedPaneStyle
+	}
+	middlePane := middlePaneStyle.Width(panelWidth).Render(middleContent)
 
 	// --- Bottom pane: Teams ---
 	var bottomLines []string
@@ -290,14 +308,121 @@ func (m Model) renderLeftPanel(panelWidth, panelHeight int) string {
 	return LeftPanelStyle.Width(panelWidth).Height(panelHeight).Render(inner)
 }
 
+// leftPanelAgentsPaneHeight returns the rendered height of the Agents middle pane
+// in the left panel, for use in mouse hit-testing.
+func (m *Model) leftPanelAgentsPaneHeight() int {
+	paneFrameV := FocusedPaneStyle.GetVerticalBorderSize()
+	agentCount := 0
+	if m.gateway != nil {
+		for _, snap := range m.gateway.Slots() {
+			if snap.Active {
+				agentCount++
+			}
+		}
+	}
+	sortedRT := m.sortedRuntimeSessions()
+	agentCount += len(sortedRT)
+	middleContentH := 1 + agentCount
+	if agentCount == 0 {
+		middleContentH = 2
+	}
+	if m.focused == focusAgents {
+		middleContentH++
+	}
+	return middleContentH + paneFrameV
+}
+
+// leftPanelTeamsPaneHeight returns the rendered height of the Teams bottom pane
+// in the left panel, for use in mouse hit-testing.
+func (m *Model) leftPanelTeamsPaneHeight() int {
+	paneFrameV := FocusedPaneStyle.GetVerticalBorderSize()
+	bottomContentH := 1 + len(m.teams)
+	if len(m.teams) == 0 {
+		bottomContentH = 2
+	}
+	if m.focused == focusTeams && len(m.teams) > 0 {
+		bottomContentH++
+	}
+	return bottomContentH + paneFrameV
+}
+
 // renderSidebar builds the right sidebar as two independent bordered panes
-// stacked vertically: an operator/stats pane (top, fills remaining space)
-// and an agents pane (bottom, auto-sized to content).
+// stacked vertically: an operator/stats pane (top) and an MCP pane (bottom).
 func (m Model) renderSidebar(sbWidth int) string {
 	paneFrameH := FocusedPaneStyle.GetHorizontalBorderSize() + FocusedPaneStyle.GetHorizontalPadding()
 	contentWidth := sbWidth - paneFrameH
 	if contentWidth < 1 {
 		contentWidth = 1
+	}
+
+	// --- Bottom pane: MCP ---
+	var mcpSB strings.Builder
+	mcpTitle := gradientText("MCP", [3]uint8{50, 130, 255}, [3]uint8{175, 50, 200})
+	if m.focused == focusMCP && m.focusAnimFrames > 0 {
+		mcpTitle = rainbowText("MCP", m.spinnerFrame)
+	}
+	mcpSB.WriteString(mcpTitle)
+	mcpSB.WriteString("\n")
+
+	hasMCP := false
+	if m.mcpManager != nil {
+		servers := m.mcpManager.Servers()
+		if len(servers) > 0 {
+			hasMCP = true
+			var totalTools int
+			for _, s := range servers {
+				var icon string
+				var style lipgloss.Style
+				switch s.State {
+				case mcp.ServerConnected:
+					icon = "✓"
+					style = ConnectedStyle
+				case mcp.ServerFailed:
+					icon = "✗"
+					style = ErrorStyle
+				default:
+					icon = "○"
+					style = DimStyle
+				}
+				totalTools += s.ToolCount
+
+				label := s.Name
+				toolInfo := fmt.Sprintf("(%d tools)", s.ToolCount)
+				if s.State == mcp.ServerFailed {
+					toolInfo = "(failed)"
+				}
+
+				line := style.Render(icon) + " " + truncateStr(label, contentWidth-len(icon)-len(toolInfo)-3) + " " + DimStyle.Render(toolInfo)
+				mcpSB.WriteString(line)
+				mcpSB.WriteString("\n")
+			}
+
+			// Summary line
+			summary := fmt.Sprintf("%d servers, %d tools", len(servers), totalTools)
+			mcpSB.WriteString(DimStyle.Render(summary))
+			mcpSB.WriteString("\n")
+		}
+	}
+	if !hasMCP {
+		mcpSB.WriteString(DimStyle.Italic(true).Render("no MCP servers"))
+		mcpSB.WriteString("\n")
+	}
+	if m.focused == focusMCP {
+		mcpSB.WriteString(DimStyle.Render("Enter → MCP details"))
+		mcpSB.WriteString("\n")
+	}
+
+	mcpPaneStyle := UnfocusedPaneStyle
+	if m.focused == focusMCP {
+		mcpPaneStyle = FocusedPaneStyle
+	}
+	// Ensure MCP pane is at least as tall as the input area so borders align.
+	minMCPH := inputHeight + InputAreaStyle.GetVerticalFrameSize()
+	mcpPane := mcpPaneStyle.Width(sbWidth).Render(mcpSB.String())
+	mcpH := lipgloss.Height(mcpPane)
+	if mcpH < minMCPH {
+		mcpPane = mcpPaneStyle.Width(sbWidth).Height(minMCPH).Render(mcpSB.String())
+		mcpH = minMCPH
 	}
 
 	// --- Top pane: Operator stats ---
@@ -308,6 +433,9 @@ func (m Model) renderSidebar(sbWidth int) string {
 		connStatus = ErrorStyle.Render("disconnected")
 	}
 	headerText := gradientText("operator", [3]uint8{255, 175, 0}, [3]uint8{175, 50, 200})
+	if m.focused == focusOperator && m.focusAnimFrames > 0 {
+		headerText = rainbowText("operator", m.spinnerFrame)
+	}
 	gap := contentWidth - lipgloss.Width(headerText) - lipgloss.Width(connStatus)
 	if gap < 1 {
 		gap = 1
@@ -368,223 +496,19 @@ func (m Model) renderSidebar(sbWidth int) string {
 	sb.WriteString(sidebarRow("Last resp", lastResp))
 	sb.WriteString(sidebarRow("Avg resp", avgResp))
 
-	// --- MCP servers section ---
-	if m.mcpManager != nil {
-		servers := m.mcpManager.Servers()
-		if len(servers) > 0 {
-			sb.WriteString("\n")
-			sb.WriteString(gradientText("MCP", [3]uint8{50, 130, 255}, [3]uint8{175, 50, 200}))
-			sb.WriteString("\n")
-
-			var totalTools int
-			for _, s := range servers {
-				var icon string
-				var style lipgloss.Style
-				switch s.State {
-				case mcp.ServerConnected:
-					icon = "✓"
-					style = ConnectedStyle
-				case mcp.ServerFailed:
-					icon = "✗"
-					style = ErrorStyle
-				default:
-					icon = "○"
-					style = DimStyle
-				}
-				totalTools += s.ToolCount
-
-				label := s.Name
-				toolInfo := fmt.Sprintf("(%d tools)", s.ToolCount)
-				if s.State == mcp.ServerFailed {
-					toolInfo = "(failed)"
-				}
-
-				line := style.Render(icon) + " " + truncateStr(label, contentWidth-len(icon)-len(toolInfo)-3) + " " + DimStyle.Render(toolInfo)
-				sb.WriteString(line)
-				sb.WriteString("\n")
-			}
-
-			// Summary line
-			summary := fmt.Sprintf("%d servers, %d tools", len(servers), totalTools)
-			sb.WriteString(DimStyle.Render(summary))
-			sb.WriteString("\n")
-		}
+	// Calculate operator pane height so the sidebar fills the terminal exactly.
+	operatorPaneH := m.height - mcpH
+	if operatorPaneH < 3 {
+		operatorPaneH = 3
 	}
 
-	// --- Bottom pane: Agents (auto-sized to content) ---
-	var agentsSB strings.Builder
-	agentsTitle := gradientText("Agents", [3]uint8{50, 130, 255}, [3]uint8{0, 200, 200})
-	if m.focused == focusAgents && m.focusAnimFrames > 0 {
-		agentsTitle = rainbowText("Agents", m.spinnerFrame)
+	operatorPaneStyle := UnfocusedPaneStyle
+	if m.focused == focusOperator {
+		operatorPaneStyle = FocusedPaneStyle
 	}
-	agentsSB.WriteString(agentsTitle)
-	agentsSB.WriteString("\n")
+	operatorPane := operatorPaneStyle.Width(sbWidth).Height(operatorPaneH).Render(sb.String())
 
-	hasAnyGateway := false
-	if m.gateway != nil {
-		slots := m.gateway.Slots()
-		for i, snap := range slots {
-			if !snap.Active {
-				continue
-			}
-			hasAnyGateway = true
-			label := snap.AgentName + " · " + snap.JobID
-			var statusIcon string
-			if snap.Status == gateway.SlotRunning {
-				statusIcon = string(spinnerChars[m.spinnerFrame%len(spinnerChars)]) + " "
-			} else {
-				statusIcon = "✓ "
-			}
-			line := statusIcon + truncateStr(label, contentWidth-2)
-			if m.focused == focusAgents && i == m.selectedAgentSlot {
-				agentsSB.WriteString(JobSelectedStyle.Render("🍞 " + truncateStr(label, contentWidth-3)))
-			} else if snap.Status == gateway.SlotDone {
-				agentsSB.WriteString(DimStyle.Render(statusIcon + truncateStr(label, contentWidth-2)))
-			} else {
-				agentsSB.WriteString(SidebarValueStyle.Render(line))
-			}
-			agentsSB.WriteString("\n")
-		}
-
-		var totalAgentIn, totalAgentOut int
-		for _, snap := range slots {
-			totalAgentIn += snap.InputTokens
-			totalAgentOut += snap.OutputTokens
-		}
-		if totalAgentIn > 0 || totalAgentOut > 0 {
-			agentsSB.WriteString("\n")
-			agentsSB.WriteString(sidebarRow("Agent ↑ tok", compactNum(totalAgentIn)))
-			agentsSB.WriteString(sidebarRow("Agent ↓ tok", compactNum(totalAgentOut)))
-			for i, snap := range slots {
-				if snap.InputTokens > 0 || snap.OutputTokens > 0 {
-					perSlot := fmt.Sprintf("  s%d: ↑%s ↓%s", i, compactNum(snap.InputTokens), compactNum(snap.OutputTokens))
-					agentsSB.WriteString(DimStyle.Render(truncateStr(perSlot, contentWidth)))
-					agentsSB.WriteString("\n")
-				}
-			}
-		}
-	}
-
-	// Runtime sessions — sorted by start time for stable ordering.
-	runtimeStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("39")) // cyan/blue for runtime
-	sortedRT := m.sortedRuntimeSessions()
-	hasAnyRuntime := len(sortedRT) > 0
-	if hasAnyRuntime {
-		for _, rs := range sortedRT {
-			label := rs.agentName + " · " + rs.jobID
-			var statusIcon string
-			if rs.status == "active" {
-				statusIcon = string(spinnerChars[m.spinnerFrame%len(spinnerChars)]) + " "
-			} else {
-				statusIcon = "✓ "
-			}
-			prefix := runtimeStyle.Render("⚡")
-			line := prefix + statusIcon + truncateStr(label, contentWidth-4)
-			if rs.status != "active" {
-				agentsSB.WriteString(DimStyle.Render("⚡" + statusIcon + truncateStr(label, contentWidth-4)))
-			} else {
-				agentsSB.WriteString(line)
-			}
-			agentsSB.WriteString("\n")
-		}
-	}
-
-	if !hasAnyGateway && !hasAnyRuntime {
-		agentsSB.WriteString(DimStyle.Italic(true).Render("No agents running"))
-	}
-
-	// Active session token usage — prefer live runtime snapshots (accurate token counts)
-	// over DB records (which only have counts after session completion).
-	if len(m.progress.runtimeSnapshots) > 0 {
-		agentsSB.WriteString("\n")
-		agentsSB.WriteString(gradientText("Sessions", [3]uint8{50, 200, 100}, [3]uint8{0, 150, 200}))
-		agentsSB.WriteString("\n")
-		var totalIn, totalOut int64
-		for _, s := range m.progress.runtimeSnapshots {
-			totalIn += s.TokensIn
-			totalOut += s.TokensOut
-			label := s.AgentID
-			if label == "" {
-				label = s.JobID
-			}
-			if label == "" {
-				label = s.ID
-			}
-			label = truncateStr(label, 12)
-			tokLine := fmt.Sprintf("  %s: %s↓ %s↑",
-				label,
-				formatTokenCount(s.TokensOut),
-				formatTokenCount(s.TokensIn),
-			)
-			agentsSB.WriteString(DimStyle.Render(truncateStr(tokLine, contentWidth)))
-			agentsSB.WriteString("\n")
-		}
-		totalLine := fmt.Sprintf("  Total: %s↓ %s↑",
-			formatTokenCount(totalOut),
-			formatTokenCount(totalIn),
-		)
-		agentsSB.WriteString(SidebarValueStyle.Render(truncateStr(totalLine, contentWidth)))
-		agentsSB.WriteString("\n")
-	} else if len(m.progress.activeSessions) > 0 {
-		// Fallback to DB sessions (e.g. gateway-spawned sessions not in runtime).
-		agentsSB.WriteString("\n")
-		agentsSB.WriteString(gradientText("Sessions", [3]uint8{50, 200, 100}, [3]uint8{0, 150, 200}))
-		agentsSB.WriteString("\n")
-		var totalIn, totalOut int64
-		for _, s := range m.progress.activeSessions {
-			totalIn += s.TokensIn
-			totalOut += s.TokensOut
-			label := s.AgentID
-			if label == "" {
-				label = s.JobID
-			}
-			if label == "" {
-				label = s.ID
-			}
-			label = truncateStr(label, 12)
-			tokLine := fmt.Sprintf("  %s: %s↓ %s↑",
-				label,
-				formatTokenCount(s.TokensOut),
-				formatTokenCount(s.TokensIn),
-			)
-			agentsSB.WriteString(DimStyle.Render(truncateStr(tokLine, contentWidth)))
-			agentsSB.WriteString("\n")
-		}
-		totalLine := fmt.Sprintf("  Total: %s↓ %s↑",
-			formatTokenCount(totalOut),
-			formatTokenCount(totalIn),
-		)
-		agentsSB.WriteString(SidebarValueStyle.Render(truncateStr(totalLine, contentWidth)))
-		agentsSB.WriteString("\n")
-	}
-
-	agentsPaneStyle := UnfocusedPaneStyle
-	if m.focused == focusAgents {
-		agentsPaneStyle = FocusedPaneStyle
-	}
-
-	// Ensure the agents pane is at least as tall as the input area so their
-	// top borders align across the three columns.
-	minAgentsH := inputHeight + InputAreaStyle.GetVerticalFrameSize()
-	agentsPane := agentsPaneStyle.Width(sbWidth).Render(agentsSB.String())
-	agentsH := lipgloss.Height(agentsPane)
-	if agentsH < minAgentsH {
-		agentsPane = agentsPaneStyle.Width(sbWidth).Height(minAgentsH).Render(agentsSB.String())
-		agentsH = minAgentsH
-	}
-
-	// Calculate top pane height so the sidebar fills the terminal exactly.
-	// agentsH includes the agents pane's border. Style.Height() sets the
-	// outer height (including border/padding), so no extra subtraction needed.
-	topContentH := m.height - agentsH
-	if topContentH < 3 {
-		topContentH = 3
-	}
-
-	topPaneStyle := UnfocusedPaneStyle
-	topPane := topPaneStyle.Width(sbWidth).Height(topContentH).Render(sb.String())
-
-	return lipgloss.JoinVertical(lipgloss.Left, topPane, agentsPane)
+	return lipgloss.JoinVertical(lipgloss.Left, operatorPane, mcpPane)
 }
 
 func sidebarRow(label, value string) string {

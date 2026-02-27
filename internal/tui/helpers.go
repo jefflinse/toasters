@@ -421,7 +421,7 @@ func (m *Model) setFocus(p focusedPanel) tea.Cmd {
 		return nil
 	}
 	m.focused = p
-	if p == focusJobs || p == focusTeams || p == focusAgents {
+	if p == focusJobs || p == focusTeams || p == focusAgents || p == focusOperator || p == focusMCP {
 		m.focusAnimPanel = p
 		m.focusAnimFrames = 13 // ~1s at 80ms/tick
 		// Only arm the ticker if it isn't already running — firing a second
