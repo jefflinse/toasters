@@ -423,7 +423,7 @@ func (m *Model) setFocus(p focusedPanel) tea.Cmd {
 	m.focused = p
 	if p == focusJobs || p == focusTeams || p == focusAgents {
 		m.focusAnimPanel = p
-		m.focusAnimFrames = 8
+		m.focusAnimFrames = 13 // ~1s at 80ms/tick
 		return spinnerTick()
 	}
 	return nil
