@@ -248,12 +248,13 @@ type Model struct {
 	prevSlotStatus [gateway.MaxSlots]gateway.SlotStatus
 
 	// Shared spinner animation frame counter.
-	spinnerFrame int
+	spinnerFrame   int
+	spinnerRunning bool // true while the spinnerTick loop is live; prevents double-arming
 
 	// Focus burst animation: plays rainbowText on the newly-focused sidebar tile
 	// for focusAnimFramesTotal ticks, then stops.
 	focusAnimPanel  focusedPanel // which panel is currently animating
-	focusAnimFrames int          // frames remaining (counts down from 8 to 0)
+	focusAnimFrames int          // frames remaining (counts down from 13 to 0)
 
 	// Toast notification state.
 	toasts      []toast
@@ -403,6 +404,7 @@ func NewModel(cfg ModelConfig) Model {
 }
 
 func (m *Model) Init() tea.Cmd {
+	m.spinnerRunning = true // spinnerTick() is always armed at startup
 	cmds := []tea.Cmd{
 		tea.RequestWindowSize,
 		m.fetchModels(),
@@ -1541,8 +1543,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			needTick = true
 		}
 		if needTick {
+			m.spinnerRunning = true
 			return m, spinnerTick()
 		}
+		m.spinnerRunning = false
 		return m, nil
 
 	case clearFlashMsg:

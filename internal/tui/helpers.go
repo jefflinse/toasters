@@ -424,7 +424,14 @@ func (m *Model) setFocus(p focusedPanel) tea.Cmd {
 	if p == focusJobs || p == focusTeams || p == focusAgents {
 		m.focusAnimPanel = p
 		m.focusAnimFrames = 13 // ~1s at 80ms/tick
-		return spinnerTick()
+		// Only arm the ticker if it isn't already running — firing a second
+		// spinnerTick() while one is live would create a second concurrent loop,
+		// causing spinnerFrame to increment twice per tick and the animation to
+		// run at double (or more) speed.
+		if !m.spinnerRunning {
+			m.spinnerRunning = true
+			return spinnerTick()
+		}
 	}
 	return nil
 }
