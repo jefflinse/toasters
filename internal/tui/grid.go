@@ -562,13 +562,16 @@ func (m *Model) renderRuntimeGridCell(rs *runtimeSlot, cellW, cellH, innerW, inn
 		if len(all) > 2 {
 			all = all[:2]
 		}
-		// Style: dim for completed/killed, near-white for active.
-		taskStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
-		if rs.status != "active" {
-			taskStyle = DimStyle
-		}
-		for _, l := range all {
-			taskLines = append(taskLines, taskStyle.Render(l))
+		if rs.status == "active" {
+			// Slowly cycle colors through the task text to signal in-progress work.
+			for _, l := range all {
+				taskLines = append(taskLines, rainbowText(l, m.spinnerFrame))
+			}
+		} else {
+			// Dim for completed/killed.
+			for _, l := range all {
+				taskLines = append(taskLines, DimStyle.Render(l))
+			}
 		}
 	}
 	hasTask := len(taskLines) > 0
