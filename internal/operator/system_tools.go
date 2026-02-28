@@ -454,6 +454,9 @@ func (st *SystemTools) queryJob(ctx context.Context, args json.RawMessage) (stri
 	if job.Description != "" {
 		fmt.Fprintf(&b, "Description: %s\n", job.Description)
 	}
+	if job.WorkspaceDir != "" {
+		fmt.Fprintf(&b, "Workspace: %s\n", contractHome(job.WorkspaceDir))
+	}
 
 	if len(tasks) == 0 {
 		b.WriteString("\nNo tasks.")

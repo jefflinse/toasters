@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/jefflinse/toasters/internal/compose"
 	"github.com/jefflinse/toasters/internal/db"
@@ -87,6 +88,14 @@ func (ot *operatorTools) Definitions() []runtime.ToolDef {
 			}`),
 		},
 		{
+			Name:        "list_jobs",
+			Description: "List all jobs with their IDs, titles, statuses, and workspace directories. Use this to find a job by name when you don't have its ID.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {}
+			}`),
+		},
+		{
 			Name:        "query_teams",
 			Description: "List all available teams with their descriptions, lead agents, and member counts.",
 			Parameters: json.RawMessage(`{
@@ -142,6 +151,8 @@ func (ot *operatorTools) Execute(ctx context.Context, name string, args json.Raw
 		return ot.consultAgent(ctx, args)
 	case "surface_to_user":
 		return ot.surfaceToUser(ctx, args)
+	case "list_jobs":
+		return ot.listJobs(ctx)
 	case "query_job":
 		return ot.queryJob(ctx, args)
 	case "query_teams":
@@ -286,6 +297,30 @@ func (ot *operatorTools) surfaceToUser(ctx context.Context, args json.RawMessage
 		return "", fmt.Errorf("surface_to_user unavailable: no system tools configured")
 	}
 	return ot.systemTools.Execute(ctx, "surface_to_user", args)
+}
+
+// listJobs returns all jobs with their IDs, titles, statuses, and workspace directories.
+func (ot *operatorTools) listJobs(ctx context.Context) (string, error) {
+	jobs, err := ot.store.ListAllJobs(ctx)
+	if err != nil {
+		return "", fmt.Errorf("listing jobs: %w", err)
+	}
+
+	if len(jobs) == 0 {
+		return "No jobs.", nil
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "Jobs (%d):\n", len(jobs))
+	for _, job := range jobs {
+		fmt.Fprintf(&b, "\n- %s (id: %s)\n", job.Title, job.ID)
+		fmt.Fprintf(&b, "  Status: %s\n", job.Status)
+		if job.WorkspaceDir != "" {
+			fmt.Fprintf(&b, "  Workspace: %s\n", contractHome(job.WorkspaceDir))
+		}
+	}
+
+	return b.String(), nil
 }
 
 // queryJob delegates to SystemTools.queryJob for DB-backed job queries.

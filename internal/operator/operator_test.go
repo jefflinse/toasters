@@ -1691,8 +1691,8 @@ func TestOperatorToolDefinitions(t *testing.T) {
 	tools := newTestOperatorTools(t, nil)
 	defs := tools.Definitions()
 
-	if len(defs) != 8 {
-		t.Fatalf("want 8 tool definitions, got %d", len(defs))
+	if len(defs) != 9 {
+		t.Fatalf("want 9 tool definitions, got %d", len(defs))
 	}
 
 	names := make(map[string]bool)
@@ -1700,7 +1700,7 @@ func TestOperatorToolDefinitions(t *testing.T) {
 		names[d.Name] = true
 	}
 
-	for _, expected := range []string{"consult_agent", "surface_to_user", "query_job", "query_teams", "setup_workspace", "create_job", "create_task", "assign_task"} {
+	for _, expected := range []string{"consult_agent", "surface_to_user", "list_jobs", "query_job", "query_teams", "setup_workspace", "create_job", "create_task", "assign_task"} {
 		if !names[expected] {
 			t.Errorf("expected %s in definitions", expected)
 		}
