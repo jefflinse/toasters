@@ -369,16 +369,21 @@ func (st *SystemTools) assignTask(ctx context.Context, args json.RawMessage) (st
 		}
 	}
 
-	// 8. Send EventTaskStarted to the event channel.
-	trySendEvent(ctx, st.eventCh, Event{
-		Type: EventTaskStarted,
-		Payload: TaskStartedPayload{
-			TaskID: params.TaskID,
-			JobID:  task.JobID,
-			TeamID: params.TeamID,
-			Title:  task.Title,
-		},
-	})
+	// 8. Handle task-started side effects inline. We do NOT send
+	// EventTaskStarted through the event channel because assignTask may be
+	// called from the event loop goroutine (via assignNextTask or operator
+	// tool execution). Sending to eventCh from the sole reader would
+	// self-deadlock if the buffer is full.
+	content := fmt.Sprintf("⚡ %s started task: %s", params.TeamID, task.Title)
+	entry := &db.FeedEntry{
+		EntryType: db.FeedEntryTaskStarted,
+		Content:   content,
+		JobID:     task.JobID,
+	}
+	if err := st.store.CreateFeedEntry(ctx, entry); err != nil {
+		slog.Warn("failed to create task_started feed entry", "task_id", params.TaskID, "error", err)
+	}
+	slog.Info("task started", "task_id", params.TaskID, "job_id", task.JobID, "team_id", params.TeamID, "title", task.Title)
 
 	return fmt.Sprintf("Task assigned to team %s", team.Name), nil
 }

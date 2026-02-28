@@ -3,6 +3,8 @@ package runtime
 import (
 	"encoding/json"
 	"time"
+
+	"github.com/jefflinse/toasters/internal/tooldef"
 )
 
 // SpawnOpts configures a new agent session.
@@ -31,12 +33,8 @@ const (
 	defaultMaxDepth = 1
 )
 
-// ToolDef defines a tool available to an agent.
-type ToolDef struct {
-	Name        string
-	Description string
-	Parameters  json.RawMessage // JSON Schema
-}
+// ToolDef is an alias for tooldef.ToolDef, the shared tool definition type.
+type ToolDef = tooldef.ToolDef
 
 // SessionSnapshot is a read-only view of a session's state.
 type SessionSnapshot struct {

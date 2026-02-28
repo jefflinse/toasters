@@ -467,12 +467,42 @@ func (o *Operator) handleUserMessage(ctx context.Context, payload UserMessagePay
 func (o *Operator) appendMessage(msg provider.Message) {
 	o.mu.Lock()
 	o.messages = append(o.messages, msg)
-	// Prevent unbounded growth of conversation history. Keep the most recent
-	// messages to stay within LLM context window limits.
-	if len(o.messages) > maxMessages {
-		o.messages = o.messages[len(o.messages)-maxMessages:]
-	}
+	o.messages = truncateMessages(o.messages, maxMessages)
 	o.mu.Unlock()
+}
+
+// truncateMessages trims the conversation history to at most maxMessages,
+// ensuring the window never starts in the middle of a tool-call/result
+// exchange. Naive truncation (messages[len-max:]) can split a tool-call from
+// its tool-result, corrupting the LLM conversation. This function walks
+// forward from the start of the tail window to find the first safe boundary:
+// a user message or an assistant message with no tool calls.
+func truncateMessages(messages []provider.Message, maxMessages int) []provider.Message {
+	if len(messages) <= maxMessages {
+		return messages
+	}
+
+	tail := messages[len(messages)-maxMessages:]
+
+	// Walk forward to find the first complete exchange boundary.
+	// A safe start is:
+	// - A user message
+	// - An assistant message with no tool calls
+	// Skip orphaned tool results (role=tool) and assistant messages with
+	// tool calls whose results might be before the window.
+	startIdx := 0
+	for i, msg := range tail {
+		if msg.Role == "user" {
+			startIdx = i
+			break
+		}
+		if msg.Role == "assistant" && len(msg.ToolCalls) == 0 {
+			startIdx = i
+			break
+		}
+	}
+
+	return tail[startIdx:]
 }
 
 // collectResponse reads from the event channel, accumulates text and tool

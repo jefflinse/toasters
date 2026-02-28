@@ -10,13 +10,8 @@ import (
 //
 // IMPORTANT: This function must NOT be called from the event loop goroutine
 // (the sole reader of eventCh) when the buffer could be full, as this would
-// self-deadlock. The event loop goroutine should use handleEvent() directly
-// for inline event processing (see checkJobComplete for the pattern).
-//
-// Currently, the event loop goroutine calls assignNextTask → SystemTools.assignTask
-// → trySendEvent(EventTaskStarted). This is safe because the 256-slot buffer
-// makes overflow practically impossible during normal operation. If this becomes
-// a concern, refactor assignNextTask to handle EventTaskStarted inline.
+// self-deadlock. The event loop goroutine should handle such events inline
+// (see checkJobComplete and assignTask for the pattern).
 //
 // Note: events may be dropped during shutdown when the context is cancelled.
 // This is acceptable because the DB state (task status, progress reports) is

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -1884,6 +1885,216 @@ func TestConsultAgent_ToolFiltering(t *testing.T) {
 	if len(plannerReq.Tools) != wantCount {
 		t.Errorf("planner session has %d tools, want %d (matching declared tools %v); got: %v",
 			len(plannerReq.Tools), wantCount, plannerTools, plannerReq.Tools)
+	}
+}
+
+// --- truncateMessages tests ---
+
+func TestTruncateMessages_NoTruncationNeeded(t *testing.T) {
+	msgs := []provider.Message{
+		{Role: "user", Content: "hello"},
+		{Role: "assistant", Content: "hi"},
+	}
+	got := truncateMessages(msgs, 10)
+	if len(got) != 2 {
+		t.Fatalf("want 2 messages, got %d", len(got))
+	}
+}
+
+func TestTruncateMessages_ExactLimit(t *testing.T) {
+	msgs := []provider.Message{
+		{Role: "user", Content: "hello"},
+		{Role: "assistant", Content: "hi"},
+	}
+	got := truncateMessages(msgs, 2)
+	if len(got) != 2 {
+		t.Fatalf("want 2 messages, got %d", len(got))
+	}
+}
+
+func TestTruncateMessages_SafeBoundaryOnUserMessage(t *testing.T) {
+	// Build a conversation where naive truncation with max=4 would start
+	// on a tool result, splitting the tool-call/result pair.
+	msgs := []provider.Message{
+		{Role: "user", Content: "msg-1"},       // 0
+		{Role: "assistant", Content: "resp-1"}, // 1
+		{Role: "user", Content: "msg-2"},       // 2
+		{Role: "assistant", Content: "", ToolCalls: []provider.ToolCall{{ID: "tc-1", Name: "do_thing"}}}, // 3
+		{Role: "tool", Content: "result-1", ToolCallID: "tc-1"},                                          // 4 ← naive start
+		{Role: "assistant", Content: "after tool"},                                                       // 5
+		{Role: "user", Content: "msg-3"},                                                                 // 6
+		{Role: "assistant", Content: "resp-3"},                                                           // 7
+	}
+
+	// Naive truncation with max=4 would give msgs[4:] = [tool, assistant, user, assistant]
+	// which starts with an orphaned tool result.
+	got := truncateMessages(msgs, 4)
+
+	// Should skip the orphaned tool result, then find assistant("after tool")
+	// which has no tool calls — that's a safe start boundary.
+	if len(got) != 3 {
+		t.Fatalf("want 3 messages, got %d", len(got))
+	}
+	assertEqual(t, "assistant", got[0].Role)
+	assertEqual(t, "after tool", got[0].Content)
+	assertEqual(t, "user", got[1].Role)
+	assertEqual(t, "msg-3", got[1].Content)
+	assertEqual(t, "assistant", got[2].Role)
+	assertEqual(t, "resp-3", got[2].Content)
+}
+
+func TestTruncateMessages_SafeBoundaryOnAssistantNoToolCalls(t *testing.T) {
+	// Tail starts with an assistant message that has no tool calls — that's safe.
+	msgs := []provider.Message{
+		{Role: "user", Content: "old-1"},
+		{Role: "assistant", Content: "old-2"},
+		{Role: "user", Content: "old-3"},
+		{Role: "assistant", Content: "safe-start"}, // no tool calls
+		{Role: "user", Content: "msg-4"},
+		{Role: "assistant", Content: "resp-4"},
+	}
+
+	got := truncateMessages(msgs, 3)
+	// Tail is [assistant("safe-start"), user("msg-4"), assistant("resp-4")]
+	// assistant with no tool calls is a safe start.
+	if len(got) != 3 {
+		t.Fatalf("want 3 messages, got %d", len(got))
+	}
+	assertEqual(t, "assistant", got[0].Role)
+	assertEqual(t, "safe-start", got[0].Content)
+}
+
+func TestTruncateMessages_SkipsAssistantWithToolCalls(t *testing.T) {
+	// Tail starts with an assistant message that HAS tool calls — its tool
+	// results are before the window, so it's not safe to start here.
+	msgs := []provider.Message{
+		{Role: "user", Content: "old-1"},
+		{Role: "assistant", Content: "old-2"},
+		{Role: "assistant", Content: "", ToolCalls: []provider.ToolCall{{ID: "tc-1", Name: "x"}}}, // unsafe start
+		{Role: "tool", Content: "result", ToolCallID: "tc-1"},
+		{Role: "user", Content: "msg-3"},
+		{Role: "assistant", Content: "resp-3"},
+	}
+
+	got := truncateMessages(msgs, 4)
+	// Tail is [assistant(tool calls), tool, user, assistant]
+	// Must skip assistant-with-tool-calls and tool result, start at user.
+	if len(got) != 2 {
+		t.Fatalf("want 2 messages, got %d", len(got))
+	}
+	assertEqual(t, "user", got[0].Role)
+	assertEqual(t, "msg-3", got[0].Content)
+}
+
+func TestTruncateMessages_MultipleToolCallsBeforeWindow(t *testing.T) {
+	// Simulate a scenario where multiple tool results are orphaned at the
+	// start of the tail window.
+	msgs := []provider.Message{
+		{Role: "user", Content: "old"},
+		{Role: "assistant", Content: "", ToolCalls: []provider.ToolCall{
+			{ID: "tc-1", Name: "tool_a"},
+			{ID: "tc-2", Name: "tool_b"},
+		}},
+		{Role: "tool", Content: "result-a", ToolCallID: "tc-1"}, // orphaned
+		{Role: "tool", Content: "result-b", ToolCallID: "tc-2"}, // orphaned
+		{Role: "assistant", Content: "after tools"},
+		{Role: "user", Content: "next-msg"},
+		{Role: "assistant", Content: "next-resp"},
+	}
+
+	got := truncateMessages(msgs, 5)
+	// Tail is [tool("result-a"), tool("result-b"), assistant("after tools"), user, assistant]
+	// Must skip both tool results, start at assistant("after tools") which has no tool calls.
+	if len(got) != 3 {
+		t.Fatalf("want 3 messages, got %d", len(got))
+	}
+	assertEqual(t, "assistant", got[0].Role)
+	assertEqual(t, "after tools", got[0].Content)
+	assertEqual(t, "user", got[1].Role)
+	assertEqual(t, "next-msg", got[1].Content)
+}
+
+func TestTruncateMessages_AllToolResults(t *testing.T) {
+	// Edge case: the entire tail is tool results. The function should return
+	// an empty slice (or the tail from startIdx=0 if no safe boundary found).
+	// In practice this shouldn't happen, but the function should not panic.
+	msgs := make([]provider.Message, 10)
+	for i := range msgs {
+		msgs[i] = provider.Message{Role: "tool", Content: "result", ToolCallID: "tc"}
+	}
+
+	got := truncateMessages(msgs, 5)
+	// No safe boundary found — startIdx stays at 0, returns the full tail.
+	// This is the best we can do; the conversation is already corrupted.
+	if len(got) != 5 {
+		t.Fatalf("want 5 messages (fallback), got %d", len(got))
+	}
+}
+
+func TestTruncateMessages_PreservesToolCallResultPair(t *testing.T) {
+	// Verify that a complete tool-call → tool-result pair within the window
+	// is preserved intact.
+	msgs := []provider.Message{
+		{Role: "user", Content: "old-1"},
+		{Role: "assistant", Content: "old-2"},
+		{Role: "user", Content: "do something"},
+		{Role: "assistant", Content: "", ToolCalls: []provider.ToolCall{{ID: "tc-1", Name: "run"}}},
+		{Role: "tool", Content: "done", ToolCallID: "tc-1"},
+		{Role: "assistant", Content: "completed"},
+	}
+
+	got := truncateMessages(msgs, 4)
+	// Tail is [user("do something"), assistant(tool call), tool, assistant]
+	// Starts at user — the entire tool-call/result pair is within the window.
+	if len(got) != 4 {
+		t.Fatalf("want 4 messages, got %d", len(got))
+	}
+	assertEqual(t, "user", got[0].Role)
+	assertEqual(t, "do something", got[0].Content)
+	assertEqual(t, "assistant", got[1].Role)
+	if len(got[1].ToolCalls) != 1 {
+		t.Fatal("expected assistant message to have tool calls")
+	}
+	assertEqual(t, "tool", got[2].Role)
+	assertEqual(t, "assistant", got[3].Role)
+}
+
+func TestTruncateMessages_LargeConversation(t *testing.T) {
+	// Simulate a realistic large conversation that exceeds maxMessages.
+	// Pattern: user → assistant(tool call) → tool result → assistant → repeat
+	var msgs []provider.Message
+	for i := 0; i < 60; i++ {
+		msgs = append(msgs,
+			provider.Message{Role: "user", Content: fmt.Sprintf("user-%d", i)},
+			provider.Message{Role: "assistant", Content: "", ToolCalls: []provider.ToolCall{
+				{ID: fmt.Sprintf("tc-%d", i), Name: "some_tool"},
+			}},
+			provider.Message{Role: "tool", Content: fmt.Sprintf("result-%d", i), ToolCallID: fmt.Sprintf("tc-%d", i)},
+			provider.Message{Role: "assistant", Content: fmt.Sprintf("resp-%d", i)},
+		)
+	}
+	// 240 messages total
+
+	got := truncateMessages(msgs, 200)
+
+	// The first message in the truncated window must be safe.
+	if got[0].Role == "tool" {
+		t.Fatal("truncated window starts with orphaned tool result")
+	}
+	if got[0].Role == "assistant" && len(got[0].ToolCalls) > 0 {
+		t.Fatal("truncated window starts with assistant that has tool calls (results may be missing)")
+	}
+
+	// Verify no tool result appears without its preceding tool call in the window.
+	for i, msg := range got {
+		if msg.Role == "tool" && i > 0 {
+			prev := got[i-1]
+			// The preceding message should be either another tool result (multi-tool)
+			// or an assistant with tool calls.
+			if prev.Role != "tool" && (prev.Role != "assistant" || len(prev.ToolCalls) == 0) {
+				t.Fatalf("tool result at index %d has no preceding tool call", i)
+			}
+		}
 	}
 }
 

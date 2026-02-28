@@ -6,7 +6,6 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/jefflinse/toasters/internal/agents"
 	"github.com/jefflinse/toasters/internal/db"
 	"github.com/jefflinse/toasters/internal/mcp"
 	"github.com/jefflinse/toasters/internal/operator"
@@ -50,12 +49,6 @@ func (m *Model) addToast(message string, level toastLevel) tea.Cmd {
 		m.toasts = m.toasts[len(m.toasts)-5:]
 	}
 	return dismissToast(t.id)
-}
-
-// pendingCompletion holds a buffered agent-completion notification that arrived
-// while the operator stream was active. It is drained after the stream ends.
-type pendingCompletion struct {
-	notification string // the pre-built notification message to inject
 }
 
 // focusedPanel identifies which panel currently holds keyboard focus.
@@ -113,20 +106,6 @@ type progressPollTickMsg struct{}
 
 // Message types for the Bubble Tea event loop.
 
-type StreamChunkMsg struct {
-	Content   string
-	Reasoning string
-}
-
-type StreamDoneMsg struct {
-	Model string
-	Usage *provider.Usage
-}
-
-type StreamErrMsg struct {
-	Err error
-}
-
 type ModelsMsg struct {
 	Models []provider.ModelInfo
 	Err    error
@@ -161,7 +140,7 @@ type RuntimeSessionDoneMsg struct {
 
 // TeamsReloadedMsg is sent by the hot-reload watcher when the teams directory changes.
 type TeamsReloadedMsg struct {
-	Teams     []agents.Team
+	Teams     []TeamView
 	Awareness string
 }
 
@@ -228,30 +207,6 @@ func (m *Model) showScrollbar() tea.Cmd {
 	m.scroll.scrollbarVisible = true
 	m.scroll.lastScrollTime = time.Now()
 	return scrollbarHide()
-}
-
-// ToolCallMsg is emitted when the LLM requests one or more tool calls.
-type ToolCallMsg struct {
-	Calls []provider.ToolCall
-}
-
-// ToolResult holds the result of a single tool call execution.
-type ToolResult struct {
-	CallID string
-	Name   string
-	Result string
-	Err    error
-}
-
-// ToolResultMsg is sent when async tool execution completes.
-type ToolResultMsg struct {
-	Results []ToolResult
-}
-
-// AskUserResponseMsg is dispatched when the user submits a response in prompt mode.
-type AskUserResponseMsg struct {
-	Call   provider.ToolCall
-	Result string
 }
 
 // TeamsAutoDetectDoneMsg is sent when the LLM coordinator auto-detection finishes.

@@ -1,7 +1,7 @@
 # Pre-Phase 4 — Wave 2: Structural Preparation
 
 **Created:** 2026-02-27
-**Status:** Pending
+**Status:** ✅ Complete (2026-02-27)
 **Prerequisite:** Wave 1 complete (`PRE_PHASE_4_WAVE_1.md`)
 **Prerequisite for:** Phase 4 feature development (especially 4.3 Server/Client Split)
 **Source:** `PRE_PHASE_4_ARCH_REVIEW.md` Section 11
@@ -44,7 +44,7 @@ Before starting Wave 2, confirm Wave 1 is complete. After Wave 1:
 
 ### Task 2.1: Consolidate Agent/Team Type Systems (DEAD-2)
 
-- **Status:** ⬜ Pending
+- **Status:** ✅ Complete
 - **Finding:** DEAD-2
 - **Severity:** HIGH
 - **Effort:** Large (this is the biggest task in Wave 2)
@@ -140,7 +140,7 @@ ls internal/agents/ 2>/dev/null
 
 ### Task 2.2: Relocate `llm/tools` Package (DEAD-3)
 
-- **Status:** ⬜ Pending
+- **Status:** ✅ Complete (package deleted — superseded by operator's SystemTools)
 - **Finding:** DEAD-3
 - **Severity:** MEDIUM
 - **Effort:** Small
@@ -198,7 +198,7 @@ grep -r "internal/llm" . --include="*.go" && echo "FAIL: llm imports remain" || 
 
 ### Task 2.3: Remove Legacy Dual-Path in TUI (ARCH-5)
 
-- **Status:** ⬜ Pending
+- **Status:** ✅ Complete
 - **Finding:** ARCH-5
 - **Severity:** MEDIUM
 - **Effort:** Medium
@@ -264,7 +264,7 @@ grep -n "StreamChunkMsg\|StreamDoneMsg" internal/tui/
 
 ### Task 2.4: Fix Conversation Window Truncation (ARCH-3)
 
-- **Status:** ⬜ Pending
+- **Status:** ✅ Complete
 - **Finding:** ARCH-3
 - **Severity:** MEDIUM
 - **Effort:** Small
@@ -330,7 +330,7 @@ grep -n "maxMessages" internal/operator/operator.go
 
 ### Task 2.5: Fix Self-Send Deadlock Potential (ARCH-2 / CONC-2)
 
-- **Status:** ⬜ Pending
+- **Status:** ✅ Complete
 - **Finding:** ARCH-2, CONC-2
 - **Severity:** MEDIUM
 - **Effort:** Small
@@ -363,7 +363,7 @@ Specifically:
 
 ### Task 2.6: Consolidate `ToolDef` Type (STRUCT-2)
 
-- **Status:** ⬜ Pending
+- **Status:** ✅ Complete
 - **Finding:** STRUCT-2
 - **Severity:** MEDIUM
 - **Effort:** Small
@@ -403,7 +403,7 @@ Then update both `runtime` and `progress` to import from `tooldef`. This breaks 
 
 ### Task 2.7: Fix Post-Shutdown TUI Sends (CONC-6)
 
-- **Status:** ⬜ Pending
+- **Status:** ✅ Complete
 - **Finding:** CONC-6
 - **Severity:** LOW
 - **Effort:** Trivial

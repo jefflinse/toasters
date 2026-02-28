@@ -13,7 +13,6 @@ var allCommands = []SlashCommand{
 	{Name: "/exit", Description: "Exit the application"},
 	{Name: "/quit", Description: "Exit the application"},
 	{Name: "/help", Description: "Show help information"},
-	{Name: "/anthropic", Description: "Ask Claude (via Anthropic API)"},
 	{Name: "/new", Description: "Start a new session"},
 	{Name: "/teams", Description: "Browse and manage agent teams"},
 	{Name: "/skills", Description: "Browse and manage skills"},

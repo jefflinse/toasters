@@ -242,14 +242,12 @@ func (m Model) renderLeftPanel(panelWidth, panelHeight int) string {
 			}
 			prefix := lipgloss.NewStyle().Foreground(teamColor).Render("◆") + " "
 			workerCount := fmt.Sprintf("(%d workers)", len(t.Workers))
-			// Append badge for system or auto teams.
+			// Append badge for auto teams.
 			badge := ""
-			if isSystemTeam(t) {
-				badge = " ⚙"
-			} else if isAutoTeam(t) {
+			if isAutoTeam(t) {
 				badge = " ↻"
 			}
-			name := truncateStr(t.Name, contentWidth-2)
+			name := truncateStr(t.Name(), contentWidth-2)
 			if m.focused == focusTeams && i == m.selectedTeam {
 				line := JobSelectedStyle.Render(prefix + name + badge + " " + workerCount)
 				bottomLines = append(bottomLines, line)

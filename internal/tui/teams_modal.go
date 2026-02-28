@@ -18,7 +18,6 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/jefflinse/toasters/internal/agentfmt"
-	"github.com/jefflinse/toasters/internal/agents"
 	"github.com/jefflinse/toasters/internal/config"
 	"github.com/jefflinse/toasters/internal/db"
 	"github.com/jefflinse/toasters/internal/loader"
@@ -28,14 +27,14 @@ import (
 // teamsModalState holds all state for the /teams modal overlay.
 type teamsModalState struct {
 	show              bool
-	teams             []agents.Team   // local copy for the modal; separate from m.teams
+	teams             []TeamView      // local copy for the modal; separate from m.teams
 	teamIdx           int             // selected team in left panel
 	agentIdx          int             // selected agent in right panel (for 'c' key)
 	focus             int             // 0=left panel, 1=right panel
 	nameInput         string          // text being typed for new team name
 	inputMode         bool            // true when typing a new team name
 	confirmDelete     bool            // true when delete confirmation is showing
-	autoDetectPending map[string]bool // keyed by team.Dir; prevents re-firing
+	autoDetectPending map[string]bool // keyed by team Dir; prevents re-firing
 	autoDetecting     bool            // true while LLM call is in flight
 	promoting         bool            // true while auto-team promotion is in flight
 
@@ -61,10 +60,10 @@ type teamPromotedMsg struct {
 
 // promoteAutoTeamCmd wraps promoteAutoTeam as a tea.Cmd so it runs in a goroutine
 // and does not block the Bubble Tea update loop.
-func promoteAutoTeamCmd(team agents.Team) tea.Cmd {
+func promoteAutoTeamCmd(tv TeamView) tea.Cmd {
 	return func() tea.Msg {
-		err := promoteAutoTeam(team)
-		return teamPromotedMsg{teamName: team.Name, err: err}
+		err := promoteAutoTeam(tv)
+		return teamPromotedMsg{teamName: tv.Name(), err: err}
 	}
 }
 
@@ -117,7 +116,7 @@ func (m *Model) updateTeamsModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				}
 				m.reloadTeamsForModal()
 				for i, t := range m.teamsModal.teams {
-					if t.Name == name {
+					if t.Name() == name {
 						m.teamsModal.teamIdx = i
 						m.refreshSelectedTeamDef()
 						break
@@ -162,8 +161,8 @@ func (m *Model) updateTeamsModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				if agent.SourcePath == "" {
 					modalCmds = append(modalCmds, m.addToast("Cannot add agent: source file unknown", toastWarning))
 				} else if len(m.teamsModal.teams) > 0 && m.teamsModal.teamIdx < len(m.teamsModal.teams) {
-					team := m.teamsModal.teams[m.teamsModal.teamIdx]
-					if err := addAgentToTeam(team, agent); err != nil {
+					tv := m.teamsModal.teams[m.teamsModal.teamIdx]
+					if err := addAgentToTeam(tv, agent); err != nil {
 						modalCmds = append(modalCmds, m.addToast("⚠ Add failed: "+err.Error(), toastWarning))
 					} else {
 						m.teamsModal.pickerMode = false
@@ -229,9 +228,9 @@ func (m *Model) updateTeamsModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		} else {
 			// Right panel: navigate agents (coordinator first, then workers).
 			if len(m.teamsModal.teams) > 0 && m.teamsModal.teamIdx < len(m.teamsModal.teams) {
-				team := m.teamsModal.teams[m.teamsModal.teamIdx]
-				total := len(team.Workers)
-				if team.Coordinator != nil {
+				tv := m.teamsModal.teams[m.teamsModal.teamIdx]
+				total := len(tv.Workers)
+				if tv.Coordinator != nil {
 					total++
 				}
 				if m.teamsModal.agentIdx < total-1 {
@@ -260,15 +259,15 @@ func (m *Model) updateTeamsModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "enter":
 		if m.teamsModal.confirmDelete {
 			if len(m.teamsModal.teams) > 0 && m.teamsModal.teamIdx < len(m.teamsModal.teams) {
-				team := m.teamsModal.teams[m.teamsModal.teamIdx]
-				// Validate that team.Dir is under the expected teams directory
+				tv := m.teamsModal.teams[m.teamsModal.teamIdx]
+				// Validate that team dir is under the expected teams directory
 				// before performing recursive deletion.
-				realTeamDir, err := filepath.EvalSymlinks(team.Dir)
+				realTeamDir, err := filepath.EvalSymlinks(tv.Dir())
 				realTeamsDir, err2 := filepath.EvalSymlinks(m.teamsDir)
 				if err == nil && err2 == nil && strings.HasPrefix(realTeamDir, realTeamsDir+string(filepath.Separator)) {
-					_ = os.RemoveAll(team.Dir)
+					_ = os.RemoveAll(tv.Dir())
 				} else {
-					slog.Error("refusing to delete team outside teams directory", "dir", team.Dir, "teamsDir", m.teamsDir)
+					slog.Error("refusing to delete team outside teams directory", "dir", tv.Dir(), "teamsDir", m.teamsDir)
 				}
 			}
 			m.reloadTeamsForModal()
@@ -284,18 +283,18 @@ func (m *Model) updateTeamsModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	case "ctrl+k":
 		if m.teamsModal.focus == 1 && len(m.teamsModal.teams) > 0 && m.teamsModal.teamIdx < len(m.teamsModal.teams) {
-			team := m.teamsModal.teams[m.teamsModal.teamIdx]
-			if !isReadOnlyTeam(team) {
+			tv := m.teamsModal.teams[m.teamsModal.teamIdx]
+			if !isReadOnlyTeam(tv) {
 				// Build the ordered agent list: coordinator first, then workers.
-				var agentList []agents.Agent
-				if team.Coordinator != nil {
-					agentList = append(agentList, *team.Coordinator)
+				var agentList []*db.Agent
+				if tv.Coordinator != nil {
+					agentList = append(agentList, tv.Coordinator)
 				}
-				agentList = append(agentList, team.Workers...)
+				agentList = append(agentList, tv.Workers...)
 				if m.teamsModal.agentIdx < len(agentList) {
 					target := agentList[m.teamsModal.agentIdx]
-					if err := agents.SetCoordinator(team.Dir, target.Name); err != nil {
-						slog.Error("failed to set coordinator", "team", team.Name, "agent", target.Name, "error", err)
+					if err := SetCoordinator(tv.Dir(), target.Name); err != nil {
+						slog.Error("failed to set coordinator", "team", tv.Name(), "agent", target.Name, "error", err)
 						modalCmds = append(modalCmds, m.addToast("⚠ Set coordinator failed: "+err.Error(), toastWarning))
 					} else {
 						m.reloadTeamsForModal()
@@ -307,18 +306,18 @@ func (m *Model) updateTeamsModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	case "ctrl+p":
 		if m.teamsModal.focus == 0 && len(m.teamsModal.teams) > 0 && m.teamsModal.teamIdx < len(m.teamsModal.teams) {
-			team := m.teamsModal.teams[m.teamsModal.teamIdx]
-			if isAutoTeam(team) && !isSystemTeam(team) && !m.teamsModal.promoting {
+			tv := m.teamsModal.teams[m.teamsModal.teamIdx]
+			if isAutoTeam(tv) && !isSystemTeam(tv) && !m.teamsModal.promoting {
 				m.teamsModal.promoting = true
-				modalCmds = append(modalCmds, promoteAutoTeamCmd(team))
+				modalCmds = append(modalCmds, promoteAutoTeamCmd(tv))
 			}
 		}
 
 	case "ctrl+a":
 		// Open the add-agent picker when a non-system, non-read-only team is selected.
 		if !m.teamsModal.inputMode && len(m.teamsModal.teams) > 0 && m.teamsModal.teamIdx < len(m.teamsModal.teams) {
-			team := m.teamsModal.teams[m.teamsModal.teamIdx]
-			if !isReadOnlyTeam(team) && !isSystemTeam(team) && m.store != nil {
+			tv := m.teamsModal.teams[m.teamsModal.teamIdx]
+			if !isReadOnlyTeam(tv) && !isSystemTeam(tv) && m.store != nil {
 				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 				allAgents, err := m.store.ListAgents(ctx)
 				cancel()
@@ -326,7 +325,7 @@ func (m *Model) updateTeamsModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 					slog.Error("failed to list agents for picker", "error", err)
 					modalCmds = append(modalCmds, m.addToast("⚠ Failed to load agents", toastWarning))
 				} else {
-					available := filterAgentsForTeam(team, allAgents)
+					available := filterAgentsForTeam(tv, allAgents)
 					if len(available) == 0 {
 						modalCmds = append(modalCmds, m.addToast("No additional agents available", toastInfo))
 					} else {
@@ -364,12 +363,12 @@ func (m *Model) updateTeamsModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 // filterAgentsForTeam returns agents from available that are not already in the
 // team (neither coordinator nor workers). Comparison is by agent name (case-sensitive).
-func filterAgentsForTeam(team agents.Team, available []*db.Agent) []*db.Agent {
+func filterAgentsForTeam(tv TeamView, available []*db.Agent) []*db.Agent {
 	inTeam := make(map[string]bool)
-	if team.Coordinator != nil {
-		inTeam[team.Coordinator.Name] = true
+	if tv.Coordinator != nil {
+		inTeam[tv.Coordinator.Name] = true
 	}
-	for _, w := range team.Workers {
+	for _, w := range tv.Workers {
 		inTeam[w.Name] = true
 	}
 	var result []*db.Agent
@@ -393,68 +392,29 @@ func getCachedHomeDir() string {
 	return cachedHomeDir
 }
 
-// isReadOnlyTeam returns true if the team's directory is one of the well-known
-// auto-detected read-only directories (~/.config/opencode/agents, ~/.claude/agents).
-func isReadOnlyTeam(team agents.Team) bool {
-	home := getCachedHomeDir()
-	if home == "" {
-		return false
-	}
-	readOnlyDirs := []string{
-		filepath.Join(home, ".config", "opencode", "agents"),
-		filepath.Join(home, ".claude", "agents"),
-	}
-	for _, d := range readOnlyDirs {
-		if team.Dir == d {
-			return true
-		}
-	}
-	return false
-}
-
-// isSystemTeam returns true if the team's directory is under ~/.config/toasters/system/.
-func isSystemTeam(team agents.Team) bool {
-	cfgDir, err := config.Dir()
-	if err != nil {
-		return false
-	}
-	systemDir := filepath.Join(cfgDir, "system")
-	return strings.HasPrefix(team.Dir, systemDir)
-}
-
-// isAutoTeam returns true if the team is auto-detected: either from a well-known
-// read-only directory or from a directory containing an .auto-team marker.
-func isAutoTeam(team agents.Team) bool {
-	if isReadOnlyTeam(team) {
-		return true
-	}
-	_, err := os.Stat(filepath.Join(team.Dir, ".auto-team"))
-	return err == nil
-}
-
 // promoteAutoTeam promotes an auto-detected team to a fully managed team.
 // It branches on whether the team is a legacy read-only auto-team (lives at a
 // well-known read-only directory like ~/.claude/agents) or a bootstrap
 // auto-team (already lives inside user/teams/ with a .auto-team marker and an
 // agents/ symlink).
-func promoteAutoTeam(team agents.Team) error {
-	if isReadOnlyTeam(team) {
-		return promoteReadOnlyAutoTeam(team)
+func promoteAutoTeam(tv TeamView) error {
+	if isReadOnlyTeam(tv) {
+		return promoteReadOnlyAutoTeam(tv)
 	}
-	return promoteMarkerAutoTeam(team)
+	return promoteMarkerAutoTeam(tv)
 }
 
 // promoteReadOnlyAutoTeam handles promotion of legacy read-only auto-teams
 // (e.g. ~/.claude/agents). It copies agent files into a new managed team
 // directory under ~/.config/toasters/user/teams/{team-name}/.
-func promoteReadOnlyAutoTeam(team agents.Team) error {
+func promoteReadOnlyAutoTeam(tv TeamView) error {
 	configDir, err := config.Dir()
 	if err != nil {
 		return fmt.Errorf("getting config directory: %w", err)
 	}
 	userTeamsDir := filepath.Join(configDir, "user", "teams")
 
-	targetDir := filepath.Join(userTeamsDir, team.Name)
+	targetDir := filepath.Join(userTeamsDir, tv.Name())
 	targetAgentsDir := filepath.Join(targetDir, "agents")
 
 	// Fail if the target already exists to avoid overwriting.
@@ -462,8 +422,8 @@ func promoteReadOnlyAutoTeam(team agents.Team) error {
 		return fmt.Errorf("team directory %q already exists", targetDir)
 	}
 
-	// For read-only teams, team.Dir IS the agents directory.
-	agentsSourceDir := team.Dir
+	// For read-only teams, Dir IS the agents directory.
+	agentsSourceDir := tv.Dir()
 
 	// Discover agent .md files in the source directory.
 	matches, err := filepath.Glob(filepath.Join(agentsSourceDir, "*.md"))
@@ -521,16 +481,16 @@ func promoteReadOnlyAutoTeam(team agents.Team) error {
 
 	// Determine the lead agent.
 	lead := ""
-	if team.Coordinator != nil {
-		lead = team.Coordinator.Name
+	if tv.Coordinator != nil {
+		lead = tv.Coordinator.Name
 	}
 
 	// Use the parent/dir label for clarity (e.g. ".claude/agents").
-	source := filepath.Base(filepath.Dir(team.Dir)) + "/" + filepath.Base(team.Dir)
+	source := filepath.Base(filepath.Dir(tv.Dir())) + "/" + filepath.Base(tv.Dir())
 
 	// Generate team.md.
 	teamDef := &agentfmt.TeamDef{
-		Name:        team.Name,
+		Name:        tv.Name(),
 		Description: fmt.Sprintf("Promoted from %s", source),
 		Lead:        lead,
 		Agents:      agentNames,
@@ -541,7 +501,7 @@ func promoteReadOnlyAutoTeam(team agents.Team) error {
 		return fmt.Errorf("writing team.md: %w", err)
 	}
 
-	slog.Info("promoted read-only auto-team to managed team", "team", team.Name, "target", targetDir, "agents", len(parsed))
+	slog.Info("promoted read-only auto-team to managed team", "team", tv.Name(), "target", targetDir, "agents", len(parsed))
 	return nil
 }
 
@@ -550,8 +510,8 @@ func promoteReadOnlyAutoTeam(team agents.Team) error {
 // and an agents/ symlink pointing to the real source directory. Promotion
 // replaces the symlink with a real directory containing the parsed agent files,
 // writes team.md, and removes the .auto-team marker.
-func promoteMarkerAutoTeam(team agents.Team) error {
-	agentsSymlink := filepath.Join(team.Dir, "agents")
+func promoteMarkerAutoTeam(tv TeamView) error {
+	agentsSymlink := filepath.Join(tv.Dir(), "agents")
 
 	// Discover agent .md files via the symlink (which points to the real source).
 	matches, err := filepath.Glob(filepath.Join(agentsSymlink, "*.md"))
@@ -612,28 +572,28 @@ func promoteMarkerAutoTeam(team agents.Team) error {
 
 	// Determine the lead agent.
 	lead := ""
-	if team.Coordinator != nil {
-		lead = team.Coordinator.Name
+	if tv.Coordinator != nil {
+		lead = tv.Coordinator.Name
 	}
 
 	// Write team.md into the team directory.
 	teamDef := &agentfmt.TeamDef{
-		Name:        team.Name,
-		Description: fmt.Sprintf("Promoted from %s", team.Name),
+		Name:        tv.Name(),
+		Description: fmt.Sprintf("Promoted from %s", tv.Name()),
 		Lead:        lead,
 		Agents:      agentNames,
 	}
-	teamMDPath := filepath.Join(team.Dir, "team.md")
+	teamMDPath := filepath.Join(tv.Dir(), "team.md")
 	if err := writeTeamFile(teamMDPath, teamDef); err != nil {
 		return fmt.Errorf("writing team.md: %w", err)
 	}
 
 	// Remove the .auto-team marker to complete the promotion.
-	if err := os.Remove(filepath.Join(team.Dir, ".auto-team")); err != nil {
-		slog.Warn("failed to remove .auto-team marker", "dir", team.Dir, "error", err)
+	if err := os.Remove(filepath.Join(tv.Dir(), ".auto-team")); err != nil {
+		slog.Warn("failed to remove .auto-team marker", "dir", tv.Dir(), "error", err)
 	}
 
-	slog.Info("promoted bootstrap auto-team in-place", "team", team.Name, "dir", team.Dir, "agents", len(parsed))
+	slog.Info("promoted bootstrap auto-team in-place", "team", tv.Name(), "dir", tv.Dir(), "agents", len(parsed))
 	return nil
 }
 
@@ -677,9 +637,9 @@ func writeTeamFile(path string, def *agentfmt.TeamDef) error {
 	return os.WriteFile(path, []byte(sb.String()), 0o644)
 }
 
-// reloadTeamsForModal refreshes m.teamsModal.teams from disk.
+// reloadTeamsForModal refreshes m.teamsModal.teams from the store.
 func (m *Model) reloadTeamsForModal() {
-	m.teamsModal.teams, _ = agents.DiscoverTeams(m.teamsDir)
+	m.teamsModal.teams = reloadTeamsFromStore(m.store)
 	m.refreshSelectedTeamDef()
 }
 
@@ -691,8 +651,8 @@ func (m *Model) refreshSelectedTeamDef() {
 		m.teamsModal.selectedTeamDef = nil
 		return
 	}
-	team := m.teamsModal.teams[m.teamsModal.teamIdx]
-	teamMDPath := filepath.Join(team.Dir, "team.md")
+	tv := m.teamsModal.teams[m.teamsModal.teamIdx]
+	teamMDPath := filepath.Join(tv.Dir(), "team.md")
 	if def, err := agentfmt.ParseTeam(teamMDPath); err == nil {
 		m.teamsModal.selectedTeamDef = def
 	} else {
@@ -703,14 +663,14 @@ func (m *Model) refreshSelectedTeamDef() {
 // addAgentToTeam adds the given agent to the team by:
 //  1. Appending the agent name to the team's team.md agents list.
 //  2. Copying the agent's source .md file into <team.Dir>/agents/<slug>.md.
-func addAgentToTeam(team agents.Team, agent *db.Agent) error {
-	teamMDPath := filepath.Join(team.Dir, "team.md")
+func addAgentToTeam(tv TeamView, agent *db.Agent) error {
+	teamMDPath := filepath.Join(tv.Dir(), "team.md")
 
 	// Parse the existing team.md (or create a minimal one if absent).
 	teamDef, err := agentfmt.ParseTeam(teamMDPath)
 	if err != nil {
 		// If team.md doesn't exist yet, start with a minimal definition.
-		teamDef = &agentfmt.TeamDef{Name: team.Name}
+		teamDef = &agentfmt.TeamDef{Name: tv.Name()}
 	}
 
 	// Append the agent name if not already present.
@@ -731,7 +691,7 @@ func addAgentToTeam(team agents.Team, agent *db.Agent) error {
 	}
 
 	// Copy the agent's source file into the team's agents directory.
-	agentsDir := filepath.Join(team.Dir, "agents")
+	agentsDir := filepath.Join(tv.Dir(), "agents")
 	if err := os.MkdirAll(agentsDir, 0o755); err != nil {
 		return fmt.Errorf("creating agents directory: %w", err)
 	}
@@ -778,30 +738,30 @@ func copyFile(src, dst string) error {
 
 // maybeAutoDetectCoordinator fires an LLM call to pick a coordinator for team
 // if the team has no coordinator, is not read-only, and hasn't been attempted yet.
-func (m *Model) maybeAutoDetectCoordinator(team agents.Team) tea.Cmd {
-	if isReadOnlyTeam(team) {
+func (m *Model) maybeAutoDetectCoordinator(tv TeamView) tea.Cmd {
+	if isReadOnlyTeam(tv) {
 		return nil
 	}
-	if team.Coordinator != nil {
+	if tv.Coordinator != nil {
 		return nil
 	}
-	allAgents := team.Workers // no coordinator, so all agents are workers
+	allAgents := tv.Workers // no coordinator, so all agents are workers
 	if len(allAgents) == 0 {
 		return nil
 	}
 	if m.teamsModal.autoDetectPending == nil {
 		m.teamsModal.autoDetectPending = make(map[string]bool)
 	}
-	if m.teamsModal.autoDetectPending[team.Dir] {
+	if m.teamsModal.autoDetectPending[tv.Dir()] {
 		return nil
 	}
-	m.teamsModal.autoDetectPending[team.Dir] = true
+	m.teamsModal.autoDetectPending[tv.Dir()] = true
 	m.teamsModal.autoDetecting = true
 
 	// Capture values for the goroutine.
 	client := m.llmClient
-	teamDir := team.Dir
-	agentsCopy := make([]agents.Agent, len(allAgents))
+	teamDir := tv.Dir()
+	agentsCopy := make([]*db.Agent, len(allAgents))
 	copy(agentsCopy, allAgents)
 
 	return func() tea.Msg {
@@ -894,7 +854,7 @@ func (m *Model) renderTeamsModal() string {
 		} else {
 			icon = "■"
 		}
-		name := truncateStr(t.Name, leftInnerW-4)
+		name := truncateStr(t.Name(), leftInnerW-4)
 		line := fmt.Sprintf(" %s %s", icon, name)
 		// Append badges for system, auto, and read-only teams.
 		if isSystemTeam(t) {
@@ -1004,32 +964,32 @@ func (m *Model) renderTeamsModal() string {
 		rightLines = append(rightLines, DimStyle.Render("No teams configured."))
 		rightLines = append(rightLines, DimStyle.Render("Press [Ctrl+N] to create one."))
 	} else if m.teamsModal.teamIdx < len(teams) {
-		team := teams[m.teamsModal.teamIdx]
+		tv := teams[m.teamsModal.teamIdx]
 
 		// Header with badges.
-		headerText := truncateStr(team.Name, rightInnerW-12)
-		if isSystemTeam(team) {
+		headerText := truncateStr(tv.Name(), rightInnerW-12)
+		if isSystemTeam(tv) {
 			headerText += " " + DimStyle.Render("⚙ system")
-		} else if isAutoTeam(team) {
+		} else if isAutoTeam(tv) {
 			headerText += " " + DimStyle.Render("↻ auto")
 		}
 		rightLines = append(rightLines, HeaderStyle.Render(headerText))
 		rightLines = append(rightLines, DimStyle.Render(strings.Repeat("─", rightInnerW)))
 
 		// Description line (if available).
-		if team.Description != "" {
-			rightLines = append(rightLines, DimStyle.Render(truncateStr(team.Description, rightInnerW)))
+		if tv.Description() != "" {
+			rightLines = append(rightLines, DimStyle.Render(truncateStr(tv.Description(), rightInnerW)))
 		}
 
 		// Promote hint for auto-teams.
-		if isAutoTeam(team) && !isSystemTeam(team) {
+		if isAutoTeam(tv) && !isSystemTeam(tv) {
 			rightLines = append(rightLines, DimStyle.Render("⇧ Ctrl+P to promote to managed team"))
 		}
 
 		// Coordinator line.
 		coordName := "(none)"
-		if team.Coordinator != nil {
-			coordName = team.Coordinator.Name
+		if tv.Coordinator != nil {
+			coordName = tv.Coordinator.Name
 		}
 		coordLine := "Coordinator: " + coordName
 		if m.teamsModal.autoDetecting {
@@ -1072,15 +1032,15 @@ func (m *Model) renderTeamsModal() string {
 		rightLines = append(rightLines, "")
 
 		// Build ordered agent list for right panel: coordinator first, then workers.
-		var agentList []agents.Agent
-		if team.Coordinator != nil {
-			agentList = append(agentList, *team.Coordinator)
+		var agentList []*db.Agent
+		if tv.Coordinator != nil {
+			agentList = append(agentList, tv.Coordinator)
 		}
-		agentList = append(agentList, team.Workers...)
+		agentList = append(agentList, tv.Workers...)
 
 		// Workers section — scroll a window around the selected agent so long
 		// lists don't get clipped by the panel height.
-		rightLines = append(rightLines, fmt.Sprintf("Workers (%d)", len(team.Workers)))
+		rightLines = append(rightLines, fmt.Sprintf("Workers (%d)", len(tv.Workers)))
 		// How many lines are left for agents after the header rows we've already
 		// rendered (rightLines so far) and optional confirm (2).
 		confirmExtra := 0
@@ -1113,7 +1073,7 @@ func (m *Model) renderTeamsModal() string {
 		for vi, a := range visibleAgents {
 			i := vi + scrollOffset
 			prefix := "  ■ "
-			if team.Coordinator != nil && i == 0 {
+			if tv.Coordinator != nil && i == 0 {
 				prefix = "  ◆ " // coordinator marker
 			}
 			line := prefix + truncateStr(a.Name, rightInnerW-4)
@@ -1127,7 +1087,7 @@ func (m *Model) renderTeamsModal() string {
 		if m.teamsModal.confirmDelete {
 			rightLines = append(rightLines, "")
 			rightLines = append(rightLines, TeamsWarningStyle.Render(
-				fmt.Sprintf("⚠ Delete '%s'? [Enter] confirm  [Esc] cancel", truncateStr(team.Name, rightInnerW-30)),
+				fmt.Sprintf("⚠ Delete '%s'? [Enter] confirm  [Esc] cancel", truncateStr(tv.Name(), rightInnerW-30)),
 			))
 		}
 	}

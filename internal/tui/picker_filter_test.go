@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/jefflinse/toasters/internal/agents"
 	"github.com/jefflinse/toasters/internal/db"
 )
 
@@ -12,11 +11,9 @@ import (
 
 func TestFilterAgentsForTeam_ExcludesCoordinatorAndWorkers(t *testing.T) {
 	t.Parallel()
-	coord := agents.Agent{Name: "alpha"}
-	workerB := agents.Agent{Name: "beta"}
-	team := agents.Team{
-		Coordinator: &coord,
-		Workers:     []agents.Agent{workerB},
+	team := TeamView{
+		Coordinator: &db.Agent{Name: "alpha"},
+		Workers:     []*db.Agent{{Name: "beta"}},
 	}
 	available := []*db.Agent{
 		{Name: "alpha"},
@@ -36,7 +33,7 @@ func TestFilterAgentsForTeam_ExcludesCoordinatorAndWorkers(t *testing.T) {
 
 func TestFilterAgentsForTeam_NoAgentsInTeam(t *testing.T) {
 	t.Parallel()
-	team := agents.Team{
+	team := TeamView{
 		Coordinator: nil,
 		Workers:     nil,
 	}
@@ -54,11 +51,9 @@ func TestFilterAgentsForTeam_NoAgentsInTeam(t *testing.T) {
 
 func TestFilterAgentsForTeam_AllAgentsAlreadyInTeam(t *testing.T) {
 	t.Parallel()
-	coord := agents.Agent{Name: "alpha"}
-	workerB := agents.Agent{Name: "beta"}
-	team := agents.Team{
-		Coordinator: &coord,
-		Workers:     []agents.Agent{workerB},
+	team := TeamView{
+		Coordinator: &db.Agent{Name: "alpha"},
+		Workers:     []*db.Agent{{Name: "beta"}},
 	}
 	available := []*db.Agent{
 		{Name: "alpha"},
@@ -74,10 +69,9 @@ func TestFilterAgentsForTeam_AllAgentsAlreadyInTeam(t *testing.T) {
 
 func TestFilterAgentsForTeam_EmptyAvailable(t *testing.T) {
 	t.Parallel()
-	coord := agents.Agent{Name: "alpha"}
-	team := agents.Team{
-		Coordinator: &coord,
-		Workers:     []agents.Agent{{Name: "beta"}},
+	team := TeamView{
+		Coordinator: &db.Agent{Name: "alpha"},
+		Workers:     []*db.Agent{{Name: "beta"}},
 	}
 
 	got := filterAgentsForTeam(team, nil)
@@ -89,9 +83,8 @@ func TestFilterAgentsForTeam_EmptyAvailable(t *testing.T) {
 
 func TestFilterAgentsForTeam_OnlyCoordinator(t *testing.T) {
 	t.Parallel()
-	coord := agents.Agent{Name: "alpha"}
-	team := agents.Team{
-		Coordinator: &coord,
+	team := TeamView{
+		Coordinator: &db.Agent{Name: "alpha"},
 		Workers:     nil,
 	}
 	available := []*db.Agent{
@@ -113,9 +106,9 @@ func TestFilterAgentsForTeam_OnlyCoordinator(t *testing.T) {
 
 func TestFilterAgentsForTeam_OnlyWorkers(t *testing.T) {
 	t.Parallel()
-	team := agents.Team{
+	team := TeamView{
 		Coordinator: nil,
-		Workers:     []agents.Agent{{Name: "alpha"}, {Name: "beta"}},
+		Workers:     []*db.Agent{{Name: "alpha"}, {Name: "beta"}},
 	}
 	available := []*db.Agent{
 		{Name: "alpha"},
@@ -136,9 +129,8 @@ func TestFilterAgentsForTeam_OnlyWorkers(t *testing.T) {
 func TestFilterAgentsForTeam_CaseSensitive(t *testing.T) {
 	t.Parallel()
 	// "Alpha" (capital A) is in the team; "alpha" (lowercase) is a different name.
-	coord := agents.Agent{Name: "Alpha"}
-	team := agents.Team{
-		Coordinator: &coord,
+	team := TeamView{
+		Coordinator: &db.Agent{Name: "Alpha"},
 		Workers:     nil,
 	}
 	available := []*db.Agent{
@@ -158,8 +150,8 @@ func TestFilterAgentsForTeam_CaseSensitive(t *testing.T) {
 
 func TestFilterAgentsForTeam_PreservesOrder(t *testing.T) {
 	t.Parallel()
-	team := agents.Team{
-		Coordinator: &agents.Agent{Name: "b"},
+	team := TeamView{
+		Coordinator: &db.Agent{Name: "b"},
 	}
 	available := []*db.Agent{
 		{Name: "a"},

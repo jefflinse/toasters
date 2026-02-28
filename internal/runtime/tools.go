@@ -305,13 +305,7 @@ func (ct *CoreTools) Definitions() []ToolDef {
 
 	// Include progress tools if a store is available.
 	if ct.store != nil {
-		for _, pd := range progress.ProgressToolDefs() {
-			defs = append(defs, ToolDef{
-				Name:        pd.Name,
-				Description: pd.Description,
-				Parameters:  pd.Parameters,
-			})
-		}
+		defs = append(defs, progress.ProgressToolDefs()...)
 	}
 
 	return defs

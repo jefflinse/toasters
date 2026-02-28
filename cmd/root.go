@@ -12,12 +12,10 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/jefflinse/toasters/defaults"
-	"github.com/jefflinse/toasters/internal/agents"
 	"github.com/jefflinse/toasters/internal/bootstrap"
 	"github.com/jefflinse/toasters/internal/compose"
 	"github.com/jefflinse/toasters/internal/config"
 	"github.com/jefflinse/toasters/internal/db"
-	llmtools "github.com/jefflinse/toasters/internal/llm/tools"
 	"github.com/jefflinse/toasters/internal/loader"
 	"github.com/jefflinse/toasters/internal/mcp"
 	"github.com/jefflinse/toasters/internal/operator"
@@ -83,14 +81,7 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 
-	// Discover teams from the configured teams directory.
 	teamsDir := cfg.Operator.TeamsDir
-	teams, err := agents.DiscoverTeams(teamsDir)
-	if err != nil {
-		// Non-fatal: log a warning and proceed with no teams.
-		slog.Warn("failed to discover teams", "path", teamsDir, "error", err)
-		teams = []agents.Team{}
-	}
 
 	// Open SQLite database for persistence (graceful degradation if it fails).
 	// The DB defaults to <workspaceDir>/toasters.db so operational state lives
@@ -160,14 +151,6 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 		truncatingCaller := mcp.NewTruncatingCaller(mcpManager, mcp.DefaultMaxResultLen)
 		rt.SetMCPCaller(truncatingCaller, mcp.ToRuntimeToolDefs(mcpManager.Tools()))
 	}
-
-	toolExec := llmtools.NewToolExecutor(teams, workspaceDir, store, rt)
-	toolExec.DefaultProvider = cfg.Agents.DefaultProvider
-	toolExec.DefaultModel = cfg.Agents.DefaultModel
-
-	// Wire MCP tools into operator tool set.
-	toolExec.MCPManager = mcpManager
-	toolExec.Tools = append(toolExec.Tools, mcp.ToProviderTools(mcpManager.Tools())...)
 
 	var client provider.Provider
 	switch cfg.Operator.Provider {
@@ -275,13 +258,15 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 		}
 	}
 
+	// Build initial team views from the store.
+	initialTeams := tui.BuildTeamViews(context.Background(), store)
+
 	m := tui.NewModel(tui.ModelConfig{
 		Client:         client,
 		WorkspaceDir:   workspaceDir,
 		TeamsDir:       teamsDir,
-		Teams:          teams,
+		Teams:          initialTeams,
 		Awareness:      "",
-		ToolExec:       toolExec,
 		Store:          store,
 		Runtime:        rt,
 		MCPManager:     mcpManager,
@@ -306,11 +291,13 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 	// so the TUI appears immediately. Always send AppReadyMsg even on error.
 	go func() {
 		ctx := context.Background()
-		awareness := generateTeamAwareness(ctx, client, teams, configDir)
+		awareness := generateTeamAwareness(ctx, client, tui.BuildTeamViews(ctx, store), configDir)
 
 		if op != nil {
 			// Send AppReadyMsg so the TUI can initialize the system prompt.
-			prog.Send(tui.AppReadyMsg{Awareness: awareness, Greeting: ""})
+			if prog := p.Load(); prog != nil {
+				prog.Send(tui.AppReadyMsg{Awareness: awareness, Greeting: ""})
+			}
 			// Send the greeting through the operator so it goes through the
 			// operator's conversation history and streams naturally.
 			if err := op.Send(ctx, operator.Event{
@@ -322,35 +309,28 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 				slog.Warn("failed to send greeting through operator", "error", err)
 			}
 		} else {
-			prog.Send(tui.AppReadyMsg{
-				Awareness: awareness,
-				Greeting:  "⚠ Database unavailable — operator is offline. Check ~/.config/toasters/toasters.log for details.",
-			})
+			if prog := p.Load(); prog != nil {
+				prog.Send(tui.AppReadyMsg{
+					Awareness: awareness,
+					Greeting:  "⚠ Database unavailable — operator is offline. Check ~/.config/toasters/toasters.log for details.",
+				})
+			}
 		}
 	}()
 
 	watchCtx, watchCancel := context.WithCancel(context.Background())
 	defer watchCancel()
-	go func() {
-		err := agents.Watch(watchCtx, teamsDir, func() {
-			newTeams, err := agents.DiscoverTeams(teamsDir)
-			if err != nil {
-				slog.Error("teams reload failed", "error", err)
-				return
-			}
-			toolExec.SetTeams(newTeams)
-			newAwareness := generateTeamAwareness(context.Background(), client, newTeams, configDir)
-			prog.Send(tui.TeamsReloadedMsg{Teams: newTeams, Awareness: newAwareness})
-		})
-		if err != nil && watchCtx.Err() == nil {
-			slog.Error("teams watcher error", "error", err)
-		}
-	}()
 
 	// Watch for definition file changes and reload.
 	if ldr != nil {
 		defWatcher, defWatchErr := loader.NewWatcher(ldr, func() {
-			prog.Send(tui.DefinitionsReloadedMsg{})
+			if prog := p.Load(); prog != nil {
+				prog.Send(tui.DefinitionsReloadedMsg{})
+				// Rebuild team views from the store and send to TUI.
+				newTeams := tui.BuildTeamViews(context.Background(), store)
+				newAwareness := generateTeamAwareness(context.Background(), client, newTeams, configDir)
+				prog.Send(tui.TeamsReloadedMsg{Teams: newTeams, Awareness: newAwareness})
+			}
 		})
 		if defWatchErr != nil {
 			slog.Warn("failed to create definitions watcher", "error", defWatchErr)
@@ -365,5 +345,6 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 	}
 
 	_, err = prog.Run()
+	p.Store(nil) // Prevent post-shutdown sends
 	return err
 }

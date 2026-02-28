@@ -1,4 +1,4 @@
-// Streaming: LLM stream lifecycle including start, send, chunk processing, and completion draining.
+// Streaming: message sending and model fetching for the operator-driven TUI.
 package tui
 
 import (
@@ -12,74 +12,8 @@ import (
 	"github.com/jefflinse/toasters/internal/provider"
 )
 
-// streamStartedMsg carries the channel back to the model after the stream begins.
-type streamStartedMsg struct {
-	ch <-chan provider.StreamEvent
-}
-
-func (m *Model) drainPendingCompletions() ([]provider.Message, bool) {
-	if len(m.chat.pendingCompletions) == 0 {
-		return m.messagesFromEntries(), false
-	}
-	for _, pc := range m.chat.pendingCompletions {
-		m.appendEntry(ChatEntry{
-			Message:   provider.Message{Role: "user", Content: pc.notification},
-			Timestamp: time.Now(),
-		})
-	}
-	m.chat.pendingCompletions = nil
-	return m.messagesFromEntries(), true
-}
-
-// startStream begins a new LLM stream with the current messages and available tools.
-// It sets m.stream.streaming = true and m.stats.ResponseStart.
-func (m *Model) startStream(msgs []provider.Message) tea.Cmd {
-	ctx, cancel := context.WithCancel(context.Background())
-	m.stream.cancelStream = cancel
-	m.stream.streaming = true
-	m.stream.currentResponse = ""
-	m.stream.currentReasoning = ""
-	m.stats.ResponseStart = time.Now()
-
-	client := m.llmClient
-	tools := m.toolExec.Tools
-
-	// Build the ChatRequest: extract system messages, pass tools.
-	req := provider.ChatRequest{}
-	var systemParts []string
-	for _, msg := range msgs {
-		if msg.Role == "system" {
-			if msg.Content != "" {
-				systemParts = append(systemParts, msg.Content)
-			}
-			continue
-		}
-		req.Messages = append(req.Messages, msg)
-	}
-	if len(systemParts) > 0 {
-		req.System = strings.Join(systemParts, "\n\n")
-	}
-	req.Tools = append(req.Tools, tools...)
-
-	return tea.Batch(
-		func() tea.Msg {
-			ch, err := client.ChatStream(ctx, req)
-			if err != nil {
-				// Return error as a stream event channel with one error event.
-				errCh := make(chan provider.StreamEvent, 1)
-				errCh <- provider.StreamEvent{Type: provider.EventError, Error: err}
-				close(errCh)
-				return streamStartedMsg{ch: errCh}
-			}
-			return streamStartedMsg{ch: ch}
-		},
-		spinnerTick(), // re-arm spinner animation for streaming cursor
-	)
-}
-
-// sendMessage takes the current input, appends it to history, and starts streaming.
-// When m.operator is set, the message is routed through the operator event loop
-// instead of the legacy direct-stream path.
+// sendMessage takes the current input, appends it to history, and routes it
+// through the operator event loop.
 func (m *Model) sendMessage() tea.Cmd {
 	text := strings.TrimSpace(m.input.Value())
 	if text == "" {
@@ -104,103 +38,44 @@ func (m *Model) sendMessage() tea.Cmd {
 	m.updateViewportContent()
 	m.chatViewport.GotoBottom()
 
-	// Route through the operator when available; fall back to legacy stream path.
-	if m.operator != nil {
-		m.stream.streaming = true
-		m.stream.currentResponse = ""
-		m.stats.ResponseStart = time.Now()
-		op := m.operator
-		return tea.Batch(
-			func() tea.Msg {
-				ctx := context.Background()
-				_ = op.Send(ctx, operator.Event{
-					Type:    operator.EventUserMessage,
-					Payload: operator.UserMessagePayload{Text: text},
-				})
-				// Send returns immediately — OperatorDoneMsg is fired by the
-				// OnTurnDone callback wired in cmd/root.go when the turn completes.
-				return nil
-			},
-			spinnerTick(),
-		)
+	if m.operator == nil {
+		return nil
 	}
 
-	return m.startStream(m.messagesFromEntries())
-}
-
-// sendAnthropicMessage appends the user prompt to history and starts a direct
-// Anthropic API stream using OAuth credentials from the macOS Keychain.
-func (m *Model) sendAnthropicMessage(prompt string) tea.Cmd {
-	m.input.Blur()
-	m.cmdPopup.filteredCmds = nil
-	m.cmdPopup.selectedIdx = 0
-
-	m.appendEntry(ChatEntry{
-		Message:   provider.Message{Role: "user", Content: "/anthropic " + prompt},
-		Timestamp: time.Now(),
-	})
-	m.stats.MessageCount++
 	m.stream.streaming = true
 	m.stream.currentResponse = ""
-	m.stream.currentReasoning = ""
-	m.err = nil
-	m.scroll.userScrolled = false
-	m.scroll.hasNewMessages = false
 	m.stats.ResponseStart = time.Now()
-
-	m.updateViewportContent()
-	m.chatViewport.GotoBottom()
-
-	ctx, cancel := context.WithCancel(context.Background())
-	m.stream.cancelStream = cancel
-
-	client := provider.NewAnthropic("anthropic", "")
-	ch, err := client.ChatStream(ctx, provider.ChatRequest{
-		Messages: []provider.Message{{Role: "user", Content: prompt}},
-	})
-	if err != nil {
-		errCh := make(chan provider.StreamEvent, 1)
-		errCh <- provider.StreamEvent{Type: provider.EventError, Error: err}
-		close(errCh)
-		ch = errCh
-	}
+	op := m.operator
 	return tea.Batch(
 		func() tea.Msg {
-			return streamStartedMsg{ch: ch}
+			ctx := context.Background()
+			_ = op.Send(ctx, operator.Event{
+				Type:    operator.EventUserMessage,
+				Payload: operator.UserMessagePayload{Text: text},
+			})
+			// Send returns immediately — OperatorDoneMsg is fired by the
+			// OnTurnDone callback wired in cmd/root.go when the turn completes.
+			return nil
 		},
 		spinnerTick(),
 	)
 }
 
-// waitForChunk reads one item from the stream channel and returns the appropriate Msg.
-func waitForChunk(ch <-chan provider.StreamEvent) tea.Cmd {
+// notifyOperator sends a notification message to the operator. If the operator
+// is currently streaming, the notification is sent asynchronously (the operator
+// will queue it). Returns a tea.Cmd that performs the send.
+func (m *Model) notifyOperator(notification string) tea.Cmd {
+	if m.operator == nil {
+		return nil
+	}
+	op := m.operator
 	return func() tea.Msg {
-		ev, ok := <-ch
-		if !ok {
-			return StreamDoneMsg{}
-		}
-		switch ev.Type {
-		case provider.EventError:
-			return StreamErrMsg{Err: ev.Error}
-		case provider.EventToolCall:
-			if ev.ToolCall != nil {
-				return ToolCallMsg{Calls: []provider.ToolCall{*ev.ToolCall}}
-			}
-			return StreamChunkMsg{}
-		case provider.EventUsage:
-			if ev.Usage != nil {
-				return StreamDoneMsg{
-					Model: ev.Model,
-					Usage: ev.Usage,
-				}
-			}
-			return StreamChunkMsg{}
-		case provider.EventDone:
-			return StreamDoneMsg{Model: ev.Model, Usage: ev.Usage}
-		case provider.EventText:
-			return StreamChunkMsg{Content: ev.Text, Reasoning: ev.Reasoning}
-		}
-		return StreamChunkMsg{Content: ev.Text, Reasoning: ev.Reasoning}
+		ctx := context.Background()
+		_ = op.Send(ctx, operator.Event{
+			Type:    operator.EventUserMessage,
+			Payload: operator.UserMessagePayload{Text: notification},
+		})
+		return nil
 	}
 }
 

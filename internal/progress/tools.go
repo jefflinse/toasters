@@ -1,14 +1,13 @@
 package progress
 
-import "encoding/json"
+import (
+	"encoding/json"
 
-// ToolDef mirrors runtime.ToolDef to avoid an import cycle (runtime imports
-// progress for handler dispatch). Keep in sync with runtime.ToolDef.
-type ToolDef struct {
-	Name        string
-	Description string
-	Parameters  json.RawMessage
-}
+	"github.com/jefflinse/toasters/internal/tooldef"
+)
+
+// ToolDef is an alias for tooldef.ToolDef, the shared tool definition type.
+type ToolDef = tooldef.ToolDef
 
 // ProgressToolDefs returns the tool definitions for the 6 progress tools.
 func ProgressToolDefs() []ToolDef {

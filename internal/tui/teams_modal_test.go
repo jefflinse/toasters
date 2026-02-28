@@ -8,6 +8,7 @@
 package tui
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -16,7 +17,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/jefflinse/toasters/internal/agentfmt"
-	"github.com/jefflinse/toasters/internal/agents"
+	"github.com/jefflinse/toasters/internal/db"
 )
 
 // ---------------------------------------------------------------------------
@@ -32,8 +33,8 @@ func agentFileContent(name, description string) string {
 
 // makeAutoTeam creates a temporary directory that looks like an auto-team
 // (contains a .auto-team marker file and at least one agent .md file).
-// It returns an agents.Team pointing at that directory.
-func makeAutoTeam(t *testing.T, name string) agents.Team {
+// It returns a TeamView pointing at that directory.
+func makeAutoTeam(t *testing.T, name string) TeamView {
 	t.Helper()
 	dir := t.TempDir()
 
@@ -52,30 +53,28 @@ func makeAutoTeam(t *testing.T, name string) agents.Team {
 		t.Fatalf("writing agent file: %v", err)
 	}
 
-	return agents.Team{
-		Name: name,
-		Dir:  dir,
+	return TeamView{
+		Team: &db.Team{Name: name, SourcePath: dir},
 	}
 }
 
 // makeNonAutoTeam creates a temporary directory that is NOT an auto-team
 // (no .auto-team marker, not a read-only well-known directory).
-func makeNonAutoTeam(t *testing.T, name string) agents.Team {
+func makeNonAutoTeam(t *testing.T, name string) TeamView {
 	t.Helper()
 	dir := t.TempDir()
-	return agents.Team{
-		Name: name,
-		Dir:  dir,
+	return TeamView{
+		Team: &db.Team{Name: name, SourcePath: dir},
 	}
 }
 
 // modelWithTeam returns a minimal Model with the teams modal open and the
 // given team pre-selected at index 0.
-func modelWithTeam(t *testing.T, team agents.Team) *Model {
+func modelWithTeam(t *testing.T, team TeamView) *Model {
 	t.Helper()
 	m := newMinimalModel(t)
 	m.teamsModal.show = true
-	m.teamsModal.teams = []agents.Team{team}
+	m.teamsModal.teams = []TeamView{team}
 	m.teamsModal.teamIdx = 0
 	m.teamsModal.focus = 0 // left panel focused (required for Ctrl+P to fire)
 	return &m
@@ -211,10 +210,10 @@ func TestTeamPromotedMsg_Error_DoesNotReloadTeams(t *testing.T) {
 	t.Parallel()
 
 	// Seed the modal with a sentinel team list.
-	sentinelTeam := agents.Team{Name: "sentinel", Dir: t.TempDir()}
+	sentinelTeam := TeamView{Team: &db.Team{Name: "sentinel", SourcePath: t.TempDir()}}
 	m := newMinimalModel(t)
 	m.teamsModal.promoting = true
-	m.teamsModal.teams = []agents.Team{sentinelTeam}
+	m.teamsModal.teams = []TeamView{sentinelTeam}
 	m.teamsDir = t.TempDir() // empty dir → DiscoverTeams returns []
 
 	updatedModel, _ := m.Update(teamPromotedMsg{
@@ -224,7 +223,7 @@ func TestTeamPromotedMsg_Error_DoesNotReloadTeams(t *testing.T) {
 	got := updatedModel.(*Model)
 
 	// On error the teams list must NOT be reloaded (sentinel should still be there).
-	if len(got.teamsModal.teams) != 1 || got.teamsModal.teams[0].Name != "sentinel" {
+	if len(got.teamsModal.teams) != 1 || got.teamsModal.teams[0].Name() != "sentinel" {
 		t.Errorf("teams list should be unchanged on error; got %v", got.teamsModal.teams)
 	}
 }
@@ -254,12 +253,13 @@ func TestTeamPromotedMsg_Success_ClearsPromotingFlag(t *testing.T) {
 }
 
 // TestTeamPromotedMsg_Success_ReloadsTeams verifies that a successful promotion
-// triggers reloadTeamsForModal.  We point teamsDir at a temp directory that
-// contains a real team subdirectory so we can observe the reload.
+// triggers reloadTeamsForModal.  We create a team in the store and write a
+// team.md on disk so we can observe the reload and selectedTeamDef population.
 func TestTeamPromotedMsg_Success_ReloadsTeams(t *testing.T) {
 	t.Parallel()
 
-	// Build a minimal teams directory with one team so DiscoverTeams finds it.
+	// Build a minimal teams directory with one team so refreshSelectedTeamDef
+	// can parse team.md and populate selectedTeamDef.
 	teamsDir := t.TempDir()
 	teamDir := filepath.Join(teamsDir, "promoted-team")
 	agentsDir := filepath.Join(teamDir, "agents")
@@ -275,7 +275,23 @@ func TestTeamPromotedMsg_Success_ReloadsTeams(t *testing.T) {
 		t.Fatalf("writing team.md: %v", err)
 	}
 
+	// Create a real store and insert the team so reloadTeamsForModal finds it.
+	store, err := db.Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatalf("opening test store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	if err := store.UpsertTeam(context.Background(), &db.Team{
+		ID:         "promoted-team",
+		Name:       "promoted-team",
+		Source:     "user",
+		SourcePath: teamDir,
+	}); err != nil {
+		t.Fatalf("upserting test team: %v", err)
+	}
+
 	m := newMinimalModel(t)
+	m.store = store
 	m.teamsModal.promoting = true
 	m.teamsModal.teams = nil // start empty
 	m.teamsDir = teamsDir
@@ -286,7 +302,7 @@ func TestTeamPromotedMsg_Success_ReloadsTeams(t *testing.T) {
 	})
 	got := updatedModel.(*Model)
 
-	// reloadTeamsForModal should have populated the teams list from disk.
+	// reloadTeamsForModal should have populated the teams list from the store.
 	if len(got.teamsModal.teams) == 0 {
 		t.Error("teamsModal.teams should be non-empty after successful promotion (reloadTeamsForModal was called)")
 	}
@@ -312,9 +328,8 @@ func TestPromoteAutoTeamCmd_ReturnsTeamPromotedMsg(t *testing.T) {
 	// Point the config dir at a temp dir via the HOME env var trick is fragile;
 	// instead we test the error path (target already exists) which still
 	// produces a teamPromotedMsg — just with a non-nil err.
-	team := agents.Team{
-		Name: "test-team",
-		Dir:  t.TempDir(),
+	team := TeamView{
+		Team: &db.Team{Name: "test-team", SourcePath: t.TempDir()},
 	}
 
 	cmd := promoteAutoTeamCmd(team)
@@ -382,9 +397,8 @@ func TestPromoteAutoTeam_CreatesExpectedStructure(t *testing.T) {
 	}
 
 	// team.Dir is the same as the target directory — this is the bug scenario.
-	team := agents.Team{
-		Name: "my-team",
-		Dir:  teamDir,
+	team := TeamView{
+		Team: &db.Team{Name: "my-team", SourcePath: teamDir},
 	}
 
 	if err := promoteAutoTeam(team); err != nil {
@@ -442,9 +456,8 @@ func TestPromoteReadOnlyAutoTeam_CreatesExpectedStructure(t *testing.T) {
 		t.Fatalf("writing agent file: %v", err)
 	}
 
-	team := agents.Team{
-		Name: "my-team",
-		Dir:  agentsSourceDir,
+	team := TeamView{
+		Team: &db.Team{Name: "my-team", SourcePath: agentsSourceDir},
 	}
 
 	// Call promoteReadOnlyAutoTeam directly to bypass the isReadOnlyTeam check
@@ -489,7 +502,7 @@ func TestPromoteAutoTeam_FailsIfTargetExists(t *testing.T) {
 		t.Fatalf("pre-creating target dir: %v", err)
 	}
 
-	team := agents.Team{Name: "my-team", Dir: sourceDir}
+	team := TeamView{Team: &db.Team{Name: "my-team", SourcePath: sourceDir}}
 
 	// Call promoteReadOnlyAutoTeam directly to test the collision guard.
 	err := promoteReadOnlyAutoTeam(team)
@@ -521,7 +534,7 @@ func TestPromoteAutoTeam_FailsWithNoAgentFiles(t *testing.T) {
 		t.Fatalf("creating agents symlink: %v", err)
 	}
 
-	team := agents.Team{Name: "empty-team", Dir: teamDir}
+	team := TeamView{Team: &db.Team{Name: "empty-team", SourcePath: teamDir}}
 
 	err := promoteAutoTeam(team)
 	if err == nil {
@@ -564,7 +577,7 @@ func TestPromoteAutoTeamCmd_SuccessPath(t *testing.T) {
 		t.Fatalf("creating agents symlink: %v", err)
 	}
 
-	team := agents.Team{Name: "build-team", Dir: teamDir}
+	team := TeamView{Team: &db.Team{Name: "build-team", SourcePath: teamDir}}
 
 	cmd := promoteAutoTeamCmd(team)
 	if cmd == nil {
@@ -673,7 +686,7 @@ func TestIsAutoTeam_WithMarker(t *testing.T) {
 		t.Fatalf("writing .auto-team: %v", err)
 	}
 
-	team := agents.Team{Name: "auto", Dir: dir}
+	team := TeamView{Team: &db.Team{Name: "auto", SourcePath: dir}}
 	if !isAutoTeam(team) {
 		t.Error("isAutoTeam should return true when .auto-team marker is present")
 	}
@@ -683,7 +696,7 @@ func TestIsAutoTeam_WithoutMarker(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	team := agents.Team{Name: "regular", Dir: dir}
+	team := TeamView{Team: &db.Team{Name: "regular", SourcePath: dir}}
 	if isAutoTeam(team) {
 		t.Error("isAutoTeam should return false when .auto-team marker is absent")
 	}
@@ -693,7 +706,7 @@ func TestIsReadOnlyTeam_UnknownDir(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	team := agents.Team{Name: "unknown", Dir: dir}
+	team := TeamView{Team: &db.Team{Name: "unknown", SourcePath: dir}}
 	if isReadOnlyTeam(team) {
 		t.Error("isReadOnlyTeam should return false for an arbitrary directory")
 	}

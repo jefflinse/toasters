@@ -8,14 +8,14 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/jefflinse/toasters/internal/agents"
 	"github.com/jefflinse/toasters/internal/provider"
+	"github.com/jefflinse/toasters/internal/tui"
 )
 
 // generateTeamAwareness builds ~/.config/toasters/team-awareness.md
 // with one-sentence dispatch summaries for each team.
 // Returns the file content, or "" on error.
-func generateTeamAwareness(ctx context.Context, client provider.Provider, teams []agents.Team, configDir string) string {
+func generateTeamAwareness(ctx context.Context, client provider.Provider, teams []tui.TeamView, configDir string) string {
 	if len(teams) == 0 {
 		return ""
 	}
@@ -24,7 +24,7 @@ func generateTeamAwareness(ctx context.Context, client provider.Provider, teams 
 	sb.WriteString("# Teams\n\n")
 
 	for _, team := range teams {
-		fmt.Fprintf(&sb, "## %s\n\n", team.Name)
+		fmt.Fprintf(&sb, "## %s\n\n", team.Name())
 		sb.WriteString(summarizeTeam(ctx, client, team))
 		sb.WriteString("\n\n")
 	}
@@ -42,9 +42,9 @@ func generateTeamAwareness(ctx context.Context, client provider.Provider, teams 
 
 // summarizeTeam asks the LLM for a one-sentence "Use this team when..."
 // summary suitable for operator dispatch decisions.
-func summarizeTeam(ctx context.Context, client provider.Provider, team agents.Team) string {
+func summarizeTeam(ctx context.Context, client provider.Provider, team tui.TeamView) string {
 	var prompt string
-	if team.Coordinator != nil && strings.TrimSpace(team.Coordinator.Body) != "" {
+	if team.Coordinator != nil && strings.TrimSpace(team.Coordinator.SystemPrompt) != "" {
 		prompt = fmt.Sprintf(
 			`You are summarizing a software development team for an AI dispatcher.
 
@@ -53,8 +53,8 @@ Coordinator instructions:
 %s
 
 Write exactly one sentence starting with "Use this team when" that describes what kinds of tasks should be routed to this team. Be specific and concise. Output only the sentence, nothing else.`,
-			team.Name,
-			strings.TrimSpace(team.Coordinator.Body),
+			team.Name(),
+			strings.TrimSpace(team.Coordinator.SystemPrompt),
 		)
 	} else {
 		workerNames := make([]string, len(team.Workers))
@@ -68,7 +68,7 @@ Team name: %q
 Workers: %s
 
 Write exactly one sentence starting with "Use this team when" that describes what kinds of tasks should be routed to this team. Be specific and concise. Output only the sentence, nothing else.`,
-			team.Name,
+			team.Name(),
 			strings.Join(workerNames, ", "),
 		)
 	}
@@ -76,9 +76,9 @@ Write exactly one sentence starting with "Use this team when" that describes wha
 	msgs := []provider.Message{{Role: "user", Content: prompt}}
 	resp, err := provider.ChatCompletion(ctx, client, msgs)
 	if err != nil {
-		slog.Warn("team awareness inference failed", "team", team.Name, "error", err)
+		slog.Warn("team awareness inference failed", "team", team.Name(), "error", err)
 		// Fallback: generic sentence
-		return fmt.Sprintf("Use this team when you need help from the %s team.", team.Name)
+		return fmt.Sprintf("Use this team when you need help from the %s team.", team.Name())
 	}
 	return strings.TrimSpace(resp)
 }

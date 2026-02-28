@@ -41,7 +41,7 @@ This architecture review is the **diagnostic report** — it identifies what's w
 | Wave | File | Status | What It Covers |
 |------|------|--------|---------------|
 | Wave 1: Safety & Cleanup | [`PRE_PHASE_4_WAVE_1.md`](PRE_PHASE_4_WAVE_1.md) | ✅ Complete (2026-02-27) | 8 tasks: security fixes, dead code removal, concurrency fixes |
-| Wave 2: Structural Preparation | [`PRE_PHASE_4_WAVE_2.md`](PRE_PHASE_4_WAVE_2.md) | Pending | 7 tasks: type consolidation, package relocation, legacy removal |
+| Wave 2: Structural Preparation | [`PRE_PHASE_4_WAVE_2.md`](PRE_PHASE_4_WAVE_2.md) | ✅ Complete (2026-02-27) | 7 tasks: type consolidation, package relocation, legacy removal |
 | Wave 3: Client/Server Extraction | Section 11 below | Future | Phase 4.3 core work |
 | Wave 4: Hardening | Section 11 below | Future | Post-split improvements |
 
@@ -656,20 +656,20 @@ Auto-detection of file type (skill/agent/team) and format (Toasters/Claude Code/
 |----|----------|----------|---------|--------|
 | SEC-CRITICAL-1 | CRITICAL | Security | Command injection in `setup_workspace` | ✅ Wave 1 |
 | DEAD-1 | BLOCKING | Dead Code | ~4,600 lines of legacy `llm` package family | ✅ Wave 1 |
-| DEAD-2 | HIGH | Architecture | Dual agent/team type systems | |
-| STRUCT-1 | HIGH | Architecture | Two parallel tool systems, duplicated SSRF | ✅ Wave 1 (SSRF consolidated) |
+| DEAD-2 | HIGH | Architecture | Dual agent/team type systems | ✅ Wave 2 |
+| STRUCT-1 | HIGH | Architecture | Two parallel tool systems, duplicated SSRF | ✅ Wave 1 (SSRF) + Wave 2 (tool systems consolidated) |
 | SEC-HIGH-1 | HIGH | Security | Shell tool has no sandboxing (design tradeoff) | |
 | SEC-HIGH-2 | HIGH | Security | Incomplete `.gitignore` | ✅ Wave 1 |
 | SEC-HIGH-3 | HIGH | Security | API keys in plaintext config | |
 | ARCH-1 | MEDIUM | Architecture | Operator blocks during tool execution | |
-| ARCH-2 | MEDIUM | Architecture | Self-send deadlock potential | |
-| ARCH-3 | MEDIUM | Architecture | Naive conversation window truncation | |
+| ARCH-2 | MEDIUM | Architecture | Self-send deadlock potential | ✅ Wave 2 |
+| ARCH-3 | MEDIUM | Architecture | Naive conversation window truncation | ✅ Wave 2 |
 | ARCH-4 | MEDIUM | Architecture | No backpressure from operator to TUI | |
-| ARCH-5 | MEDIUM | Architecture | Legacy dual-path complexity in TUI | |
-| STRUCT-2 | MEDIUM | Architecture | `ToolDef` type duplication | |
-| DEAD-3 | MEDIUM | Dead Code | `llm/tools` package misplacement | |
+| ARCH-5 | MEDIUM | Architecture | Legacy dual-path complexity in TUI | ✅ Wave 2 |
+| STRUCT-2 | MEDIUM | Architecture | `ToolDef` type duplication | ✅ Wave 2 |
+| DEAD-3 | MEDIUM | Dead Code | `llm/tools` package misplacement | ✅ Wave 2 (deleted — superseded by operator SystemTools) |
 | CONC-1 | MEDIUM | Concurrency | `Session.messages` mixed synchronization | |
-| CONC-2 | MEDIUM | Concurrency | Operator self-send deadlock potential | |
+| CONC-2 | MEDIUM | Concurrency | Operator self-send deadlock potential | ✅ Wave 2 |
 | CONC-3 | MEDIUM | Concurrency | MCP Manager Close() race | |
 | CONC-4 | MEDIUM | Concurrency | Runtime.Shutdown() busy-wait, no timeout | ✅ Wave 1 |
 | CONC-5 | MEDIUM | Concurrency | Operator tool execution blocks event loop | |
@@ -679,20 +679,20 @@ Auto-detection of file type (skill/agent/team) and format (Toasters/Claude Code/
 | SEC-MEDIUM-4 | MEDIUM | Security | `glob` pattern traversal | |
 | SEC-MEDIUM-5 | MEDIUM | Security | MCP subprocess trust | |
 | QUAL-1 | MEDIUM | Quality | `fetchWebpage` missing context | ✅ Wave 1 |
-| STRUCT-3 | LOW | Architecture | `ProviderConfig` duplication |
-| STRUCT-4 | LOW | Architecture | `MCPCaller` interface duplication |
-| STRUCT-5 | LOW | Architecture | `ToolExecutor` name collision |
-| STRUCT-6 | LOW | Architecture | `ToolExecutor` partial construction |
-| STRUCT-7 | LOW | Architecture | SpawnTeamLead coupling risk |
-| CONC-6 | LOW | Concurrency | Post-shutdown TUI sends |
-| CONC-7 | LOW | Concurrency | Subscriber event drops (intentional) |
-| CONC-8 | LOW | Concurrency | MCP sequential connection |
-| QUAL-2 | LOW | Quality | No tests for `cmd/` package |
-| QUAL-3 | LOW | Quality | Store optional everywhere pattern |
-| QUAL-4 | LOW | Quality | `RebuildDefinitions` duplicates insert logic |
-| QUAL-5 | LOW | Quality | No incremental definition updates |
-| QUAL-6 | LOW | Quality | `agentfmt` type detection is heuristic |
-| QUAL-7 | LOW | Quality | `SplitFrontmatter` Windows line endings |
+| STRUCT-3 | LOW | Architecture | `ProviderConfig` duplication | |
+| STRUCT-4 | LOW | Architecture | `MCPCaller` interface duplication | |
+| STRUCT-5 | LOW | Architecture | `ToolExecutor` name collision | ✅ Wave 2 (llm/tools deleted) |
+| STRUCT-6 | LOW | Architecture | `ToolExecutor` partial construction | ✅ Wave 2 (llm/tools deleted) |
+| STRUCT-7 | LOW | Architecture | SpawnTeamLead coupling risk | |
+| CONC-6 | LOW | Concurrency | Post-shutdown TUI sends | ✅ Wave 2 |
+| CONC-7 | LOW | Concurrency | Subscriber event drops (intentional) | |
+| CONC-8 | LOW | Concurrency | MCP sequential connection | |
+| QUAL-2 | LOW | Quality | No tests for `cmd/` package | |
+| QUAL-3 | LOW | Quality | Store optional everywhere pattern | |
+| QUAL-4 | LOW | Quality | `RebuildDefinitions` duplicates insert logic | |
+| QUAL-5 | LOW | Quality | No incremental definition updates | |
+| QUAL-6 | LOW | Quality | `agentfmt` type detection is heuristic | |
+| QUAL-7 | LOW | Quality | `SplitFrontmatter` Windows line endings | |
 
 ### By Category
 

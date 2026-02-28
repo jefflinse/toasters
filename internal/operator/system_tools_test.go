@@ -326,21 +326,22 @@ func TestAssignTask(t *testing.T) {
 	assertNoError(t, err)
 	assertEqual(t, job.WorkspaceDir, calls[0].WorkDir)
 
-	// Verify event was sent.
+	// Verify feed entry was created inline (no event sent to channel).
+	entries, err := store.ListRecentFeedEntries(ctx, 10)
+	assertNoError(t, err)
+	if len(entries) != 1 {
+		t.Fatalf("want 1 feed entry, got %d", len(entries))
+	}
+	assertEqual(t, string(db.FeedEntryTaskStarted), string(entries[0].EntryType))
+	assertContains(t, entries[0].Content, "backend")
+	assertContains(t, entries[0].Content, "Build API")
+
+	// Verify no event was sent to the channel (inline handling, no self-send).
 	select {
 	case ev := <-eventCh:
-		if ev.Type != EventTaskStarted {
-			t.Fatalf("want EventTaskStarted, got %s", ev.Type)
-		}
-		payload, ok := ev.Payload.(TaskStartedPayload)
-		if !ok {
-			t.Fatal("invalid payload type")
-		}
-		assertEqual(t, taskID, payload.TaskID)
-		assertEqual(t, "backend", payload.TeamID)
-		assertEqual(t, "Build API", payload.Title)
+		t.Fatalf("unexpected event on channel: %s (task started should be handled inline)", ev.Type)
 	default:
-		t.Fatal("expected event on channel")
+		// Good — no event sent.
 	}
 }
 

@@ -19,9 +19,7 @@ import (
 	xansi "github.com/charmbracelet/x/ansi"
 
 	"github.com/jefflinse/toasters/internal/agentfmt"
-	"github.com/jefflinse/toasters/internal/agents"
 	"github.com/jefflinse/toasters/internal/db"
-	"github.com/jefflinse/toasters/internal/llm/tools"
 	"github.com/jefflinse/toasters/internal/loader"
 	"github.com/jefflinse/toasters/internal/mcp"
 	"github.com/jefflinse/toasters/internal/operator"
@@ -44,9 +42,8 @@ type ModelConfig struct {
 	Client         provider.Provider
 	WorkspaceDir   string
 	TeamsDir       string
-	Teams          []agents.Team
+	Teams          []TeamView
 	Awareness      string
-	ToolExec       *tools.ToolExecutor
 	Store          db.Store
 	Runtime        *runtime.Runtime
 	MCPManager     *mcp.Manager
@@ -55,13 +52,11 @@ type ModelConfig struct {
 	OperatorPrompt string // system prompt for the operator, composed from operator.md
 }
 
-// streamingState holds all state related to the active LLM stream.
+// streamingState holds all state related to the active operator stream.
 type streamingState struct {
 	streaming        bool
 	currentResponse  string
 	currentReasoning string
-	streamCh         <-chan provider.StreamEvent
-	cancelStream     context.CancelFunc
 	operatorByline   string // formatted byline for the in-progress operator stream; cleared when done
 }
 
@@ -77,12 +72,11 @@ type gridState struct {
 // promptModeState holds all state for the interactive prompt mode
 // (active when the operator calls ask_user, assign_team, etc.).
 type promptModeState struct {
-	promptMode        bool
-	promptQuestion    string
-	promptOptions     []string          // LLM-provided options; "Custom response..." appended at render time
-	promptSelected    int               // cursor index
-	promptCustom      bool              // true when user selected "Custom response..." and is typing
-	promptPendingCall provider.ToolCall // the tool call to resume after input
+	promptMode     bool
+	promptQuestion string
+	promptOptions  []string // LLM-provided options; "Custom response..." appended at render time
+	promptSelected int      // cursor index
+	promptCustom   bool     // true when user selected "Custom response..." and is typing
 
 	confirmDispatch bool              // true when promptMode is a dispatch confirmation
 	changingTeam    bool              // true when promptMode is the "change team" sub-prompt
@@ -148,9 +142,6 @@ type chatState struct {
 	expandedReasoning map[int]bool // which entry indices have reasoning expanded
 	collapsedTools    map[int]bool // true = expanded; absent/false = collapsed (default)
 
-	// pendingCompletions buffers agent-completion notifications that arrive while
-	// the operator stream is active. They are drained after the stream ends.
-	pendingCompletions []pendingCompletion
 }
 
 // Model is the root Bubble Tea model for the toasters TUI.
@@ -183,14 +174,10 @@ type Model struct {
 	selectedTeam int
 	focused      focusedPanel
 
-	toolExec       *tools.ToolExecutor
-	toolsInFlight  bool
-	toolCancelFunc context.CancelFunc
-
-	teams        []agents.Team // available teams
-	teamsDir     string        // path to the configured teams directory
-	awareness    string        // team-awareness content used to build the operator prompt
-	systemPrompt string        // assembled at startup; prepended to every LLM call
+	teams        []TeamView // available teams
+	teamsDir     string     // path to the configured teams directory
+	awareness    string     // team-awareness content used to build the operator prompt
+	systemPrompt string     // assembled at startup; prepended to every LLM call
 
 	// Teams modal state.
 	teamsModal teamsModalState
@@ -283,7 +270,6 @@ func NewModel(cfg ModelConfig) Model {
 	teamsDir := cfg.TeamsDir
 	teams := cfg.Teams
 	awareness := cfg.Awareness
-	toolExec := cfg.ToolExec
 	store := cfg.Store
 	rt := cfg.Runtime
 	mcpMgr := cfg.MCPManager
@@ -324,7 +310,6 @@ func NewModel(cfg ModelConfig) Model {
 		llmClient:    client,
 		chatViewport: vp,
 		input:        ta,
-		toolExec:     toolExec,
 		store:        store,
 		runtime:      rt,
 		mcpManager:   mcpMgr,
@@ -766,33 +751,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 
 		case "esc":
-			// Cancel in-flight async tool execution.
-			if m.toolsInFlight && m.toolCancelFunc != nil {
-				m.toolCancelFunc()
-				m.toolsInFlight = false
-				m.toolCancelFunc = nil
-				m.appendEntry(ChatEntry{
-					Message:    provider.Message{Role: "assistant", Content: "[tool calls cancelled]"},
-					Timestamp:  time.Now(),
-					ClaudeMeta: "tool-call-indicator",
-				})
-				m.updateViewportContent()
-				if !m.scroll.userScrolled {
-					m.chatViewport.GotoBottom()
-				}
-				return m, m.input.Focus()
-			}
 			// Exit grid screen.
 			if m.grid.showGrid {
 				m.grid.showGrid = false
 				return m, nil
 			}
-			// Cancel an in-flight stream. (Popup esc is handled above and returns early.)
-			if m.stream.streaming && m.stream.cancelStream != nil {
-				m.stream.cancelStream()
+			// Cancel an in-flight operator stream.
+			if m.stream.streaming {
 				m.stream.streaming = false
-				m.stream.cancelStream = nil
-				m.stream.streamCh = nil
 				if m.stream.currentResponse != "" {
 					m.appendEntry(ChatEntry{
 						Message:    provider.Message{Role: "assistant", Content: m.stream.currentResponse},
@@ -943,18 +909,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.input.SetValue("[JOB REQUEST] " + prompt)
 					return m, m.sendMessage()
 				}
-				// /anthropic <prompt> — stream via the Anthropic API directly.
-				if strings.HasPrefix(text, "/anthropic ") {
-					prompt := strings.TrimSpace(strings.TrimPrefix(text, "/anthropic "))
-					if prompt == "" {
-						m.input.Reset()
-						m.cmdPopup.show = false
-						return m, nil
-					}
-					m.cmdPopup.show = false
-					m.input.Reset()
-					return m, m.sendAnthropicMessage(prompt)
-				}
 				// Not a recognized slash command — send to LLM.
 				m.cmdPopup.show = false
 				return m, m.sendMessage()
@@ -1006,150 +960,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
-	case StreamChunkMsg:
-		m.stream.currentResponse += msg.Content
-		m.stream.currentReasoning += msg.Reasoning
-		// Live token estimates (~4 chars/token).
-		m.stats.CompletionTokensLive = len([]rune(m.stream.currentResponse)) / 4
-		m.stats.ReasoningTokensLive = len([]rune(m.stream.currentReasoning)) / 4
-		// Elapsed response time ticks up on every chunk.
-		if !m.stats.ResponseStart.IsZero() {
-			m.stats.LastResponseTime = time.Since(m.stats.ResponseStart)
-		}
-		m.updateViewportContent()
-		if !m.scroll.userScrolled {
-			m.chatViewport.GotoBottom()
-		} else {
-			m.scroll.hasNewMessages = true
-		}
-		if m.stream.streamCh != nil {
-			cmds = append(cmds, waitForChunk(m.stream.streamCh))
-		}
-
-	case StreamDoneMsg:
-		m.stream.streaming = false
-		if msg.Model != "" {
-			m.stats.ModelName = msg.Model
-		}
-		if msg.Usage != nil {
-			m.stats.PromptTokens = msg.Usage.InputTokens
-			m.stats.CompletionTokens += msg.Usage.OutputTokens
-		}
-		// Accumulate reasoning tokens from live estimate (server doesn't report them separately).
-		m.stats.ReasoningTokens += m.stats.ReasoningTokensLive
-		m.stats.CompletionTokensLive = 0
-		m.stats.ReasoningTokensLive = 0
-		if !m.stats.ResponseStart.IsZero() {
-			m.stats.LastResponseTime = time.Since(m.stats.ResponseStart)
-			m.stats.TotalResponseTime += m.stats.LastResponseTime
-			m.stats.TotalResponses++
-		}
-		if m.stream.currentResponse != "" {
-			// Fill in the operator byline if not already set.
-			byline := m.stream.operatorByline
-			if byline == "" && m.stats.ModelName != "" {
-				byline = "operator · " + m.stats.ModelName
-			}
-			m.appendEntry(ChatEntry{
-				Message:    provider.Message{Role: "assistant", Content: m.stream.currentResponse},
-				Timestamp:  time.Now(),
-				Reasoning:  m.stream.currentReasoning,
-				ClaudeMeta: byline,
-			})
-			m.stream.operatorByline = ""
-		}
-		m.stream.currentResponse = ""
-		m.stream.currentReasoning = ""
-		m.stream.streamCh = nil
-		m.stream.cancelStream = nil
-		m.updateViewportContent()
-		if !m.scroll.userScrolled {
-			m.chatViewport.GotoBottom()
-		} else {
-			m.scroll.hasNewMessages = true
-		}
-		// Drain any completion notifications that arrived while we were streaming.
-		// If there are pending completions, inject them and start a new stream instead
-		// of returning focus to the input.
-		if msgs, ok := m.drainPendingCompletions(); ok {
-			m.updateViewportContent()
-			if !m.scroll.userScrolled {
-				m.chatViewport.GotoBottom()
-			}
-			cmds = append(cmds, m.startStream(msgs))
-		} else {
-			cmds = append(cmds, m.input.Focus())
-		}
-
-	case ToolCallMsg:
-		return m.handleToolCalls(msg)
-
-	case ToolResultMsg:
-		// If tools were already cancelled (e.g. via Escape), discard the late result.
-		// The goroutine always sends a ToolResultMsg even after cancellation.
-		if !m.toolsInFlight {
-			return m, nil
-		}
-
-		m.toolsInFlight = false
-		if m.toolCancelFunc != nil {
-			m.toolCancelFunc() // clean up context
-			m.toolCancelFunc = nil
-		}
-
-		// Append each tool result to the conversation.
-		for _, result := range msg.Results {
-			content := result.Result
-			if result.Err != nil {
-				content = fmt.Sprintf("error: %s", result.Err.Error())
-			}
-			m.appendEntry(ChatEntry{
-				Message:   provider.Message{Role: "tool", ToolCallID: result.CallID, Content: content},
-				Timestamp: time.Now(),
-			})
-		}
-
-		// Update the viewport.
-		m.updateViewportContent()
-		if !m.scroll.userScrolled {
-			m.chatViewport.GotoBottom()
-		}
-
-		// Drain completions into entries; we rebuild messages from entries below.
-		_, _ = m.drainPendingCompletions()
-
-		// Re-invoke the stream with the updated messages for the final answer.
-		return m, m.startStream(m.messagesFromEntries())
-
-	case AskUserResponseMsg:
-		return m.handleAskUserResponse(msg)
-
-	case StreamErrMsg:
-		m.stream.streaming = false
-		m.err = msg.Err
-		m.stats.Connected = false
-		m.stream.streamCh = nil
-		m.stream.cancelStream = nil
-		if m.stream.currentResponse != "" {
-			byline := m.stream.operatorByline
-			if byline == "" && m.stats.ModelName != "" {
-				byline = "operator · " + m.stats.ModelName
-			}
-			m.appendEntry(ChatEntry{
-				Message:    provider.Message{Role: "assistant", Content: m.stream.currentResponse},
-				Timestamp:  time.Now(),
-				Reasoning:  m.stream.currentReasoning,
-				ClaudeMeta: byline,
-			})
-			m.stream.operatorByline = ""
-			m.stream.currentResponse = ""
-			m.stream.currentReasoning = ""
-		}
-		m.stats.CompletionTokensLive = 0
-		m.stats.ReasoningTokensLive = 0
-		m.updateViewportContent()
-		cmds = append(cmds, m.input.Focus())
-
 	case ModelsMsg:
 		if msg.Err != nil {
 			m.stats.Connected = false
@@ -1183,10 +993,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.updateViewportContent()
 
-	case streamStartedMsg:
-		m.stream.streamCh = msg.ch
-		cmds = append(cmds, waitForChunk(m.stream.streamCh))
-
 	case TeamsReloadedMsg:
 		m.teams = msg.Teams
 		if m.selectedTeam >= len(m.teams) && len(m.teams) > 0 {
@@ -1198,7 +1004,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// The operator's system prompt is composed from operator.md at startup and
 		// does not change when teams reload. The operator discovers teams at runtime
 		// via the query_teams tool.
-		m.toolExec.SetTeams(m.teams)
 		return m, tea.Batch(cmds...)
 
 	case JobsReloadedMsg:
@@ -1231,7 +1036,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case TeamsAutoDetectDoneMsg:
 		m.teamsModal.autoDetecting = false
 		if msg.agentName != "" && msg.err == nil {
-			_ = agents.SetCoordinator(msg.teamDir, msg.agentName)
+			_ = SetCoordinator(msg.teamDir, msg.agentName)
 			m.reloadTeamsForModal()
 		}
 		return m, tea.Batch(cmds...)
@@ -1246,7 +1051,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.reloadTeamsForModal()
 			// Select the newly promoted team.
 			for i, t := range m.teamsModal.teams {
-				if t.Name == msg.teamName && !isAutoTeam(t) {
+				if t.Name() == msg.teamName && !isAutoTeam(t) {
 					m.teamsModal.teamIdx = i
 					m.refreshSelectedTeamDef()
 					break
@@ -1342,7 +1147,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Reload and select the newly created team.
 		m.reloadTeamsForModal()
 		for i, t := range m.teamsModal.teams {
-			if t.Name == teamDef.Name {
+			if t.Name() == teamDef.Name {
 				m.teamsModal.teamIdx = i
 				m.refreshSelectedTeamDef()
 				break
@@ -1462,7 +1267,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
-		// Build completion notification for the operator from the runtime session output.
+		// Build completion notification and send it to the operator.
 		outputTail := slot.output.String()
 		const maxTail = 2000
 		if len(outputTail) > maxTail {
@@ -1473,23 +1278,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			msg.AgentName, msg.JobID, msg.Status, outputTail,
 		)
 
-		if m.stream.streaming {
-			m.chat.pendingCompletions = append(m.chat.pendingCompletions, pendingCompletion{
-				notification: notification,
-			})
-		} else {
-			m.appendEntry(ChatEntry{
-				Message:   provider.Message{Role: "user", Content: notification},
-				Timestamp: time.Now(),
-			})
-			completionIdx := len(m.chat.entries) - 1
-			m.chat.completionMsgIdx[completionIdx] = true
-			m.chat.selectedMsgIdx = completionIdx
-			m.updateViewportContent()
-			if !m.scroll.userScrolled {
-				m.chatViewport.GotoBottom()
-			}
-			cmds = append(cmds, m.startStream(m.messagesFromEntries()))
+		// Route the notification through the operator event loop.
+		if cmd := m.notifyOperator(notification); cmd != nil {
+			cmds = append(cmds, cmd)
 		}
 		return m, tea.Batch(cmds...)
 
@@ -1587,8 +1378,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.focusAnimFrames > 0 {
 			m.focusAnimFrames--
 		}
-		// Re-arm only if something is animating: operator streaming, tools in flight, or any agent running.
-		needTick := m.stream.streaming || m.toolsInFlight
+		// Re-arm only if something is animating: operator streaming or any agent running.
+		needTick := m.stream.streaming
 		if !needTick {
 			for _, rs := range m.runtimeSessions {
 				if rs.status == "active" {
@@ -1723,7 +1514,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case OperatorTextMsg:
 		slog.Debug("operator text", "len", len(msg.Text))
-		// Accumulate streamed text into currentResponse (same pattern as StreamChunkMsg).
+		// Accumulate streamed text into currentResponse.
 		// The full response is committed as a single entry when OperatorDoneMsg arrives.
 		if msg.Text != "" {
 			m.stream.currentResponse += msg.Text

@@ -2,7 +2,7 @@ package mcp
 
 import (
 	"github.com/jefflinse/toasters/internal/provider"
-	"github.com/jefflinse/toasters/internal/runtime"
+	"github.com/jefflinse/toasters/internal/tooldef"
 )
 
 // ToProviderTools converts MCP tool definitions to provider.Tool format.
@@ -18,11 +18,11 @@ func ToProviderTools(tools []ToolInfo) []provider.Tool {
 	return result
 }
 
-// ToRuntimeToolDefs converts MCP tool definitions to runtime.ToolDef format.
-func ToRuntimeToolDefs(tools []ToolInfo) []runtime.ToolDef {
-	result := make([]runtime.ToolDef, 0, len(tools))
+// ToRuntimeToolDefs converts MCP tool definitions to tooldef.ToolDef format.
+func ToRuntimeToolDefs(tools []ToolInfo) []tooldef.ToolDef {
+	result := make([]tooldef.ToolDef, 0, len(tools))
 	for _, t := range tools {
-		result = append(result, runtime.ToolDef{
+		result = append(result, tooldef.ToolDef{
 			Name:        t.NamespacedName,
 			Description: t.Description,
 			Parameters:  t.InputSchema,
