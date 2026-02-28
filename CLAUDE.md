@@ -30,6 +30,7 @@ internal/
                             #   Import: ImportClaudeCode, ImportOpenCode (lossless)
                             #   Export: ExportClaudeCode, ExportOpenCode (lossy with Warning list)
                             #   Auto-detection via ParseAgent/ParseFile (inspects frontmatter fields)
+                            #   1 MiB file size limit on all Parse* functions
   anthropic/                # Keychain/OAuth token management for Anthropic API
                             #   keychain.go: ReadKeychainAccessToken(), token refresh with mutex
   bootstrap/                # First-run bootstrap + upgrade migration
@@ -39,6 +40,7 @@ internal/
                             #   Loads agent → skills → team culture → merges tools → resolves provider/model
                             #   Returns ComposedAgent ready for session creation
   config/                   # Viper-based config from ~/.config/toasters/config.yaml
+                            #   Warns on plaintext API keys at startup, enforces 0600 config file permissions
   db/                       # SQLite persistence (Store interface, migrations, CRUD)
                             #   Schema: jobs, tasks, skills, agents, teams, team_agents, feed_entries,
                             #   sessions, progress_reports, artifacts
@@ -51,6 +53,7 @@ internal/
                             #   Resolves agent references (team-local → shared → system)
                             #   Watcher: 200ms debounce, .md filtering, dynamic dir watching
   mcp/                      # MCP client manager, tool conversion, namespacing, result truncation/slimming, server status tracking
+                            #   Parallel server connection via WaitGroup, recover() on Call for shutdown safety
   operator/                 # Operator event loop, typed events, system/team tools
                             #   Event loop: mechanical handling + selective LLM routing
                             #   System tools: create_job, create_task, assign_task, query_teams, query_job
@@ -64,7 +67,7 @@ internal/
                             #   composite_tools.go: CompositeTools wrapper combining CoreTools + MCP tools
                             #   Shutdown: WaitGroup-based with 10s timeout (no busy-wait)
   sse/                      # Shared SSE parsing (reader, Anthropic event types, OpenAI chunk types)
-  tooldef/                  # Shared ToolDef type (used by runtime, progress, mcp)
+  tooldef/                  # Shared ToolDef and MCPCaller types (used by runtime, progress, mcp)
   tui/                      # Bubble Tea TUI (model, views, grid, modals, streaming, activity feed, CRUD)
                             #   All interaction flows through the operator event loop (no legacy direct-LLM path)
                             #   team_view.go: TeamView type bundles db.Team + coordinator + workers from store
@@ -80,8 +83,8 @@ internal/
 - **System Team**: The operator's own team, defined in `~/.config/toasters/system/`. Includes the operator (lead), planner (creates jobs/tasks), scheduler (breaks plans into tasks with assignments), and blocker-handler (triages blockers). System agents have orchestration tools (`create_job`, `create_task`, `assign_task`) but NO filesystem tools. Fully hackable — users can modify any system agent.
 - **Teams**: Groups of agents defined in `~/.config/toasters/user/teams/`. Each team has a lead agent and worker agents. Team leads receive tasks from the operator, delegate to workers via `spawn_agent`, and report results via `complete_task`. Teams can also be auto-detected from `~/.claude/agents/` and `~/.config/Claude/agents/`. Auto-teams can be promoted to full teams via `Ctrl+P` in the teams modal.
 - **Composition Model**: Three-layer composition: Skills (reusable capabilities with prompts + tools) → Agents (personas with skills, provider/model config) → Teams (agents + culture + lead). At runtime, `internal/compose` assembles the full system prompt, tool set, and provider/model for any agent. Skills are additive, tools are unioned with denylist, provider/model cascades (agent → team → global default).
-- **Agent Runtime**: In-process agent sessions running as goroutines. Each session is a conversation loop: send messages to the LLM → receive response → execute tool calls → loop. Core tools include file I/O, shell, glob, grep, web fetch, subagent spawning, and progress reporting (`report_progress`, `update_task_status`, `report_blocker`, `request_review`, `query_job_context`, `log_artifact`). Sessions are tracked in SQLite and observable via the TUI. `spawn_agent` enforces a max depth of 1 (coordinators may spawn workers; workers may not spawn further agents) and propagates tool filtering via `filteredToolExecutor`.
-- **MCP Client**: `internal/mcp` package manages connections to external MCP servers (GitHub, Jira, Linear, etc.). Tools are namespaced as `{server_name}__{tool_name}` and merged into both the operator and agent tool sets. Failed servers are skipped with a warning. Server connection status is tracked and exposed via `Servers()` accessor. MCP tool results are automatically slimmed (strips nulls, `*_url` fields, API URLs, `node_id`, opaque blobs) and truncated (JSON-aware array shrinking with UTF-8 safe byte fallback, 16KB default) to prevent context window exhaustion.
+- **Agent Runtime**: In-process agent sessions running as goroutines. Each session is a conversation loop: send messages to the LLM → receive response → execute tool calls → loop. Core tools include file I/O, shell, glob, grep, web fetch, subagent spawning, and progress reporting (`report_progress`, `update_task_status`, `report_blocker`, `request_review`, `query_job_context`, `log_artifact`). Sessions are tracked in SQLite and observable via the TUI. `spawn_agent` enforces a max depth of 1 (coordinators may spawn workers; workers may not spawn further agents) and propagates tool filtering via `filteredToolExecutor`. `disallowed_tools` denylist is enforced at both the definition layer (tools excluded from `Definitions()`) and execution layer (rejected in `Execute()`) for defense-in-depth.
+- **MCP Client**: `internal/mcp` package manages connections to external MCP servers (GitHub, Jira, Linear, etc.). Tools are namespaced as `{server_name}__{tool_name}` and merged into both the operator and agent tool sets. Servers connect in parallel via `sync.WaitGroup`; failed servers are skipped with a warning. Server connection status is tracked and exposed via `Servers()` accessor. MCP tool results are automatically slimmed (strips nulls, `*_url` fields, API URLs, `node_id`, opaque blobs) and truncated (JSON-aware array shrinking with UTF-8 safe byte fallback, 16KB default) to prevent context window exhaustion.
 - **Provider Registry**: Multi-provider LLM abstraction supporting OpenAI-compatible APIs (LM Studio, Ollama, OpenAI) and Anthropic's Messages API. Providers are configured in YAML and looked up by name. Anthropic supports both API key and Keychain/OAuth authentication.
 - **SQLite Persistence**: Operational state stored in SQLite via `modernc.org/sqlite` (pure Go). WAL mode for concurrent reads. Schema includes jobs, tasks, task dependencies, progress reports, skills, agents, teams, team_agents, feed_entries, sessions, and artifacts. Auto-migrating on open. Definition tables (skills, agents, teams) are a runtime cache rebuilt from files on startup; operational tables (jobs, tasks, sessions) are persistent.
 - **Bootstrap**: On first run, `internal/bootstrap` copies embedded default system team files from `defaults/system/` to `~/.config/toasters/system/`, creates the `user/` directory structure, and detects auto-teams. On upgrade, migrates old `teams/` layout to `user/teams/`.
@@ -192,11 +195,37 @@ Full details: `PRE_PHASE_4_WAVE_2.md`
 - [x] **STRUCT-2**: Consolidated `ToolDef` type — shared `internal/tooldef/` package replaces duplicate definitions in runtime and progress
 - [x] **CONC-6**: Fixed post-shutdown TUI sends — nil-guard all `prog.Send()` call sites, clear atomic pointer after `prog.Run()` returns
 
+### Pre-Phase 4 Wave 3 — QOL Batch ✅
+
+**Status: Complete (2026-02-28)**
+
+20 QOL fixes across 13 packages — security hardening, concurrency fixes, type consolidation, style cleanup, and documentation.
+
+- [x] **QUAL-7**: Fixed `SplitFrontmatter` Windows line endings — added `\r` to delimiter detection
+- [x] **QUAL-3**: Removed all store nil guards from `CoreTools` — store is required, not optional
+- [x] **SEC-HIGH-3**: Added plaintext API key warning at startup + `chmod 0600` on config file
+- [x] **SEC-MEDIUM-4**: Fixed `glob` pattern traversal — base directory validated within workspace
+- [x] **CONC-3**: Fixed MCP Manager `Close()` race — `recover()` wrapper in `Call()` catches use-after-close panics
+- [x] **CONC-8**: Parallelized MCP server connections via `sync.WaitGroup`
+- [x] **CONC-1**: Documented `Session.messages` concurrency contract
+- [x] **STRUCT-3**: Consolidated `ProviderConfig` — single definition in `provider` package, removed duplicate from `config`
+- [x] **STRUCT-4**: Consolidated `MCPCaller` interface — canonical definition in `tooldef` package, type alias in `runtime`
+- [x] **STRUCT-7**: Added `DefinitionsByName()` helper to `CoreTools`, eliminated manual map construction in `SpawnTeamLead`
+- [x] Standardized UUID library — all code uses `gofrs/uuid/v5`, removed `google/uuid` as direct dependency
+- [x] Added `disallowed_tools` denylist enforcement at execution time — defense-in-depth in `CoreTools.Execute()`
+- [x] Added 1 MiB file size limit to `agentfmt.ParseFile` (matches loader limit)
+- [x] Deduplicated tool schemas in `progress/server.go` — driven by `ProgressToolDefs()`, removed ~100 lines of inline JSON
+- [x] Standardized TUI modal styles — renamed `Teams*` prefixes to `Modal*`, removed alias indirection
+- [x] Moved `editorFinishedMsg` to `messages.go` (shared TUI message types)
+- [x] Fixed `humanizeDirName` abbreviations — QA, CI, CD, API, UI, UX, DB, ML, AI, SRE, DevOps
+- [x] Added doc comments on exported `agentfmt` export functions and `loader.Slugify`
+- [x] Cleaned up 14 stale/resolved deferred items from `PHASE_4.md`
+
 ### Remaining Findings (from PRE_PHASE_4_ARCH_REVIEW.md)
 
-17 findings resolved across Waves 1-2. Remaining open findings (23) are tracked in `PRE_PHASE_4_ARCH_REVIEW.md` Section 10. Key remaining items for future waves:
+27 findings resolved across Waves 1-3. Remaining open findings (13) are tracked in `PRE_PHASE_4_ARCH_REVIEW.md` Section 10. Key remaining items for future waves:
 - **ARCH-1/CONC-5**: Operator blocks during tool execution (non-blocking tool execution — large effort)
 - **SEC-HIGH-1**: Shell tool sandboxing (design tradeoff — large effort)
-- **SEC-HIGH-3**: API key management improvements
 - **ARCH-4**: Operator → TUI backpressure
-- Various LOW findings (STRUCT-3/4/7, CONC-7/8, QUAL-2–7)
+- **SEC-MEDIUM-5**: MCP subprocess trust
+- Various LOW findings (CONC-7, QUAL-2/4/5/6)

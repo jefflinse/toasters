@@ -660,7 +660,7 @@ Auto-detection of file type (skill/agent/team) and format (Toasters/Claude Code/
 | STRUCT-1 | HIGH | Architecture | Two parallel tool systems, duplicated SSRF | ✅ Wave 1 (SSRF) + Wave 2 (tool systems consolidated) |
 | SEC-HIGH-1 | HIGH | Security | Shell tool has no sandboxing (design tradeoff) | |
 | SEC-HIGH-2 | HIGH | Security | Incomplete `.gitignore` | ✅ Wave 1 |
-| SEC-HIGH-3 | HIGH | Security | API keys in plaintext config | |
+| SEC-HIGH-3 | HIGH | Security | API keys in plaintext config | ✅ Wave 3 (startup warning + chmod 0600) |
 | ARCH-1 | MEDIUM | Architecture | Operator blocks during tool execution | |
 | ARCH-2 | MEDIUM | Architecture | Self-send deadlock potential | ✅ Wave 2 |
 | ARCH-3 | MEDIUM | Architecture | Naive conversation window truncation | ✅ Wave 2 |
@@ -668,31 +668,31 @@ Auto-detection of file type (skill/agent/team) and format (Toasters/Claude Code/
 | ARCH-5 | MEDIUM | Architecture | Legacy dual-path complexity in TUI | ✅ Wave 2 |
 | STRUCT-2 | MEDIUM | Architecture | `ToolDef` type duplication | ✅ Wave 2 |
 | DEAD-3 | MEDIUM | Dead Code | `llm/tools` package misplacement | ✅ Wave 2 (deleted — superseded by operator SystemTools) |
-| CONC-1 | MEDIUM | Concurrency | `Session.messages` mixed synchronization | |
+| CONC-1 | MEDIUM | Concurrency | `Session.messages` mixed synchronization | ✅ Wave 3 (documented concurrency contract) |
 | CONC-2 | MEDIUM | Concurrency | Operator self-send deadlock potential | ✅ Wave 2 |
-| CONC-3 | MEDIUM | Concurrency | MCP Manager Close() race | |
+| CONC-3 | MEDIUM | Concurrency | MCP Manager Close() race | ✅ Wave 3 (recover wrapper in Call) |
 | CONC-4 | MEDIUM | Concurrency | Runtime.Shutdown() busy-wait, no timeout | ✅ Wave 1 |
 | CONC-5 | MEDIUM | Concurrency | Operator tool execution blocks event loop | |
 | SEC-MEDIUM-1 | MEDIUM | Security | `editFile` no size limit | ✅ Wave 1 |
 | SEC-MEDIUM-2 | MEDIUM | Security | `writeFile` no content size limit | ✅ Wave 1 |
 | SEC-MEDIUM-3 | MEDIUM | Security | Token refresh race condition | ✅ Wave 1 |
-| SEC-MEDIUM-4 | MEDIUM | Security | `glob` pattern traversal | |
+| SEC-MEDIUM-4 | MEDIUM | Security | `glob` pattern traversal | ✅ Wave 3 (base dir validation) |
 | SEC-MEDIUM-5 | MEDIUM | Security | MCP subprocess trust | |
 | QUAL-1 | MEDIUM | Quality | `fetchWebpage` missing context | ✅ Wave 1 |
-| STRUCT-3 | LOW | Architecture | `ProviderConfig` duplication | |
-| STRUCT-4 | LOW | Architecture | `MCPCaller` interface duplication | |
+| STRUCT-3 | LOW | Architecture | `ProviderConfig` duplication | ✅ Wave 3 (consolidated to provider pkg) |
+| STRUCT-4 | LOW | Architecture | `MCPCaller` interface duplication | ✅ Wave 3 (consolidated to tooldef pkg) |
 | STRUCT-5 | LOW | Architecture | `ToolExecutor` name collision | ✅ Wave 2 (llm/tools deleted) |
 | STRUCT-6 | LOW | Architecture | `ToolExecutor` partial construction | ✅ Wave 2 (llm/tools deleted) |
-| STRUCT-7 | LOW | Architecture | SpawnTeamLead coupling risk | |
+| STRUCT-7 | LOW | Architecture | SpawnTeamLead coupling risk | ✅ Wave 3 (DefinitionsByName helper) |
 | CONC-6 | LOW | Concurrency | Post-shutdown TUI sends | ✅ Wave 2 |
 | CONC-7 | LOW | Concurrency | Subscriber event drops (intentional) | |
-| CONC-8 | LOW | Concurrency | MCP sequential connection | |
+| CONC-8 | LOW | Concurrency | MCP sequential connection | ✅ Wave 3 (parallel via WaitGroup) |
 | QUAL-2 | LOW | Quality | No tests for `cmd/` package | |
-| QUAL-3 | LOW | Quality | Store optional everywhere pattern | |
+| QUAL-3 | LOW | Quality | Store optional everywhere pattern | ✅ Wave 3 (nil guards removed, store required) |
 | QUAL-4 | LOW | Quality | `RebuildDefinitions` duplicates insert logic | |
 | QUAL-5 | LOW | Quality | No incremental definition updates | |
 | QUAL-6 | LOW | Quality | `agentfmt` type detection is heuristic | |
-| QUAL-7 | LOW | Quality | `SplitFrontmatter` Windows line endings | |
+| QUAL-7 | LOW | Quality | `SplitFrontmatter` Windows line endings | ✅ Wave 3 (\\r in TrimRight) |
 
 ### By Category
 
