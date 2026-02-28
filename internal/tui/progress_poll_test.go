@@ -57,6 +57,9 @@ func (m *mockStore) UpdateTaskStatus(ctx context.Context, id string, status db.T
 func (m *mockStore) UpdateTaskResult(ctx context.Context, id string, resultSummary, recommendations string) error {
 	return nil
 }
+func (m *mockStore) CompleteTask(ctx context.Context, id string, status db.TaskStatus, summary, recommendations string) error {
+	return nil
+}
 func (m *mockStore) AssignTask(ctx context.Context, id string, teamID string) error {
 	return nil
 }

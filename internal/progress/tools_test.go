@@ -18,7 +18,7 @@ func TestProgressToolDefs_Names(t *testing.T) {
 	defs := ProgressToolDefs()
 
 	wantNames := []string{
-		"report_progress",
+		"report_task_progress",
 		"report_blocker",
 		"update_task_status",
 		"request_review",
@@ -178,7 +178,7 @@ func TestProgressToolDefs_SpecificRequiredFields(t *testing.T) {
 		toolName string
 		required []string
 	}{
-		{"report_progress", []string{"job_id", "status", "message"}},
+		{"report_task_progress", []string{"job_id", "status", "message"}},
 		{"report_blocker", []string{"job_id", "description", "severity"}},
 		{"update_task_status", []string{"job_id", "task_id", "status"}},
 		{"request_review", []string{"job_id", "artifact_path"}},

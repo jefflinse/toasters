@@ -85,6 +85,10 @@ func (m *mockStore) UpdateTaskStatus(ctx context.Context, id string, status db.T
 	return nil
 }
 
+func (m *mockStore) CompleteTask(_ context.Context, _ string, _ db.TaskStatus, _, _ string) error {
+	return nil
+}
+
 func (m *mockStore) GetJob(ctx context.Context, id string) (*db.Job, error) {
 	if m.getJobFn != nil {
 		return m.getJobFn(ctx, id)
@@ -115,16 +119,16 @@ func (m *mockStore) ListArtifactsForJob(ctx context.Context, jobID string) ([]*d
 
 func (m *mockStore) Close() error { return nil }
 
-// --- ReportProgress tests ---
+// --- ReportTaskProgress tests ---
 
-func TestReportProgress_Success(t *testing.T) {
+func TestReportTaskProgress_Success(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	store := openTestStore(t)
 
 	createTestJob(t, ctx, store, "job-1")
 
-	params := ReportProgressParams{
+	params := ReportTaskProgressParams{
 		JobID:   "job-1",
 		TaskID:  "task-1",
 		AgentID: "agent-1",
@@ -132,9 +136,9 @@ func TestReportProgress_Success(t *testing.T) {
 		Message: "working on it",
 	}
 
-	result, err := ReportProgress(ctx, store, params)
+	result, err := ReportTaskProgress(ctx, store, params)
 	if err != nil {
-		t.Fatalf("ReportProgress: %v", err)
+		t.Fatalf("ReportTaskProgress: %v", err)
 	}
 	if result != "progress reported" {
 		t.Errorf("result = %q, want %q", result, "progress reported")
@@ -166,7 +170,7 @@ func TestReportProgress_Success(t *testing.T) {
 	}
 }
 
-func TestReportProgress_StoreError(t *testing.T) {
+func TestReportTaskProgress_StoreError(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	storeErr := errors.New("db exploded")
@@ -176,7 +180,7 @@ func TestReportProgress_StoreError(t *testing.T) {
 		},
 	}
 
-	_, err := ReportProgress(ctx, store, ReportProgressParams{
+	_, err := ReportTaskProgress(ctx, store, ReportTaskProgressParams{
 		JobID:   "job-1",
 		Status:  "in_progress",
 		Message: "hello",
@@ -189,7 +193,7 @@ func TestReportProgress_StoreError(t *testing.T) {
 	}
 }
 
-func TestReportProgress_EmptyOptionalFields(t *testing.T) {
+func TestReportTaskProgress_EmptyOptionalFields(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	store := openTestStore(t)
@@ -197,15 +201,15 @@ func TestReportProgress_EmptyOptionalFields(t *testing.T) {
 	createTestJob(t, ctx, store, "job-empty")
 
 	// TaskID and AgentID are optional — should succeed with empty strings.
-	params := ReportProgressParams{
+	params := ReportTaskProgressParams{
 		JobID:   "job-empty",
 		Status:  "completed",
 		Message: "done",
 	}
 
-	result, err := ReportProgress(ctx, store, params)
+	result, err := ReportTaskProgress(ctx, store, params)
 	if err != nil {
-		t.Fatalf("ReportProgress with empty optional fields: %v", err)
+		t.Fatalf("ReportTaskProgress with empty optional fields: %v", err)
 	}
 	if result != "progress reported" {
 		t.Errorf("result = %q, want %q", result, "progress reported")

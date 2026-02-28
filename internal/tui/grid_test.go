@@ -518,12 +518,24 @@ func TestActivityLabel(t *testing.T) {
 			want:     "spawn: worker",
 		},
 
-		// --- report_progress ---
+		// --- report_progress / report_task_progress ---
 		{
 			name:     "report_progress short message not truncated",
 			toolName: "report_progress",
 			args:     json.RawMessage(`{"message": "done"}`),
 			want:     "progress: done",
+		},
+		{
+			name:     "report_task_progress maps to same label as report_progress",
+			toolName: "report_task_progress",
+			args:     json.RawMessage(`{"message": "halfway there"}`),
+			want:     "progress: halfway there",
+		},
+		{
+			name:     "report_task_progress with empty message returns sentinel",
+			toolName: "report_task_progress",
+			args:     json.RawMessage(`{}`),
+			want:     "progress: (no message)",
 		},
 		{
 			name:     "report_progress long message truncated with ellipsis",
@@ -602,6 +614,46 @@ func TestActivityLabel(t *testing.T) {
 			toolName: "log_artifact",
 			args:     json.RawMessage(`{"name": "output.json"}`),
 			want:     "artifact: output.json",
+		},
+
+		// --- complete_task ---
+		{
+			name:     "complete_task with summary",
+			toolName: "complete_task",
+			args:     json.RawMessage(`{"summary": "all tests passing"}`),
+			want:     "task: all tests passing",
+		},
+		{
+			name:     "complete_task with empty args returns sentinel",
+			toolName: "complete_task",
+			args:     json.RawMessage(`{}`),
+			want:     "task: completed",
+		},
+		{
+			name:     "complete_task with long summary truncated",
+			toolName: "complete_task",
+			args:     json.RawMessage(`{"summary": "implemented all core data models and tests"}`),
+			want:     "task: implemented all core data mo…",
+		},
+
+		// --- request_new_task ---
+		{
+			name:     "request_new_task with description",
+			toolName: "request_new_task",
+			args:     json.RawMessage(`{"description": "add caching layer"}`),
+			want:     "request: add caching layer",
+		},
+		{
+			name:     "request_new_task with empty args returns sentinel",
+			toolName: "request_new_task",
+			args:     json.RawMessage(`{}`),
+			want:     "request: new task",
+		},
+		{
+			name:     "request_new_task with long description truncated",
+			toolName: "request_new_task",
+			args:     json.RawMessage(`{"description": "refactor the entire authentication subsystem"}`),
+			want:     "request: refactor the entire authenti…",
 		},
 
 		// --- MCP-namespaced tools ---

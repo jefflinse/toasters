@@ -45,6 +45,11 @@ func (r *Runtime) SetMCPCaller(caller MCPCaller, defs []ToolDef) {
 
 // SpawnAgent creates and starts a new agent session.
 func (r *Runtime) SpawnAgent(ctx context.Context, opts SpawnOpts) (*Session, error) {
+	// Validate mutually exclusive options.
+	if opts.ToolExecutor != nil && opts.ExtraTools != nil {
+		return nil, fmt.Errorf("SpawnOpts.ToolExecutor and SpawnOpts.ExtraTools are mutually exclusive")
+	}
+
 	// Look up provider from registry.
 	p, ok := r.providers.Get(opts.ProviderName)
 	if !ok {
@@ -86,6 +91,12 @@ func (r *Runtime) SpawnAgent(ctx context.Context, opts SpawnOpts) (*Session, err
 		} else {
 			tools = coreTools
 		}
+	}
+
+	// If the caller provided extra tools, layer them on top of the base tools
+	// so they get dispatch priority.
+	if opts.ExtraTools != nil {
+		tools = NewLayeredToolExecutor(tools, opts.ExtraTools)
 	}
 
 	// If the caller requested a specific tool subset, wrap the executor so that

@@ -352,7 +352,11 @@ func (st *SystemTools) assignTask(ctx context.Context, args json.RawMessage) (st
 	}
 	// Build the initial message for the team lead from the task and job context.
 	initialMsg := fmt.Sprintf("Task: %s\n\nJob: %s\n%s", task.Title, job.Title, job.Description)
-	if err := st.spawner.SpawnTeamLead(ctx, composed, params.TaskID, task.JobID, job.WorkspaceDir, initialMsg); err != nil {
+
+	// Create team lead tools that send events through the operator's event channel.
+	teamLeadTools := NewTeamLeadTools(st.store, st.eventCh, params.TaskID, task.JobID, params.TeamID)
+
+	if err := st.spawner.SpawnTeamLead(ctx, composed, params.TaskID, task.JobID, job.WorkspaceDir, initialMsg, teamLeadTools); err != nil {
 		return "", fmt.Errorf("spawning team lead: %w", err)
 	}
 

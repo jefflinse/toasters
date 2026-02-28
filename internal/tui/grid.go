@@ -520,7 +520,7 @@ func activityLabel(toolName string, args json.RawMessage) string {
 			name = "worker"
 		}
 		return "spawn: " + name
-	case "report_progress":
+	case "report_progress", "report_task_progress":
 		msg := str("message")
 		if msg == "" {
 			return "progress: (no message)"
@@ -550,6 +550,18 @@ func activityLabel(toolName string, args json.RawMessage) string {
 		return "review: requested"
 	case "query_job_context":
 		return "query: job context"
+	case "complete_task":
+		summary := str("summary")
+		if summary == "" {
+			return "task: completed"
+		}
+		return "task: " + trunc(summary, 28)
+	case "request_new_task":
+		desc := str("description")
+		if desc == "" {
+			return "request: new task"
+		}
+		return "request: " + trunc(desc, 28)
 	default:
 		// MCP-namespaced tools: "server__tool_name" → "server: tool_name"
 		if parts := strings.SplitN(toolName, "__", 2); len(parts) == 2 {

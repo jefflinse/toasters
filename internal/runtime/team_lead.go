@@ -11,14 +11,15 @@ import (
 // creating an import cycle: operator → runtime is fine; runtime → operator
 // would be a cycle.
 type TeamLeadSpawner interface {
-	SpawnTeamLead(ctx context.Context, composed *compose.ComposedAgent, taskID, jobID, workDir, taskDescription string) error
+	SpawnTeamLead(ctx context.Context, composed *compose.ComposedAgent, taskID, jobID, workDir, taskDescription string, extraTools ToolExecutor) error
 }
 
 // SpawnTeamLead implements TeamLeadSpawner. It spawns a team lead agent session
 // from a fully composed agent definition. The session runs fire-and-forget at
 // depth 0 (team leads may spawn workers; workers may not spawn further agents).
 // taskDescription is sent as the initial user message to kick off the conversation.
-func (r *Runtime) SpawnTeamLead(ctx context.Context, composed *compose.ComposedAgent, taskID, jobID, workDir, taskDescription string) error {
+// extraTools, if non-nil, are layered on top of CoreTools with dispatch priority.
+func (r *Runtime) SpawnTeamLead(ctx context.Context, composed *compose.ComposedAgent, taskID, jobID, workDir, taskDescription string, extraTools ToolExecutor) error {
 	// Resolve tool definitions from the composed tool name list. Team leads
 	// receive the full default CoreTools set filtered to the composed tool names.
 	// The actual ToolDef schemas are provided by CoreTools.Definitions() at
@@ -30,6 +31,7 @@ func (r *Runtime) SpawnTeamLead(ctx context.Context, composed *compose.ComposedA
 		Model:          composed.Model,
 		SystemPrompt:   composed.SystemPrompt,
 		InitialMessage: taskDescription,
+		ExtraTools:     extraTools,
 		JobID:          jobID,
 		TaskID:         taskID,
 		TeamName:       composed.TeamID,
@@ -59,8 +61,12 @@ func (r *Runtime) SpawnTeamLead(ctx context.Context, composed *compose.ComposedA
 			workDir,
 			WithShell(true),
 			WithSpawner(r, 0, defaultMaxDepth),
+			WithStore(r.store),
 		)
 		allDefs := tmp.Definitions()
+		if extraTools != nil {
+			allDefs = append(allDefs, extraTools.Definitions()...)
+		}
 		byName := make(map[string]ToolDef, len(allDefs))
 		for _, td := range allDefs {
 			byName[td.Name] = td

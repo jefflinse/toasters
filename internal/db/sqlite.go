@@ -313,6 +313,17 @@ func (s *SQLiteStore) UpdateTaskResult(ctx context.Context, id string, resultSum
 	return checkRowsAffected(result, "task", id)
 }
 
+func (s *SQLiteStore) CompleteTask(ctx context.Context, id string, status TaskStatus, summary, recommendations string) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	result, err := s.db.ExecContext(ctx,
+		"UPDATE tasks SET status = ?, summary = ?, result_summary = ?, recommendations = ?, updated_at = ? WHERE id = ?",
+		string(status), summary, summary, recommendations, now, id)
+	if err != nil {
+		return fmt.Errorf("completing task: %w", err)
+	}
+	return checkRowsAffected(result, "task", id)
+}
+
 func (s *SQLiteStore) AssignTask(ctx context.Context, id string, teamID string) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 	result, err := s.db.ExecContext(ctx,

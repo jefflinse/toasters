@@ -139,6 +139,7 @@ type RuntimeSessionStartedMsg struct {
 	TeamName       string // team this agent belongs to (may be empty)
 	Task           string // short human-readable description of what this agent is doing
 	JobID          string
+	TaskID         string
 	SystemPrompt   string
 	InitialMessage string
 }
@@ -153,6 +154,7 @@ type RuntimeSessionDoneMsg struct {
 	SessionID string
 	AgentName string
 	JobID     string
+	TaskID    string
 	FinalText string
 	Status    string // "completed", "failed", "cancelled"
 }

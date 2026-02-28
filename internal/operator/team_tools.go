@@ -150,23 +150,18 @@ func (tl *TeamLeadTools) completeTask(ctx context.Context, args json.RawMessage)
 		return "", fmt.Errorf("summary is required")
 	}
 
-	// 1. Update task status to completed with summary.
-	if err := tl.store.UpdateTaskStatus(ctx, tl.taskID, db.TaskStatusCompleted, params.Summary); err != nil {
-		return "", fmt.Errorf("updating task status: %w", err)
+	// Update task status, summary, and recommendations atomically.
+	if err := tl.store.CompleteTask(ctx, tl.taskID, db.TaskStatusCompleted, params.Summary, params.Recommendations); err != nil {
+		return "", fmt.Errorf("completing task: %w", err)
 	}
 
-	// 2. Update task result_summary and recommendations.
-	if err := tl.store.UpdateTaskResult(ctx, tl.taskID, params.Summary, params.Recommendations); err != nil {
-		return "", fmt.Errorf("updating task result: %w", err)
-	}
-
-	// 3. Check if there are more pending tasks for this job.
+	// Check if there are more pending tasks for this job.
 	readyTasks, err := tl.store.GetReadyTasks(ctx, tl.jobID)
 	if err != nil {
 		return "", fmt.Errorf("checking ready tasks: %w", err)
 	}
 
-	// 4. Send EventTaskCompleted.
+	// Send EventTaskCompleted.
 	trySendEvent(ctx, tl.eventCh, Event{
 		Type: EventTaskCompleted,
 		Payload: TaskCompletedPayload{

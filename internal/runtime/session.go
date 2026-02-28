@@ -21,6 +21,7 @@ type Session struct {
 	teamName     string // team this agent belongs to (may be empty)
 	task         string // short human-readable description of what this agent is doing
 	jobID        string
+	taskID       string
 	prov         provider.Provider
 	model        string
 	systemPrompt string
@@ -63,6 +64,7 @@ func newSession(id string, p provider.Provider, opts SpawnOpts, toolExec ToolExe
 		teamName:     opts.TeamName,
 		task:         opts.Task,
 		jobID:        opts.JobID,
+		taskID:       opts.TaskID,
 		prov:         p,
 		model:        opts.Model,
 		systemPrompt: opts.SystemPrompt,
@@ -289,6 +291,7 @@ func (s *Session) Snapshot() SessionSnapshot {
 		AgentID:   s.agentID,
 		TeamName:  s.teamName,
 		JobID:     s.jobID,
+		TaskID:    s.taskID,
 		Status:    status,
 		Model:     s.model,
 		Provider:  s.prov.Name(),

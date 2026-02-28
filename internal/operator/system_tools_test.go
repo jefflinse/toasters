@@ -31,12 +31,13 @@ type spawnCall struct {
 	JobID           string
 	WorkDir         string
 	TaskDescription string
+	ExtraTools      runtime.ToolExecutor
 }
 
-func (m *mockSpawner) SpawnTeamLead(_ context.Context, composed *compose.ComposedAgent, taskID string, jobID string, workDir string, taskDescription string) error {
+func (m *mockSpawner) SpawnTeamLead(_ context.Context, composed *compose.ComposedAgent, taskID string, jobID string, workDir string, taskDescription string, extraTools runtime.ToolExecutor) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.calls = append(m.calls, spawnCall{Composed: composed, TaskID: taskID, JobID: jobID, WorkDir: workDir, TaskDescription: taskDescription})
+	m.calls = append(m.calls, spawnCall{Composed: composed, TaskID: taskID, JobID: jobID, WorkDir: workDir, TaskDescription: taskDescription, ExtraTools: extraTools})
 	return nil
 }
 
@@ -316,6 +317,9 @@ func TestAssignTask(t *testing.T) {
 	assertEqual(t, taskID, calls[0].TaskID)
 	assertEqual(t, jobID, calls[0].JobID)
 	assertEqual(t, "lead-agent", calls[0].Composed.AgentID)
+	if calls[0].ExtraTools == nil {
+		t.Fatal("expected non-nil ExtraTools (TeamLeadTools) to be passed to SpawnTeamLead")
+	}
 
 	// Verify the job's workspace directory was propagated to the spawner.
 	job, err := store.GetJob(ctx, jobID)

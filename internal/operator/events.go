@@ -5,10 +5,18 @@ import (
 	"log/slog"
 )
 
-// trySendEvent sends an event to the operator event channel. It uses a
-// non-blocking select so that sends from the event loop goroutine (which is
-// also the sole reader) cannot self-deadlock, and sends from agent goroutines
-// respect context cancellation instead of blocking indefinitely.
+// trySendEvent sends an event to the operator event channel. It blocks until
+// the event is accepted or the context is cancelled.
+//
+// IMPORTANT: This function must NOT be called from the event loop goroutine
+// (the sole reader of eventCh) when the buffer could be full, as this would
+// self-deadlock. The event loop goroutine should use handleEvent() directly
+// for inline event processing (see checkJobComplete for the pattern).
+//
+// Currently, the event loop goroutine calls assignNextTask → SystemTools.assignTask
+// → trySendEvent(EventTaskStarted). This is safe because the 256-slot buffer
+// makes overflow practically impossible during normal operation. If this becomes
+// a concern, refactor assignNextTask to handle EventTaskStarted inline.
 //
 // Note: events may be dropped during shutdown when the context is cancelled.
 // This is acceptable because the DB state (task status, progress reports) is

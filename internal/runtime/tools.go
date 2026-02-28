@@ -124,18 +124,18 @@ func (ct *CoreTools) Execute(ctx context.Context, name string, args json.RawMess
 		return ct.webFetch(ctx, args)
 	case "spawn_agent":
 		return ct.spawnAgent(ctx, args)
-	case "report_progress":
+	case "report_task_progress":
 		if ct.store == nil {
 			return "progress reporting not available (no store)", nil
 		}
-		var params progress.ReportProgressParams
+		var params progress.ReportTaskProgressParams
 		if err := json.Unmarshal(args, &params); err != nil {
-			return "", fmt.Errorf("parsing report_progress args: %w", err)
+			return "", fmt.Errorf("parsing report_task_progress args: %w", err)
 		}
 		if params.AgentID == "" {
 			params.AgentID = ct.agentID
 		}
-		return progress.ReportProgress(ctx, ct.store, params)
+		return progress.ReportTaskProgress(ctx, ct.store, params)
 	case "report_blocker":
 		if ct.store == nil {
 			return "progress reporting not available (no store)", nil
@@ -857,6 +857,11 @@ func (ct *CoreTools) spawnAgent(ctx context.Context, args json.RawMessage) (stri
 		childAgentID = "worker"
 	}
 
+	// TODO: When WorkerTools event wiring is implemented, propagate the parent
+	// session's ExtraTools (or a worker-specific subset) to child sessions so
+	// that workers spawned by team leads get event-aware report_progress and
+	// query_team_context tools. Currently workers use CoreTools' report_task_progress
+	// which writes to DB but doesn't send operator events.
 	result, err := ct.spawner.SpawnAndWait(ctx, SpawnOpts{
 		SystemPrompt:   params.SystemPrompt,
 		InitialMessage: params.Message,

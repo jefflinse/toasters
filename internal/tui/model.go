@@ -268,6 +268,7 @@ type runtimeSlot struct {
 	teamName       string // team this agent belongs to (may be empty)
 	task           string // short human-readable description of what this agent is doing
 	jobID          string
+	taskID         string
 	status         string // "active", "completed", "failed", "cancelled"
 	output         strings.Builder
 	startTime      time.Time
@@ -1359,6 +1360,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			teamName:       msg.TeamName,
 			task:           msg.Task,
 			jobID:          msg.JobID,
+			taskID:         msg.TaskID,
 			status:         "active",
 			startTime:      time.Now(),
 			systemPrompt:   msg.SystemPrompt,
@@ -1426,6 +1428,26 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		slot.status = msg.Status
 		slot.endTime = time.Now()
 
+		cmds = append(cmds, m.addToast("🍞 "+msg.AgentName+" is done (runtime).", toastSuccess))
+
+		// If this session was working on a task that's already been handled
+		// by the operator event loop (team lead called complete_task, report_blocker,
+		// etc.), skip the operator notification to avoid duplicate handling.
+		if msg.TaskID != "" && m.store != nil {
+			taskHandled := false
+			ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+			if task, err := m.store.GetTask(ctx, msg.TaskID); err == nil {
+				switch task.Status {
+				case db.TaskStatusCompleted, db.TaskStatusFailed, db.TaskStatusBlocked:
+					taskHandled = true
+				}
+			}
+			cancel()
+			if taskHandled {
+				return m, tea.Batch(cmds...)
+			}
+		}
+
 		// Build completion notification for the operator from the runtime session output.
 		outputTail := slot.output.String()
 		const maxTail = 2000
@@ -1436,8 +1458,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			"Agent '%s' (runtime session) has completed (job: %s, status: %s).\n\nOutput (last 2000 chars):\n%s",
 			msg.AgentName, msg.JobID, msg.Status, outputTail,
 		)
-
-		cmds = append(cmds, m.addToast("🍞 "+msg.AgentName+" is done (runtime).", toastSuccess))
 
 		if m.stream.streaming {
 			m.chat.pendingCompletions = append(m.chat.pendingCompletions, pendingCompletion{

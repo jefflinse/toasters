@@ -8,8 +8,8 @@ import (
 	"github.com/jefflinse/toasters/internal/db"
 )
 
-// ReportProgressParams holds parameters for the report_progress tool.
-type ReportProgressParams struct {
+// ReportTaskProgressParams holds parameters for the report_task_progress tool.
+type ReportTaskProgressParams struct {
 	JobID   string `json:"job_id"`
 	TaskID  string `json:"task_id"`
 	AgentID string `json:"agent_id"`
@@ -66,8 +66,8 @@ var validProgressStatuses = map[string]bool{
 	"review_requested": true,
 }
 
-// ReportProgress records a progress update for a job or task.
-func ReportProgress(ctx context.Context, store db.Store, params ReportProgressParams) (string, error) {
+// ReportTaskProgress records a progress update for a job or task.
+func ReportTaskProgress(ctx context.Context, store db.Store, params ReportTaskProgressParams) (string, error) {
 	if !validProgressStatuses[params.Status] {
 		return "", fmt.Errorf("invalid status %q: must be one of in_progress, completed, failed, blocked", params.Status)
 	}

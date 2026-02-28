@@ -13,6 +13,7 @@ type SpawnOpts struct {
 	SystemPrompt   string
 	Tools          []ToolDef
 	ToolExecutor   ToolExecutor // optional; overrides default CoreTools when set
+	ExtraTools     ToolExecutor // optional; layered on top of CoreTools (overlay with dispatch priority)
 	JobID          string
 	TaskID         string
 	TeamName       string // team this agent belongs to (may be empty)
@@ -43,6 +44,7 @@ type SessionSnapshot struct {
 	AgentID   string
 	TeamName  string // team this agent belongs to (may be empty)
 	JobID     string
+	TaskID    string
 	Status    string
 	Model     string
 	Provider  string
