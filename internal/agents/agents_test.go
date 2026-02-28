@@ -3,60 +3,9 @@ package agents
 import (
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 )
-
-// --- ClaudePermissionArgs tests ---
-
-func TestClaudePermissionArgs_NoToolsBlock(t *testing.T) {
-	a := Agent{Name: "builder", HasToolsBlock: false}
-	got := a.ClaudePermissionArgs()
-	want := []string{"--dangerously-skip-permissions"}
-	if !slices.Equal(got, want) {
-		t.Errorf("got %v, want %v", got, want)
-	}
-}
-
-func TestClaudePermissionArgs_BashDenied(t *testing.T) {
-	a := Agent{
-		Name:          "docs-writer",
-		HasToolsBlock: true,
-		Tools:         map[string]bool{"bash": false},
-	}
-	got := a.ClaudePermissionArgs()
-	want := []string{"--permission-mode", "acceptEdits", "--allowedTools", "Read,Write,Edit,Glob,Grep,WebFetch,TodoRead,TodoWrite"}
-	if !slices.Equal(got, want) {
-		t.Errorf("got %v, want %v", got, want)
-	}
-}
-
-func TestClaudePermissionArgs_WriteEditDenied(t *testing.T) {
-	a := Agent{
-		Name:          "reader",
-		HasToolsBlock: true,
-		Tools:         map[string]bool{"write": false, "edit": false},
-	}
-	got := a.ClaudePermissionArgs()
-	want := []string{"--permission-mode", "acceptEdits", "--allowedTools", "Bash,Read,Glob,Grep,WebFetch,TodoRead,TodoWrite"}
-	if !slices.Equal(got, want) {
-		t.Errorf("got %v, want %v", got, want)
-	}
-}
-
-func TestClaudePermissionArgs_AllDenied(t *testing.T) {
-	a := Agent{
-		Name:          "readonly",
-		HasToolsBlock: true,
-		Tools:         map[string]bool{"bash": false, "write": false, "edit": false},
-	}
-	got := a.ClaudePermissionArgs()
-	want := []string{"--permission-mode", "acceptEdits", "--allowedTools", "Read,Glob,Grep,WebFetch,TodoRead,TodoWrite"}
-	if !slices.Equal(got, want) {
-		t.Errorf("got %v, want %v", got, want)
-	}
-}
 
 // --- ParseFile tools block tests ---
 
@@ -246,65 +195,6 @@ func TestDiscoverTeams(t *testing.T) {
 	})
 }
 
-// --- BuildSystemPrompt tests ---
-
-func TestBuildSystemPrompt_WithWorkers(t *testing.T) {
-	coord := Agent{Name: "coordinator", Body: "I am the coordinator."}
-	workers := []Agent{
-		{Name: "builder", Description: "Builds things"},
-		{Name: "tester", Description: "Tests things"},
-	}
-
-	got := BuildSystemPrompt(coord, workers)
-
-	// Must contain the coordinator body.
-	if !strings.Contains(got, "I am the coordinator.") {
-		t.Error("missing coordinator body")
-	}
-	// Must contain the separator.
-	if !strings.Contains(got, "---") {
-		t.Error("missing separator between coordinator body and wrapper")
-	}
-	// Must contain the wrapper prompt framing.
-	if !strings.Contains(got, "You are a coordinator agent operating inside toasters") {
-		t.Error("missing wrapper prompt framing")
-	}
-	// Must list workers.
-	if !strings.Contains(got, "`builder`: Builds things") {
-		t.Error("missing builder in roster")
-	}
-	if !strings.Contains(got, "`tester`: Tests things") {
-		t.Error("missing tester in roster")
-	}
-}
-
-func TestBuildSystemPrompt_NoWorkers(t *testing.T) {
-	coord := Agent{Name: "coordinator", Body: "Solo coordinator."}
-
-	got := BuildSystemPrompt(coord, nil)
-
-	if !strings.Contains(got, "No worker agents discovered.") {
-		t.Error("expected 'No worker agents discovered.' when no workers provided")
-	}
-}
-
-func TestBuildSystemPrompt_WorkersWithEmptyDescription(t *testing.T) {
-	coord := Agent{Name: "coordinator", Body: "Coord body."}
-	workers := []Agent{
-		{Name: "visible", Description: "Has a description"},
-		{Name: "hidden", Description: ""},
-	}
-
-	got := BuildSystemPrompt(coord, workers)
-
-	if !strings.Contains(got, "`visible`: Has a description") {
-		t.Error("missing visible worker in roster")
-	}
-	if strings.Contains(got, "`hidden`") {
-		t.Error("worker with empty description should be omitted from roster")
-	}
-}
-
 // --- BuildTeamCoordinatorPrompt tests ---
 
 func TestBuildTeamCoordinatorPrompt_WithCoordinatorAndWorkers(t *testing.T) {
@@ -383,69 +273,6 @@ func TestBuildTeamCoordinatorPrompt_NoWorkers(t *testing.T) {
 
 	if !strings.Contains(got, "(no workers configured)") {
 		t.Error("expected '(no workers configured)' when no workers")
-	}
-}
-
-// --- BuildOperatorPrompt tests ---
-
-func TestBuildOperatorPrompt_WithTeams(t *testing.T) {
-	coord := Agent{Name: "lead", Description: "Leads coding"}
-	teams := []Team{
-		{
-			Name:        "coding",
-			Coordinator: &coord,
-			Workers:     []Agent{{Name: "builder", Description: "Builds"}},
-		},
-		{
-			Name:        "docs",
-			Coordinator: nil,
-			Workers:     []Agent{{Name: "writer"}, {Name: "editor"}},
-		},
-	}
-
-	got := BuildOperatorPrompt(teams, "")
-
-	// Must contain the operator framing.
-	if !strings.Contains(got, "You are the Operator") {
-		t.Error("missing operator framing")
-	}
-	// Must contain the Available Teams section.
-	if !strings.Contains(got, "## Available Teams") {
-		t.Error("missing Available Teams section")
-	}
-	// Team with coordinator shows coordinator description.
-	if !strings.Contains(got, "`coding`: Leads coding") {
-		t.Error("missing coding team with coordinator description")
-	}
-	// Team without coordinator shows worker count.
-	if !strings.Contains(got, "`docs`: 2 workers") {
-		t.Error("missing docs team with worker count")
-	}
-}
-
-func TestBuildOperatorPrompt_NoTeams(t *testing.T) {
-	got := BuildOperatorPrompt(nil, "")
-
-	if !strings.Contains(got, "No teams configured") {
-		t.Error("expected 'No teams configured' message when no teams")
-	}
-}
-
-func TestBuildOperatorPrompt_WithAwareness(t *testing.T) {
-	teams := []Team{
-		{Name: "coding", Coordinator: nil, Workers: []Agent{{Name: "w1"}}},
-	}
-
-	awareness := "Custom awareness text about teams."
-	got := BuildOperatorPrompt(teams, awareness)
-
-	// When awareness is provided, it should be used verbatim.
-	if !strings.Contains(got, "Custom awareness text about teams.") {
-		t.Error("expected awareness text to be used verbatim")
-	}
-	// The default team list should NOT appear.
-	if strings.Contains(got, "`coding`") {
-		t.Error("default team list should not appear when awareness is provided")
 	}
 }
 

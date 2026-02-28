@@ -18,24 +18,9 @@ import (
 )
 
 // spawnAgentTaskInstruction is the canonical instruction for populating the
-// "task" field when calling spawn_agent. It is referenced verbatim in both
-// WrapperPrompt and BuildTeamCoordinatorPrompt so the two stay in sync.
+// "task" field when calling spawn_agent. It is referenced verbatim in
+// BuildTeamCoordinatorPrompt so the two stay in sync.
 const spawnAgentTaskInstruction = `When calling spawn_agent, always populate the "task" field with a short (≤60 char) description of what the worker is being asked to do. This is shown in the TUI card so the operator can monitor progress at a glance. Example: "building core data models", "performing code review", "writing unit tests".`
-
-// WrapperPrompt is the toasters-owned framing text appended to every coordinator
-// system prompt. The %s placeholder is replaced with the agent roster at runtime.
-const WrapperPrompt = `You are a coordinator agent operating inside toasters, an agentic orchestration tool. You lead a team of specialized workers.
-
-Your job is to take the assigned task, plan the work, and delegate subtasks to your workers using the Task tool. Each worker is a Claude subagent with a specific role — delegate to them by their role/description, not by name. Do not perform domain work yourself; delegate it.
-
-` + spawnAgentTaskInstruction + `
-
-When the job is complete, write a REPORT.md to the job directory summarizing what was done.
-
-If you hit a genuine blocker that requires human input, write a BLOCKER.md to the job directory and stop.
-
-Available workers:
-%s`
 
 // Agent represents a single agent loaded from a Markdown file.
 type Agent struct {
@@ -46,7 +31,7 @@ type Agent struct {
 	Color         string          // from frontmatter "color" field (hex color, e.g. "#FF9800")
 	Temperature   float64         // from frontmatter "temperature" field (0 if absent)
 	Body          string          // the system prompt text (everything after the closing --- of frontmatter)
-	Tools         map[string]bool // legacy enable/disable map for ClaudePermissionArgs compat
+	Tools         map[string]bool // tool enable/disable map from agent frontmatter (populated by agentfmt)
 	HasToolsBlock bool            // true if allowed or disallowed tools were specified
 
 	// Superset fields from agentfmt.
@@ -67,55 +52,6 @@ type Agent struct {
 	Hooks           map[string]any // lifecycle hooks
 	Background      bool           // run in background
 	Isolation       string         // isolation mode (e.g. "container")
-}
-
-// ClaudePermissionArgs returns the Claude CLI permission flags for this agent.
-//
-// If the agent has a tools: block in its frontmatter, the denied tools are
-// translated to a --allowedTools allow-list (full set minus denied tools).
-// If no tools: block is present, --dangerously-skip-permissions is used
-// (full access — appropriate for agents like builder that need everything).
-//
-// Note: when --allowedTools is used, the prompt MUST be passed via stdin
-// rather than as a positional argument, as the flag greedily consumes
-// subsequent positional args as tool names. The gateway handles this.
-func (a Agent) ClaudePermissionArgs() []string {
-	if !a.HasToolsBlock {
-		return []string{"--dangerously-skip-permissions"}
-	}
-
-	// Full set of Claude Code built-in tools.
-	fullSet := []string{"Bash", "Read", "Write", "Edit", "Glob", "Grep", "WebFetch", "TodoRead", "TodoWrite"}
-
-	// OpenCode tools: key → Claude Code tool name.
-	openCodeToClaudeCode := map[string]string{
-		"bash":  "Bash",
-		"write": "Write",
-		"edit":  "Edit",
-	}
-
-	denied := map[string]bool{}
-	for ocKey, allowed := range a.Tools {
-		if !allowed {
-			if ccName, ok := openCodeToClaudeCode[ocKey]; ok {
-				denied[ccName] = true
-			}
-		}
-	}
-
-	var allowed []string
-	for _, tool := range fullSet {
-		if !denied[tool] {
-			allowed = append(allowed, tool)
-		}
-	}
-
-	if len(allowed) == 0 {
-		return []string{"--permission-mode", "bypassPermissions"}
-	}
-	// --permission-mode acceptEdits prevents the interactive plan-approval prompt
-	// while still respecting the --allowedTools constraint.
-	return []string{"--permission-mode", "acceptEdits", "--allowedTools", strings.Join(allowed, ",")}
 }
 
 // Registry holds a set of agents split into a coordinator and workers.
@@ -492,30 +428,6 @@ type Team struct {
 	Workers     []Agent // all non-coordinator agents
 }
 
-// BuildSystemPrompt assembles the full system prompt for the coordinator by
-// appending the toasters wrapper (with agent roster) to the coordinator's body.
-//
-// Workers with an empty description are omitted from the roster. If no workers
-// are present, the roster section reads "No worker agents discovered."
-func BuildSystemPrompt(coordinator Agent, workers []Agent) string {
-	var rosterLines []string
-	for _, w := range workers {
-		if w.Description == "" {
-			continue
-		}
-		rosterLines = append(rosterLines, fmt.Sprintf("- `%s`: %s", w.Name, w.Description))
-	}
-
-	var roster string
-	if len(rosterLines) == 0 {
-		roster = "No worker agents discovered."
-	} else {
-		roster = strings.Join(rosterLines, "\n")
-	}
-
-	return coordinator.Body + "\n\n---\n\n" + fmt.Sprintf(WrapperPrompt, roster)
-}
-
 // DiscoverTeams loads all teams from subdirectories of teamsDir.
 //
 // Each subdirectory (excluding hidden dirs starting with ".") is treated as a
@@ -877,74 +789,4 @@ func rewriteMode(content, mode string) string {
 	sb.WriteString("\n" + delim)
 	sb.WriteString(afterClose)
 	return sb.String()
-}
-
-// BuildOperatorPrompt returns the hardcoded toasters operator system prompt,
-// listing all available teams.
-//
-// When awareness is non-empty it is used verbatim as the body of the
-// "## Available Teams" section. When awareness is empty the fallback
-// one-liner-per-team list is used instead.
-func BuildOperatorPrompt(teams []Team, awareness string) string {
-	var teamsSection string
-	if awareness != "" {
-		teamsSection = awareness
-	} else {
-		var teamList strings.Builder
-		if len(teams) == 0 {
-			teamList.WriteString("No teams configured. Ask the user to set up a teams directory.")
-		} else {
-			for _, t := range teams {
-				if t.Coordinator != nil {
-					fmt.Fprintf(&teamList, "- `%s`: %s\n", t.Name, t.Coordinator.Description)
-				} else {
-					fmt.Fprintf(&teamList, "- `%s`: %d workers\n", t.Name, len(t.Workers))
-				}
-			}
-		}
-		teamsSection = strings.TrimRight(teamList.String(), "\n")
-	}
-
-	return fmt.Sprintf(`You are the Operator — a dispatcher that receives user requests, manages jobs, and assigns work to teams. You do NOT do domain work yourself.
-
-## When to Create a Job
-
-Create a job only when explicitly triggered:
-- User message starts with `+"`[JOB REQUEST]`"+`
-- User explicitly says "create a job", "new job:", "start a job", or similar
-
-When creating a job: call `+"`job_create`"+`, then immediately call `+"`assign_team`"+` with the job ID to select the best team. The TUI will confirm with the user before the team starts work. To start work on an existing job, call `+"`assign_team`"+` directly with the existing job ID — no need to call `+"`job_create`"+` again.
-
-## When NOT to Create a Job
-
-Do not create a job for:
-- Status checks ("what's the status of...", "how is X going")
-- Questions or requests for information
-- Simple tasks that don't require background agent work
-- Anything not clearly requesting a new job
-
-If unsure → use `+"`ask_user`"+` to confirm before calling `+"`job_create`"+`.
-
-## For Non-Job Requests
-
-Respond directly using available tools (`+"`job_list`"+`, `+"`job_read_overview`"+`, `+"`fetch_webpage`"+`, etc.) or answer conversationally. Do not create a job.
-
-## Job Tools
-
-`+"`job_create`"+`, `+"`job_list`"+`, `+"`job_read_overview`"+`, `+"`job_read_todos`"+`, `+"`job_update_overview`"+`, `+"`job_add_todo`"+`, `+"`job_complete_todo`"+`, `+"`job_set_status`"+`, `+"`assign_team`"+`, `+"`list_slots`"+`, `+"`kill_slot`"+`
-
-## Slot Management
-
-Use `+"`list_slots`"+` to see what's running. Use `+"`kill_slot`"+` to stop a running team (the TUI will confirm before killing).
-
-## On Team Completion
-
-When you receive a message that a team has completed work on a job:
-1. Review the exit summary and output.
-2. Call `+"`task_set_status`"+` to mark the completed task as done (use the task ID from `+"`job_read_overview`"+` if needed).
-3. If all tasks for the job are done, call `+"`job_set_status`"+` with status `+"`done`"+` to close the job.
-4. Summarize what was accomplished for the user.
-
-## Available Teams
-%s`, teamsSection)
 }

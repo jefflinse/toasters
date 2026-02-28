@@ -144,7 +144,7 @@ func TestNewMCPServer_ToolNames(t *testing.T) {
 	s := NewMCPServer(store)
 
 	wantTools := []string{
-		"report_progress",
+		"report_task_progress",
 		"report_blocker",
 		"update_task_status",
 		"request_review",
@@ -202,7 +202,7 @@ func TestMCPServer_ListTools(t *testing.T) {
 	}
 
 	wantNames := []string{
-		"report_progress",
+		"report_task_progress",
 		"report_blocker",
 		"update_task_status",
 		"request_review",
@@ -216,7 +216,7 @@ func TestMCPServer_ListTools(t *testing.T) {
 	}
 }
 
-func TestMCPServer_ReportProgress(t *testing.T) {
+func TestMCPServer_ReportTaskProgress(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	store := openTestStore(t)
@@ -227,7 +227,7 @@ func TestMCPServer_ReportProgress(t *testing.T) {
 	send, cleanup := startTestServer(t, store)
 	defer cleanup()
 
-	text, isError := callTool(t, send, 2, "report_progress", map[string]any{
+	text, isError := callTool(t, send, 2, "report_task_progress", map[string]any{
 		"job_id":   "job-mcp-rp",
 		"task_id":  "task-1",
 		"agent_id": "agent-1",
@@ -540,14 +540,14 @@ func TestMCPServer_ViaTestHelper(t *testing.T) {
 		t.Errorf("expected 6 tools, got %d", len(toolsList))
 	}
 
-	// Call report_progress and verify it persists.
-	text, isError := callTool(t, send, 11, "report_progress", map[string]any{
+	// Call report_task_progress and verify it persists.
+	text, isError := callTool(t, send, 11, "report_task_progress", map[string]any{
 		"job_id":  "job-via-helper",
 		"status":  "in_progress",
 		"message": "via helper test",
 	})
 	if isError {
-		t.Fatalf("report_progress returned error: %s", text)
+		t.Fatalf("report_task_progress returned error: %s", text)
 	}
 
 	reports, err := store.GetRecentProgress(ctx, "job-via-helper", 10)

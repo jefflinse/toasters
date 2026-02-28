@@ -7,6 +7,7 @@ agents:
   - planner
   - scheduler
   - blocker-handler
+  - decomposer
 skills:
   - orchestration
 ---
@@ -20,6 +21,7 @@ The system team is the backbone of toasters orchestration. It sits between the u
 - **Planner**: Analyzes requests, surveys available teams, and creates jobs with well-defined tasks. Produces the initial work breakdown.
 - **Scheduler**: Takes plans and turns them into concrete task assignments. Considers team capabilities and task dependencies.
 - **Blocker Handler**: Triages blocker reports from work teams. Decides whether a team can self-resolve with more context or whether the user needs to weigh in.
+- **Decomposer**: Analyzes a job description and workspace to produce a structured, dependency-ordered JSON task list with team assignments. Used when the operator needs a detailed breakdown before scheduling work.
 
 ## Norms
 

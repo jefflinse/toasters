@@ -171,13 +171,13 @@ var (
 					Foreground(lipgloss.Color("252")).
 					Background(lipgloss.Color("238"))
 
-	// ClaudeMetaStyle styles the status strip shown near the input during an active claude stream.
-	ClaudeMetaStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("250")).
-			Italic(true)
+	// OperatorMetaStyle styles the status strip shown near the input during an active operator stream.
+	OperatorMetaStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("250")).
+				Italic(true)
 
-	// ClaudeBylineStyle styles the dim byline shown above completed claude responses.
-	ClaudeBylineStyle = lipgloss.NewStyle().
+	// OperatorBylineStyle styles the dim byline shown above completed operator responses.
+	OperatorBylineStyle = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("250")).
 				Italic(true)
 

@@ -14,7 +14,7 @@ type ToolDef struct {
 func ProgressToolDefs() []ToolDef {
 	return []ToolDef{
 		{
-			Name:        "report_progress",
+			Name:        "report_task_progress",
 			Description: "Report progress on a task. Use this to keep the orchestrator informed of what you're doing.",
 			Parameters: json.RawMessage(`{
 				"type": "object",

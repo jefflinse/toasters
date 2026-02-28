@@ -183,18 +183,6 @@ func TestLoad_MissingConfigFile_AppliesDefaults(t *testing.T) {
 	if cfg.Operator.TeamsDir != wantTeamsDir {
 		t.Errorf("Operator.TeamsDir: got %q, want %q", cfg.Operator.TeamsDir, wantTeamsDir)
 	}
-	if cfg.Claude.Path != "claude" {
-		t.Errorf("Claude.Path: got %q, want %q", cfg.Claude.Path, "claude")
-	}
-	if cfg.Claude.DefaultModel != "" {
-		t.Errorf("Claude.DefaultModel: got %q, want %q", cfg.Claude.DefaultModel, "")
-	}
-	if cfg.Claude.PermissionMode != "" {
-		t.Errorf("Claude.PermissionMode: got %q, want %q", cfg.Claude.PermissionMode, "")
-	}
-	if cfg.Claude.SlotTimeoutMinutes != 15 {
-		t.Errorf("Claude.SlotTimeoutMinutes: got %d, want %d", cfg.Claude.SlotTimeoutMinutes, 15)
-	}
 }
 
 func TestLoad_WithConfigFile_OverridesDefaults(t *testing.T) {
@@ -216,11 +204,6 @@ operator:
   api_key: sk-test-key
   model: gpt-custom
   teams_dir: /custom/teams
-claude:
-  path: /usr/local/bin/claude
-  default_model: claude-opus-4-20250514
-  permission_mode: plan
-  slot_timeout_minutes: 30
 `)
 
 	cfg, err := Load()
@@ -246,18 +229,6 @@ claude:
 	if cfg.Operator.TeamsDir != "/custom/teams" {
 		t.Errorf("Operator.TeamsDir: got %q, want %q", cfg.Operator.TeamsDir, "/custom/teams")
 	}
-	if cfg.Claude.Path != "/usr/local/bin/claude" {
-		t.Errorf("Claude.Path: got %q, want %q", cfg.Claude.Path, "/usr/local/bin/claude")
-	}
-	if cfg.Claude.DefaultModel != "claude-opus-4-20250514" {
-		t.Errorf("Claude.DefaultModel: got %q, want %q", cfg.Claude.DefaultModel, "claude-opus-4-20250514")
-	}
-	if cfg.Claude.PermissionMode != "plan" {
-		t.Errorf("Claude.PermissionMode: got %q, want %q", cfg.Claude.PermissionMode, "plan")
-	}
-	if cfg.Claude.SlotTimeoutMinutes != 30 {
-		t.Errorf("Claude.SlotTimeoutMinutes: got %d, want %d", cfg.Claude.SlotTimeoutMinutes, 30)
-	}
 }
 
 func TestLoad_PartialConfig_MergesWithDefaults(t *testing.T) {
@@ -275,8 +246,6 @@ func TestLoad_PartialConfig_MergesWithDefaults(t *testing.T) {
 	writeConfigYAML(t, configDir, `
 operator:
   model: my-model
-claude:
-  permission_mode: plan
 `)
 
 	cfg, err := Load()
@@ -288,9 +257,6 @@ claude:
 	if cfg.Operator.Model != "my-model" {
 		t.Errorf("Operator.Model: got %q, want %q", cfg.Operator.Model, "my-model")
 	}
-	if cfg.Claude.PermissionMode != "plan" {
-		t.Errorf("Claude.PermissionMode: got %q, want %q", cfg.Claude.PermissionMode, "plan")
-	}
 
 	// Default values should still be applied.
 	if cfg.Operator.Provider != "local" {
@@ -298,12 +264,6 @@ claude:
 	}
 	if cfg.Operator.Endpoint != "http://localhost:1234" {
 		t.Errorf("Operator.Endpoint: got %q, want %q (default)", cfg.Operator.Endpoint, "http://localhost:1234")
-	}
-	if cfg.Claude.Path != "claude" {
-		t.Errorf("Claude.Path: got %q, want %q (default)", cfg.Claude.Path, "claude")
-	}
-	if cfg.Claude.SlotTimeoutMinutes != 15 {
-		t.Errorf("Claude.SlotTimeoutMinutes: got %d, want %d (default)", cfg.Claude.SlotTimeoutMinutes, 15)
 	}
 	wantWorkspace := filepath.Join(tmpHome, "toasters")
 	if cfg.WorkspaceDir != wantWorkspace {
@@ -358,12 +318,6 @@ func TestLoad_EmptyConfigFile_AppliesDefaults(t *testing.T) {
 	}
 	if cfg.Operator.Endpoint != "http://localhost:1234" {
 		t.Errorf("Operator.Endpoint: got %q, want %q", cfg.Operator.Endpoint, "http://localhost:1234")
-	}
-	if cfg.Claude.Path != "claude" {
-		t.Errorf("Claude.Path: got %q, want %q", cfg.Claude.Path, "claude")
-	}
-	if cfg.Claude.SlotTimeoutMinutes != 15 {
-		t.Errorf("Claude.SlotTimeoutMinutes: got %d, want %d", cfg.Claude.SlotTimeoutMinutes, 15)
 	}
 }
 
@@ -518,6 +472,50 @@ mcp:
 	}
 	if s.Env["token"] != "secret-token" {
 		t.Errorf("Env[token]: got %q, want %q", s.Env["token"], "secret-token")
+	}
+}
+
+// --- BindFlags tests ---
+
+// --- DatabasePath tests ---
+
+func TestDatabasePath_EmptyString_DefaultsToWorkspaceDir(t *testing.T) {
+	cfg := &Config{DatabasePath: ""}
+	got, err := DatabasePath(cfg, "/my/workspace")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := "/my/workspace/toasters.db"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestDatabasePath_ExplicitAbsolutePath_ReturnedUnchanged(t *testing.T) {
+	cfg := &Config{DatabasePath: "/custom/path/my.db"}
+	got, err := DatabasePath(cfg, "/my/workspace")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := "/custom/path/my.db"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestDatabasePath_TildePath_ExpandsHome(t *testing.T) {
+	cfg := &Config{DatabasePath: "~/data/toasters.db"}
+	got, err := DatabasePath(cfg, "/my/workspace")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatalf("getting home dir: %v", err)
+	}
+	want := filepath.Join(home, "data/toasters.db")
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
 	}
 }
 

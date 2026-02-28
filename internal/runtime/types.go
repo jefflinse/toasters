@@ -13,15 +13,17 @@ type SpawnOpts struct {
 	SystemPrompt   string
 	Tools          []ToolDef
 	ToolExecutor   ToolExecutor // optional; overrides default CoreTools when set
+	ExtraTools     ToolExecutor // optional; layered on top of CoreTools (overlay with dispatch priority)
 	JobID          string
 	TaskID         string
 	TeamName       string // team this agent belongs to (may be empty)
 	Task           string // short human-readable description of what this agent is doing (≤60 chars)
 	InitialMessage string
 	WorkDir        string
-	MaxTurns       int // 0 = use default (50)
-	MaxDepth       int // 0 = use default (1); coordinators may spawn workers, workers may not spawn further
-	Depth          int // current spawn depth (set by parent)
+	MaxTurns       int  // 0 = use default (50)
+	MaxDepth       int  // 0 = use default (1); coordinators may spawn workers, workers may not spawn further
+	Depth          int  // current spawn depth (set by parent)
+	Hidden         bool // when true, OnSessionStarted is not called (internal/system sessions)
 }
 
 const (
@@ -42,6 +44,7 @@ type SessionSnapshot struct {
 	AgentID   string
 	TeamName  string // team this agent belongs to (may be empty)
 	JobID     string
+	TaskID    string
 	Status    string
 	Model     string
 	Provider  string

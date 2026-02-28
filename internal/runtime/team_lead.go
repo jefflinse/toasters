@@ -11,29 +11,33 @@ import (
 // creating an import cycle: operator → runtime is fine; runtime → operator
 // would be a cycle.
 type TeamLeadSpawner interface {
-	SpawnTeamLead(ctx context.Context, composed *compose.ComposedAgent, taskID, jobID, workDir string) error
+	SpawnTeamLead(ctx context.Context, composed *compose.ComposedAgent, taskID, jobID, workDir, taskDescription string, extraTools ToolExecutor) error
 }
 
 // SpawnTeamLead implements TeamLeadSpawner. It spawns a team lead agent session
 // from a fully composed agent definition. The session runs fire-and-forget at
 // depth 0 (team leads may spawn workers; workers may not spawn further agents).
-func (r *Runtime) SpawnTeamLead(ctx context.Context, composed *compose.ComposedAgent, taskID, jobID, workDir string) error {
+// taskDescription is sent as the initial user message to kick off the conversation.
+// extraTools, if non-nil, are layered on top of CoreTools with dispatch priority.
+func (r *Runtime) SpawnTeamLead(ctx context.Context, composed *compose.ComposedAgent, taskID, jobID, workDir, taskDescription string, extraTools ToolExecutor) error {
 	// Resolve tool definitions from the composed tool name list. Team leads
 	// receive the full default CoreTools set filtered to the composed tool names.
 	// The actual ToolDef schemas are provided by CoreTools.Definitions() at
 	// session start; here we pass nil Tools so the session builds its own
 	// CoreTools stack (which will include spawn_agent at depth 0).
 	opts := SpawnOpts{
-		AgentID:      composed.AgentID,
-		ProviderName: composed.Provider,
-		Model:        composed.Model,
-		SystemPrompt: composed.SystemPrompt,
-		JobID:        jobID,
-		TaskID:       taskID,
-		TeamName:     composed.TeamID,
-		WorkDir:      workDir,
-		Depth:        0,
-		MaxDepth:     defaultMaxDepth,
+		AgentID:        composed.AgentID,
+		ProviderName:   composed.Provider,
+		Model:          composed.Model,
+		SystemPrompt:   composed.SystemPrompt,
+		InitialMessage: taskDescription,
+		ExtraTools:     extraTools,
+		JobID:          jobID,
+		TaskID:         taskID,
+		TeamName:       composed.TeamID,
+		WorkDir:        workDir,
+		Depth:          0,
+		MaxDepth:       defaultMaxDepth,
 	}
 
 	// Apply tool filter from composition if specified.
@@ -57,8 +61,12 @@ func (r *Runtime) SpawnTeamLead(ctx context.Context, composed *compose.ComposedA
 			workDir,
 			WithShell(true),
 			WithSpawner(r, 0, defaultMaxDepth),
+			WithStore(r.store),
 		)
 		allDefs := tmp.Definitions()
+		if extraTools != nil {
+			allDefs = append(allDefs, extraTools.Definitions()...)
+		}
 		byName := make(map[string]ToolDef, len(allDefs))
 		for _, td := range allDefs {
 			byName[td.Name] = td

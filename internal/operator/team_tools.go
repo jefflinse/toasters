@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/jefflinse/toasters/internal/db"
@@ -150,23 +151,18 @@ func (tl *TeamLeadTools) completeTask(ctx context.Context, args json.RawMessage)
 		return "", fmt.Errorf("summary is required")
 	}
 
-	// 1. Update task status to completed with summary.
-	if err := tl.store.UpdateTaskStatus(ctx, tl.taskID, db.TaskStatusCompleted, params.Summary); err != nil {
-		return "", fmt.Errorf("updating task status: %w", err)
+	// Update task status, summary, and recommendations atomically.
+	if err := tl.store.CompleteTask(ctx, tl.taskID, db.TaskStatusCompleted, params.Summary, params.Recommendations); err != nil {
+		return "", fmt.Errorf("completing task: %w", err)
 	}
 
-	// 2. Update task result_summary and recommendations.
-	if err := tl.store.UpdateTaskResult(ctx, tl.taskID, params.Summary, params.Recommendations); err != nil {
-		return "", fmt.Errorf("updating task result: %w", err)
-	}
-
-	// 3. Check if there are more pending tasks for this job.
+	// Check if there are more pending tasks for this job.
 	readyTasks, err := tl.store.GetReadyTasks(ctx, tl.jobID)
 	if err != nil {
 		return "", fmt.Errorf("checking ready tasks: %w", err)
 	}
 
-	// 4. Send EventTaskCompleted.
+	// Send EventTaskCompleted.
 	trySendEvent(ctx, tl.eventCh, Event{
 		Type: EventTaskCompleted,
 		Payload: TaskCompletedPayload{
@@ -403,6 +399,9 @@ func formatJobContext(ctx context.Context, store db.Store, jobID string) (string
 	if job.Description != "" {
 		fmt.Fprintf(&b, "Description: %s\n", job.Description)
 	}
+	if job.WorkspaceDir != "" {
+		fmt.Fprintf(&b, "Workspace: %s\n", contractHome(job.WorkspaceDir))
+	}
 
 	if len(tasks) == 0 {
 		b.WriteString("\nNo tasks.")
@@ -435,4 +434,22 @@ func formatTeamContext(ctx context.Context, store db.Store, teamID string) (stri
 	}
 
 	return team.Culture, nil
+}
+
+// contractHome replaces the user's home directory prefix with "~/" for
+// shorter, more readable paths in tool output. If the home directory
+// cannot be determined or the path is not under it, the path is returned
+// unchanged.
+func contractHome(path string) string {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return path
+	}
+	if strings.HasPrefix(path, home+"/") {
+		return "~/" + path[len(home)+1:]
+	}
+	if path == home {
+		return "~"
+	}
+	return path
 }

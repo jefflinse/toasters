@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 
 	"github.com/jefflinse/toasters/internal/agents"
 	"github.com/jefflinse/toasters/internal/provider"
@@ -12,9 +11,6 @@ import (
 )
 
 func handleAssignTeam(ctx context.Context, te *ToolExecutor, call provider.ToolCall) (string, error) {
-	if te.Gateway == nil {
-		return "", fmt.Errorf("gateway not initialized")
-	}
 	var args struct {
 		TeamName string `json:"team_name"`
 		JobID    string `json:"job_id"`
@@ -44,7 +40,7 @@ func handleAssignTeam(ctx context.Context, te *ToolExecutor, call provider.ToolC
 	if !found {
 		return "", fmt.Errorf("team %q not found", args.TeamName)
 	}
-	// Try runtime path first if available and configured.
+	// Use runtime path if available and configured.
 	if te.Runtime != nil && te.DefaultProvider != "" {
 		prompt := agents.BuildTeamCoordinatorPrompt(team, job.WorkspaceDir)
 		opts := runtime.SpawnOpts{
@@ -60,21 +56,11 @@ func handleAssignTeam(ctx context.Context, te *ToolExecutor, call provider.ToolC
 		}
 		sess, err := te.Runtime.SpawnAgent(ctx, opts)
 		if err != nil {
-			slog.Warn("runtime spawn failed, falling back to gateway", "error", err)
-			// Fall through to gateway path below.
-		} else {
-			return fmt.Sprintf("started runtime session %s for team %s", sess.ID(), team.Name), nil
+			return "", fmt.Errorf("spawning team: %w", err)
 		}
+		return fmt.Sprintf("started runtime session %s for team %s", sess.ID(), team.Name), nil
 	}
-	// Fall through to gateway path.
-	slotID, alreadyRunning, err := te.Gateway.SpawnTeam(args.TeamName, args.JobID, args.Task, team, job.WorkspaceDir)
-	if err != nil {
-		return "", fmt.Errorf("spawning team: %w", err)
-	}
-	if alreadyRunning {
-		return fmt.Sprintf("already running: slot %d (do not call assign_team again for this team)", slotID), nil
-	}
-	return fmt.Sprintf("started: slot %d", slotID), nil
+	return "", fmt.Errorf("runtime not available: no provider configured")
 }
 
 func handleEscalateToUser(_ context.Context, _ *ToolExecutor, call provider.ToolCall) (string, error) {

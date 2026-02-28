@@ -77,7 +77,7 @@ func (m *Model) updatePromptMode(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 }
 
 // handleToolCalls processes a ToolCallMsg — the LLM wants to call tools.
-// It intercepts special tools (kill_slot, assign_team, ask_user, escalate_to_user)
+// It intercepts special tools (assign_team, ask_user, escalate_to_user)
 // for confirmation prompts, then executes remaining tools and re-invokes the stream.
 func (m *Model) handleToolCalls(msg ToolCallMsg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
@@ -86,46 +86,9 @@ func (m *Model) handleToolCalls(msg ToolCallMsg) (tea.Model, tea.Cmd) {
 	// via ToolResultMsg, which re-invokes the stream for the final answer.
 	m.stream.streaming = false
 
-	// Check for kill_slot, assign_team, ask_user, or escalate_to_user — intercept before ExecuteTool.
+	// Check for assign_team, ask_user, or escalate_to_user — intercept before ExecuteTool.
 	for _, call := range msg.Calls {
-		if call.Name == "kill_slot" {
-			var args struct {
-				SlotID int `json:"slot_id"`
-			}
-			_ = json.Unmarshal(call.Arguments, &args)
 
-			// Look up slot info for the confirmation message.
-			question := fmt.Sprintf("Kill slot %d?", args.SlotID)
-			snapshots := m.gateway.Slots()
-			if args.SlotID >= 0 && args.SlotID < len(snapshots) {
-				snap := snapshots[args.SlotID]
-				if snap.AgentName != "" {
-					question = fmt.Sprintf("Kill slot %d (%s on %s)?", args.SlotID, snap.AgentName, snap.JobID)
-				}
-			}
-
-			m.appendEntry(ChatEntry{
-				Message:    provider.Message{Role: "assistant", Content: question},
-				Timestamp:  time.Now(),
-				ClaudeMeta: "kill-confirm",
-			})
-			m.stream.streaming = false
-			m.prompt.promptMode = true
-			m.prompt.confirmKill = true
-			m.prompt.confirmDispatch = false
-			m.prompt.pendingKillSlot = args.SlotID
-			m.prompt.promptPendingCall = call
-			m.prompt.promptQuestion = question
-			m.prompt.promptOptions = []string{"Yes, kill", "Cancel"}
-			m.prompt.promptSelected = 0
-			m.prompt.promptCustom = false
-			m.updateViewportContent()
-			if !m.scroll.userScrolled {
-				m.chatViewport.GotoBottom()
-			}
-			cmds = append(cmds, m.input.Focus())
-			return m, tea.Batch(cmds...)
-		}
 		if call.Name == "assign_team" {
 			var args struct {
 				TeamName string `json:"team_name"`
@@ -256,66 +219,8 @@ func (m *Model) handleToolCalls(msg ToolCallMsg) (tea.Model, tea.Cmd) {
 }
 
 // handleAskUserResponse processes an AskUserResponseMsg — the user has submitted
-// a response in prompt mode (or a confirmation dialog like kill/dispatch/timeout).
+// a response in prompt mode (or a confirmation dialog like dispatch).
 func (m *Model) handleAskUserResponse(msg AskUserResponseMsg) (tea.Model, tea.Cmd) {
-	// Handle slot-timeout confirmation flow.
-	if m.prompt.confirmTimeout {
-		m.prompt.confirmTimeout = false
-		m.prompt.promptMode = false
-		m.prompt.promptOptions = nil
-		m.prompt.promptSelected = 0
-		m.prompt.promptPendingCall = provider.ToolCall{}
-		switch msg.Result {
-		case "Continue (+15m)":
-			_ = m.gateway.ExtendSlot(m.prompt.pendingTimeoutSlot)
-			m.appendEntry(ChatEntry{
-				Message:    provider.Message{Role: "assistant", Content: fmt.Sprintf("Slot %d extended by 15m.", m.prompt.pendingTimeoutSlot)},
-				Timestamp:  time.Now(),
-				ClaudeMeta: "tool-call-indicator",
-			})
-		default: // "Kill"
-			_ = m.gateway.Kill(m.prompt.pendingTimeoutSlot)
-			m.appendEntry(ChatEntry{
-				Message:    provider.Message{Role: "assistant", Content: fmt.Sprintf("Slot %d killed.", m.prompt.pendingTimeoutSlot)},
-				Timestamp:  time.Now(),
-				ClaudeMeta: "tool-call-indicator",
-			})
-		}
-		m.updateViewportContent()
-		if !m.scroll.userScrolled {
-			m.chatViewport.GotoBottom()
-		}
-		return m, m.input.Focus()
-	}
-
-	// Handle kill confirmation flow.
-	if m.prompt.confirmKill {
-		m.prompt.confirmKill = false
-		m.prompt.promptMode = false
-		m.prompt.promptCustom = false
-		m.prompt.promptOptions = nil
-		m.prompt.promptSelected = 0
-
-		var result string
-		if msg.Result == "Yes, kill" {
-			_ = m.gateway.Kill(m.prompt.pendingKillSlot)
-			result = fmt.Sprintf("killed slot %d", m.prompt.pendingKillSlot)
-		} else {
-			result = "User cancelled the kill."
-		}
-		m.appendEntry(ChatEntry{
-			Message:    provider.Message{Role: "assistant", ToolCalls: []provider.ToolCall{m.prompt.promptPendingCall}},
-			Timestamp:  time.Now(),
-			ClaudeMeta: "tool-call-indicator",
-		})
-		m.appendEntry(ChatEntry{
-			Message:   provider.Message{Role: "tool", Content: result, ToolCallID: m.prompt.promptPendingCall.ID},
-			Timestamp: time.Now(),
-		})
-		m.updateViewportContent()
-		return m, m.startStream(m.messagesFromEntries())
-	}
-
 	// Handle dispatch confirmation flow.
 	if m.prompt.confirmDispatch {
 		m.prompt.promptMode = false

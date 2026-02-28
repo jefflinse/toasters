@@ -282,6 +282,113 @@ func TestRuntimeImplementsAgentSpawner(t *testing.T) {
 	var _ AgentSpawner = (*Runtime)(nil)
 }
 
+// TestSpawnAgent_ExtraToolsMutualExclusion verifies that setting both
+// ToolExecutor and ExtraTools on SpawnOpts returns an error.
+func TestSpawnAgent_ExtraToolsMutualExclusion(t *testing.T) {
+	mp := &mockProvider{
+		name: "test",
+		responses: []mockResponse{
+			{events: []provider.StreamEvent{
+				{Type: provider.EventText, Text: "done"},
+				{Type: provider.EventDone},
+			}},
+		},
+	}
+
+	rt := New(nil, newTestRegistry(mp))
+
+	_, err := rt.SpawnAgent(context.Background(), SpawnOpts{
+		ProviderName: "test",
+		Model:        "test-model",
+		ToolExecutor: &mockToolExecutor{
+			defs: []ToolDef{{Name: "custom_tool", Description: "Custom"}},
+		},
+		ExtraTools: &mockToolExecutor{
+			defs: []ToolDef{{Name: "extra_tool", Description: "Extra"}},
+		},
+		InitialMessage: "Test",
+		WorkDir:        t.TempDir(),
+	})
+	assertError(t, err)
+	assertContains(t, err.Error(), "mutually exclusive")
+}
+
+// TestSpawnAgent_ExtraToolsLayered verifies that when ExtraTools is set on
+// SpawnOpts, the session's tool definitions include both CoreTools and the
+// extra tools, with extra tools getting dispatch priority.
+func TestSpawnAgent_ExtraToolsLayered(t *testing.T) {
+	mp := &mockProvider{
+		name: "test",
+		responses: []mockResponse{
+			{events: []provider.StreamEvent{
+				{Type: provider.EventText, Text: "done"},
+				{Type: provider.EventDone},
+			}},
+		},
+	}
+
+	rt := New(nil, newTestRegistry(mp))
+
+	var startedSess *Session
+	rt.OnSessionStarted = func(s *Session) {
+		startedSess = s
+	}
+
+	extraTools := &mockToolExecutor{
+		defs: []ToolDef{
+			{Name: "complete_task", Description: "Mark task as done"},
+			{Name: "report_blocker", Description: "Report a blocker"},
+		},
+		results: map[string]string{
+			"complete_task":  "completed",
+			"report_blocker": "reported",
+		},
+	}
+
+	_, err := rt.SpawnAgent(context.Background(), SpawnOpts{
+		AgentID:        "test-agent",
+		ProviderName:   "test",
+		Model:          "test-model",
+		ExtraTools:     extraTools,
+		InitialMessage: "Test extra tools",
+		WorkDir:        t.TempDir(),
+	})
+	assertNoError(t, err)
+
+	if startedSess == nil {
+		t.Fatal("OnSessionStarted was not called; no session was created")
+	}
+
+	defs := startedSess.toolExec.Definitions()
+	names := make(map[string]bool, len(defs))
+	for _, d := range defs {
+		names[d.Name] = true
+	}
+
+	// CoreTools should be present.
+	if !names["read_file"] {
+		t.Error("expected read_file (CoreTools) in session tool definitions")
+	}
+	if !names["write_file"] {
+		t.Error("expected write_file (CoreTools) in session tool definitions")
+	}
+
+	// Extra tools should also be present.
+	if !names["complete_task"] {
+		t.Error("expected complete_task (extra tool) in session tool definitions")
+	}
+	if !names["report_blocker"] {
+		t.Error("expected report_blocker (extra tool) in session tool definitions")
+	}
+
+	// Wait for session to complete.
+	select {
+	case <-startedSess.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("session did not complete in time")
+	}
+}
+
 // TestFilteredToolExecutor is a unit test for the filteredToolExecutor type
 // introduced in runtime.go. It verifies that:
 //   - Definitions() returns only the allowed subset, not the full inner set.

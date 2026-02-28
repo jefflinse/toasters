@@ -18,10 +18,10 @@ func NewMCPServer(store db.Store) *mcpserver.MCPServer {
 		"1.0.0",
 	)
 
-	// report_progress
+	// report_task_progress
 	s.AddTool(
 		mcp.NewToolWithRawSchema(
-			"report_progress",
+			"report_task_progress",
 			"Report progress on a task. Use this to keep the orchestrator informed of what you're doing.",
 			[]byte(`{
 				"type": "object",
@@ -36,11 +36,11 @@ func NewMCPServer(store db.Store) *mcpserver.MCPServer {
 			}`),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			var params ReportProgressParams
+			var params ReportTaskProgressParams
 			if err := req.BindArguments(&params); err != nil {
 				return mcp.NewToolResultError(fmt.Sprintf("invalid arguments: %v", err)), nil
 			}
-			result, err := ReportProgress(ctx, store, params)
+			result, err := ReportTaskProgress(ctx, store, params)
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}

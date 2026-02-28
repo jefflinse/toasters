@@ -13,8 +13,7 @@ import (
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/glamour/ansi"
 	glamourstyles "github.com/charmbracelet/glamour/styles"
-
-	"github.com/jefflinse/toasters/internal/gateway"
+	xansi "github.com/charmbracelet/x/ansi"
 )
 
 // loadingBarWidth is the number of cells in the bouncing bar track.
@@ -220,6 +219,15 @@ func (m *Model) View() tea.View {
 		return v
 	}
 
+	// Jobs modal takes over the full terminal as a centered overlay.
+	if m.jobsModal.show {
+		jobsView := m.renderJobsModal()
+		v := tea.NewView(jobsView)
+		v.AltScreen = true
+		v.MouseMode = tea.MouseModeCellMotion
+		return v
+	}
+
 	// MCP modal takes over the full terminal as a centered overlay.
 	if m.mcpModal.show {
 		mcpView := m.renderMCPModal()
@@ -233,6 +241,14 @@ func (m *Model) View() tea.View {
 	if m.blockerModal.show {
 		blockerView := m.renderBlockerModal()
 		v := tea.NewView(blockerView)
+		v.AltScreen = true
+		v.MouseMode = tea.MouseModeCellMotion
+		return v
+	}
+
+	// Log view takes over the full terminal.
+	if m.logView.show {
+		v := tea.NewView(m.renderLogView())
 		v.AltScreen = true
 		v.MouseMode = tea.MouseModeCellMotion
 		return v
@@ -299,28 +315,10 @@ func (m *Model) View() tea.View {
 		flashLine = DimStyle.Render(m.flashText)
 	}
 
-	// Determine chat content and input area — swapped when attached to an agent slot.
+	// Determine chat content and input area.
 	var chatContent string
 	var inputOrStatus string
-	if m.attachedSlot >= 0 && m.gateway != nil {
-		slots := m.gateway.Slots()
-		snap := slots[m.attachedSlot]
-		header := fmt.Sprintf("⬡ %s · %s", snap.AgentName, snap.JobID)
-		if snap.Status == gateway.SlotDone {
-			header += " [done]"
-		} else {
-			header += " [running]"
-		}
-		chatContent = m.agentViewport.View()
-		inputArea := inputStyle.Width(mainWidth).Render(
-			DimStyle.Render(header + "  ·  Esc to detach · d to dismiss"),
-		)
-		if flashLine != "" {
-			inputOrStatus = lipgloss.JoinVertical(lipgloss.Left, flashLine, inputArea)
-		} else {
-			inputOrStatus = inputArea
-		}
-	} else {
+	{
 		chatContent = m.chatViewport.View()
 
 		// Render scrollbar column alongside the chat content.
@@ -414,43 +412,6 @@ func (m *Model) View() tea.View {
 		chatContent = strings.Join(lines[:trimTo], "\n")
 	}
 
-	// Build kill modal popup (if active) — mutually exclusive with cmd popup.
-	var killPopupView string
-	if m.killModal.show && m.gateway != nil {
-		slots := m.gateway.Slots()
-		var rows []string
-		for i, slotIdx := range m.killModal.slots {
-			snap := slots[slotIdx]
-			label := fmt.Sprintf("[%d] %s · %s", slotIdx, snap.AgentName, snap.JobID)
-			if i == m.killModal.selectedIdx {
-				row := CmdPopupSelectedStyle.Width(mainWidth).Render(
-					CmdPopupNameSelectedStyle.Render(label),
-				)
-				rows = append(rows, row)
-			} else {
-				row := CmdPopupRowStyle.Width(mainWidth).Render(
-					CmdPopupNameStyle.Render(label),
-				)
-				rows = append(rows, row)
-			}
-		}
-		footer := CmdPopupRowStyle.Width(mainWidth).Render(
-			DimStyle.Render("Enter to kill · Esc to cancel"),
-		)
-		rows = append(rows, footer)
-		killPopupView = CmdPopupContainerStyle.Width(mainWidth).Render(
-			lipgloss.JoinVertical(lipgloss.Left, rows...),
-		)
-		// Trim chatContent to make room for the modal.
-		killPopupHeight := len(m.killModal.slots) + 1 // +1 for footer
-		lines := strings.Split(chatContent, "\n")
-		trimTo := len(lines) - killPopupHeight
-		if trimTo < 0 {
-			trimTo = 0
-		}
-		chatContent = strings.Join(lines[:trimTo], "\n")
-	}
-
 	// Trim chatContent when in prompt option-selection mode to prevent overflow.
 	// The prompt widget is taller than the normal input area; subtract the extra lines.
 	if m.prompt.promptMode && !m.prompt.promptCustom {
@@ -471,17 +432,14 @@ func (m *Model) View() tea.View {
 
 	chatView := ChatAreaStyle.Width(mainWidth).Render(chatContent)
 
-	// Build claude meta strip (shown while a claude stream is active).
+	// Build operator byline strip (shown while the operator stream is active).
 	var metaStrip string
-	if m.stream.claudeActiveMeta != "" {
-		metaStrip = ClaudeMetaStyle.Width(mainWidth).Render("⬡ " + m.stream.claudeActiveMeta)
+	if m.stream.operatorByline != "" {
+		metaStrip = OperatorMetaStyle.Width(mainWidth).Render("⬡ " + m.stream.operatorByline)
 	}
 
-	// overlayView is whichever popup is active (cmd popup or kill modal), if any.
+	// overlayView is whichever popup is active (cmd popup), if any.
 	overlayView := popupView
-	if killPopupView != "" {
-		overlayView = killPopupView
-	}
 
 	// Join chat + overlay (if any) + meta strip (if any) + input/status vertically.
 	var mainColumn string
@@ -743,22 +701,16 @@ func (m *Model) renderOutputModal(title, content string, scroll int) (string, in
 
 	innerW := modalW - 4 // account for border + padding
 
-	// Step 1: Apply dim styling to tool event lines on the raw content string,
-	// before any markdown rendering. This avoids nesting ANSI escape sequences
-	// inside Glamour-rendered output (which would corrupt the display).
-	rawLines := strings.Split(content, "\n")
-	for i, line := range rawLines {
-		stripped := strings.TrimSpace(line)
-		if strings.HasPrefix(stripped, "⚙") || strings.HasPrefix(stripped, "→") {
-			rawLines[i] = DimStyle.Render(line)
-		}
-	}
-	dimmedContent := strings.Join(rawLines, "\n")
+	// Step 1: Strip any pre-existing ANSI escape codes from the raw content so
+	// that DimStyle.Render() and Glamour start from clean text. Without this,
+	// escape sequences embedded in the content (e.g. from tool output) appear
+	// as literal text in the viewport.
+	cleanContent := xansi.Strip(content)
 
-	// Step 2: Optionally render markdown on the dimmed content, then split into lines.
+	// Step 2: Optionally render markdown on the clean content, then split into lines.
 	var allLines []string
-	if m.outputMdRender != nil && looksLikeMarkdown(dimmedContent) {
-		rendered, err := m.outputMdRender.Render(dimmedContent)
+	if m.outputMdRender != nil && looksLikeMarkdown(cleanContent) {
+		rendered, err := m.outputMdRender.Render(cleanContent)
 		if err == nil {
 			allLines = strings.Split(strings.TrimRight(rendered, "\n"), "\n")
 		} else {
@@ -766,7 +718,18 @@ func (m *Model) renderOutputModal(title, content string, scroll int) (string, in
 		}
 	}
 	if allLines == nil {
-		allLines = strings.Split(dimmedContent, "\n")
+		allLines = strings.Split(cleanContent, "\n")
+	}
+
+	// Step 3: Apply dim styling to tool event lines AFTER markdown rendering,
+	// so DimStyle ANSI codes are never fed into Glamour (which would render
+	// them as literal text).
+	for i, line := range allLines {
+		stripped := xansi.Strip(line)
+		trimmed := strings.TrimSpace(stripped)
+		if strings.HasPrefix(trimmed, "⚙") || strings.HasPrefix(trimmed, "→") {
+			allLines[i] = DimStyle.Render(stripped)
+		}
 	}
 
 	// Compute scroll bounds.
@@ -786,19 +749,13 @@ func (m *Model) renderOutputModal(title, content string, scroll int) (string, in
 	}
 	visibleLines := allLines[start:end]
 
-	// Truncate each line to modal inner width.
-	// For Glamour-rendered lines, Glamour already word-wraps to outputW (= m.width-8)
-	// which equals innerW, so this branch rarely triggers on the markdown path.
-	// For plain-text lines (no ANSI codes), rune-slicing is safe and O(1).
+	// Truncate each line to modal inner width using an ANSI-aware truncator so
+	// we never slice mid-escape-sequence (which would leave raw codes like
+	// "[38;2;98;98;98m" visible in the terminal).
 	truncated := make([]string, len(visibleLines))
 	for i, l := range visibleLines {
 		if lipgloss.Width(l) > innerW {
-			runes := []rune(l)
-			if len(runes) > innerW {
-				truncated[i] = string(runes[:innerW])
-			} else {
-				truncated[i] = l
-			}
+			truncated[i] = xansi.Truncate(l, innerW, "")
 		} else {
 			truncated[i] = l
 		}
@@ -941,9 +898,8 @@ func (m *Model) resizeComponents() {
 	m.chatViewport.SetWidth(vpWidth)
 	m.chatViewport.SetHeight(vpHeight)
 
-	// Agent viewport mirrors chat viewport dimensions.
-	m.agentViewport.SetWidth(vpWidth)
-	m.agentViewport.SetHeight(vpHeight)
+	// Log view viewport.
+	m.resizeLogView()
 
 	m.input.SetWidth(mainWidth - InputAreaStyle.GetHorizontalFrameSize())
 	m.input.SetHeight(inputHeight)
@@ -1131,7 +1087,7 @@ func (m *Model) updateViewportContent() {
 			// Render claude byline (if any) above the response, with timestamp.
 			indent := strings.Repeat(" ", AssistantMsgIndent)
 			if entry.ClaudeMeta != "" {
-				byline := ClaudeBylineStyle.Render("⬡ " + entry.ClaudeMeta)
+				byline := OperatorBylineStyle.Render("⬡ " + entry.ClaudeMeta)
 				if ts != "" {
 					byline += DimStyle.Render(ts)
 				}

@@ -15,7 +15,6 @@ type Config struct {
 	WorkspaceDir string           `mapstructure:"workspace_dir"`
 	DatabasePath string           `mapstructure:"database_path"`
 	Operator     OperatorConfig   `mapstructure:"operator"`
-	Claude       ClaudeConfig     `mapstructure:"claude"`
 	Providers    []ProviderConfig `mapstructure:"providers"`
 	Agents       AgentsConfig     `mapstructure:"agents"`
 	MCP          MCPConfig        `mapstructure:"mcp"`
@@ -62,14 +61,6 @@ type OperatorConfig struct {
 	TeamsDir string `mapstructure:"teams_dir"`
 }
 
-// ClaudeConfig holds configuration for the Claude CLI.
-type ClaudeConfig struct {
-	Path               string `mapstructure:"path"`
-	DefaultModel       string `mapstructure:"default_model"`
-	PermissionMode     string `mapstructure:"permission_mode"`
-	SlotTimeoutMinutes int    `mapstructure:"slot_timeout_minutes"`
-}
-
 // Load reads configuration from ~/.config/toasters/config.yaml, applying
 // defaults for any values not present in the file.
 func Load() (*Config, error) {
@@ -83,16 +74,12 @@ func Load() (*Config, error) {
 	viper.AddConfigPath(home + "/.config/toasters")
 
 	viper.SetDefault("workspace_dir", filepath.Join(home, "toasters"))
-	viper.SetDefault("database_path", filepath.Join(home, ".config", "toasters", "toasters.db"))
+	viper.SetDefault("database_path", "")
 	viper.SetDefault("operator.provider", "local")
 	viper.SetDefault("operator.endpoint", "http://localhost:1234")
 	viper.SetDefault("operator.api_key", "")
 	viper.SetDefault("operator.model", "")
 	viper.SetDefault("operator.teams_dir", filepath.Join(home, ".config", "toasters", "teams"))
-	viper.SetDefault("claude.path", "claude")
-	viper.SetDefault("claude.default_model", "")
-	viper.SetDefault("claude.permission_mode", "")
-	viper.SetDefault("claude.slot_timeout_minutes", 15)
 	viper.SetDefault("agents.default_provider", "")
 	viper.SetDefault("agents.default_model", "")
 
@@ -183,19 +170,20 @@ func WorkspaceDir(cfg *Config) (string, error) {
 // DatabasePath returns the resolved database file path from cfg.
 // A leading ~ is expanded to the user's home directory.
 // Absolute paths are returned unchanged without calling os.UserHomeDir.
-func DatabasePath(cfg *Config) (string, error) {
+//
+// When database_path is not explicitly set, the database defaults to
+// <workspaceDir>/toasters.db so that operational state (jobs, tasks,
+// sessions) lives alongside the workspace rather than in the config
+// directory. This allows the config directory to be version-controlled
+// without including transient job state.
+func DatabasePath(cfg *Config, workspaceDir string) (string, error) {
 	if cfg.DatabasePath != "" && !strings.HasPrefix(cfg.DatabasePath, "~") {
 		return cfg.DatabasePath, nil
 	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-	return expandTilde(cfg.DatabasePath, filepath.Join(home, ".config", "toasters", "toasters.db"))
+	return expandTilde(cfg.DatabasePath, filepath.Join(workspaceDir, "toasters.db"))
 }
 
 // BindFlags binds relevant cobra pflags to their Viper configuration keys.
 func BindFlags(cmd *cobra.Command) {
 	viper.BindPFlag("operator.endpoint", cmd.Flags().Lookup("operator-endpoint")) //nolint:errcheck
-	viper.BindPFlag("claude.path", cmd.Flags().Lookup("claude-path"))             //nolint:errcheck
 }

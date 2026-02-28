@@ -26,16 +26,18 @@ type mockSpawner struct {
 }
 
 type spawnCall struct {
-	Composed *compose.ComposedAgent
-	TaskID   string
-	JobID    string
-	WorkDir  string
+	Composed        *compose.ComposedAgent
+	TaskID          string
+	JobID           string
+	WorkDir         string
+	TaskDescription string
+	ExtraTools      runtime.ToolExecutor
 }
 
-func (m *mockSpawner) SpawnTeamLead(_ context.Context, composed *compose.ComposedAgent, taskID string, jobID string, workDir string) error {
+func (m *mockSpawner) SpawnTeamLead(_ context.Context, composed *compose.ComposedAgent, taskID string, jobID string, workDir string, taskDescription string, extraTools runtime.ToolExecutor) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.calls = append(m.calls, spawnCall{Composed: composed, TaskID: taskID, JobID: jobID, WorkDir: workDir})
+	m.calls = append(m.calls, spawnCall{Composed: composed, TaskID: taskID, JobID: jobID, WorkDir: workDir, TaskDescription: taskDescription, ExtraTools: extraTools})
 	return nil
 }
 
@@ -315,6 +317,9 @@ func TestAssignTask(t *testing.T) {
 	assertEqual(t, taskID, calls[0].TaskID)
 	assertEqual(t, jobID, calls[0].JobID)
 	assertEqual(t, "lead-agent", calls[0].Composed.AgentID)
+	if calls[0].ExtraTools == nil {
+		t.Fatal("expected non-nil ExtraTools (TeamLeadTools) to be passed to SpawnTeamLead")
+	}
 
 	// Verify the job's workspace directory was propagated to the spawner.
 	job, err := store.GetJob(ctx, jobID)
@@ -588,6 +593,7 @@ func TestSystemToolDefinitions(t *testing.T) {
 		"assign_task",
 		"query_teams",
 		"query_job",
+		"query_job_context",
 		"surface_to_user",
 	}
 
@@ -749,6 +755,122 @@ func TestAssignTask_UpdateJobStatusFailureIsNonFatal(t *testing.T) {
 		t.Fatalf("want 1 spawn call, got %d", len(calls))
 	}
 	assertEqual(t, taskID, calls[0].TaskID)
+}
+
+// --- Regression tests for Bug 2: query_job_context missing from SystemTools ---
+
+// TestQueryJobContext_InDefinitions is a regression test for the bug where
+// query_job_context was declared in agent .md files but not implemented in
+// SystemTools.Definitions(). Without the fix, this test fails because
+// query_job_context is absent from the returned slice.
+func TestQueryJobContext_InDefinitions(t *testing.T) {
+	st, _, _, _, _ := newTestSystemTools(t)
+	defs := st.Definitions()
+
+	var found *runtime.ToolDef
+	for i := range defs {
+		if defs[i].Name == "query_job_context" {
+			found = &defs[i]
+			break
+		}
+	}
+	if found == nil {
+		t.Fatal("query_job_context not found in SystemTools.Definitions() — regression: planner/scheduler agents would never see this tool")
+	}
+
+	// Verify the definition has a non-empty description.
+	if found.Description == "" {
+		t.Error("query_job_context definition has empty description")
+	}
+
+	// Verify the schema is valid JSON and requires job_id.
+	var schema map[string]any
+	if err := json.Unmarshal(found.Parameters, &schema); err != nil {
+		t.Fatalf("query_job_context has invalid parameter schema: %v", err)
+	}
+
+	required, ok := schema["required"].([]any)
+	if !ok {
+		t.Fatal("query_job_context schema missing 'required' field")
+	}
+	var hasJobID bool
+	for _, r := range required {
+		if r == "job_id" {
+			hasJobID = true
+			break
+		}
+	}
+	if !hasJobID {
+		t.Error("query_job_context schema does not require 'job_id'")
+	}
+}
+
+// TestQueryJobContext_Execute_ValidJobID is a regression test for the bug where
+// SystemTools.Execute("query_job_context", ...) returned ErrUnknownTool because
+// the case was missing from the switch statement. Without the fix, this test
+// fails with an ErrUnknownTool error.
+func TestQueryJobContext_Execute_ValidJobID(t *testing.T) {
+	st, _, _, _, _ := newTestSystemTools(t)
+	ctx := context.Background()
+
+	// Create a job with tasks via the existing create_job/create_task tools.
+	jobResult, err := st.Execute(ctx, "create_job", json.RawMessage(`{
+		"title": "Regression job",
+		"description": "Tests query_job_context execution"
+	}`))
+	assertNoError(t, err)
+
+	var jobRes map[string]string
+	if err := json.Unmarshal([]byte(jobResult), &jobRes); err != nil {
+		t.Fatalf("parsing job result: %v", err)
+	}
+	jobID := jobRes["job_id"]
+
+	// Create two tasks so the response is non-trivial.
+	_, err = st.Execute(ctx, "create_task", json.RawMessage(`{
+		"job_id": "`+jobID+`",
+		"title": "First task"
+	}`))
+	assertNoError(t, err)
+
+	_, err = st.Execute(ctx, "create_task", json.RawMessage(`{
+		"job_id": "`+jobID+`",
+		"title": "Second task",
+		"team_id": "backend"
+	}`))
+	assertNoError(t, err)
+
+	// Execute query_job_context — must not return ErrUnknownTool.
+	result, err := st.Execute(ctx, "query_job_context", json.RawMessage(`{"job_id": "`+jobID+`"}`))
+	assertNoError(t, err)
+
+	// formatJobContext returns human-readable text; verify the key fields are present.
+	assertContains(t, result, "Regression job")
+	assertContains(t, result, string(db.JobStatusPending))
+	assertContains(t, result, "First task")
+	assertContains(t, result, "Second task")
+	assertContains(t, result, "Tasks (2)")
+}
+
+// TestQueryJobContext_Execute_MissingJobID verifies that query_job_context
+// returns an appropriate error when job_id is absent from the arguments.
+func TestQueryJobContext_Execute_MissingJobID(t *testing.T) {
+	st, _, _, _, _ := newTestSystemTools(t)
+	ctx := context.Background()
+
+	_, err := st.Execute(ctx, "query_job_context", json.RawMessage(`{}`))
+	assertError(t, err)
+	assertContains(t, err.Error(), "job_id is required")
+}
+
+// TestQueryJobContext_Execute_NonExistentJobID verifies that query_job_context
+// returns an error when the job_id does not exist in the store.
+func TestQueryJobContext_Execute_NonExistentJobID(t *testing.T) {
+	st, _, _, _, _ := newTestSystemTools(t)
+	ctx := context.Background()
+
+	_, err := st.Execute(ctx, "query_job_context", json.RawMessage(`{"job_id": "does-not-exist"}`))
+	assertError(t, err)
 }
 
 func TestUUIDv4_Uniqueness(t *testing.T) {

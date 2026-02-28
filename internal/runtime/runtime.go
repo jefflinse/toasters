@@ -45,6 +45,11 @@ func (r *Runtime) SetMCPCaller(caller MCPCaller, defs []ToolDef) {
 
 // SpawnAgent creates and starts a new agent session.
 func (r *Runtime) SpawnAgent(ctx context.Context, opts SpawnOpts) (*Session, error) {
+	// Validate mutually exclusive options.
+	if opts.ToolExecutor != nil && opts.ExtraTools != nil {
+		return nil, fmt.Errorf("SpawnOpts.ToolExecutor and SpawnOpts.ExtraTools are mutually exclusive")
+	}
+
 	// Look up provider from registry.
 	p, ok := r.providers.Get(opts.ProviderName)
 	if !ok {
@@ -88,6 +93,12 @@ func (r *Runtime) SpawnAgent(ctx context.Context, opts SpawnOpts) (*Session, err
 		}
 	}
 
+	// If the caller provided extra tools, layer them on top of the base tools
+	// so they get dispatch priority.
+	if opts.ExtraTools != nil {
+		tools = NewLayeredToolExecutor(tools, opts.ExtraTools)
+	}
+
 	// If the caller requested a specific tool subset, wrap the executor so that
 	// Definitions() returns only those tools. Execute() still dispatches all
 	// calls, but the LLM will only know about — and therefore only call — the
@@ -121,8 +132,9 @@ func (r *Runtime) SpawnAgent(ctx context.Context, opts SpawnOpts) (*Session, err
 	}
 
 	// Notify observer before starting the goroutine so the subscriber is set up
-	// before events start flowing.
-	if r.OnSessionStarted != nil {
+	// before events start flowing. Hidden sessions (e.g. internal system agent
+	// calls via consult_agent) skip this to avoid appearing in the TUI.
+	if r.OnSessionStarted != nil && !opts.Hidden {
 		r.OnSessionStarted(sess)
 	}
 

@@ -1,16 +1,11 @@
 package tui
 
 import (
-	"strings"
 	"testing"
-	"time"
 
 	"charm.land/bubbles/v2/textarea"
 	"charm.land/bubbles/v2/viewport"
 
-	"github.com/jefflinse/toasters/internal/agents"
-	"github.com/jefflinse/toasters/internal/config"
-	"github.com/jefflinse/toasters/internal/gateway"
 	llmtools "github.com/jefflinse/toasters/internal/llm/tools"
 	"github.com/jefflinse/toasters/internal/provider"
 )
@@ -29,15 +24,12 @@ func newMinimalModel(t *testing.T) Model {
 	ta.Focus()
 
 	vp := viewport.New()
-	agentVP := viewport.New()
 
 	return Model{
-		llmClient:     nil,
-		chatViewport:  vp,
-		agentViewport: agentVP,
-		input:         ta,
-		toolExec:      llmtools.NewToolExecutor(nil, nil, "", nil, nil),
-		attachedSlot:  -1,
+		llmClient:    nil,
+		chatViewport: vp,
+		input:        ta,
+		toolExec:     llmtools.NewToolExecutor(nil, "", nil, nil),
 		chat: chatState{
 			selectedMsgIdx:    -1,
 			completionMsgIdx:  make(map[int]bool),
@@ -47,92 +39,6 @@ func newMinimalModel(t *testing.T) Model {
 		},
 		blockers:        make(map[string]*Blocker),
 		runtimeSessions: make(map[string]*runtimeSlot),
-	}
-}
-
-// newGatewayWithDoneSlot creates a real gateway, spawns a team using
-// /usr/bin/true as the claude binary (exits immediately with no output), and
-// waits until slot 0 transitions to SlotDone. It returns the gateway and the
-// slot index used.
-//
-// This is the only reliable way to get a gateway with a Done slot without
-// refactoring Gateway to accept an interface, since Gateway's slots field is
-// unexported.
-func newGatewayWithDoneSlot(t *testing.T) (*gateway.Gateway, int) {
-	t.Helper()
-
-	claudeCfg := config.ClaudeConfig{
-		Path: "/usr/bin/true", // exits immediately with no output
-	}
-	gw := gateway.New(claudeCfg, t.TempDir(), func() {})
-
-	slotID, _, err := gw.SpawnTeam("test-team", "job-001", "do something", agents.Team{}, t.TempDir())
-	if err != nil {
-		t.Fatalf("SpawnTeam: %v", err)
-	}
-
-	// Poll until the slot is done (/usr/bin/true exits immediately).
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		slots := gw.Slots()
-		if slots[slotID].Status == gateway.SlotDone {
-			return gw, slotID
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	t.Fatal("timed out waiting for slot to reach SlotDone")
-	return nil, -1
-}
-
-// TestPendingCompletion_BufferedWhenStreaming verifies that when a Running→Done
-// slot transition is detected while m.stream.streaming == true, the completion
-// notification is buffered in m.chat.pendingCompletions rather than injected
-// immediately into m.chat.entries.
-func TestPendingCompletion_BufferedWhenStreaming(t *testing.T) {
-	gw, slotID := newGatewayWithDoneSlot(t)
-
-	m := newMinimalModel(t)
-	m.gateway = gw
-	m.stream.streaming = true
-
-	// Simulate that slotID was previously Running so the handler detects the
-	// Running→Done transition.
-	m.prevSlotActive[slotID] = true
-	m.prevSlotStatus[slotID] = gateway.SlotRunning
-
-	// Provide a notify channel so the handler can re-arm the poller.
-	m.agentNotifyCh = make(chan struct{}, 8)
-
-	initialMsgCount := len(m.chat.entries)
-
-	updatedModel, _ := m.Update(AgentOutputMsg{})
-	got := updatedModel.(*Model)
-
-	// The notification must be buffered, not injected immediately.
-	if len(got.chat.pendingCompletions) != 1 {
-		t.Errorf("pendingCompletions: got %d entries, want 1", len(got.chat.pendingCompletions))
-	}
-
-	// No new entries should have been appended while streaming.
-	if len(got.chat.entries) != initialMsgCount {
-		t.Errorf("entries: got %d, want %d (no entries should be injected while streaming)",
-			len(got.chat.entries), initialMsgCount)
-	}
-
-	// The buffered notification should reference the team and job.
-	if len(got.chat.pendingCompletions) > 0 {
-		notif := got.chat.pendingCompletions[0].notification
-		if !strings.Contains(notif, "test-team") {
-			t.Errorf("notification %q does not contain team name %q", notif, "test-team")
-		}
-		if !strings.Contains(notif, "job-001") {
-			t.Errorf("notification %q does not contain job ID %q", notif, "job-001")
-		}
-	}
-
-	// streaming flag must still be true — no new stream was started.
-	if !got.stream.streaming {
-		t.Error("streaming should still be true after buffering a completion")
 	}
 }
 
@@ -185,47 +91,6 @@ func TestPendingCompletion_InjectedAfterStreamDone(t *testing.T) {
 	// startStream sets m.stream.streaming = true before returning the cmd.
 	if !got.stream.streaming {
 		t.Error("streaming should be true after draining pending completions (startStream was called)")
-	}
-}
-
-// TestPendingCompletion_NotBufferedWhenNotStreaming verifies that when a
-// Running→Done slot transition is detected while m.stream.streaming == false, the
-// completion notification is injected immediately into m.chat.entries (not buffered).
-func TestPendingCompletion_NotBufferedWhenNotStreaming(t *testing.T) {
-	gw, slotID := newGatewayWithDoneSlot(t)
-
-	m := newMinimalModel(t)
-	m.gateway = gw
-	m.stream.streaming = false
-
-	// Simulate that slotID was previously Running.
-	m.prevSlotActive[slotID] = true
-	m.prevSlotStatus[slotID] = gateway.SlotRunning
-
-	m.agentNotifyCh = make(chan struct{}, 8)
-
-	updatedModel, _ := m.Update(AgentOutputMsg{})
-	got := updatedModel.(*Model)
-
-	// Nothing should be buffered — notification is injected immediately.
-	if len(got.chat.pendingCompletions) != 0 {
-		t.Errorf("pendingCompletions: got %d entries, want 0 (should inject immediately when not streaming)",
-			len(got.chat.pendingCompletions))
-	}
-
-	// The notification must have been injected as a user entry.
-	found := false
-	for _, entry := range got.chat.entries {
-		if entry.Message.Role == "user" &&
-			strings.Contains(entry.Message.Content, "test-team") &&
-			strings.Contains(entry.Message.Content, "job-001") {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Errorf("expected a user entry containing team/job notification in m.chat.entries, got: %v",
-			got.chat.entries)
 	}
 }
 

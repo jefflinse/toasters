@@ -21,6 +21,7 @@ type Session struct {
 	teamName     string // team this agent belongs to (may be empty)
 	task         string // short human-readable description of what this agent is doing
 	jobID        string
+	taskID       string
 	prov         provider.Provider
 	model        string
 	systemPrompt string
@@ -63,6 +64,7 @@ func newSession(id string, p provider.Provider, opts SpawnOpts, toolExec ToolExe
 		teamName:     opts.TeamName,
 		task:         opts.Task,
 		jobID:        opts.JobID,
+		taskID:       opts.TaskID,
 		prov:         p,
 		model:        opts.Model,
 		systemPrompt: opts.SystemPrompt,
@@ -184,6 +186,20 @@ func (s *Session) Run(ctx context.Context) (retErr error) {
 				ToolResult: resultEvent,
 			})
 
+			// Cap tool results before storing in message history to prevent
+			// context window overflow when agents read large files or directory
+			// listings. 8KB per result keeps the conversation manageable while
+			// still providing meaningful content to the LLM.
+			//
+			// spawn_agent is exempt: its result is the synthesized output of an
+			// entire child agent session, which is typically a concise summary
+			// but can legitimately exceed 8KB. Truncating it causes the parent
+			// to misinterpret the child's work as incomplete and retry in a loop.
+			const maxToolResultBytes = 8 * 1024
+			if tc.Name != "spawn_agent" && len(result) > maxToolResultBytes {
+				result = result[:maxToolResultBytes] + "\n[... truncated: result exceeded 8KB ...]"
+			}
+
 			s.messages = append(s.messages, provider.Message{
 				Role:       "tool",
 				Content:    result,
@@ -280,6 +296,7 @@ func (s *Session) Snapshot() SessionSnapshot {
 		AgentID:   s.agentID,
 		TeamName:  s.teamName,
 		JobID:     s.jobID,
+		TaskID:    s.taskID,
 		Status:    status,
 		Model:     s.model,
 		Provider:  s.prov.Name(),

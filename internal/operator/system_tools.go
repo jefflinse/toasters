@@ -128,6 +128,20 @@ func (st *SystemTools) Definitions() []runtime.ToolDef {
 			}`),
 		},
 		{
+			Name:        "query_job_context",
+			Description: "Query the context of a job, including its tasks and their current status.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"job_id": {
+						"type": "string",
+						"description": "ID of the job to query"
+					}
+				},
+				"required": ["job_id"]
+			}`),
+		},
+		{
 			Name:        "surface_to_user",
 			Description: "Surface information to the user. Use this to relay important findings, summaries, questions, or status updates.",
 			Parameters: json.RawMessage(`{
@@ -157,6 +171,8 @@ func (st *SystemTools) Execute(ctx context.Context, name string, args json.RawMe
 		return st.queryTeams(ctx)
 	case "query_job":
 		return st.queryJob(ctx, args)
+	case "query_job_context":
+		return st.queryJobContext(ctx, args)
 	case "surface_to_user":
 		return st.surfaceToUser(ctx, args)
 	default:
@@ -289,22 +305,58 @@ func (st *SystemTools) assignTask(ctx context.Context, args json.RawMessage) (st
 		return "", fmt.Errorf("getting team: %w", err)
 	}
 
-	// 4. Update task: set status to in_progress and assign team.
+	// 3a. Reject assignments to the system team — it handles orchestration only.
+	if team.Source == "system" {
+		return "", fmt.Errorf("cannot assign job tasks to system team %q; use a user or auto team", team.Name)
+	}
+
+	// 3b. Validate that the team has a lead agent before we modify the task.
+	if team.LeadAgent == "" {
+		return "", fmt.Errorf("team %q has no lead agent configured; cannot assign task", team.Name)
+	}
+
+	// 4. Enforce serial execution: if another task in this job is already in progress,
+	// pre-assign the team (so assignNextTask can pick it up later) but don't start it.
+	allTasks, err := st.store.ListTasksForJob(ctx, task.JobID)
+	if err != nil {
+		return "", fmt.Errorf("checking job tasks: %w", err)
+	}
+	for _, t := range allTasks {
+		if t.ID != params.TaskID && t.Status == db.TaskStatusInProgress {
+			// Pre-assign the team so assignNextTask can start this task when it's ready.
+			if err := st.store.PreAssignTaskTeam(ctx, params.TaskID, params.TeamID); err != nil {
+				return "", fmt.Errorf("pre-assigning team: %w", err)
+			}
+			return fmt.Sprintf(
+				"Task %q queued for team %s — task %q is currently in progress. "+
+					"This task will start automatically when the current task completes.",
+				task.Title, team.Name, t.Title,
+			), nil
+		}
+	}
+
+	// 5. No task in progress — start this one. Set status to in_progress and assign team.
 	if err := st.store.AssignTask(ctx, params.TaskID, params.TeamID); err != nil {
 		return "", fmt.Errorf("assigning task: %w", err)
 	}
 
-	// 5. Compose the team lead agent.
+	// 6. Compose the team lead agent.
 	composed, err := st.composer.Compose(ctx, team.LeadAgent, params.TeamID)
 	if err != nil {
 		return "", fmt.Errorf("composing team lead: %w", err)
 	}
 
-	// 6. Spawn team lead goroutine (fire-and-forget) with the job's workspace dir.
+	// 7. Spawn team lead goroutine (fire-and-forget) with the job's workspace dir.
 	if st.spawner == nil {
 		return "", fmt.Errorf("cannot assign task: no agent spawner configured")
 	}
-	if err := st.spawner.SpawnTeamLead(ctx, composed, params.TaskID, task.JobID, job.WorkspaceDir); err != nil {
+	// Build the initial message for the team lead from the task and job context.
+	initialMsg := fmt.Sprintf("Task: %s\n\nJob: %s\n%s", task.Title, job.Title, job.Description)
+
+	// Create team lead tools that send events through the operator's event channel.
+	teamLeadTools := NewTeamLeadTools(st.store, st.eventCh, params.TaskID, task.JobID, params.TeamID)
+
+	if err := st.spawner.SpawnTeamLead(ctx, composed, params.TaskID, task.JobID, job.WorkspaceDir, initialMsg, teamLeadTools); err != nil {
 		return "", fmt.Errorf("spawning team lead: %w", err)
 	}
 
@@ -317,7 +369,7 @@ func (st *SystemTools) assignTask(ctx context.Context, args json.RawMessage) (st
 		}
 	}
 
-	// 7. Send EventTaskStarted to the event channel.
+	// 8. Send EventTaskStarted to the event channel.
 	trySendEvent(ctx, st.eventCh, Event{
 		Type: EventTaskStarted,
 		Payload: TaskStartedPayload{
@@ -332,9 +384,17 @@ func (st *SystemTools) assignTask(ctx context.Context, args json.RawMessage) (st
 }
 
 func (st *SystemTools) queryTeams(ctx context.Context) (string, error) {
-	teams, err := st.store.ListTeams(ctx)
+	allTeams, err := st.store.ListTeams(ctx)
 	if err != nil {
 		return "", fmt.Errorf("listing teams: %w", err)
+	}
+
+	// Filter out the system team — it handles orchestration, not job tasks.
+	var teams []*db.Team
+	for _, t := range allTeams {
+		if t.Source != "system" {
+			teams = append(teams, t)
+		}
 	}
 
 	if len(teams) == 0 {
@@ -394,6 +454,9 @@ func (st *SystemTools) queryJob(ctx context.Context, args json.RawMessage) (stri
 	if job.Description != "" {
 		fmt.Fprintf(&b, "Description: %s\n", job.Description)
 	}
+	if job.WorkspaceDir != "" {
+		fmt.Fprintf(&b, "Workspace: %s\n", contractHome(job.WorkspaceDir))
+	}
 
 	if len(tasks) == 0 {
 		b.WriteString("\nNo tasks.")
@@ -409,6 +472,19 @@ func (st *SystemTools) queryJob(ctx context.Context, args json.RawMessage) (stri
 	}
 
 	return b.String(), nil
+}
+
+func (st *SystemTools) queryJobContext(ctx context.Context, args json.RawMessage) (string, error) {
+	var params struct {
+		JobID string `json:"job_id"`
+	}
+	if err := json.Unmarshal(args, &params); err != nil {
+		return "", fmt.Errorf("parsing query_job_context args: %w", err)
+	}
+	if params.JobID == "" {
+		return "", fmt.Errorf("job_id is required")
+	}
+	return formatJobContext(ctx, st.store, params.JobID)
 }
 
 func (st *SystemTools) surfaceToUser(ctx context.Context, args json.RawMessage) (string, error) {

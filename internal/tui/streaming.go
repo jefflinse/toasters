@@ -8,6 +8,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/jefflinse/toasters/internal/operator"
 	"github.com/jefflinse/toasters/internal/provider"
 )
 
@@ -77,6 +78,8 @@ func (m *Model) startStream(msgs []provider.Message) tea.Cmd {
 }
 
 // sendMessage takes the current input, appends it to history, and starts streaming.
+// When m.operator is set, the message is routed through the operator event loop
+// instead of the legacy direct-stream path.
 func (m *Model) sendMessage() tea.Cmd {
 	text := strings.TrimSpace(m.input.Value())
 	if text == "" {
@@ -101,42 +104,28 @@ func (m *Model) sendMessage() tea.Cmd {
 	m.updateViewportContent()
 	m.chatViewport.GotoBottom()
 
+	// Route through the operator when available; fall back to legacy stream path.
+	if m.operator != nil {
+		m.stream.streaming = true
+		m.stream.currentResponse = ""
+		m.stats.ResponseStart = time.Now()
+		op := m.operator
+		return tea.Batch(
+			func() tea.Msg {
+				ctx := context.Background()
+				_ = op.Send(ctx, operator.Event{
+					Type:    operator.EventUserMessage,
+					Payload: operator.UserMessagePayload{Text: text},
+				})
+				// Send returns immediately — OperatorDoneMsg is fired by the
+				// OnTurnDone callback wired in cmd/root.go when the turn completes.
+				return nil
+			},
+			spinnerTick(),
+		)
+	}
+
 	return m.startStream(m.messagesFromEntries())
-}
-
-// sendClaudeMessage appends the user prompt to history and starts a subprocess
-// stream via the claude CLI, reusing the same streaming pipeline as sendMessage.
-func (m *Model) sendClaudeMessage(prompt string) tea.Cmd {
-	m.input.Blur()
-	m.cmdPopup.filteredCmds = nil
-	m.cmdPopup.selectedIdx = 0
-
-	m.appendEntry(ChatEntry{
-		Message:   provider.Message{Role: "user", Content: "/claude " + prompt},
-		Timestamp: time.Now(),
-	})
-	m.stats.MessageCount++
-	m.stream.streaming = true
-	m.stream.currentResponse = ""
-	m.stream.currentReasoning = ""
-	m.err = nil
-	m.scroll.userScrolled = false
-	m.scroll.hasNewMessages = false
-	m.stats.ResponseStart = time.Now()
-
-	m.updateViewportContent()
-	m.chatViewport.GotoBottom()
-
-	ctx, cancel := context.WithCancel(context.Background())
-	m.stream.cancelStream = cancel
-
-	ch := streamClaudeResponse(ctx, prompt, m.claudeCfg)
-	return tea.Batch(
-		func() tea.Msg {
-			return streamStartedMsg{ch: ch}
-		},
-		spinnerTick(), // re-arm spinner animation for streaming cursor
-	)
 }
 
 // sendAnthropicMessage appends the user prompt to history and starts a direct
@@ -211,15 +200,6 @@ func waitForChunk(ch <-chan provider.StreamEvent) tea.Cmd {
 		case provider.EventText:
 			return StreamChunkMsg{Content: ev.Text, Reasoning: ev.Reasoning}
 		}
-		// Gateway-specific events.
-		if ev.Meta != nil {
-			return claudeMetaMsg{
-				Model:          ev.Meta.Model,
-				PermissionMode: ev.Meta.PermissionMode,
-				Version:        ev.Meta.Version,
-				SessionID:      ev.Meta.SessionID,
-			}
-		}
 		return StreamChunkMsg{Content: ev.Text, Reasoning: ev.Reasoning}
 	}
 }
@@ -233,20 +213,4 @@ func (m Model) fetchModels() tea.Cmd {
 		models, err := client.Models(ctx)
 		return ModelsMsg{Models: models, Err: err}
 	}
-}
-
-// formatClaudeMeta returns a short byline string for a claudeMetaMsg.
-func formatClaudeMeta(msg claudeMetaMsg) string {
-	s := msg.Model + " · " + msg.PermissionMode + " mode"
-	if msg.Version != "" {
-		s += " · claude v" + msg.Version
-	}
-	if msg.SessionID != "" {
-		short := msg.SessionID
-		if len(short) > 8 {
-			short = short[:8]
-		}
-		s += " · session: " + short
-	}
-	return s
 }

@@ -19,14 +19,12 @@ import (
 	"github.com/jefflinse/toasters/internal/agents"
 	"github.com/jefflinse/toasters/internal/db"
 	"github.com/jefflinse/toasters/internal/mcp"
-	"github.com/jefflinse/toasters/internal/orchestration"
 	"github.com/jefflinse/toasters/internal/provider"
 	"github.com/jefflinse/toasters/internal/runtime"
 )
 
 // ToolExecutor holds the dependencies needed to execute operator tool calls.
 type ToolExecutor struct {
-	Gateway      orchestration.GatewaySpawner
 	teams        []agents.Team
 	teamsMu      sync.RWMutex
 	WorkspaceDir string
@@ -58,9 +56,8 @@ func (te *ToolExecutor) getTeams() []agents.Team {
 }
 
 // NewToolExecutor creates a ToolExecutor with the default static tools.
-func NewToolExecutor(gateway orchestration.GatewaySpawner, teams []agents.Team, workspaceDir string, store db.Store, rt *runtime.Runtime) *ToolExecutor {
+func NewToolExecutor(teams []agents.Team, workspaceDir string, store db.Store, rt *runtime.Runtime) *ToolExecutor {
 	return &ToolExecutor{
-		Gateway:      gateway,
 		teams:        teams,
 		WorkspaceDir: workspaceDir,
 		Tools:        staticTools,
@@ -248,25 +245,6 @@ var staticTools = []provider.Tool{
 		}),
 	},
 	{
-		Name:        "list_slots",
-		Description: "List all gateway slots with their current status, team, job, and elapsed time.",
-		Parameters:  mustMarshalJSON(map[string]any{"type": "object", "properties": map[string]any{}, "required": []string{}}),
-	},
-	{
-		Name:        "kill_slot",
-		Description: "Kill a running agent slot by its slot index. Use list_slots to find the slot index.",
-		Parameters: mustMarshalJSON(map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"slot_id": map[string]any{
-					"type":        "integer",
-					"description": "The index of the slot to kill.",
-				},
-			},
-			"required": []string{"slot_id"},
-		}),
-	},
-	{
 		Name:        "task_set_status",
 		Description: "Update the status of a specific task within a job. Valid statuses: active, done, paused.",
 		Parameters: mustMarshalJSON(map[string]any{
@@ -349,8 +327,6 @@ var handlers = map[string]toolHandler{
 	"job_set_status":      handleJobSetStatus,
 	"assign_team":         handleAssignTeam,
 	"escalate_to_user":    handleEscalateToUser,
-	"list_slots":          handleListSlots,
-	"kill_slot":           handleKillSlot,
 	"ask_user":            handleAskUser,
 	"list_sessions":       handleListSessions,
 	"cancel_session":      handleCancelSession,
