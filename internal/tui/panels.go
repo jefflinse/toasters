@@ -142,24 +142,20 @@ func (m Model) renderLeftPanel(panelWidth, panelHeight int) string {
 					topLines = append(topLines, TaskBlockedStyle.Render(blockerLine))
 				}
 
-				// SQLite task progress summary (if available from polling).
+				// SQLite task progress summary and subitems (single lookup).
 				if dbTasks := m.progress.tasks[j.ID]; len(dbTasks) > 0 {
 					summary := renderJobProgressSummary(dbTasks)
 					if summary != "" {
 						topLines = append(topLines, DimStyle.Render("  ")+summary)
 					}
-				}
-
-				// Task subitems from SQLite.
-				if dbTasks := m.progress.tasks[j.ID]; len(dbTasks) > 0 {
 					for _, task := range dbTasks {
 						indicator, style := taskStatusIndicator(task.Status)
-						title := task.Title
-						if task.TeamID != "" {
-							title += " (" + task.TeamID + ")"
-						}
-						taskLine := "  " + indicator + " " + truncateStr(title, contentWidth-5)
+						taskLine := "  " + indicator + " " + truncateStr(task.Title, contentWidth-5)
 						topLines = append(topLines, style.Render(taskLine))
+						if task.TeamID != "" && (task.Status == db.TaskStatusInProgress || task.Status == db.TaskStatusBlocked) {
+							teamLine := "    " + style.Render(indicator) + " " + TaskPendingStyle.Render(truncateStr(task.TeamID, contentWidth-7))
+							topLines = append(topLines, teamLine)
+						}
 					}
 				}
 			}

@@ -150,13 +150,6 @@ func (m *Model) renderRuntimeGridCell(rs *runtimeSlot, cellW, cellH, innerW, inn
 		}
 	}
 
-	var hdrStyle lipgloss.Style
-	if focused {
-		hdrStyle = HeaderStyle
-	} else {
-		hdrStyle = SidebarHeaderStyle
-	}
-
 	borderType := lipgloss.RoundedBorder()
 	if focused {
 		borderType = lipgloss.ThickBorder()
@@ -169,6 +162,14 @@ func (m *Model) renderRuntimeGridCell(rs *runtimeSlot, cellW, cellH, innerW, inn
 		BorderForeground(borderColor).
 		Padding(0, 1)
 
+	return cellStyle.Render(renderAgentCard(rs, innerW, innerH, focused, m.spinnerFrame))
+}
+
+// renderAgentCard renders the inner content of an agent smart card (without border).
+// innerW and innerH define the available content dimensions.
+// focused indicates whether this card has focus (affects header style).
+// spinnerFrame is the current animation frame for the braille spinner.
+func renderAgentCard(rs *runtimeSlot, innerW, innerH int, focused bool, spinnerFrame int) string {
 	// Graceful degrade: too narrow to show a useful card.
 	if innerH < 4 {
 		jobID := rs.jobID
@@ -180,7 +181,14 @@ func (m *Model) renderRuntimeGridCell(rs *runtimeSlot, cellW, cellH, innerW, inn
 		if len(miniLines) > innerH {
 			miniLines = miniLines[:innerH]
 		}
-		return cellStyle.Render(strings.Join(miniLines, "\n"))
+		return strings.Join(miniLines, "\n")
+	}
+
+	var hdrStyle lipgloss.Style
+	if focused {
+		hdrStyle = HeaderStyle
+	} else {
+		hdrStyle = SidebarHeaderStyle
 	}
 
 	// --- Header line ---
@@ -292,7 +300,9 @@ func (m *Model) renderRuntimeGridCell(rs *runtimeSlot, cellW, cellH, innerW, inn
 		lines = lines[:innerH]
 	}
 
-	return cellStyle.Render(strings.Join(lines, "\n"))
+	_ = spinnerFrame // reserved for future animated content in the card body
+
+	return strings.Join(lines, "\n")
 }
 
 // commaInt formats an integer with comma-separated thousands (e.g. 200000 → "200,000").

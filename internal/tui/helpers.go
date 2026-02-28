@@ -215,10 +215,13 @@ func (m *Model) renderToasts() string {
 	for i := len(m.toasts) - 1; i >= 0; i-- {
 		t := m.toasts[i]
 		msg := t.message
-		// Truncate message to fit within toast max width (inner ~36 chars after padding).
-		maxMsg := 36
-		if len([]rune(msg)) > maxMsg {
-			msg = string([]rune(msg)[:maxMsg-1]) + "…"
+		// Truncate by display width, not rune count, so wide characters (emoji,
+		// CJK) don't overflow the toast box. Inner budget = MaxWidth(40) minus
+		// horizontal padding (Padding(0,1) → 1+1 = 2 columns).
+		innerBudget := 40 - ToastBaseStyle.GetHorizontalPadding()
+		for lipgloss.Width(msg) > innerBudget {
+			runes := []rune(msg)
+			msg = string(runes[:len(runes)-1]) + "…"
 		}
 		var rendered string
 		switch t.level {
@@ -515,6 +518,35 @@ func (m *Model) sortedRuntimeSessions() []*runtimeSlot {
 		}
 		return strings.Compare(a.sessionID, b.sessionID) // stable tiebreaker
 	})
+	return slots
+}
+
+// runtimeSessionsForTask returns all runtime sessions associated with the given task ID,
+// sorted with active sessions first, then completed, ordered by start time within each group.
+func (m *Model) runtimeSessionsForTask(taskID string) []*runtimeSlot {
+	var slots []*runtimeSlot
+	for _, rs := range m.runtimeSessions {
+		if rs.taskID == taskID {
+			slots = append(slots, rs)
+		}
+	}
+	slices.SortFunc(slots, func(a, b *runtimeSlot) int {
+		aActive := a.status == "active"
+		bActive := b.status == "active"
+		if aActive != bActive {
+			if aActive {
+				return -1 // active before inactive
+			}
+			return 1
+		}
+		if cmp := a.startTime.Compare(b.startTime); cmp != 0 {
+			return cmp
+		}
+		return strings.Compare(a.sessionID, b.sessionID) // stable tiebreaker
+	})
+	if slots == nil {
+		return []*runtimeSlot{}
+	}
 	return slots
 }
 

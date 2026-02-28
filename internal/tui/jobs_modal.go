@@ -4,6 +4,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"image/color"
 	"log/slog"
 	"strings"
 	"time"
@@ -16,14 +17,15 @@ import (
 
 // jobsModalState holds all state for the /jobs modal overlay.
 type jobsModalState struct {
-	show          bool
-	jobs          []*db.Job
-	jobIdx        int
-	tasks         map[string][]*db.Task
-	progress      map[string][]*db.ProgressReport
-	focus         int // 0=left (jobs list), 1=right (task detail)
-	taskIdx       int
-	confirmCancel bool
+	show              bool
+	jobs              []*db.Job
+	jobIdx            int
+	tasks             map[string][]*db.Task
+	progress          map[string][]*db.ProgressReport
+	focus             int // 0=jobs list, 1=tasks list, 2=agent detail
+	taskIdx           int
+	confirmCancel     bool
+	agentScrollOffset int // TODO: implement scrolling in the agent detail panel (v2)
 }
 
 // loadJobsForModal loads all jobs from the store into the jobs modal state.
@@ -89,40 +91,47 @@ func (m *Model) updateJobsModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 
 	case "tab":
-		if m.jobsModal.focus == 0 {
-			m.jobsModal.focus = 1
-		} else {
-			m.jobsModal.focus = 0
-		}
+		m.jobsModal.focus = (m.jobsModal.focus + 1) % 3
+
+	case "shift+tab":
+		m.jobsModal.focus = (m.jobsModal.focus + 2) % 3
 
 	case "up":
-		if m.jobsModal.focus == 0 {
+		switch m.jobsModal.focus {
+		case 0:
 			if m.jobsModal.jobIdx > 0 {
 				m.jobsModal.jobIdx--
 				m.jobsModal.taskIdx = 0
+				m.jobsModal.agentScrollOffset = 0
 				m.loadJobDetail()
 			}
-		} else {
+		case 1:
 			if m.jobsModal.taskIdx > 0 {
 				m.jobsModal.taskIdx--
+				m.jobsModal.agentScrollOffset = 0
 			}
+			// focus==2: no-op (display-only panel in v1)
 		}
 
 	case "down":
-		if m.jobsModal.focus == 0 {
+		switch m.jobsModal.focus {
+		case 0:
 			if m.jobsModal.jobIdx < len(m.jobsModal.jobs)-1 {
 				m.jobsModal.jobIdx++
 				m.jobsModal.taskIdx = 0
+				m.jobsModal.agentScrollOffset = 0
 				m.loadJobDetail()
 			}
-		} else {
+		case 1:
 			if len(m.jobsModal.jobs) > 0 && m.jobsModal.jobIdx < len(m.jobsModal.jobs) {
 				job := m.jobsModal.jobs[m.jobsModal.jobIdx]
 				tasks := m.jobsModal.tasks[job.ID]
 				if m.jobsModal.taskIdx < len(tasks)-1 {
 					m.jobsModal.taskIdx++
+					m.jobsModal.agentScrollOffset = 0
 				}
 			}
+			// focus==2: no-op (display-only panel in v1)
 		}
 
 	case "ctrl+x":
@@ -149,15 +158,21 @@ func (m *Model) updateJobsModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				modalCmds = append(modalCmds, m.addToast("✓ Job cancelled", toastSuccess))
 			}
 			m.jobsModal.confirmCancel = false
+		} else if m.jobsModal.focus == 1 {
+			// Drill into agent detail panel.
+			m.jobsModal.focus = 2
 		}
+		// focus==0: no additional action beyond confirmCancel handling above.
+		// focus==2: no-op.
 	}
 
 	return m, tea.Batch(modalCmds...)
 }
 
-// renderJobsModal renders the full-screen jobs management modal.
+// renderJobsModal renders the full-screen jobs management modal as a three-panel layout:
+// Left (20%): job list, Middle (30%): task list for selected job, Right (~50%): agent cards for selected task.
 func (m *Model) renderJobsModal() string {
-	jobs := m.jobsModal.jobs
+	const columnGap = 1 // 1-column gap between panels, matching main layout convention
 
 	// Modal dimensions: use most of the terminal.
 	modalW := m.width - 4
@@ -172,33 +187,42 @@ func (m *Model) renderJobsModal() string {
 		modalH = 20
 	}
 
-	// Inner width after modal border + padding (border=2, padding=2 each side).
+	// Inner width after modal border + padding.
 	innerW := modalW - ModalStyle.GetHorizontalFrameSize()
 	if innerW < 10 {
 		innerW = 10
 	}
 
-	// Left panel: ~30% of modal width.
-	leftInnerW := innerW * 30 / 100
-	if leftInnerW < 20 {
-		leftInnerW = 20
+	// Panel frame overhead (border + padding on each side).
+	panelFrameW := ModalPanelStyle.GetHorizontalFrameSize()
+
+	// Left panel: 20% of modal width, min 18 cols inner.
+	leftInnerW := innerW * 20 / 100
+	if leftInnerW < 18 {
+		leftInnerW = 18
 	}
-	leftPanelW := leftInnerW + ModalPanelStyle.GetHorizontalFrameSize()
-	if leftPanelW > innerW/2 {
-		leftPanelW = innerW / 2
-		leftInnerW = leftPanelW - ModalPanelStyle.GetHorizontalFrameSize()
+	leftPanelW := leftInnerW + panelFrameW
+
+	// Middle panel: 30% of modal width, min 24 cols inner.
+	midInnerW := innerW * 30 / 100
+	if midInnerW < 24 {
+		midInnerW = 24
+	}
+	midPanelW := midInnerW + panelFrameW
+
+	// Right panel: remaining width after left + middle + two gaps.
+	rightPanelW := innerW - leftPanelW - midPanelW - 2*columnGap
+	if rightPanelW < panelFrameW+4 {
+		rightPanelW = panelFrameW + 4
+	}
+	rightInnerW := rightPanelW - panelFrameW
+	if rightInnerW < 4 {
+		rightInnerW = 4
 	}
 
-	// Right panel: remaining width.
-	rightPanelW := innerW - leftPanelW - 1 // -1 for spacing
-	rightInnerW := rightPanelW - ModalPanelStyle.GetHorizontalFrameSize()
-	if rightInnerW < 5 {
-		rightInnerW = 5
-	}
-
-	// Panel inner height (subtract border + footer line).
+	// Panel height: subtract modal frame + footer line.
 	footerLines := 1
-	panelH := modalH - ModalStyle.GetVerticalFrameSize() - footerLines - 1
+	panelH := modalH - ModalStyle.GetVerticalFrameSize() - footerLines - 1 // -1 for visual breathing room
 	if panelH < 5 {
 		panelH = 5
 	}
@@ -207,14 +231,26 @@ func (m *Model) renderJobsModal() string {
 		panelInnerH = 3
 	}
 
+	// Use the modal's own job list (same source as the key handler) for consistency.
+	displayedJobs := m.jobsModal.jobs
+
+	// Clamp jobIdx to valid bounds.
+	jobIdx := m.jobsModal.jobIdx
+	if jobIdx >= len(displayedJobs) {
+		jobIdx = len(displayedJobs) - 1
+	}
+	if jobIdx < 0 {
+		jobIdx = 0
+	}
+
 	// --- Left panel: jobs list ---
 	var leftLines []string
 	leftLines = append(leftLines, gradientText("Jobs", [3]uint8{0, 200, 200}, [3]uint8{175, 50, 200}))
 
-	if len(jobs) == 0 {
+	if len(displayedJobs) == 0 {
 		leftLines = append(leftLines, DimStyle.Render("No jobs."))
 	} else {
-		for i, j := range jobs {
+		for i, j := range displayedJobs {
 			var icon string
 			switch j.Status {
 			case db.JobStatusActive:
@@ -233,22 +269,15 @@ func (m *Model) renderJobsModal() string {
 				icon = "·"
 			}
 			name := truncateStr(j.Title, leftInnerW-4)
-			line := fmt.Sprintf("%s %s", icon, name)
-			if j.Type != "" {
-				line += " " + DimStyle.Render("["+j.Type+"]")
+			if i == jobIdx {
+				leftLines = append(leftLines, JobSelectedStyle.Width(leftInnerW).Render(fmt.Sprintf("%s %s", icon, name)))
+			} else {
+				leftLines = append(leftLines, JobItemStyle.Render(fmt.Sprintf("%s %s", icon, name)))
 			}
-			if i == m.jobsModal.jobIdx {
-				line = ModalSelectedStyle.Width(leftInnerW).Render(fmt.Sprintf("%s %s", icon, name))
-				if j.Type != "" {
-					// Re-render with type badge outside the selected highlight to avoid style bleed.
-					line = ModalSelectedStyle.Width(leftInnerW).Render(fmt.Sprintf("%s %s [%s]", icon, name, j.Type))
-				}
-			}
-			leftLines = append(leftLines, line)
 		}
 	}
 
-	// Pad left panel to fill height.
+	// Pad/trim left panel to fill height.
 	for len(leftLines) < panelInnerH {
 		leftLines = append(leftLines, "")
 	}
@@ -264,120 +293,238 @@ func (m *Model) renderJobsModal() string {
 		leftPanel = ModalPanelStyle.Width(leftPanelW).Height(panelH).Render(leftContent)
 	}
 
-	// --- Right panel: job detail ---
-	var rightLines []string
+	// --- Middle panel: task list for selected job ---
+	var midLines []string
 
-	if len(jobs) == 0 || m.jobsModal.jobIdx >= len(jobs) {
-		rightLines = append(rightLines, DimStyle.Render("No job selected."))
+	var selectedJob *db.Job
+	var selectedJobTasks []*db.Task
+	if len(displayedJobs) > 0 && jobIdx < len(displayedJobs) {
+		selectedJob = displayedJobs[jobIdx]
+		selectedJobTasks = m.jobsModal.tasks[selectedJob.ID]
+	}
+
+	if selectedJob == nil {
+		midLines = append(midLines, DimStyle.Render("No job selected."))
 	} else {
-		job := jobs[m.jobsModal.jobIdx]
-		tasks := m.jobsModal.tasks[job.ID]
-		progress := m.jobsModal.progress[job.ID]
-
-		// Header: job title.
-		rightLines = append(rightLines, HeaderStyle.Render(truncateStr(job.Title, rightInnerW)))
-		rightLines = append(rightLines, DimStyle.Render(strings.Repeat("─", rightInnerW)))
+		// Title: selected job's title as header.
+		midLines = append(midLines, HeaderStyle.Render(truncateStr(selectedJob.Title, midInnerW)))
 
 		// Status line with color coding.
 		var statusStr string
-		switch job.Status {
+		switch selectedJob.Status {
 		case db.JobStatusActive:
-			statusStr = lipgloss.NewStyle().Foreground(lipgloss.Color("10")).Bold(true).Render(string(job.Status))
+			statusStr = lipgloss.NewStyle().Foreground(lipgloss.Color("10")).Bold(true).Render(string(selectedJob.Status))
 		case db.JobStatusCompleted:
-			statusStr = lipgloss.NewStyle().Foreground(lipgloss.Color("10")).Render(string(job.Status))
+			statusStr = lipgloss.NewStyle().Foreground(lipgloss.Color("10")).Render(string(selectedJob.Status))
 		case db.JobStatusFailed:
-			statusStr = lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Bold(true).Render(string(job.Status))
+			statusStr = lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Bold(true).Render(string(selectedJob.Status))
 		case db.JobStatusPaused:
-			statusStr = lipgloss.NewStyle().Foreground(lipgloss.Color("11")).Render(string(job.Status))
+			statusStr = lipgloss.NewStyle().Foreground(lipgloss.Color("11")).Render(string(selectedJob.Status))
 		case db.JobStatusSettingUp:
-			// Muted yellow: system is preparing the job (e.g. cloning repos).
-			statusStr = lipgloss.NewStyle().Foreground(lipgloss.Color("178")).Render(string(job.Status))
+			statusStr = lipgloss.NewStyle().Foreground(lipgloss.Color("178")).Render(string(selectedJob.Status))
 		case db.JobStatusDecomposing:
-			// Muted cyan: LLM is decomposing the work into tasks.
-			statusStr = lipgloss.NewStyle().Foreground(lipgloss.Color("38")).Render(string(job.Status))
+			statusStr = lipgloss.NewStyle().Foreground(lipgloss.Color("38")).Render(string(selectedJob.Status))
 		default:
-			statusStr = DimStyle.Render(string(job.Status))
+			statusStr = DimStyle.Render(string(selectedJob.Status))
 		}
-		rightLines = append(rightLines, "Status: "+statusStr)
+		midLines = append(midLines, "Status: "+statusStr)
 
-		// Description (if non-empty).
-		if job.Description != "" {
-			rightLines = append(rightLines, DimStyle.Render(truncateStr(job.Description, rightInnerW)))
-		}
+		// Created timestamp.
+		midLines = append(midLines, DimStyle.Render("Created: "+selectedJob.CreatedAt.Format("2006-01-02 15:04")))
 
-		// Workspace dir.
-		if job.WorkspaceDir != "" {
-			rightLines = append(rightLines, DimStyle.Render("Workspace: "+truncateStr(job.WorkspaceDir, rightInnerW-12)))
-		}
+		// Separator.
+		midLines = append(midLines, DimStyle.Render(strings.Repeat("─", midInnerW)))
 
-		// Created at.
-		rightLines = append(rightLines, DimStyle.Render("Created: "+job.CreatedAt.Format("2006-01-02 15:04")))
-
-		rightLines = append(rightLines, "")
-
-		// Tasks section.
-		rightLines = append(rightLines, fmt.Sprintf("Tasks (%d)", len(tasks)))
-		for i, task := range tasks {
-			indicator, style := taskStatusIndicator(task.Status)
-			line := indicator + " " + truncateStr(task.Title, rightInnerW-4)
-			if m.jobsModal.focus == 1 && i == m.jobsModal.taskIdx {
-				line = ModalSelectedStyle.Width(rightInnerW).Render(indicator + " " + truncateStr(task.Title, rightInnerW-4))
-			} else {
-				line = style.Render(line)
-			}
-			rightLines = append(rightLines, line)
-		}
-
-		rightLines = append(rightLines, "")
-
-		// Recent progress section.
-		rightLines = append(rightLines, "Recent Progress")
-		for _, p := range progress {
-			rightLines = append(rightLines, DimStyle.Render("["+p.CreatedAt.Format("15:04:05")+"] "+truncateStr(p.Message, rightInnerW-12)))
-		}
-		if len(progress) == 0 {
-			rightLines = append(rightLines, DimStyle.Render("No recent progress."))
-		}
-
-		// Cancel confirmation.
+		// Cancel confirmation (shown in middle panel when active).
 		if m.jobsModal.confirmCancel {
-			rightLines = append(rightLines, "")
-			rightLines = append(rightLines, ModalWarningStyle.Render("⚠ Cancel this job? [Enter] confirm  [Esc] cancel"))
+			midLines = append(midLines, ModalWarningStyle.Render("⚠ Cancel this job?"))
+			midLines = append(midLines, DimStyle.Render("[Enter] confirm  [Esc] cancel"))
+			midLines = append(midLines, "")
+		}
+
+		// Task list.
+		if len(selectedJobTasks) == 0 {
+			midLines = append(midLines, DimStyle.Render("No tasks yet"))
+		} else {
+			// Clamp taskIdx to valid bounds.
+			taskIdx := m.jobsModal.taskIdx
+			if taskIdx >= len(selectedJobTasks) {
+				taskIdx = len(selectedJobTasks) - 1
+			}
+			if taskIdx < 0 {
+				taskIdx = 0
+			}
+
+			for i, task := range selectedJobTasks {
+				indicator, style := taskStatusIndicator(task.Status)
+				taskTitle := truncateStr(task.Title, midInnerW-4)
+				if i == taskIdx {
+					midLines = append(midLines, ModalSelectedStyle.Width(midInnerW).Render(indicator+" "+taskTitle))
+				} else {
+					midLines = append(midLines, style.Render(indicator+" "+taskTitle))
+				}
+				// Team nesting: 4-space indent, same status icon, team name in dim gray.
+				if task.TeamID != "" {
+					teamIndicator, _ := taskStatusIndicator(task.Status)
+					teamLine := "    " + DimStyle.Render(teamIndicator) + " " + TaskPendingStyle.Render(truncateStr(task.TeamID, midInnerW-7))
+					midLines = append(midLines, teamLine)
+				}
+			}
 		}
 	}
 
-	// Pad right panel to fill height.
-	for len(rightLines) < panelInnerH {
-		rightLines = append(rightLines, "")
+	// Pad/trim middle panel to fill height.
+	for len(midLines) < panelInnerH {
+		midLines = append(midLines, "")
 	}
-	if len(rightLines) > panelInnerH {
-		rightLines = rightLines[:panelInnerH]
+	if len(midLines) > panelInnerH {
+		midLines = midLines[:panelInnerH]
 	}
 
-	rightContent := strings.Join(rightLines, "\n")
-	var rightPanel string
+	midContent := strings.Join(midLines, "\n")
+	var midPanel string
 	if m.jobsModal.focus == 1 {
-		rightPanel = ModalFocusedPanel.Width(rightPanelW).Height(panelH).Render(rightContent)
+		midPanel = ModalFocusedPanel.Width(midPanelW).Height(panelH).Render(midContent)
 	} else {
-		rightPanel = ModalPanelStyle.Width(rightPanelW).Height(panelH).Render(rightContent)
+		midPanel = ModalPanelStyle.Width(midPanelW).Height(panelH).Render(midContent)
 	}
 
-	// Join panels horizontally.
-	panels := lipgloss.JoinHorizontal(lipgloss.Top, leftPanel, " ", rightPanel)
+	// --- Right panel: agent cards for selected task ---
+	var rightPanel string
+	{
+		var rightLines []string
+
+		// Resolve selected task.
+		var selectedTask *db.Task
+		if len(selectedJobTasks) > 0 {
+			taskIdx := m.jobsModal.taskIdx
+			if taskIdx >= len(selectedJobTasks) {
+				taskIdx = len(selectedJobTasks) - 1
+			}
+			if taskIdx < 0 {
+				taskIdx = 0
+			}
+			selectedTask = selectedJobTasks[taskIdx]
+		}
+
+		// Panel title.
+		panelTitle := "Agents"
+		if selectedTask != nil {
+			panelTitle = truncateStr(selectedTask.Title, rightInnerW)
+		}
+		rightLines = append(rightLines, gradientText(panelTitle, [3]uint8{50, 130, 255}, [3]uint8{0, 200, 200}))
+
+		if selectedTask == nil {
+			// No task selected yet.
+			placeholder := "Select a task"
+			rightLines = append(rightLines, "")
+			rightLines = append(rightLines, lipgloss.PlaceHorizontal(rightInnerW, lipgloss.Center, DimStyle.Render(placeholder)))
+		} else {
+			// Get runtime sessions for this task.
+			sessions := m.runtimeSessionsForTask(selectedTask.ID)
+
+			if len(sessions) == 0 {
+				// Show context-appropriate placeholder.
+				var placeholder string
+				switch selectedTask.Status {
+				case db.TaskStatusPending:
+					placeholder = "No agents assigned"
+				case db.TaskStatusInProgress:
+					placeholder = "Waiting for agents..."
+				case db.TaskStatusCompleted:
+					placeholder = "Task completed"
+				default:
+					placeholder = "No agents assigned"
+				}
+				rightLines = append(rightLines, "")
+				rightLines = append(rightLines, lipgloss.PlaceHorizontal(rightInnerW, lipgloss.Center, DimStyle.Render(placeholder)))
+			} else {
+				// Compute card height: divide available height evenly among sessions.
+				// Available height = panelInnerH - 1 (title line already added).
+				availH := panelInnerH - 1
+				if availH < 1 {
+					availH = 1
+				}
+				cardH := availH / len(sessions)
+				if cardH < 6 {
+					cardH = 6
+				}
+				if cardH > 12 {
+					cardH = 12
+				}
+				cardInnerH := cardH - 2 // subtract border top+bottom
+				if cardInnerH < 1 {
+					cardInnerH = 1
+				}
+				cardInnerW := rightInnerW - 4 // subtract border (2) + padding (2)
+				if cardInnerW < 1 {
+					cardInnerW = 1
+				}
+
+				for _, rs := range sessions {
+					// Choose border color: green for active, dim for completed.
+					var borderColor color.Color
+					if rs.status == "active" {
+						borderColor = ColorConnected
+					} else {
+						borderColor = ColorDim
+					}
+					cardStyle := lipgloss.NewStyle().
+						Width(rightInnerW).
+						Height(cardH).
+						Border(lipgloss.RoundedBorder()).
+						BorderForeground(borderColor).
+						Padding(0, 1)
+
+					cardContent := renderAgentCard(rs, cardInnerW, cardInnerH, false, m.spinnerFrame)
+					rendered := cardStyle.Render(cardContent)
+					rightLines = append(rightLines, strings.Split(rendered, "\n")...)
+				}
+			}
+		}
+
+		// Pad/trim right panel to fill height.
+		for len(rightLines) < panelInnerH {
+			rightLines = append(rightLines, "")
+		}
+		if len(rightLines) > panelInnerH {
+			rightLines = rightLines[:panelInnerH]
+		}
+
+		rightContent := strings.Join(rightLines, "\n")
+		if m.jobsModal.focus == 2 {
+			rightPanel = ModalFocusedPanel.Width(rightPanelW).Height(panelH).Render(rightContent)
+		} else {
+			rightPanel = ModalPanelStyle.Width(rightPanelW).Height(panelH).Render(rightContent)
+		}
+	}
+
+	// Join all three panels horizontally with 1-column gaps.
+	gapStr := strings.Repeat(" ", columnGap)
+	panels := lipgloss.JoinHorizontal(lipgloss.Top, leftPanel, gapStr, midPanel, gapStr, rightPanel)
 
 	// Footer with key hints.
 	cancelHint := "[Ctrl+X] Cancel Job"
-	canCancel := len(jobs) > 0 && m.jobsModal.jobIdx < len(jobs) &&
-		(jobs[m.jobsModal.jobIdx].Status == db.JobStatusActive || jobs[m.jobsModal.jobIdx].Status == db.JobStatusPending ||
-			jobs[m.jobsModal.jobIdx].Status == db.JobStatusSettingUp || jobs[m.jobsModal.jobIdx].Status == db.JobStatusDecomposing)
+	canCancel := selectedJob != nil &&
+		(selectedJob.Status == db.JobStatusActive || selectedJob.Status == db.JobStatusPending ||
+			selectedJob.Status == db.JobStatusSettingUp || selectedJob.Status == db.JobStatusDecomposing)
 	if !canCancel {
 		cancelHint = DimStyle.Render(cancelHint)
 	}
-	footer := lipgloss.JoinHorizontal(lipgloss.Left,
-		DimStyle.Render("[Tab] Switch"), "  ",
+	enterHint := DimStyle.Render("[Enter] View Agents")
+	if m.jobsModal.focus != 1 {
+		enterHint = ""
+	}
+	footerParts := []string{
+		DimStyle.Render("[Tab] Switch Panel"), "  ",
+		DimStyle.Render("[↑↓] Navigate"), "  ",
 		cancelHint, "  ",
 		DimStyle.Render("[Esc] Close"),
-	)
+	}
+	if enterHint != "" {
+		footerParts = append(footerParts, "  ", enterHint)
+	}
+	footer := lipgloss.JoinHorizontal(lipgloss.Left, footerParts...)
 
 	inner := lipgloss.JoinVertical(lipgloss.Left, panels, footer)
 	modal := ModalStyle.Width(modalW).Render(inner)

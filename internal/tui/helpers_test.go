@@ -9,6 +9,222 @@ import (
 	"github.com/jefflinse/toasters/internal/provider"
 )
 
+// --------------------------------------------------------------------------
+// TestRuntimeSessionsForTask
+// --------------------------------------------------------------------------
+
+func TestRuntimeSessionsForTask(t *testing.T) {
+	t.Parallel()
+
+	base := time.Date(2024, 6, 1, 12, 0, 0, 0, time.UTC)
+
+	makeSlot := func(sessionID, taskID, status string, startOffset time.Duration) *runtimeSlot {
+		return &runtimeSlot{
+			sessionID: sessionID,
+			taskID:    taskID,
+			status:    status,
+			startTime: base.Add(startOffset),
+		}
+	}
+
+	t.Run("returns matching sessions for task", func(t *testing.T) {
+		t.Parallel()
+		m := newMinimalModel(t)
+		m.runtimeSessions = map[string]*runtimeSlot{
+			"s1": makeSlot("s1", "task-A", "active", 0),
+			"s2": makeSlot("s2", "task-B", "active", time.Second),
+			"s3": makeSlot("s3", "task-A", "completed", 2*time.Second),
+		}
+
+		got := m.runtimeSessionsForTask("task-A")
+
+		if len(got) != 2 {
+			t.Fatalf("expected 2 sessions for task-A, got %d", len(got))
+		}
+		// Verify both returned sessions belong to task-A.
+		for _, rs := range got {
+			if rs.taskID != "task-A" {
+				t.Errorf("unexpected taskID %q in result", rs.taskID)
+			}
+		}
+	})
+
+	t.Run("returns empty non-nil slice when no matches", func(t *testing.T) {
+		t.Parallel()
+		m := newMinimalModel(t)
+		m.runtimeSessions = map[string]*runtimeSlot{
+			"s1": makeSlot("s1", "task-A", "active", 0),
+		}
+
+		got := m.runtimeSessionsForTask("task-Z")
+
+		if got == nil {
+			t.Error("expected non-nil empty slice, got nil")
+		}
+		if len(got) != 0 {
+			t.Errorf("expected 0 sessions, got %d", len(got))
+		}
+	})
+
+	t.Run("returns empty non-nil slice for empty taskID", func(t *testing.T) {
+		t.Parallel()
+		m := newMinimalModel(t)
+		m.runtimeSessions = map[string]*runtimeSlot{
+			"s1": makeSlot("s1", "task-A", "active", 0),
+		}
+
+		got := m.runtimeSessionsForTask("")
+
+		if got == nil {
+			t.Error("expected non-nil empty slice, got nil")
+		}
+		if len(got) != 0 {
+			t.Errorf("expected 0 sessions for empty taskID, got %d", len(got))
+		}
+	})
+
+	t.Run("returns empty non-nil slice when runtimeSessions is empty", func(t *testing.T) {
+		t.Parallel()
+		m := newMinimalModel(t)
+		// runtimeSessions is already an empty map from newMinimalModel.
+
+		got := m.runtimeSessionsForTask("task-A")
+
+		if got == nil {
+			t.Error("expected non-nil empty slice, got nil")
+		}
+		if len(got) != 0 {
+			t.Errorf("expected 0 sessions, got %d", len(got))
+		}
+	})
+
+	t.Run("sorts active sessions before completed", func(t *testing.T) {
+		t.Parallel()
+		m := newMinimalModel(t)
+		m.runtimeSessions = map[string]*runtimeSlot{
+			// completed starts earlier but should sort after active.
+			"s-completed": makeSlot("s-completed", "task-X", "completed", 0),
+			"s-active":    makeSlot("s-active", "task-X", "active", 5*time.Second),
+		}
+
+		got := m.runtimeSessionsForTask("task-X")
+
+		if len(got) != 2 {
+			t.Fatalf("expected 2 sessions, got %d", len(got))
+		}
+		if got[0].status != "active" {
+			t.Errorf("first session should be active, got status %q", got[0].status)
+		}
+		if got[1].status != "completed" {
+			t.Errorf("second session should be completed, got status %q", got[1].status)
+		}
+	})
+
+	t.Run("sorts by startTime ascending within same status group", func(t *testing.T) {
+		t.Parallel()
+		m := newMinimalModel(t)
+		m.runtimeSessions = map[string]*runtimeSlot{
+			// Three active sessions with different start times.
+			"s-late":   makeSlot("s-late", "task-Y", "active", 10*time.Second),
+			"s-early":  makeSlot("s-early", "task-Y", "active", 0),
+			"s-middle": makeSlot("s-middle", "task-Y", "active", 5*time.Second),
+		}
+
+		got := m.runtimeSessionsForTask("task-Y")
+
+		if len(got) != 3 {
+			t.Fatalf("expected 3 sessions, got %d", len(got))
+		}
+		if got[0].sessionID != "s-early" {
+			t.Errorf("first session should be s-early (earliest start), got %q", got[0].sessionID)
+		}
+		if got[1].sessionID != "s-middle" {
+			t.Errorf("second session should be s-middle, got %q", got[1].sessionID)
+		}
+		if got[2].sessionID != "s-late" {
+			t.Errorf("third session should be s-late (latest start), got %q", got[2].sessionID)
+		}
+	})
+
+	t.Run("sorts completed sessions by startTime ascending", func(t *testing.T) {
+		t.Parallel()
+		m := newMinimalModel(t)
+		m.runtimeSessions = map[string]*runtimeSlot{
+			"c-second": makeSlot("c-second", "task-Z", "completed", 2*time.Second),
+			"c-first":  makeSlot("c-first", "task-Z", "completed", 0),
+		}
+
+		got := m.runtimeSessionsForTask("task-Z")
+
+		if len(got) != 2 {
+			t.Fatalf("expected 2 sessions, got %d", len(got))
+		}
+		if got[0].sessionID != "c-first" {
+			t.Errorf("first completed session should be c-first, got %q", got[0].sessionID)
+		}
+		if got[1].sessionID != "c-second" {
+			t.Errorf("second completed session should be c-second, got %q", got[1].sessionID)
+		}
+	})
+
+	t.Run("handles multiple sessions for same task with mixed statuses", func(t *testing.T) {
+		t.Parallel()
+		m := newMinimalModel(t)
+		m.runtimeSessions = map[string]*runtimeSlot{
+			"a1": makeSlot("a1", "task-M", "active", 3*time.Second),
+			"a2": makeSlot("a2", "task-M", "active", 1*time.Second),
+			"c1": makeSlot("c1", "task-M", "completed", 0),
+			"c2": makeSlot("c2", "task-M", "completed", 2*time.Second),
+			// Different task — should not appear.
+			"other": makeSlot("other", "task-OTHER", "active", 0),
+		}
+
+		got := m.runtimeSessionsForTask("task-M")
+
+		if len(got) != 4 {
+			t.Fatalf("expected 4 sessions for task-M, got %d", len(got))
+		}
+		// First two should be active (sorted by startTime).
+		if got[0].status != "active" || got[0].sessionID != "a2" {
+			t.Errorf("got[0] = {status:%q, id:%q}, want {active, a2}", got[0].status, got[0].sessionID)
+		}
+		if got[1].status != "active" || got[1].sessionID != "a1" {
+			t.Errorf("got[1] = {status:%q, id:%q}, want {active, a1}", got[1].status, got[1].sessionID)
+		}
+		// Last two should be completed (sorted by startTime).
+		if got[2].status != "completed" || got[2].sessionID != "c1" {
+			t.Errorf("got[2] = {status:%q, id:%q}, want {completed, c1}", got[2].status, got[2].sessionID)
+		}
+		if got[3].status != "completed" || got[3].sessionID != "c2" {
+			t.Errorf("got[3] = {status:%q, id:%q}, want {completed, c2}", got[3].status, got[3].sessionID)
+		}
+	})
+
+	t.Run("stable tiebreaker by sessionID when startTimes are equal", func(t *testing.T) {
+		t.Parallel()
+		m := newMinimalModel(t)
+		// Both sessions have identical startTime — sessionID is the tiebreaker.
+		sameTime := base
+		m.runtimeSessions = map[string]*runtimeSlot{
+			"z-session": {sessionID: "z-session", taskID: "task-T", status: "active", startTime: sameTime},
+			"a-session": {sessionID: "a-session", taskID: "task-T", status: "active", startTime: sameTime},
+		}
+
+		got := m.runtimeSessionsForTask("task-T")
+
+		if len(got) != 2 {
+			t.Fatalf("expected 2 sessions, got %d", len(got))
+		}
+		// "a-session" < "z-session" lexicographically.
+		if got[0].sessionID != "a-session" {
+			t.Errorf("first session should be a-session (lexicographic tiebreaker), got %q", got[0].sessionID)
+		}
+		if got[1].sessionID != "z-session" {
+			t.Errorf("second session should be z-session, got %q", got[1].sessionID)
+		}
+	})
+}
+
 func TestWrapText(t *testing.T) {
 	t.Parallel()
 

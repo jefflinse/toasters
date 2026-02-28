@@ -2,9 +2,12 @@ package tui
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jefflinse/toasters/internal/db"
 )
 
 // --------------------------------------------------------------------------
@@ -715,6 +718,505 @@ func TestActivityLabel(t *testing.T) {
 			}
 		})
 	}
+}
+
+// --------------------------------------------------------------------------
+// TestRuntimeSessionForGridCell
+// --------------------------------------------------------------------------
+
+// --------------------------------------------------------------------------
+// TestRenderAgentCard
+// --------------------------------------------------------------------------
+
+// stripANSI removes ANSI escape sequences so we can do plain-text assertions.
+func stripANSI(s string) string {
+	// Walk rune-by-rune, skipping ESC sequences.
+	var out strings.Builder
+	inEsc := false
+	for _, r := range s {
+		if r == '\x1b' {
+			inEsc = true
+			continue
+		}
+		if inEsc {
+			if (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') {
+				inEsc = false
+			}
+			continue
+		}
+		out.WriteRune(r)
+	}
+	return out.String()
+}
+
+func TestRenderAgentCard(t *testing.T) {
+	t.Parallel()
+
+	base := time.Date(2024, 6, 1, 12, 0, 0, 0, time.UTC)
+
+	t.Run("returns non-empty string for active session", func(t *testing.T) {
+		t.Parallel()
+		rs := &runtimeSlot{
+			sessionID: "sess-1",
+			agentName: "builder",
+			teamName:  "backend",
+			task:      "implement feature X",
+			jobID:     "job-abc123",
+			status:    "active",
+			startTime: base,
+		}
+
+		result := renderAgentCard(rs, 40, 8, false, 0)
+
+		if result == "" {
+			t.Error("expected non-empty result for active session")
+		}
+	})
+
+	t.Run("returns non-empty string for completed session", func(t *testing.T) {
+		t.Parallel()
+		rs := &runtimeSlot{
+			sessionID: "sess-2",
+			agentName: "tester",
+			teamName:  "qa",
+			task:      "run test suite",
+			jobID:     "job-xyz789",
+			status:    "completed",
+			startTime: base,
+			endTime:   base.Add(5 * time.Minute),
+		}
+
+		result := renderAgentCard(rs, 40, 8, false, 0)
+
+		if result == "" {
+			t.Error("expected non-empty result for completed session")
+		}
+	})
+
+	t.Run("graceful degrade when innerH less than 4", func(t *testing.T) {
+		t.Parallel()
+		rs := &runtimeSlot{
+			sessionID: "sess-3",
+			agentName: "worker",
+			jobID:     "job-short12345678",
+			status:    "active",
+			startTime: base,
+		}
+
+		// Should not panic for any innerH < 4.
+		for _, h := range []int{0, 1, 2, 3} {
+			t.Run(fmt.Sprintf("innerH=%d", h), func(t *testing.T) {
+				result := renderAgentCard(rs, 40, h, false, 0)
+				// Result may be empty for h=0 but must not panic.
+				lines := strings.Split(result, "\n")
+				if len(lines) > h && h > 0 {
+					t.Errorf("innerH=%d: got %d lines, expected at most %d", h, len(lines), h)
+				}
+			})
+		}
+	})
+
+	t.Run("handles zero innerW gracefully without panic", func(t *testing.T) {
+		t.Parallel()
+		rs := &runtimeSlot{
+			sessionID: "sess-4",
+			agentName: "agent",
+			jobID:     "job-1",
+			status:    "active",
+			startTime: base,
+		}
+
+		// Must not panic.
+		_ = renderAgentCard(rs, 0, 8, false, 0)
+	})
+
+	t.Run("includes agent name in output", func(t *testing.T) {
+		t.Parallel()
+		rs := &runtimeSlot{
+			sessionID: "sess-5",
+			agentName: "my-special-agent",
+			jobID:     "job-1",
+			status:    "active",
+			startTime: base,
+		}
+
+		result := stripANSI(renderAgentCard(rs, 60, 10, false, 0))
+
+		if !strings.Contains(result, "my-special-agent") {
+			t.Errorf("expected agent name 'my-special-agent' in output, got:\n%s", result)
+		}
+	})
+
+	t.Run("includes team-scoped agent name when teamName is set", func(t *testing.T) {
+		t.Parallel()
+		rs := &runtimeSlot{
+			sessionID: "sess-6",
+			agentName: "builder",
+			teamName:  "backend",
+			jobID:     "job-1",
+			status:    "active",
+			startTime: base,
+		}
+
+		result := stripANSI(renderAgentCard(rs, 60, 10, false, 0))
+
+		// Should contain "backend/builder" (team-scoped label).
+		if !strings.Contains(result, "backend/builder") {
+			t.Errorf("expected 'backend/builder' in output, got:\n%s", result)
+		}
+	})
+
+	t.Run("does not double-prefix when agentName already has teamName prefix", func(t *testing.T) {
+		t.Parallel()
+		rs := &runtimeSlot{
+			sessionID: "sess-7",
+			agentName: "myteam/orchestrator",
+			teamName:  "myteam",
+			jobID:     "job-1",
+			status:    "active",
+			startTime: base,
+		}
+
+		result := stripANSI(renderAgentCard(rs, 60, 10, false, 0))
+
+		// Should contain "myteam/orchestrator" exactly once, not "myteam/myteam/orchestrator".
+		if strings.Contains(result, "myteam/myteam/orchestrator") {
+			t.Errorf("agent name was double-prefixed: %s", result)
+		}
+		if !strings.Contains(result, "myteam/orchestrator") {
+			t.Errorf("expected 'myteam/orchestrator' in output, got:\n%s", result)
+		}
+	})
+
+	t.Run("includes task description when present", func(t *testing.T) {
+		t.Parallel()
+		rs := &runtimeSlot{
+			sessionID: "sess-8",
+			agentName: "worker",
+			jobID:     "job-1",
+			task:      "implement the authentication module",
+			status:    "active",
+			startTime: base,
+		}
+
+		result := stripANSI(renderAgentCard(rs, 60, 10, false, 0))
+
+		if !strings.Contains(result, "implement the authentication module") {
+			t.Errorf("expected task description in output, got:\n%s", result)
+		}
+	})
+
+	t.Run("handles session with no activities (active shows waiting placeholder)", func(t *testing.T) {
+		t.Parallel()
+		rs := &runtimeSlot{
+			sessionID:  "sess-9",
+			agentName:  "worker",
+			jobID:      "job-1",
+			status:     "active",
+			activities: nil,
+			startTime:  base,
+		}
+
+		result := stripANSI(renderAgentCard(rs, 60, 10, false, 0))
+
+		// Active session with no activities should show "waiting for activity…".
+		if !strings.Contains(result, "waiting for activity") {
+			t.Errorf("expected 'waiting for activity' placeholder for active session with no activities, got:\n%s", result)
+		}
+	})
+
+	t.Run("handles session with no activities (completed shows nothing)", func(t *testing.T) {
+		t.Parallel()
+		rs := &runtimeSlot{
+			sessionID:  "sess-10",
+			agentName:  "worker",
+			jobID:      "job-1",
+			status:     "completed",
+			activities: nil,
+			startTime:  base,
+			endTime:    base.Add(time.Minute),
+		}
+
+		// Must not panic; completed session with no activities should not show waiting placeholder.
+		result := stripANSI(renderAgentCard(rs, 60, 10, false, 0))
+
+		if strings.Contains(result, "waiting for activity") {
+			t.Errorf("completed session should not show 'waiting for activity', got:\n%s", result)
+		}
+	})
+
+	t.Run("handles session with activities (shows activity labels)", func(t *testing.T) {
+		t.Parallel()
+		rs := &runtimeSlot{
+			sessionID: "sess-11",
+			agentName: "coder",
+			jobID:     "job-1",
+			status:    "active",
+			startTime: base,
+			activities: []activityItem{
+				{label: "write: main.go", toolName: "write_file"},
+				{label: "shell: go build ./...", toolName: "shell"},
+				{label: "read: config.yaml", toolName: "read_file"},
+			},
+		}
+
+		result := stripANSI(renderAgentCard(rs, 60, 12, false, 0))
+
+		// Activities are shown newest-first; "read: config.yaml" is the newest.
+		if !strings.Contains(result, "read: config.yaml") {
+			t.Errorf("expected newest activity 'read: config.yaml' in output, got:\n%s", result)
+		}
+	})
+
+	t.Run("activity list is capped to available height", func(t *testing.T) {
+		t.Parallel()
+		rs := &runtimeSlot{
+			sessionID: "sess-12",
+			agentName: "coder",
+			jobID:     "job-1",
+			status:    "active",
+			startTime: base,
+			activities: []activityItem{
+				{label: "act-1", toolName: "shell"},
+				{label: "act-2", toolName: "shell"},
+				{label: "act-3", toolName: "shell"},
+				{label: "act-4", toolName: "shell"},
+				{label: "act-5", toolName: "shell"},
+				{label: "act-6", toolName: "shell"},
+			},
+		}
+
+		// innerH=6: 1 header + 1 separator = 2 fixed; 4 lines for activities.
+		result := renderAgentCard(rs, 60, 6, false, 0)
+		lines := strings.Split(result, "\n")
+
+		if len(lines) > 6 {
+			t.Errorf("expected at most 6 lines (innerH=6), got %d:\n%s", len(lines), result)
+		}
+	})
+
+	t.Run("short jobID is shown in header", func(t *testing.T) {
+		t.Parallel()
+		rs := &runtimeSlot{
+			sessionID: "sess-13",
+			agentName: "worker",
+			jobID:     "abcdef1234567890", // 16 chars — only first 8 shown
+			status:    "active",
+			startTime: base,
+		}
+
+		result := stripANSI(renderAgentCard(rs, 60, 8, false, 0))
+
+		// Only the first 8 chars of the job ID should appear.
+		if !strings.Contains(result, "abcdef12") {
+			t.Errorf("expected short job ID 'abcdef12' in header, got:\n%s", result)
+		}
+		if strings.Contains(result, "abcdef1234567890") {
+			t.Errorf("full job ID should be truncated to 8 chars, got:\n%s", result)
+		}
+	})
+
+	t.Run("active session shows lightning bolt status mark", func(t *testing.T) {
+		t.Parallel()
+		rs := &runtimeSlot{
+			sessionID: "sess-14",
+			agentName: "worker",
+			jobID:     "job-1",
+			status:    "active",
+			startTime: base,
+		}
+
+		result := stripANSI(renderAgentCard(rs, 60, 8, false, 0))
+
+		if !strings.Contains(result, "⚡") {
+			t.Errorf("expected '⚡' status mark for active session, got:\n%s", result)
+		}
+	})
+
+	t.Run("completed session shows checkmark status mark", func(t *testing.T) {
+		t.Parallel()
+		rs := &runtimeSlot{
+			sessionID: "sess-15",
+			agentName: "worker",
+			jobID:     "job-1",
+			status:    "completed",
+			startTime: base,
+			endTime:   base.Add(time.Minute),
+		}
+
+		result := stripANSI(renderAgentCard(rs, 60, 8, false, 0))
+
+		if !strings.Contains(result, "✓") {
+			t.Errorf("expected '✓' status mark for completed session, got:\n%s", result)
+		}
+	})
+
+	t.Run("uses endTime for elapsed duration in completed session", func(t *testing.T) {
+		t.Parallel()
+		// endTime is exactly 2 minutes after startTime.
+		rs := &runtimeSlot{
+			sessionID: "sess-16",
+			agentName: "worker",
+			jobID:     "job-1",
+			status:    "completed",
+			startTime: base,
+			endTime:   base.Add(2 * time.Minute),
+		}
+
+		result := stripANSI(renderAgentCard(rs, 60, 8, false, 0))
+
+		// Duration should be "2m0s".
+		if !strings.Contains(result, "2m0s") {
+			t.Errorf("expected '2m0s' elapsed duration for completed session, got:\n%s", result)
+		}
+	})
+
+	t.Run("falls back to 'runtime' when agentName is empty", func(t *testing.T) {
+		t.Parallel()
+		rs := &runtimeSlot{
+			sessionID: "sess-17",
+			agentName: "", // empty — should fall back to "runtime"
+			jobID:     "job-1",
+			status:    "active",
+			startTime: base,
+		}
+
+		result := stripANSI(renderAgentCard(rs, 60, 8, false, 0))
+
+		if !strings.Contains(result, "runtime") {
+			t.Errorf("expected 'runtime' fallback label when agentName is empty, got:\n%s", result)
+		}
+	})
+}
+
+// --------------------------------------------------------------------------
+// TestRenderLeftPanel_TeamNesting
+// --------------------------------------------------------------------------
+
+func TestRenderLeftPanel_TeamNesting(t *testing.T) {
+	t.Parallel()
+
+	// renderLeftPanel requires a reasonably complete Model to avoid nil-pointer
+	// panics in the rendering path (sortedRuntimeSessions, displayJobs, etc.).
+	// We use newMinimalModel and set only the fields the function reads.
+
+	t.Run("task with TeamID produces a nested team line", func(t *testing.T) {
+		t.Parallel()
+		m := newMinimalModel(t)
+		m.width = 200
+		m.height = 40
+
+		// Set up a job with one task that has a TeamID.
+		jobID := "job-team-test"
+		m.jobs = []*db.Job{
+			{ID: jobID, Title: "Test Job", Status: db.JobStatusActive},
+		}
+		m.progress.tasks = map[string][]*db.Task{
+			jobID: {
+				{
+					ID:     "task-1",
+					JobID:  jobID,
+					Title:  "Build the thing",
+					Status: db.TaskStatusInProgress,
+					TeamID: "backend-team",
+				},
+			},
+		}
+
+		result := stripANSI(m.renderLeftPanel(40, 40))
+
+		// The team line should contain the TeamID.
+		if !strings.Contains(result, "backend-team") {
+			t.Errorf("expected 'backend-team' nested team line in left panel output, got:\n%s", result)
+		}
+	})
+
+	t.Run("task without TeamID does not produce an extra team line", func(t *testing.T) {
+		t.Parallel()
+		m := newMinimalModel(t)
+		m.width = 200
+		m.height = 40
+
+		jobID := "job-no-team"
+		m.jobs = []*db.Job{
+			{ID: jobID, Title: "No Team Job", Status: db.JobStatusActive},
+		}
+		m.progress.tasks = map[string][]*db.Task{
+			jobID: {
+				{
+					ID:     "task-2",
+					JobID:  jobID,
+					Title:  "Do the work",
+					Status: db.TaskStatusPending,
+					TeamID: "", // no team assigned
+				},
+			},
+		}
+
+		result := stripANSI(m.renderLeftPanel(40, 40))
+
+		// The task title should appear, but no extra team-nesting line.
+		if !strings.Contains(result, "Do the work") {
+			t.Errorf("expected task title 'Do the work' in output, got:\n%s", result)
+		}
+		// There should be no team indicator line (no "backend-team" or similar).
+		// We verify by checking the line count: task with no TeamID should produce
+		// exactly 1 line (the task line), not 2.
+		lines := strings.Split(result, "\n")
+		taskLineCount := 0
+		for _, line := range lines {
+			if strings.Contains(line, "Do the work") {
+				taskLineCount++
+			}
+		}
+		if taskLineCount != 1 {
+			t.Errorf("expected exactly 1 line containing 'Do the work', got %d", taskLineCount)
+		}
+	})
+
+	t.Run("two tasks: one with TeamID and one without", func(t *testing.T) {
+		t.Parallel()
+		m := newMinimalModel(t)
+		m.width = 200
+		m.height = 40
+
+		jobID := "job-mixed"
+		m.jobs = []*db.Job{
+			{ID: jobID, Title: "Mixed Job", Status: db.JobStatusActive},
+		}
+		m.progress.tasks = map[string][]*db.Task{
+			jobID: {
+				{
+					ID:     "task-with-team",
+					JobID:  jobID,
+					Title:  "Assigned task",
+					Status: db.TaskStatusInProgress,
+					TeamID: "frontend-team",
+				},
+				{
+					ID:     "task-without-team",
+					JobID:  jobID,
+					Title:  "Unassigned task",
+					Status: db.TaskStatusPending,
+					TeamID: "",
+				},
+			},
+		}
+
+		result := stripANSI(m.renderLeftPanel(40, 40))
+
+		// The team line should appear for the assigned task.
+		if !strings.Contains(result, "frontend-team") {
+			t.Errorf("expected 'frontend-team' in output for assigned task, got:\n%s", result)
+		}
+		// Both task titles should appear.
+		if !strings.Contains(result, "Assigned task") {
+			t.Errorf("expected 'Assigned task' in output, got:\n%s", result)
+		}
+		if !strings.Contains(result, "Unassigned task") {
+			t.Errorf("expected 'Unassigned task' in output, got:\n%s", result)
+		}
+	})
 }
 
 // --------------------------------------------------------------------------
