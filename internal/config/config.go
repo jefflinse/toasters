@@ -74,7 +74,7 @@ func Load() (*Config, error) {
 	viper.AddConfigPath(home + "/.config/toasters")
 
 	viper.SetDefault("workspace_dir", filepath.Join(home, "toasters"))
-	viper.SetDefault("database_path", filepath.Join(home, ".config", "toasters", "toasters.db"))
+	viper.SetDefault("database_path", "")
 	viper.SetDefault("operator.provider", "local")
 	viper.SetDefault("operator.endpoint", "http://localhost:1234")
 	viper.SetDefault("operator.api_key", "")
@@ -170,15 +170,17 @@ func WorkspaceDir(cfg *Config) (string, error) {
 // DatabasePath returns the resolved database file path from cfg.
 // A leading ~ is expanded to the user's home directory.
 // Absolute paths are returned unchanged without calling os.UserHomeDir.
-func DatabasePath(cfg *Config) (string, error) {
+//
+// When database_path is not explicitly set, the database defaults to
+// <workspaceDir>/toasters.db so that operational state (jobs, tasks,
+// sessions) lives alongside the workspace rather than in the config
+// directory. This allows the config directory to be version-controlled
+// without including transient job state.
+func DatabasePath(cfg *Config, workspaceDir string) (string, error) {
 	if cfg.DatabasePath != "" && !strings.HasPrefix(cfg.DatabasePath, "~") {
 		return cfg.DatabasePath, nil
 	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-	return expandTilde(cfg.DatabasePath, filepath.Join(home, ".config", "toasters", "toasters.db"))
+	return expandTilde(cfg.DatabasePath, filepath.Join(workspaceDir, "toasters.db"))
 }
 
 // BindFlags binds relevant cobra pflags to their Viper configuration keys.

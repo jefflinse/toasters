@@ -36,6 +36,10 @@ func Run(configDir string, systemFS embed.FS, defaultConfig []byte) error {
 		return fmt.Errorf("auto-team detection: %w", err)
 	}
 
+	if err := migrateDatabase(configDir); err != nil {
+		return fmt.Errorf("database migration: %w", err)
+	}
+
 	if err := ensureDirectories(configDir); err != nil {
 		return fmt.Errorf("ensuring directories: %w", err)
 	}
@@ -184,6 +188,73 @@ func autoTeamDetection(configDir string) error {
 		slog.Info("Detected auto-team", "name", at.name, "source", at.sourceDir)
 	}
 
+	return nil
+}
+
+// migrateDatabase moves the SQLite database from the old config-dir location
+// (~/.config/toasters/toasters.db) to the workspace root (~/toasters/toasters.db)
+// if the old file exists and the new one does not. This is a one-time migration
+// so that operational state (jobs, tasks, sessions) lives alongside the workspace
+// rather than in the config directory.
+//
+// The migration only runs when database_path is not explicitly set in config.yaml
+// (i.e. the user is relying on the default location). If the user has set a custom
+// database_path, we leave everything alone.
+func migrateDatabase(configDir string) error {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil // can't determine paths — skip silently
+	}
+
+	// Check if the user has explicitly set database_path in config.yaml.
+	// If so, they're managing the location themselves — don't migrate.
+	configPath := filepath.Join(configDir, "config.yaml")
+	if fileExists(configPath) {
+		data, err := os.ReadFile(configPath)
+		if err == nil {
+			var raw map[string]interface{}
+			if yaml.Unmarshal(data, &raw) == nil {
+				if _, ok := raw["database_path"]; ok {
+					return nil // user has explicit database_path — skip migration
+				}
+			}
+		}
+	}
+
+	oldDB := filepath.Join(home, ".config", "toasters", "toasters.db")
+	newDB := filepath.Join(home, "toasters", "toasters.db")
+
+	if !fileExists(oldDB) {
+		return nil // nothing to migrate
+	}
+	if fileExists(newDB) {
+		return nil // new location already has a DB — don't overwrite
+	}
+
+	// Ensure the workspace directory exists.
+	if err := os.MkdirAll(filepath.Join(home, "toasters"), 0o755); err != nil {
+		return fmt.Errorf("creating workspace dir: %w", err)
+	}
+
+	// Move the database file.
+	if err := os.Rename(oldDB, newDB); err != nil {
+		return fmt.Errorf("moving database: %w", err)
+	}
+
+	// Also move WAL and SHM files if they exist (SQLite WAL mode).
+	for _, suffix := range []string{"-wal", "-shm"} {
+		oldAux := oldDB + suffix
+		if fileExists(oldAux) {
+			newAux := newDB + suffix
+			if err := os.Rename(oldAux, newAux); err != nil {
+				slog.Warn("failed to move database auxiliary file",
+					"file", oldAux, "error", err)
+			}
+		}
+	}
+
+	slog.Info("Migrated database to workspace",
+		"from", oldDB, "to", newDB)
 	return nil
 }
 

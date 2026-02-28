@@ -396,3 +396,147 @@ func assertFileExists(t *testing.T, path string) {
 		t.Errorf("expected %s to be a file, got directory", path)
 	}
 }
+
+// --- migrateDatabase tests ---
+
+func TestMigrateDatabase_MovesDBToWorkspace(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+
+	configDir := filepath.Join(tmpHome, ".config", "toasters")
+	workspaceDir := filepath.Join(tmpHome, "toasters")
+
+	// Create old DB in config dir.
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("creating config dir: %v", err)
+	}
+	oldDB := filepath.Join(configDir, "toasters.db")
+	if err := os.WriteFile(oldDB, []byte("test-db-content"), 0o644); err != nil {
+		t.Fatalf("writing old DB: %v", err)
+	}
+	// Also create a WAL file.
+	if err := os.WriteFile(oldDB+"-wal", []byte("wal-content"), 0o644); err != nil {
+		t.Fatalf("writing old WAL: %v", err)
+	}
+
+	if err := migrateDatabase(configDir); err != nil {
+		t.Fatalf("migrateDatabase() error: %v", err)
+	}
+
+	// Old DB should be gone.
+	if fileExists(oldDB) {
+		t.Error("old DB still exists after migration")
+	}
+	if fileExists(oldDB + "-wal") {
+		t.Error("old WAL still exists after migration")
+	}
+
+	// New DB should exist in workspace.
+	newDB := filepath.Join(workspaceDir, "toasters.db")
+	if !fileExists(newDB) {
+		t.Fatal("new DB does not exist after migration")
+	}
+	data, err := os.ReadFile(newDB)
+	if err != nil {
+		t.Fatalf("reading new DB: %v", err)
+	}
+	if string(data) != "test-db-content" {
+		t.Errorf("new DB content: got %q, want %q", string(data), "test-db-content")
+	}
+
+	// WAL should also have been moved.
+	newWAL := newDB + "-wal"
+	if !fileExists(newWAL) {
+		t.Fatal("new WAL does not exist after migration")
+	}
+}
+
+func TestMigrateDatabase_SkipsWhenNewDBExists(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+
+	configDir := filepath.Join(tmpHome, ".config", "toasters")
+	workspaceDir := filepath.Join(tmpHome, "toasters")
+
+	// Create old DB.
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("creating config dir: %v", err)
+	}
+	oldDB := filepath.Join(configDir, "toasters.db")
+	if err := os.WriteFile(oldDB, []byte("old-content"), 0o644); err != nil {
+		t.Fatalf("writing old DB: %v", err)
+	}
+
+	// Create new DB already in workspace.
+	if err := os.MkdirAll(workspaceDir, 0o755); err != nil {
+		t.Fatalf("creating workspace dir: %v", err)
+	}
+	newDB := filepath.Join(workspaceDir, "toasters.db")
+	if err := os.WriteFile(newDB, []byte("new-content"), 0o644); err != nil {
+		t.Fatalf("writing new DB: %v", err)
+	}
+
+	if err := migrateDatabase(configDir); err != nil {
+		t.Fatalf("migrateDatabase() error: %v", err)
+	}
+
+	// Old DB should still exist (not moved).
+	if !fileExists(oldDB) {
+		t.Error("old DB was removed even though new DB already existed")
+	}
+
+	// New DB should be unchanged.
+	data, err := os.ReadFile(newDB)
+	if err != nil {
+		t.Fatalf("reading new DB: %v", err)
+	}
+	if string(data) != "new-content" {
+		t.Errorf("new DB was overwritten: got %q, want %q", string(data), "new-content")
+	}
+}
+
+func TestMigrateDatabase_SkipsWhenExplicitDatabasePath(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+
+	configDir := filepath.Join(tmpHome, ".config", "toasters")
+
+	// Create config.yaml with explicit database_path.
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("creating config dir: %v", err)
+	}
+	configYAML := "database_path: /custom/path/my.db\n"
+	if err := os.WriteFile(filepath.Join(configDir, "config.yaml"), []byte(configYAML), 0o644); err != nil {
+		t.Fatalf("writing config.yaml: %v", err)
+	}
+
+	// Create old DB.
+	oldDB := filepath.Join(configDir, "toasters.db")
+	if err := os.WriteFile(oldDB, []byte("old-content"), 0o644); err != nil {
+		t.Fatalf("writing old DB: %v", err)
+	}
+
+	if err := migrateDatabase(configDir); err != nil {
+		t.Fatalf("migrateDatabase() error: %v", err)
+	}
+
+	// Old DB should still exist (migration skipped).
+	if !fileExists(oldDB) {
+		t.Error("old DB was removed even though database_path is explicitly set")
+	}
+}
+
+func TestMigrateDatabase_NoOldDB_Noop(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+
+	configDir := filepath.Join(tmpHome, ".config", "toasters")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("creating config dir: %v", err)
+	}
+
+	// No old DB exists — should be a no-op.
+	if err := migrateDatabase(configDir); err != nil {
+		t.Fatalf("migrateDatabase() error: %v", err)
+	}
+}

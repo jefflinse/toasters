@@ -477,6 +477,50 @@ mcp:
 
 // --- BindFlags tests ---
 
+// --- DatabasePath tests ---
+
+func TestDatabasePath_EmptyString_DefaultsToWorkspaceDir(t *testing.T) {
+	cfg := &Config{DatabasePath: ""}
+	got, err := DatabasePath(cfg, "/my/workspace")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := "/my/workspace/toasters.db"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestDatabasePath_ExplicitAbsolutePath_ReturnedUnchanged(t *testing.T) {
+	cfg := &Config{DatabasePath: "/custom/path/my.db"}
+	got, err := DatabasePath(cfg, "/my/workspace")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := "/custom/path/my.db"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestDatabasePath_TildePath_ExpandsHome(t *testing.T) {
+	cfg := &Config{DatabasePath: "~/data/toasters.db"}
+	got, err := DatabasePath(cfg, "/my/workspace")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatalf("getting home dir: %v", err)
+	}
+	want := filepath.Join(home, "data/toasters.db")
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+// --- BindFlags tests ---
+
 func TestBindFlags_DoesNotPanic(t *testing.T) {
 	resetViper(t)
 

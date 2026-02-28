@@ -97,8 +97,10 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 	teams = append(teams, autoTeams...)
 
 	// Open SQLite database for persistence (graceful degradation if it fails).
+	// The DB defaults to <workspaceDir>/toasters.db so operational state lives
+	// alongside the workspace, not in the config directory.
 	var store db.Store
-	dbPath, err := config.DatabasePath(cfg)
+	dbPath, err := config.DatabasePath(cfg, workspaceDir)
 	if err != nil {
 		slog.Warn("failed to resolve database path", "error", err)
 	} else {
