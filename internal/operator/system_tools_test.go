@@ -73,6 +73,7 @@ func newTestSystemTools(t *testing.T) (*SystemTools, db.Store, *mockSpawner, cha
 	composer := compose.New(store, "test-provider", "test-model")
 
 	workDir := t.TempDir()
+	t.Setenv("HOME", workDir) // Ensure workDir passes home-directory validation
 	st := NewSystemTools(store, composer, eventCh, spawner, workDir)
 	return st, store, spawner, eventCh, workDir
 }
@@ -872,6 +873,113 @@ func TestQueryJobContext_Execute_NonExistentJobID(t *testing.T) {
 
 	_, err := st.Execute(ctx, "query_job_context", json.RawMessage(`{"job_id": "does-not-exist"}`))
 	assertError(t, err)
+}
+
+func TestCreateJob_RejectsWorkDirOutsideHome(t *testing.T) {
+	store := newTestStore(t)
+	spawner := &mockSpawner{}
+	eventCh := make(chan Event, 64)
+	composer := compose.New(store, "test-provider", "test-model")
+
+	// Set HOME to a temp dir, then use a workDir outside of it.
+	fakeHome := t.TempDir()
+	t.Setenv("HOME", fakeHome)
+
+	outsideDir := t.TempDir() // A different temp dir, not under fakeHome.
+	st := NewSystemTools(store, composer, eventCh, spawner, outsideDir)
+
+	ctx := context.Background()
+	args, _ := json.Marshal(map[string]string{
+		"title":       "Bad job",
+		"description": "Should be rejected",
+	})
+	_, err := st.Execute(ctx, "create_job", args)
+	assertError(t, err)
+	assertContains(t, err.Error(), "outside")
+}
+
+func TestCreateJob_AcceptsWorkDirUnderHome(t *testing.T) {
+	store := newTestStore(t)
+	spawner := &mockSpawner{}
+	eventCh := make(chan Event, 64)
+	composer := compose.New(store, "test-provider", "test-model")
+
+	// Set HOME to a temp dir, then create workDir under it.
+	fakeHome := t.TempDir()
+	t.Setenv("HOME", fakeHome)
+
+	workDir := filepath.Join(fakeHome, "workspace")
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
+		t.Fatalf("creating workDir: %v", err)
+	}
+
+	st := NewSystemTools(store, composer, eventCh, spawner, workDir)
+
+	ctx := context.Background()
+	args, _ := json.Marshal(map[string]string{
+		"title":       "Good job",
+		"description": "Should be accepted",
+	})
+	result, err := st.Execute(ctx, "create_job", args)
+	assertNoError(t, err)
+
+	// Verify we got a valid job_id back.
+	var res map[string]string
+	if err := json.Unmarshal([]byte(result), &res); err != nil {
+		t.Fatalf("parsing result: %v", err)
+	}
+	if res["job_id"] == "" {
+		t.Fatal("expected non-empty job_id")
+	}
+}
+
+// TestAssignTask_RejectsJobWithWorkspaceDirOutsideHome verifies that assignTask
+// validates the job's WorkspaceDir from the database before spawning agents.
+// This guards against tampered database entries or jobs created before validation.
+func TestAssignTask_RejectsJobWithWorkspaceDirOutsideHome(t *testing.T) {
+	st, store, _, _, _ := newTestSystemTools(t)
+	ctx := context.Background()
+
+	// Seed a team.
+	seedTeam(t, ctx, store, "backend", "Backend Team", "lead-agent")
+
+	// Create a job normally (passes validation because newTestSystemTools sets HOME=workDir).
+	jobResult, err := st.Execute(ctx, "create_job", json.RawMessage(`{
+		"title": "Test job",
+		"description": "A test job"
+	}`))
+	assertNoError(t, err)
+
+	var jobRes map[string]string
+	if err := json.Unmarshal([]byte(jobResult), &jobRes); err != nil {
+		t.Fatalf("parsing job result: %v", err)
+	}
+	jobID := jobRes["job_id"]
+
+	// Create a task.
+	taskResult, err := st.Execute(ctx, "create_task", json.RawMessage(`{
+		"job_id": "`+jobID+`",
+		"title": "Build API"
+	}`))
+	assertNoError(t, err)
+
+	var taskRes map[string]string
+	if err := json.Unmarshal([]byte(taskResult), &taskRes); err != nil {
+		t.Fatalf("parsing task result: %v", err)
+	}
+	taskID := taskRes["task_id"]
+
+	// Now tamper with the job's WorkspaceDir in the database to point outside HOME.
+	// We do this by changing HOME to a different directory, simulating a tampered DB.
+	t.Setenv("HOME", t.TempDir())
+
+	// Assign the task — should fail because the job's WorkspaceDir is now outside HOME.
+	_, err = st.Execute(ctx, "assign_task", json.RawMessage(`{
+		"task_id": "`+taskID+`",
+		"team_id": "backend"
+	}`))
+	assertError(t, err)
+	assertContains(t, err.Error(), "workspace validation failed")
 }
 
 func TestUUIDv4_Uniqueness(t *testing.T) {

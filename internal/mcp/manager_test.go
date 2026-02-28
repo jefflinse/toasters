@@ -1295,6 +1295,117 @@ func TestCreateClient_EmptyTransport(t *testing.T) {
 	}
 }
 
+// --- filterDangerousEnv ---
+
+func TestFilterDangerousEnv_NilMap(t *testing.T) {
+	t.Parallel()
+
+	result := filterDangerousEnv(nil, "srv")
+	if result != nil {
+		t.Errorf("expected nil for nil input, got %v", result)
+	}
+}
+
+func TestFilterDangerousEnv_EmptyMap(t *testing.T) {
+	t.Parallel()
+
+	result := filterDangerousEnv(map[string]string{}, "srv")
+	if result == nil {
+		t.Fatal("expected non-nil map for empty input")
+	}
+	if len(result) != 0 {
+		t.Errorf("expected empty map, got %d entries", len(result))
+	}
+}
+
+func TestFilterDangerousEnv_SafeVarsPassThrough(t *testing.T) {
+	t.Parallel()
+
+	env := map[string]string{
+		"PATH":    "/usr/bin",
+		"HOME":    "/home/user",
+		"FOO_BAR": "baz",
+	}
+	result := filterDangerousEnv(env, "srv")
+	if len(result) != 3 {
+		t.Fatalf("expected 3 entries, got %d", len(result))
+	}
+	for k, v := range env {
+		if result[k] != v {
+			t.Errorf("expected %q=%q, got %q=%q", k, v, k, result[k])
+		}
+	}
+}
+
+func TestFilterDangerousEnv_DangerousVarsRemoved(t *testing.T) {
+	t.Parallel()
+
+	env := map[string]string{
+		"PATH":                         "/usr/bin",
+		"LD_PRELOAD":                   "/evil/lib.so",
+		"LD_LIBRARY_PATH":              "/evil",
+		"LD_AUDIT":                     "/evil/audit.so",
+		"LD_PROFILE":                   "/evil/profile.so",
+		"LD_CONFIG":                    "/evil/ld.so.conf",
+		"LD_DEBUG_OUTPUT":              "/evil/debug.log",
+		"DYLD_INSERT_LIBRARIES":        "/evil/lib.dylib",
+		"DYLD_LIBRARY_PATH":            "/evil",
+		"DYLD_FRAMEWORK_PATH":          "/evil",
+		"DYLD_FALLBACK_LIBRARY_PATH":   "/evil",
+		"DYLD_FALLBACK_FRAMEWORK_PATH": "/evil",
+		"DYLD_IMAGE_SUFFIX":            "_evil",
+		"SAFE_VAR":                     "safe",
+	}
+	result := filterDangerousEnv(env, "srv")
+	if len(result) != 2 {
+		t.Fatalf("expected 2 safe entries, got %d: %v", len(result), result)
+	}
+	if result["PATH"] != "/usr/bin" {
+		t.Errorf("expected PATH=/usr/bin, got %q", result["PATH"])
+	}
+	if result["SAFE_VAR"] != "safe" {
+		t.Errorf("expected SAFE_VAR=safe, got %q", result["SAFE_VAR"])
+	}
+
+	// Verify all dangerous vars are gone.
+	for k := range dangerousEnvVars {
+		if _, ok := result[k]; ok {
+			t.Errorf("dangerous var %q should have been removed", k)
+		}
+	}
+}
+
+func TestFilterDangerousEnv_OnlyDangerousVars(t *testing.T) {
+	t.Parallel()
+
+	env := map[string]string{
+		"LD_PRELOAD":            "/evil/lib.so",
+		"DYLD_INSERT_LIBRARIES": "/evil/lib.dylib",
+	}
+	result := filterDangerousEnv(env, "srv")
+	if len(result) != 0 {
+		t.Errorf("expected empty map after stripping all dangerous vars, got %d entries: %v", len(result), result)
+	}
+}
+
+func TestFilterDangerousEnv_DoesNotModifyInput(t *testing.T) {
+	t.Parallel()
+
+	env := map[string]string{
+		"PATH":       "/usr/bin",
+		"LD_PRELOAD": "/evil/lib.so",
+	}
+	_ = filterDangerousEnv(env, "srv")
+
+	// Original map should be unchanged.
+	if len(env) != 2 {
+		t.Errorf("input map was modified: expected 2 entries, got %d", len(env))
+	}
+	if env["LD_PRELOAD"] != "/evil/lib.so" {
+		t.Errorf("input map was modified: LD_PRELOAD=%q", env["LD_PRELOAD"])
+	}
+}
+
 // --- Test helpers ---
 
 // testTool describes a tool to add to the test MCP server.

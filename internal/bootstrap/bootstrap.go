@@ -169,6 +169,11 @@ func autoTeamDetection(configDir string) error {
 			continue
 		}
 
+		// Skip if the user previously dismissed this auto-team.
+		if IsAutoTeamDismissed(teamsDir, at.name) {
+			continue
+		}
+
 		if err := os.MkdirAll(teamDir, 0o755); err != nil {
 			return fmt.Errorf("creating auto-team dir %s: %w", at.name, err)
 		}
@@ -361,6 +366,13 @@ func humanizeDirName(name string) string {
 		}
 	}
 	return strings.Join(parts, " ")
+}
+
+// IsAutoTeamDismissed reports whether the named auto-team has been dismissed
+// by the user. A dismiss marker is an empty file at
+// <teamsDir>/.dismissed/<name>.
+func IsAutoTeamDismissed(teamsDir, name string) bool {
+	return fileExists(filepath.Join(teamsDir, ".dismissed", name))
 }
 
 // dirExists reports whether path exists and is a directory.

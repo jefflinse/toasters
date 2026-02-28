@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync/atomic"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/spf13/cobra"
@@ -219,6 +220,13 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 	}
 
 	if store != nil {
+		textFlush := func(text string) {
+			if prog := p.Load(); prog != nil {
+				prog.Send(tui.OperatorTextMsg{Text: text})
+			}
+		}
+		batcher := newTextBatcher(16*time.Millisecond, textFlush)
+
 		var opErr error
 		op, opErr = operator.New(operator.Config{
 			Runtime:      rt,
@@ -230,9 +238,7 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 			Spawner:      rt,
 			SystemPrompt: operatorPrompt,
 			OnText: func(text string) {
-				if prog := p.Load(); prog != nil {
-					prog.Send(tui.OperatorTextMsg{Text: text})
-				}
+				batcher.Add(text)
 			},
 			OnEvent: func(event operator.Event) {
 				if prog := p.Load(); prog != nil {
@@ -240,6 +246,7 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 				}
 			},
 			OnTurnDone: func() {
+				batcher.Flush()
 				if prog := p.Load(); prog != nil {
 					prog.Send(tui.OperatorDoneMsg{})
 				}

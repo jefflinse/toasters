@@ -260,6 +260,19 @@ func (m *Model) updateTeamsModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if m.teamsModal.confirmDelete {
 			if len(m.teamsModal.teams) > 0 && m.teamsModal.teamIdx < len(m.teamsModal.teams) {
 				tv := m.teamsModal.teams[m.teamsModal.teamIdx]
+
+				// If this is an auto-team, create a dismiss marker so bootstrap
+				// doesn't re-create it on next startup. Check before removal
+				// since isAutoTeam may inspect the filesystem.
+				if isAutoTeam(tv) {
+					dismissedDir := filepath.Join(m.teamsDir, ".dismissed")
+					if err := os.MkdirAll(dismissedDir, 0o755); err != nil {
+						slog.Warn("failed to create dismiss marker directory", "error", err)
+					} else if err := os.WriteFile(filepath.Join(dismissedDir, filepath.Base(tv.Dir())), nil, 0o644); err != nil {
+						slog.Warn("failed to write dismiss marker", "team", tv.Name(), "error", err)
+					}
+				}
+
 				// Validate that team dir is under the expected teams directory
 				// before performing recursive deletion.
 				realTeamDir, err := filepath.EvalSymlinks(tv.Dir())

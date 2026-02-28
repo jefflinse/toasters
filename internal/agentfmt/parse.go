@@ -35,13 +35,17 @@ func readDefinitionFile(path string) ([]byte, error) {
 // agentOnlyFields are frontmatter keys that indicate an agent definition
 // (as opposed to a skill). If any of these are present, the definition is
 // classified as an agent.
+//
+// Classification priority: team fields → agent-only fields → skill (default).
+// Note: "tools" is intentionally excluded because both skills and agents can
+// declare tools. An agent must have at least one other agent-specific field
+// (mode, provider, model, temperature, skills, etc.) to be classified as such.
 var agentOnlyFields = map[string]bool{
 	"skills":           true,
 	"mode":             true,
 	"provider":         true,
 	"temperature":      true,
 	"model":            true,
-	"tools":            true,
 	"disallowed_tools": true,
 	"permission_mode":  true,
 	"permissions":      true,

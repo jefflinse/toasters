@@ -887,25 +887,153 @@ Prompt.`
 	}
 }
 
-func TestParseFile_AgentDetectedByToolsField(t *testing.T) {
+func TestParseFile_ToolsOnlyClassifiedAsSkill(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 
+	// A definition with only "tools" (no other agent-only fields) should be
+	// classified as a skill, since skills can also declare tools.
 	content := `---
-name: tools-agent
-description: Agent detected by tools field
+name: tools-only
+description: Definition with only tools field
 tools:
   - bash
 ---
 Prompt.`
 
-	path := writeTestFile(t, dir, "tools-agent.md", content)
+	path := writeTestFile(t, dir, "tools-only.md", content)
 	defType, _, err := agentfmt.ParseFile(path)
+	if err != nil {
+		t.Fatalf("ParseFile: %v", err)
+	}
+	if defType != agentfmt.DefSkill {
+		t.Errorf("DefType = %q, want %q", defType, agentfmt.DefSkill)
+	}
+}
+
+func TestParseFile_SkillWithToolsField(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+
+	// A definition with name, description, and tools but no agent-only fields
+	// should be classified as a skill.
+	content := `---
+name: code-review
+description: Reviews code for quality
+tools:
+  - read_file
+  - grep
+---
+Review the code carefully.`
+
+	path := writeTestFile(t, dir, "code-review.md", content)
+	defType, def, err := agentfmt.ParseFile(path)
+	if err != nil {
+		t.Fatalf("ParseFile: %v", err)
+	}
+	if defType != agentfmt.DefSkill {
+		t.Errorf("DefType = %q, want %q", defType, agentfmt.DefSkill)
+	}
+	skill, ok := def.(*agentfmt.SkillDef)
+	if !ok {
+		t.Fatalf("def is %T, want *SkillDef", def)
+	}
+	if !reflect.DeepEqual(skill.Tools, []string{"read_file", "grep"}) {
+		t.Errorf("Tools = %v, want %v", skill.Tools, []string{"read_file", "grep"})
+	}
+}
+
+func TestParseFile_AgentWithToolsAndMode(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+
+	// A definition with tools AND mode should be classified as an agent
+	// because mode is an agent-only field.
+	content := `---
+name: worker-bot
+description: A worker agent with tools
+mode: worker
+tools:
+  - bash
+  - read_file
+---
+Do work.`
+
+	path := writeTestFile(t, dir, "worker-bot.md", content)
+	defType, def, err := agentfmt.ParseFile(path)
 	if err != nil {
 		t.Fatalf("ParseFile: %v", err)
 	}
 	if defType != agentfmt.DefAgent {
 		t.Errorf("DefType = %q, want %q", defType, agentfmt.DefAgent)
+	}
+	agent, ok := def.(*agentfmt.AgentDef)
+	if !ok {
+		t.Fatalf("def is %T, want *AgentDef", def)
+	}
+	if agent.Mode != "worker" {
+		t.Errorf("Mode = %q, want %q", agent.Mode, "worker")
+	}
+	if !reflect.DeepEqual(agent.Tools, []string{"bash", "read_file"}) {
+		t.Errorf("Tools = %v, want %v", agent.Tools, []string{"bash", "read_file"})
+	}
+}
+
+func TestParseFile_SkillWithEmptyToolsList(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+
+	// A definition with tools: [] (empty list) and no agent-only fields
+	// should be classified as a skill.
+	content := `---
+name: empty-tools
+description: Skill with empty tools list
+tools: []
+---
+A skill with no tools.`
+
+	path := writeTestFile(t, dir, "empty-tools.md", content)
+	defType, _, err := agentfmt.ParseFile(path)
+	if err != nil {
+		t.Fatalf("ParseFile: %v", err)
+	}
+	if defType != agentfmt.DefSkill {
+		t.Errorf("DefType = %q, want %q", defType, agentfmt.DefSkill)
+	}
+}
+
+func TestParseFile_AgentWithToolsAndProvider(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+
+	// A definition with tools AND provider should be classified as an agent
+	// because provider is an agent-only field.
+	content := `---
+name: api-agent
+description: An agent with tools and provider
+provider: anthropic
+tools:
+  - bash
+---
+Use the API.`
+
+	path := writeTestFile(t, dir, "api-agent.md", content)
+	defType, def, err := agentfmt.ParseFile(path)
+	if err != nil {
+		t.Fatalf("ParseFile: %v", err)
+	}
+	if defType != agentfmt.DefAgent {
+		t.Errorf("DefType = %q, want %q", defType, agentfmt.DefAgent)
+	}
+	agent, ok := def.(*agentfmt.AgentDef)
+	if !ok {
+		t.Fatalf("def is %T, want *AgentDef", def)
+	}
+	if agent.Provider != "anthropic" {
+		t.Errorf("Provider = %q, want %q", agent.Provider, "anthropic")
+	}
+	if !reflect.DeepEqual(agent.Tools, []string{"bash"}) {
+		t.Errorf("Tools = %v, want %v", agent.Tools, []string{"bash"})
 	}
 }
 

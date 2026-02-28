@@ -3,6 +3,7 @@ package operator
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -180,7 +181,57 @@ func (st *SystemTools) Execute(ctx context.Context, name string, args json.RawMe
 	}
 }
 
+// validateWorkDir checks that the workspace directory is under the user's home
+// directory. This prevents an LLM from directing work to system directories
+// like /tmp, /etc, or /var.
+func validateWorkDir(workDir string) error {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("determining home directory: %w", err)
+	}
+
+	absWork, err := filepath.Abs(workDir)
+	if err != nil {
+		return fmt.Errorf("resolving workspace directory: %w", err)
+	}
+	absHome, err := filepath.Abs(home)
+	if err != nil {
+		return fmt.Errorf("resolving home directory: %w", err)
+	}
+
+	// Resolve symlinks so that e.g. /var -> /private/var doesn't bypass the check.
+	// Fall back to the absolute path if the directory doesn't exist yet (EvalSymlinks
+	// requires the path to exist).
+	resolvedWork, err := filepath.EvalSymlinks(absWork)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			resolvedWork = absWork
+		} else {
+			return fmt.Errorf("resolving workspace symlinks: %w", err)
+		}
+	}
+	resolvedHome, err := filepath.EvalSymlinks(absHome)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			resolvedHome = absHome
+		} else {
+			return fmt.Errorf("resolving home directory symlinks: %w", err)
+		}
+	}
+
+	// The workspace must be under the home directory (or equal to it).
+	if resolvedWork != resolvedHome && !strings.HasPrefix(resolvedWork, resolvedHome+string(filepath.Separator)) {
+		return fmt.Errorf("workspace directory %q is outside the user's home directory (%s); this is not allowed for safety", workDir, resolvedHome)
+	}
+
+	return nil
+}
+
 func (st *SystemTools) createJob(ctx context.Context, args json.RawMessage) (string, error) {
+	if err := validateWorkDir(st.workDir); err != nil {
+		return "", err
+	}
+
 	var params struct {
 		Title       string `json:"title"`
 		Description string `json:"description"`
@@ -297,6 +348,12 @@ func (st *SystemTools) assignTask(ctx context.Context, args json.RawMessage) (st
 	job, err := st.store.GetJob(ctx, task.JobID)
 	if err != nil {
 		return "", fmt.Errorf("getting job for workspace: %w", err)
+	}
+
+	// 2a. Validate the job's workspace directory is under $HOME. This guards
+	// against tampered database entries or jobs created before validation existed.
+	if err := validateWorkDir(job.WorkspaceDir); err != nil {
+		return "", fmt.Errorf("job workspace validation failed: %w", err)
 	}
 
 	// 3. Get team to verify it exists and get its name.

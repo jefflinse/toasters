@@ -293,6 +293,112 @@ func TestRun_AutoTeamDetection(t *testing.T) {
 	}
 }
 
+func TestAutoTeamDetection_SkipsDismissed(t *testing.T) {
+	teamsDir := t.TempDir()
+
+	// Create a source directory for the auto-team.
+	sourceDir := filepath.Join(t.TempDir(), "agents")
+	if err := os.MkdirAll(sourceDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create a dismiss marker.
+	dismissedDir := filepath.Join(teamsDir, ".dismissed")
+	if err := os.MkdirAll(dismissedDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dismissedDir, "auto-claude"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Attempt to create the auto-team — should be skipped.
+	if err := createAutoTeam(teamsDir, "auto-claude", sourceDir); err != nil {
+		t.Fatalf("createAutoTeam() error: %v", err)
+	}
+
+	// Verify the auto-team directory was NOT created.
+	teamDir := filepath.Join(teamsDir, "auto-claude")
+	if dirExists(teamDir) {
+		t.Error("auto-team was created despite dismiss marker")
+	}
+}
+
+func TestAutoTeamDetection_DismissMarkerRemovalAllowsReImport(t *testing.T) {
+	teamsDir := t.TempDir()
+
+	// Create a source directory for the auto-team.
+	sourceDir := filepath.Join(t.TempDir(), "agents")
+	if err := os.MkdirAll(sourceDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create a dismiss marker.
+	dismissedDir := filepath.Join(teamsDir, ".dismissed")
+	if err := os.MkdirAll(dismissedDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	markerPath := filepath.Join(dismissedDir, "auto-claude")
+	if err := os.WriteFile(markerPath, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify dismissed.
+	if !IsAutoTeamDismissed(teamsDir, "auto-claude") {
+		t.Fatal("expected auto-team to be dismissed")
+	}
+
+	// Remove the dismiss marker.
+	if err := os.Remove(markerPath); err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify no longer dismissed.
+	if IsAutoTeamDismissed(teamsDir, "auto-claude") {
+		t.Fatal("expected auto-team to NOT be dismissed after marker removal")
+	}
+
+	// Now create the auto-team — should succeed.
+	if err := createAutoTeam(teamsDir, "auto-claude", sourceDir); err != nil {
+		t.Fatalf("createAutoTeam() error: %v", err)
+	}
+
+	// Verify the auto-team directory was created.
+	teamDir := filepath.Join(teamsDir, "auto-claude")
+	assertDirExists(t, teamDir)
+	assertFileExists(t, filepath.Join(teamDir, ".auto-team"))
+}
+
+func TestIsAutoTeamDismissed(t *testing.T) {
+	teamsDir := t.TempDir()
+
+	// No .dismissed directory — should return false.
+	if IsAutoTeamDismissed(teamsDir, "auto-claude") {
+		t.Error("expected false when .dismissed dir does not exist")
+	}
+
+	// Create .dismissed directory but no marker — should return false.
+	dismissedDir := filepath.Join(teamsDir, ".dismissed")
+	if err := os.MkdirAll(dismissedDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if IsAutoTeamDismissed(teamsDir, "auto-claude") {
+		t.Error("expected false when marker does not exist")
+	}
+
+	// Create marker — should return true.
+	if err := os.WriteFile(filepath.Join(dismissedDir, "auto-claude"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if !IsAutoTeamDismissed(teamsDir, "auto-claude") {
+		t.Error("expected true when marker exists")
+	}
+
+	// Different name — should return false.
+	if IsAutoTeamDismissed(teamsDir, "auto-opencode") {
+		t.Error("expected false for different auto-team name")
+	}
+}
+
 func TestRun_AlreadySetUp(t *testing.T) {
 	configDir := t.TempDir()
 
@@ -363,6 +469,11 @@ func TestHumanizeDirName(t *testing.T) {
 func createAutoTeam(teamsDir, name, sourceDir string) error {
 	teamDir := filepath.Join(teamsDir, name)
 	if dirExists(teamDir) {
+		return nil
+	}
+
+	// Skip if the user previously dismissed this auto-team.
+	if IsAutoTeamDismissed(teamsDir, name) {
 		return nil
 	}
 

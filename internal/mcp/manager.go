@@ -363,6 +363,46 @@ func (m *Manager) Close() error {
 	return firstErr
 }
 
+// dangerousEnvVars is a denylist of environment variable names that could be
+// used for library injection or arbitrary file write attacks when passed to
+// MCP subprocess configs. Matching is case-sensitive because POSIX env vars
+// are case-sensitive and the dynamic linkers (ld.so, dyld) only recognize
+// the canonical casing.
+var dangerousEnvVars = map[string]bool{
+	// Linux ld.so
+	"LD_PRELOAD":      true,
+	"LD_LIBRARY_PATH": true,
+	"LD_AUDIT":        true,
+	"LD_PROFILE":      true,
+	"LD_CONFIG":       true,
+	"LD_DEBUG_OUTPUT": true,
+	// macOS dyld
+	"DYLD_INSERT_LIBRARIES":        true,
+	"DYLD_LIBRARY_PATH":            true,
+	"DYLD_FRAMEWORK_PATH":          true,
+	"DYLD_FALLBACK_LIBRARY_PATH":   true,
+	"DYLD_FALLBACK_FRAMEWORK_PATH": true,
+	"DYLD_IMAGE_SUFFIX":            true,
+}
+
+// filterDangerousEnv returns a copy of env with dangerous environment variables
+// removed. A warning is logged for each stripped variable.
+func filterDangerousEnv(env map[string]string, serverName string) map[string]string {
+	if env == nil {
+		return nil
+	}
+	filtered := make(map[string]string, len(env))
+	for k, v := range env {
+		if dangerousEnvVars[k] {
+			slog.Warn("stripping dangerous environment variable from MCP server config",
+				"server", serverName, "var", k)
+			continue
+		}
+		filtered[k] = v
+	}
+	return filtered
+}
+
 // createClient creates an mcp-go client for the given server config.
 func createClient(cfg config.MCPServerConfig) (*mcpclient.Client, error) {
 	switch cfg.Transport {
@@ -370,9 +410,11 @@ func createClient(cfg config.MCPServerConfig) (*mcpclient.Client, error) {
 		if cfg.Command == "" {
 			return nil, fmt.Errorf("stdio transport requires a command")
 		}
+		// Strip dangerous env vars before passing to the subprocess.
+		safeEnv := filterDangerousEnv(cfg.Env, cfg.Name)
 		// Build env slice in "KEY=VALUE" format.
 		var env []string
-		for k, v := range cfg.Env {
+		for k, v := range safeEnv {
 			env = append(env, k+"="+v)
 		}
 		c, err := mcpclient.NewStdioMCPClient(cfg.Command, env, cfg.Args...)
