@@ -49,6 +49,7 @@ type CoreTools struct {
 	sessionID    string
 	agentID      string
 	jobID        string
+	taskID       string
 	providerName string
 	model        string
 }
@@ -76,11 +77,12 @@ func WithStore(store db.Store) CoreToolsOption {
 }
 
 // WithSessionContext sets the session context for progress tool calls.
-func WithSessionContext(sessionID, agentID, jobID string) CoreToolsOption {
+func WithSessionContext(sessionID, agentID, jobID, taskID string) CoreToolsOption {
 	return func(ct *CoreTools) {
 		ct.sessionID = sessionID
 		ct.agentID = agentID
 		ct.jobID = jobID
+		ct.taskID = taskID
 	}
 }
 
@@ -872,6 +874,7 @@ func (ct *CoreTools) spawnAgent(ctx context.Context, args json.RawMessage) (stri
 		Model:          ct.model,
 		AgentID:        childAgentID,
 		JobID:          ct.jobID,
+		TaskID:         ct.taskID,
 		Task:           params.Task,
 		Tools:          toolDefs,
 	})

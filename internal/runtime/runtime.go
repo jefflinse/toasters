@@ -83,7 +83,7 @@ func (r *Runtime) SpawnAgent(ctx context.Context, opts SpawnOpts) (*Session, err
 			WithShell(true),
 			WithSpawner(r, depth, maxDepth),
 			WithStore(r.store),
-			WithSessionContext(id, opts.AgentID, opts.JobID),
+			WithSessionContext(id, opts.AgentID, opts.JobID, opts.TaskID),
 			WithProvider(opts.ProviderName, opts.Model),
 		)
 		if mcpCaller != nil {

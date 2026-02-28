@@ -679,7 +679,7 @@ func TestSpawnAgentPropagatesProviderAndContext(t *testing.T) {
 	ct := NewCoreTools(dir,
 		WithSpawner(capturing, 0, 3),
 		WithProvider("test-provider", "test-model"),
-		WithSessionContext("sess-1", "agent-1", "job-1"),
+		WithSessionContext("sess-1", "agent-1", "job-1", "task-1"),
 	)
 
 	_, err := ct.Execute(context.Background(), "spawn_agent", mustJSON(t, map[string]any{
@@ -698,6 +698,7 @@ func TestSpawnAgentPropagatesProviderAndContext(t *testing.T) {
 	// When agent_name is omitted, AgentID falls back to "worker" (anonymous subagent).
 	assertEqual(t, "worker", got.AgentID)
 	assertEqual(t, "job-1", got.JobID)
+	assertEqual(t, "task-1", got.TaskID)
 }
 
 // TestSpawnAgentNameParam verifies that when agent_name is provided in the tool
@@ -710,7 +711,7 @@ func TestSpawnAgentNameParam(t *testing.T) {
 	ct := NewCoreTools(dir,
 		WithSpawner(capturing, 0, 3),
 		WithProvider("test-provider", "test-model"),
-		WithSessionContext("sess-1", "parent-agent", "job-1"),
+		WithSessionContext("sess-1", "parent-agent", "job-1", "task-1"),
 	)
 
 	_, err := ct.Execute(context.Background(), "spawn_agent", mustJSON(t, map[string]any{
@@ -742,7 +743,7 @@ func TestSpawnAgentForwardsToolFilter(t *testing.T) {
 	ct := NewCoreTools(dir,
 		WithSpawner(capturing, 0, 3),
 		WithProvider("test-provider", "test-model"),
-		WithSessionContext("sess-1", "agent-1", "job-1"),
+		WithSessionContext("sess-1", "agent-1", "job-1", "task-1"),
 	)
 
 	_, err := ct.Execute(context.Background(), "spawn_agent", mustJSON(t, map[string]any{
