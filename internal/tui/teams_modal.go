@@ -529,9 +529,9 @@ func promoteAutoTeam(team agents.Team) error {
 }
 
 // autoTeamAgentsDir returns the directory containing agent .md files for an
-// auto-detected team. For read-only teams (from AutoDetectTeams), team.Dir IS
-// the agents directory. For auto-teams discovered via DiscoverTeams (with
-// .auto-team marker), agents are in team.Dir/agents/.
+// auto-detected team. For auto-teams discovered via DiscoverTeams (with
+// .auto-team marker), agents are in team.Dir/agents/. For read-only teams
+// (legacy), team.Dir IS the agents directory.
 func autoTeamAgentsDir(team agents.Team) string {
 	if isReadOnlyTeam(team) {
 		return team.Dir
@@ -581,9 +581,7 @@ func writeTeamFile(path string, def *agentfmt.TeamDef) error {
 
 // reloadTeamsForModal refreshes m.teamsModal.teams from disk.
 func (m *Model) reloadTeamsForModal() {
-	discovered, _ := agents.DiscoverTeams(m.teamsDir)
-	auto := agents.AutoDetectTeams()
-	m.teamsModal.teams = append(discovered, auto...)
+	m.teamsModal.teams, _ = agents.DiscoverTeams(m.teamsDir)
 }
 
 // addAgentToTeam adds the given agent to the team by:

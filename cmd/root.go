@@ -92,10 +92,6 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 		teams = []agents.Team{}
 	}
 
-	// Also include auto-detected teams (e.g. ~/.opencode/agents, ~/.claude/agents).
-	autoTeams := agents.AutoDetectTeams()
-	teams = append(teams, autoTeams...)
-
 	// Open SQLite database for persistence (graceful degradation if it fails).
 	// The DB defaults to <workspaceDir>/toasters.db so operational state lives
 	// alongside the workspace, not in the config directory.
@@ -342,11 +338,9 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 				slog.Error("teams reload failed", "error", err)
 				return
 			}
-			autoTeams := agents.AutoDetectTeams()
-			allTeams := append(newTeams, autoTeams...)
-			toolExec.SetTeams(allTeams)
-			newAwareness := generateTeamAwareness(context.Background(), client, allTeams, configDir)
-			prog.Send(tui.TeamsReloadedMsg{Teams: allTeams, Awareness: newAwareness})
+			toolExec.SetTeams(newTeams)
+			newAwareness := generateTeamAwareness(context.Background(), client, newTeams, configDir)
+			prog.Send(tui.TeamsReloadedMsg{Teams: newTeams, Awareness: newAwareness})
 		})
 		if err != nil && watchCtx.Err() == nil {
 			slog.Error("teams watcher error", "error", err)

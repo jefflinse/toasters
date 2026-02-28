@@ -487,43 +487,6 @@ func DiscoverTeams(teamsDir string) ([]Team, error) {
 	return teams, nil
 }
 
-// AutoDetectTeams checks well-known agent directories and returns any teams found.
-//
-// It checks ~/.opencode/agents/ (team name "opencode") and ~/.claude/agents/
-// (team name "claude"). Only directories with at least one agent are included.
-// Returns an empty (non-nil) slice if neither directory exists or has agents.
-func AutoDetectTeams() []Team {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return []Team{}
-	}
-
-	candidates := []struct {
-		name string
-		dir  string
-	}{
-		{"opencode", filepath.Join(home, ".opencode", "agents")},
-		{"claude", filepath.Join(home, ".claude", "agents")},
-	}
-
-	teams := make([]Team, 0)
-	for _, c := range candidates {
-		discovered, err := Discover(c.dir)
-		if err != nil || len(discovered) == 0 {
-			continue
-		}
-		reg := BuildRegistry(discovered, "")
-		teams = append(teams, Team{
-			Name:        c.name,
-			Dir:         c.dir,
-			Coordinator: reg.Coordinator,
-			Workers:     reg.Workers,
-		})
-	}
-
-	return teams
-}
-
 // BuildTeamCoordinatorPrompt returns the full system prompt for a team coordinator
 // Claude subprocess. If team.Coordinator is nil, only the instructions block is
 // returned (no coordinator body prepended).
