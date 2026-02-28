@@ -222,9 +222,7 @@ func stripCodeFences(s string) string {
 	}
 
 	// Strip closing fence.
-	if strings.HasSuffix(s, "```") {
-		s = s[:len(s)-3]
-	}
+	s = strings.TrimSuffix(s, "```")
 
 	return strings.TrimSpace(s)
 }

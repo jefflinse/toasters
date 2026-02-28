@@ -233,9 +233,7 @@ func renderAgentCard(rs *runtimeSlot, innerW, innerH int, focused bool, spinnerF
 			all = all[:2]
 		}
 		if rs.status == "active" {
-			for _, l := range all {
-				taskLines = append(taskLines, l)
-			}
+			taskLines = append(taskLines, all...)
 		} else {
 			// Dim for completed/killed.
 			for _, l := range all {

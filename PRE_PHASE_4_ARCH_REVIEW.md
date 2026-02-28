@@ -34,6 +34,36 @@
 
 ---
 
+## How to Use This Document
+
+This architecture review is the **diagnostic report** — it identifies what's wrong and why. The **execution plans** are in separate files:
+
+| Wave | File | Status | What It Covers |
+|------|------|--------|---------------|
+| Wave 1: Safety & Cleanup | [`PRE_PHASE_4_WAVE_1.md`](PRE_PHASE_4_WAVE_1.md) | ✅ Complete (2026-02-27) | 8 tasks: security fixes, dead code removal, concurrency fixes |
+| Wave 2: Structural Preparation | [`PRE_PHASE_4_WAVE_2.md`](PRE_PHASE_4_WAVE_2.md) | Pending | 7 tasks: type consolidation, package relocation, legacy removal |
+| Wave 3: Client/Server Extraction | Section 11 below | Future | Phase 4.3 core work |
+| Wave 4: Hardening | Section 11 below | Future | Post-split improvements |
+
+### Execution Workflow
+
+1. **Read this file first** to understand the findings and their context (Sections 4-9)
+2. **Execute Wave 1** using `PRE_PHASE_4_WAVE_1.md` as the task list — update checkboxes and status as you go
+3. **Execute Wave 2** using `PRE_PHASE_4_WAVE_2.md` as the task list — update checkboxes and status as you go
+4. **Update Section 10** (Consolidated Findings Registry) in this file as findings are resolved
+5. Waves 3-4 remain in this file (Section 11) until they're promoted to their own execution plans
+
+### For New Orchestrator Sessions
+
+If you're a fresh orchestrator instance picking up this work:
+- Check the Status field at the top of `PRE_PHASE_4_WAVE_1.md` and `PRE_PHASE_4_WAVE_2.md` to see where we are
+- The wave files contain all the context you need: problem descriptions, fix guidance, acceptance criteria, verification commands, and execution order
+- The appendices in this file (B through I) contain detailed reference data (boot sequence, import sites, dead code inventory, etc.) that the wave files reference
+- Wave 1 must be fully complete before starting Wave 2
+- Wave 2 must be fully complete before starting Phase 4 feature development
+
+---
+
 ## 1. Executive Summary
 
 ### Overall Health: B+
@@ -622,33 +652,33 @@ Auto-detection of file type (skill/agent/team) and format (Toasters/Claude Code/
 
 ### By Severity
 
-| ID | Severity | Category | Summary |
-|----|----------|----------|---------|
-| SEC-CRITICAL-1 | CRITICAL | Security | Command injection in `setup_workspace` |
-| DEAD-1 | BLOCKING | Dead Code | ~4,600 lines of legacy `llm` package family |
-| DEAD-2 | HIGH | Architecture | Dual agent/team type systems |
-| STRUCT-1 | HIGH | Architecture | Two parallel tool systems, duplicated SSRF |
-| SEC-HIGH-1 | HIGH | Security | Shell tool has no sandboxing (design tradeoff) |
-| SEC-HIGH-2 | HIGH | Security | Incomplete `.gitignore` |
-| SEC-HIGH-3 | HIGH | Security | API keys in plaintext config |
-| ARCH-1 | MEDIUM | Architecture | Operator blocks during tool execution |
-| ARCH-2 | MEDIUM | Architecture | Self-send deadlock potential |
-| ARCH-3 | MEDIUM | Architecture | Naive conversation window truncation |
-| ARCH-4 | MEDIUM | Architecture | No backpressure from operator to TUI |
-| ARCH-5 | MEDIUM | Architecture | Legacy dual-path complexity in TUI |
-| STRUCT-2 | MEDIUM | Architecture | `ToolDef` type duplication |
-| DEAD-3 | MEDIUM | Dead Code | `llm/tools` package misplacement |
-| CONC-1 | MEDIUM | Concurrency | `Session.messages` mixed synchronization |
-| CONC-2 | MEDIUM | Concurrency | Operator self-send deadlock potential |
-| CONC-3 | MEDIUM | Concurrency | MCP Manager Close() race |
-| CONC-4 | MEDIUM | Concurrency | Runtime.Shutdown() busy-wait, no timeout |
-| CONC-5 | MEDIUM | Concurrency | Operator tool execution blocks event loop |
-| SEC-MEDIUM-1 | MEDIUM | Security | `editFile` no size limit |
-| SEC-MEDIUM-2 | MEDIUM | Security | `writeFile` no content size limit |
-| SEC-MEDIUM-3 | MEDIUM | Security | Token refresh race condition |
-| SEC-MEDIUM-4 | MEDIUM | Security | `glob` pattern traversal |
-| SEC-MEDIUM-5 | MEDIUM | Security | MCP subprocess trust |
-| QUAL-1 | MEDIUM | Quality | `fetchWebpage` missing context |
+| ID | Severity | Category | Summary | Status |
+|----|----------|----------|---------|--------|
+| SEC-CRITICAL-1 | CRITICAL | Security | Command injection in `setup_workspace` | ✅ Wave 1 |
+| DEAD-1 | BLOCKING | Dead Code | ~4,600 lines of legacy `llm` package family | ✅ Wave 1 |
+| DEAD-2 | HIGH | Architecture | Dual agent/team type systems | |
+| STRUCT-1 | HIGH | Architecture | Two parallel tool systems, duplicated SSRF | ✅ Wave 1 (SSRF consolidated) |
+| SEC-HIGH-1 | HIGH | Security | Shell tool has no sandboxing (design tradeoff) | |
+| SEC-HIGH-2 | HIGH | Security | Incomplete `.gitignore` | ✅ Wave 1 |
+| SEC-HIGH-3 | HIGH | Security | API keys in plaintext config | |
+| ARCH-1 | MEDIUM | Architecture | Operator blocks during tool execution | |
+| ARCH-2 | MEDIUM | Architecture | Self-send deadlock potential | |
+| ARCH-3 | MEDIUM | Architecture | Naive conversation window truncation | |
+| ARCH-4 | MEDIUM | Architecture | No backpressure from operator to TUI | |
+| ARCH-5 | MEDIUM | Architecture | Legacy dual-path complexity in TUI | |
+| STRUCT-2 | MEDIUM | Architecture | `ToolDef` type duplication | |
+| DEAD-3 | MEDIUM | Dead Code | `llm/tools` package misplacement | |
+| CONC-1 | MEDIUM | Concurrency | `Session.messages` mixed synchronization | |
+| CONC-2 | MEDIUM | Concurrency | Operator self-send deadlock potential | |
+| CONC-3 | MEDIUM | Concurrency | MCP Manager Close() race | |
+| CONC-4 | MEDIUM | Concurrency | Runtime.Shutdown() busy-wait, no timeout | ✅ Wave 1 |
+| CONC-5 | MEDIUM | Concurrency | Operator tool execution blocks event loop | |
+| SEC-MEDIUM-1 | MEDIUM | Security | `editFile` no size limit | ✅ Wave 1 |
+| SEC-MEDIUM-2 | MEDIUM | Security | `writeFile` no content size limit | ✅ Wave 1 |
+| SEC-MEDIUM-3 | MEDIUM | Security | Token refresh race condition | ✅ Wave 1 |
+| SEC-MEDIUM-4 | MEDIUM | Security | `glob` pattern traversal | |
+| SEC-MEDIUM-5 | MEDIUM | Security | MCP subprocess trust | |
+| QUAL-1 | MEDIUM | Quality | `fetchWebpage` missing context | ✅ Wave 1 |
 | STRUCT-3 | LOW | Architecture | `ProviderConfig` duplication |
 | STRUCT-4 | LOW | Architecture | `MCPCaller` interface duplication |
 | STRUCT-5 | LOW | Architecture | `ToolExecutor` name collision |
@@ -681,7 +711,9 @@ Auto-detection of file type (skill/agent/team) and format (Toasters/Claude Code/
 
 ### Wave 1: Safety & Cleanup (Do Before Phase 4 Development)
 
-These are prerequisite fixes that reduce risk and noise before the client/server split work begins.
+**Execution plan:** [`PRE_PHASE_4_WAVE_1.md`](PRE_PHASE_4_WAVE_1.md)
+
+8 tasks covering security fixes, dead code removal (~4,600 lines), and concurrency/quality fixes. These are prerequisite fixes that reduce risk and noise before the client/server split work begins.
 
 | # | Finding | Effort | Impact |
 |---|---------|--------|--------|
@@ -696,7 +728,9 @@ These are prerequisite fixes that reduce risk and noise before the client/server
 
 ### Wave 2: Structural Preparation (Do As Part of Phase 4)
 
-These changes prepare the architecture for the client/server split.
+**Execution plan:** [`PRE_PHASE_4_WAVE_2.md`](PRE_PHASE_4_WAVE_2.md)
+
+7 tasks preparing the architecture for the client/server split. The largest item is consolidating the dual agent/team type systems (~800 lines of confusion eliminated).
 
 | # | Finding | Effort | Impact |
 |---|---------|--------|--------|
@@ -735,13 +769,24 @@ These are the actual client/server split tasks, informed by the analysis above.
 
 ---
 
-## Appendix A: Relationship to CLAUDE.md
+## Appendix A: Relationship to Other Documents
 
+### CLAUDE.md
 This review **supplements** CLAUDE.md. CLAUDE.md is the living project reference (architecture, conventions, commands). This review is a point-in-time audit with specific findings and remediation plans.
 
-- CLAUDE.md's "Tech Debt Execution Plan" section documents Waves 1-3 as complete. This review defines Wave 4 (pre-Phase 4) work.
+- CLAUDE.md's "Tech Debt Execution Plan" section documents Waves 1-3 (pre-Phase 3) as complete. This review defines the pre-Phase 4 work.
 - CLAUDE.md's "Project Structure" section is the canonical file map. This review adds analysis of what's wrong with that structure.
 - If a finding in this review has been fixed, update the finding's status in Section 10 and note the commit hash.
+- After each wave completes, update CLAUDE.md's Project Structure and Tech Debt sections to reflect the new state.
+
+### Wave Execution Plans
+- `PRE_PHASE_4_WAVE_1.md` — Detailed task-by-task execution plan for Wave 1 (Safety & Cleanup). Contains problem descriptions, fix guidance with code examples, acceptance criteria with checkboxes, verification commands, and execution order.
+- `PRE_PHASE_4_WAVE_2.md` — Detailed task-by-task execution plan for Wave 2 (Structural Preparation). Contains the same level of detail plus an appendix with the expected post-Wave-2 boot sequence and type change guidance.
+
+These files are the **source of truth for execution progress**. Update them as tasks are completed.
+
+### PHASE_4.md
+The Phase 4 roadmap. Contains the "Other Deferred Items" section with ~15 additional items from Phase 3 reviews. These are lower priority than Waves 1-2 and can be addressed during or after Phase 4 feature development.
 
 ---
 

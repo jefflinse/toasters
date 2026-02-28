@@ -16,6 +16,7 @@ import (
 // Runtime manages agent sessions.
 type Runtime struct {
 	mu               sync.Mutex
+	wg               sync.WaitGroup
 	sessions         map[string]*Session
 	store            db.Store // may be nil
 	providers        *provider.Registry
@@ -141,7 +142,9 @@ func (r *Runtime) SpawnAgent(ctx context.Context, opts SpawnOpts) (*Session, err
 	// Start session in goroutine. Use context.Background() because the session
 	// has its own internal context for lifecycle management. The caller's context
 	// should not control the session's lifetime for fire-and-forget spawns.
+	r.wg.Add(1)
 	go func() {
+		defer r.wg.Done()
 		err := sess.Run(context.Background())
 
 		// Update persistence on completion.
@@ -251,28 +254,25 @@ func (r *Runtime) CancelSession(id string) error {
 
 // Shutdown cancels all active sessions and waits for them to complete.
 // Call this before closing the database to ensure session cleanup finishes.
+// A 10-second timeout prevents indefinite hang if a session is stuck.
 func (r *Runtime) Shutdown() {
 	r.mu.Lock()
-	sessions := make([]*Session, 0, len(r.sessions))
 	for _, s := range r.sessions {
-		sessions = append(sessions, s)
+		s.Cancel()
 	}
 	r.mu.Unlock()
 
-	for _, s := range sessions {
-		s.Cancel()
-	}
+	done := make(chan struct{})
+	go func() {
+		r.wg.Wait()
+		close(done)
+	}()
 
-	// Wait for all sessions to finish (they remove themselves from the map).
-	for {
-		r.mu.Lock()
-		remaining := len(r.sessions)
-		r.mu.Unlock()
-		if remaining == 0 {
-			return
-		}
-		// Brief sleep to avoid busy-waiting.
-		time.Sleep(10 * time.Millisecond)
+	select {
+	case <-done:
+		slog.Info("runtime shutdown complete")
+	case <-time.After(10 * time.Second):
+		slog.Warn("runtime shutdown timed out, some sessions may still be running")
 	}
 }
 

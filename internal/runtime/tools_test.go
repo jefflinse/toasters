@@ -181,6 +181,87 @@ func TestEditFile(t *testing.T) {
 	})
 }
 
+func TestEditFileSizeLimit(t *testing.T) {
+	dir := t.TempDir()
+	ct := NewCoreTools(dir)
+
+	t.Run("rejects file larger than 10MB", func(t *testing.T) {
+		// Create a file just over the 10 MB limit.
+		const limit = 10 * 1024 * 1024
+		path := filepath.Join(dir, "large.txt")
+		f, err := os.Create(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Write limit+1 bytes using Truncate (fast, no actual I/O).
+		if err := f.Truncate(limit + 1); err != nil {
+			_ = f.Close()
+			t.Fatal(err)
+		}
+		_ = f.Close()
+
+		_, err = ct.Execute(context.Background(), "edit_file", mustJSON(t, map[string]any{
+			"path":       "large.txt",
+			"old_string": "foo",
+			"new_string": "bar",
+		}))
+		assertError(t, err)
+		assertContains(t, err.Error(), "file too large to edit")
+		assertContains(t, err.Error(), fmt.Sprintf("max %d", limit))
+	})
+
+	t.Run("accepts file at exactly 10MB", func(t *testing.T) {
+		const limit = 10 * 1024 * 1024
+		content := strings.Repeat("a", limit)
+		writeTestFile(t, dir, "exact10mb.txt", content)
+
+		// The edit will fail because old_string won't be found, but it should
+		// NOT fail with the size limit error — it should get past the size check.
+		_, err := ct.Execute(context.Background(), "edit_file", mustJSON(t, map[string]any{
+			"path":       "exact10mb.txt",
+			"old_string": "NOTFOUND",
+			"new_string": "bar",
+		}))
+		assertError(t, err)
+		assertContains(t, err.Error(), "not found")
+		assertNotContains(t, err.Error(), "file too large")
+	})
+}
+
+func TestWriteFileSizeLimit(t *testing.T) {
+	dir := t.TempDir()
+	ct := NewCoreTools(dir)
+
+	t.Run("rejects content larger than 50MB", func(t *testing.T) {
+		const limit = 50 * 1024 * 1024
+		// Build content just over the limit. We use a byte slice to avoid
+		// the overhead of strings.Repeat for 50 MB+ in the JSON marshal.
+		bigContent := strings.Repeat("x", limit+1)
+
+		_, err := ct.Execute(context.Background(), "write_file", mustJSON(t, map[string]any{
+			"path":    "big.txt",
+			"content": bigContent,
+		}))
+		assertError(t, err)
+		assertContains(t, err.Error(), "content too large to write")
+		assertContains(t, err.Error(), fmt.Sprintf("max %d", limit))
+
+		// Verify the file was NOT created.
+		if _, statErr := os.Stat(filepath.Join(dir, "big.txt")); statErr == nil {
+			t.Error("file should not have been created when content exceeds limit")
+		}
+	})
+
+	t.Run("accepts normal-sized content", func(t *testing.T) {
+		result, err := ct.Execute(context.Background(), "write_file", mustJSON(t, map[string]any{
+			"path":    "normal.txt",
+			"content": "hello world",
+		}))
+		assertNoError(t, err)
+		assertContains(t, result, "11 bytes")
+	})
+}
+
 func TestGlob(t *testing.T) {
 	dir := t.TempDir()
 	ct := NewCoreTools(dir)

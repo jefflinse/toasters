@@ -58,16 +58,6 @@ mode: worker
 
 This is a test agent.`
 
-const validTeamMD = `---
-name: test-team
-description: A test team
-lead: test-agent
----
-
-# Test Team
-
-This is a test team.`
-
 // validTeamJSON is the JSON envelope that generateTeamCmd expects from the LLM.
 const validTeamJSON = `{"team_md": "---\nname: test-team\ndescription: A test team\nlead: test-agent\n---\n\n# Test Team\n\nThis is a test team.\n", "agent_names": ["test-agent"]}`
 

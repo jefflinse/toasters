@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -19,6 +18,7 @@ import (
 	"time"
 
 	"github.com/jefflinse/toasters/internal/db"
+	"github.com/jefflinse/toasters/internal/httputil"
 	"github.com/jefflinse/toasters/internal/progress"
 )
 
@@ -447,6 +447,11 @@ func (ct *CoreTools) writeFile(_ context.Context, args json.RawMessage) (string,
 		return "", err
 	}
 
+	const maxWriteContentSize = 50 * 1024 * 1024 // 50 MB
+	if len(params.Content) > maxWriteContentSize {
+		return "", fmt.Errorf("content too large to write: %d bytes (max %d)", len(params.Content), maxWriteContentSize)
+	}
+
 	dir := filepath.Dir(resolved)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", fmt.Errorf("creating directories: %w", err)
@@ -473,6 +478,15 @@ func (ct *CoreTools) editFile(_ context.Context, args json.RawMessage) (string, 
 	resolved, err := ct.resolvePath(params.Path)
 	if err != nil {
 		return "", err
+	}
+
+	info, err := os.Stat(resolved)
+	if err != nil {
+		return "", fmt.Errorf("stat file: %w", err)
+	}
+	const maxEditFileSize = 10 * 1024 * 1024 // 10 MB
+	if info.Size() > maxEditFileSize {
+		return "", fmt.Errorf("file too large to edit: %d bytes (max %d)", info.Size(), maxEditFileSize)
 	}
 
 	content, err := os.ReadFile(resolved)
@@ -709,58 +723,8 @@ func (ct *CoreTools) shell(ctx context.Context, args json.RawMessage) (string, e
 	return result, nil
 }
 
-// privateNetworks lists IP ranges that should not be accessible via web_fetch.
-var privateNetworks = []*net.IPNet{
-	mustParseCIDR("127.0.0.0/8"),
-	mustParseCIDR("10.0.0.0/8"),
-	mustParseCIDR("172.16.0.0/12"),
-	mustParseCIDR("192.168.0.0/16"),
-	mustParseCIDR("169.254.0.0/16"),
-	mustParseCIDR("::1/128"),
-	mustParseCIDR("fc00::/7"),
-	mustParseCIDR("fe80::/10"),
-}
-
-func mustParseCIDR(s string) *net.IPNet {
-	_, n, err := net.ParseCIDR(s)
-	if err != nil {
-		panic(err)
-	}
-	return n
-}
-
-func isPrivateIP(ip net.IP) bool {
-	for _, network := range privateNetworks {
-		if network.Contains(ip) {
-			return true
-		}
-	}
-	return false
-}
-
 // webFetchClient is a dedicated HTTP client with SSRF protection.
-var webFetchClient = &http.Client{
-	Timeout: 30 * time.Second,
-	Transport: &http.Transport{
-		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-			host, _, err := net.SplitHostPort(addr)
-			if err != nil {
-				return nil, err
-			}
-			ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
-			if err != nil {
-				return nil, err
-			}
-			for _, ip := range ips {
-				if isPrivateIP(ip.IP) {
-					return nil, fmt.Errorf("access to private/reserved IP %s is blocked", ip.IP)
-				}
-			}
-			dialer := &net.Dialer{Timeout: 10 * time.Second}
-			return dialer.DialContext(ctx, network, addr)
-		},
-	},
-}
+var webFetchClient = httputil.NewSafeClient(30 * time.Second)
 
 func (ct *CoreTools) webFetch(ctx context.Context, args json.RawMessage) (string, error) {
 	var params struct {

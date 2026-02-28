@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -18,6 +17,7 @@ import (
 
 	"github.com/jefflinse/toasters/internal/agents"
 	"github.com/jefflinse/toasters/internal/db"
+	"github.com/jefflinse/toasters/internal/httputil"
 	"github.com/jefflinse/toasters/internal/mcp"
 	"github.com/jefflinse/toasters/internal/provider"
 	"github.com/jefflinse/toasters/internal/runtime"
@@ -354,64 +354,13 @@ func (te *ToolExecutor) ExecuteTool(ctx context.Context, call provider.ToolCall)
 // wsRe matches runs of whitespace for collapsing in fetchWebpage output.
 var wsRe = regexp.MustCompile(`\s+`)
 
-// privateNetworks lists IP ranges that should not be accessible via fetch_webpage.
-var privateNetworks = []*net.IPNet{
-	mustParseCIDR("127.0.0.0/8"),
-	mustParseCIDR("10.0.0.0/8"),
-	mustParseCIDR("172.16.0.0/12"),
-	mustParseCIDR("192.168.0.0/16"),
-	mustParseCIDR("169.254.0.0/16"),
-	mustParseCIDR("::1/128"),
-	mustParseCIDR("fc00::/7"),
-	mustParseCIDR("fe80::/10"),
-}
-
-func mustParseCIDR(s string) *net.IPNet {
-	_, n, err := net.ParseCIDR(s)
-	if err != nil {
-		panic(err)
-	}
-	return n
-}
-
-func isPrivateIP(ip net.IP) bool {
-	for _, network := range privateNetworks {
-		if network.Contains(ip) {
-			return true
-		}
-	}
-	return false
-}
-
 // operatorFetchClient is a dedicated HTTP client with SSRF protection for the
-// operator-level fetch_webpage tool. It resolves DNS and checks against private
-// networks before connecting.
-var operatorFetchClient = &http.Client{
-	Timeout: 10 * time.Second,
-	Transport: &http.Transport{
-		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-			host, _, err := net.SplitHostPort(addr)
-			if err != nil {
-				return nil, err
-			}
-			ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
-			if err != nil {
-				return nil, err
-			}
-			for _, ip := range ips {
-				if isPrivateIP(ip.IP) {
-					return nil, fmt.Errorf("access to private/reserved IP %s is blocked", ip.IP)
-				}
-			}
-			dialer := &net.Dialer{Timeout: 10 * time.Second}
-			return dialer.DialContext(ctx, network, addr)
-		},
-	},
-}
+// operator-level fetch_webpage tool.
+var operatorFetchClient = httputil.NewSafeClient(10 * time.Second)
 
 // fetchWebpage retrieves a URL and returns its content as plain text.
-func fetchWebpage(url string) (string, error) {
-	req, err := http.NewRequest(http.MethodGet, url, nil)
+func fetchWebpage(ctx context.Context, url string) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return "", fmt.Errorf("creating request: %w", err)
 	}
