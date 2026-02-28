@@ -1236,6 +1236,25 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, tea.Batch(cmds...)
 
+	case teamPromotedMsg:
+		m.teamsModal.promoting = false
+		if msg.err != nil {
+			slog.Error("failed to promote auto-team", "team", msg.teamName, "error", msg.err)
+			cmds = append(cmds, m.addToast("⚠ Promote failed: "+msg.err.Error(), toastWarning))
+		} else {
+			cmds = append(cmds, m.addToast("✓ Promoted '"+msg.teamName+"' to managed team", toastSuccess))
+			m.reloadTeamsForModal()
+			// Select the newly promoted team.
+			for i, t := range m.teamsModal.teams {
+				if t.Name == msg.teamName && !isAutoTeam(t) {
+					m.teamsModal.teamIdx = i
+					m.refreshSelectedTeamDef()
+					break
+				}
+			}
+		}
+		return m, tea.Batch(cmds...)
+
 	case teamGeneratedMsg:
 		m.teamsModal.generating = false
 		if msg.err != nil {
@@ -1325,6 +1344,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		for i, t := range m.teamsModal.teams {
 			if t.Name == teamDef.Name {
 				m.teamsModal.teamIdx = i
+				m.refreshSelectedTeamDef()
 				break
 			}
 		}

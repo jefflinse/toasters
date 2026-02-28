@@ -37,6 +37,9 @@ type teamsModalState struct {
 	confirmDelete     bool            // true when delete confirmation is showing
 	autoDetectPending map[string]bool // keyed by team.Dir; prevents re-firing
 	autoDetecting     bool            // true while LLM call is in flight
+	promoting         bool            // true while auto-team promotion is in flight
+
+	selectedTeamDef *agentfmt.TeamDef // cached parsed team.md for the selected team
 
 	// Picker sub-modal: select an agent to add to the current team.
 	pickerMode   bool        // true when the add-agent picker overlay is active
@@ -48,6 +51,21 @@ type teamsModalState struct {
 	generateInput  string      // the prompt text being typed
 	generating     bool        // true while LLM call is in flight
 	generateAgents []*db.Agent // available agents captured when generateMode was entered
+}
+
+// teamPromotedMsg is sent when the async auto-team promotion finishes.
+type teamPromotedMsg struct {
+	teamName string
+	err      error
+}
+
+// promoteAutoTeamCmd wraps promoteAutoTeam as a tea.Cmd so it runs in a goroutine
+// and does not block the Bubble Tea update loop.
+func promoteAutoTeamCmd(team agents.Team) tea.Cmd {
+	return func() tea.Msg {
+		err := promoteAutoTeam(team)
+		return teamPromotedMsg{teamName: team.Name, err: err}
+	}
 }
 
 // updateTeamsModal handles all key presses when the teams modal is open.
@@ -101,6 +119,7 @@ func (m *Model) updateTeamsModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				for i, t := range m.teamsModal.teams {
 					if t.Name == name {
 						m.teamsModal.teamIdx = i
+						m.refreshSelectedTeamDef()
 						break
 					}
 				}
@@ -180,6 +199,7 @@ func (m *Model) updateTeamsModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if m.teamsModal.focus == 0 {
 			if m.teamsModal.teamIdx > 0 {
 				m.teamsModal.teamIdx--
+				m.refreshSelectedTeamDef()
 			}
 			m.teamsModal.confirmDelete = false
 			m.teamsModal.agentIdx = 0
@@ -199,6 +219,7 @@ func (m *Model) updateTeamsModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if m.teamsModal.focus == 0 {
 			if m.teamsModal.teamIdx < len(m.teamsModal.teams)-1 {
 				m.teamsModal.teamIdx++
+				m.refreshSelectedTeamDef()
 			}
 			m.teamsModal.confirmDelete = false
 			m.teamsModal.agentIdx = 0
@@ -253,8 +274,10 @@ func (m *Model) updateTeamsModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.reloadTeamsForModal()
 			if m.teamsModal.teamIdx >= len(m.teamsModal.teams) && len(m.teamsModal.teams) > 0 {
 				m.teamsModal.teamIdx = len(m.teamsModal.teams) - 1
+				m.refreshSelectedTeamDef()
 			} else if len(m.teamsModal.teams) == 0 {
 				m.teamsModal.teamIdx = 0
+				m.refreshSelectedTeamDef()
 			}
 			m.teamsModal.confirmDelete = false
 		}
@@ -285,21 +308,9 @@ func (m *Model) updateTeamsModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "ctrl+p":
 		if m.teamsModal.focus == 0 && len(m.teamsModal.teams) > 0 && m.teamsModal.teamIdx < len(m.teamsModal.teams) {
 			team := m.teamsModal.teams[m.teamsModal.teamIdx]
-			if isAutoTeam(team) && !isSystemTeam(team) {
-				if err := promoteAutoTeam(team); err != nil {
-					slog.Error("failed to promote auto-team", "team", team.Name, "error", err)
-					modalCmds = append(modalCmds, m.addToast("⚠ Promote failed: "+err.Error(), toastWarning))
-				} else {
-					modalCmds = append(modalCmds, m.addToast("✓ Promoted '"+team.Name+"' to managed team", toastSuccess))
-					m.reloadTeamsForModal()
-					// Select the newly promoted team.
-					for i, t := range m.teamsModal.teams {
-						if t.Name == team.Name && !isAutoTeam(t) {
-							m.teamsModal.teamIdx = i
-							break
-						}
-					}
-				}
+			if isAutoTeam(team) && !isSystemTeam(team) && !m.teamsModal.promoting {
+				m.teamsModal.promoting = true
+				modalCmds = append(modalCmds, promoteAutoTeamCmd(team))
 			}
 		}
 
@@ -582,6 +593,24 @@ func writeTeamFile(path string, def *agentfmt.TeamDef) error {
 // reloadTeamsForModal refreshes m.teamsModal.teams from disk.
 func (m *Model) reloadTeamsForModal() {
 	m.teamsModal.teams, _ = agents.DiscoverTeams(m.teamsDir)
+	m.refreshSelectedTeamDef()
+}
+
+// refreshSelectedTeamDef parses team.md for the currently selected team and
+// caches the result in m.teamsModal.selectedTeamDef. Called whenever teamIdx
+// changes or the team list is reloaded, so renderTeamsModal never reads files.
+func (m *Model) refreshSelectedTeamDef() {
+	if m.teamsModal.teamIdx < 0 || m.teamsModal.teamIdx >= len(m.teamsModal.teams) {
+		m.teamsModal.selectedTeamDef = nil
+		return
+	}
+	team := m.teamsModal.teams[m.teamsModal.teamIdx]
+	teamMDPath := filepath.Join(team.Dir, "team.md")
+	if def, err := agentfmt.ParseTeam(teamMDPath); err == nil {
+		m.teamsModal.selectedTeamDef = def
+	} else {
+		m.teamsModal.selectedTeamDef = nil
+	}
 }
 
 // addAgentToTeam adds the given agent to the team by:
@@ -819,6 +848,12 @@ func (m *Model) renderTeamsModal() string {
 		leftLines = append(leftLines, DimStyle.Render("⟳ Generating team..."))
 	}
 
+	// Promoting: show status indicator at the bottom.
+	if m.teamsModal.promoting {
+		leftLines = append(leftLines, "")
+		leftLines = append(leftLines, DimStyle.Render("⟳ Promoting team..."))
+	}
+
 	// Pad left panel to fill height.
 	for len(leftLines) < panelInnerH {
 		leftLines = append(leftLines, "")
@@ -916,8 +951,7 @@ func (m *Model) renderTeamsModal() string {
 		rightLines = append(rightLines, coordLine)
 
 		// Composition info from team.md (skills, provider/model, culture preview).
-		teamMDPath := filepath.Join(team.Dir, "team.md")
-		if teamDef, err := agentfmt.ParseTeam(teamMDPath); err == nil {
+		if teamDef := m.teamsModal.selectedTeamDef; teamDef != nil {
 			if len(teamDef.Skills) > 0 {
 				rightLines = append(rightLines, DimStyle.Render("Skills: "+strings.Join(teamDef.Skills, ", ")))
 			}
