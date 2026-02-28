@@ -184,7 +184,12 @@ func (m *Model) renderRuntimeGridCell(rs *runtimeSlot, cellW, cellH, innerW, inn
 	}
 
 	// --- Header line ---
-	elapsed := time.Since(rs.startTime).Round(time.Second)
+	// Use endTime for completed sessions so the duration stops incrementing.
+	end := time.Now()
+	if !rs.endTime.IsZero() {
+		end = rs.endTime
+	}
+	elapsed := end.Sub(rs.startTime).Round(time.Second)
 	statusMark := "⚡"
 	if rs.status != "active" {
 		statusMark = "✓"

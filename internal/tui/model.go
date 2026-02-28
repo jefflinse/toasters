@@ -271,6 +271,7 @@ type runtimeSlot struct {
 	status         string // "active", "completed", "failed", "cancelled"
 	output         strings.Builder
 	startTime      time.Time
+	endTime        time.Time      // set when session completes; zero while active
 	systemPrompt   string         // the system prompt given to the LLM
 	initialMessage string         // the initial user message / task description
 	activities     []activityItem // recent tool-call activities; newest appended last, capped at 6
@@ -1423,6 +1424,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		slot.status = msg.Status
+		slot.endTime = time.Now()
 
 		// Build completion notification for the operator from the runtime session output.
 		outputTail := slot.output.String()
