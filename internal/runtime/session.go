@@ -190,8 +190,13 @@ func (s *Session) Run(ctx context.Context) (retErr error) {
 			// context window overflow when agents read large files or directory
 			// listings. 8KB per result keeps the conversation manageable while
 			// still providing meaningful content to the LLM.
+			//
+			// spawn_agent is exempt: its result is the synthesized output of an
+			// entire child agent session, which is typically a concise summary
+			// but can legitimately exceed 8KB. Truncating it causes the parent
+			// to misinterpret the child's work as incomplete and retry in a loop.
 			const maxToolResultBytes = 8 * 1024
-			if len(result) > maxToolResultBytes {
+			if tc.Name != "spawn_agent" && len(result) > maxToolResultBytes {
 				result = result[:maxToolResultBytes] + "\n[... truncated: result exceeded 8KB ...]"
 			}
 
