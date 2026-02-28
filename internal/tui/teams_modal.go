@@ -432,12 +432,22 @@ func isAutoTeam(team agents.Team) bool {
 	return err == nil
 }
 
-// promoteAutoTeam copies an auto-detected team's agent files into a new managed
-// team directory under ~/.config/toasters/user/teams/{team-name}/. Each agent
-// file is parsed with agentfmt (handling Claude Code and OpenCode format
-// detection) and written in toasters format. A team.md is generated with the
-// team definition. The original auto-team is not modified.
+// promoteAutoTeam promotes an auto-detected team to a fully managed team.
+// It branches on whether the team is a legacy read-only auto-team (lives at a
+// well-known read-only directory like ~/.claude/agents) or a bootstrap
+// auto-team (already lives inside user/teams/ with a .auto-team marker and an
+// agents/ symlink).
 func promoteAutoTeam(team agents.Team) error {
+	if isReadOnlyTeam(team) {
+		return promoteReadOnlyAutoTeam(team)
+	}
+	return promoteMarkerAutoTeam(team)
+}
+
+// promoteReadOnlyAutoTeam handles promotion of legacy read-only auto-teams
+// (e.g. ~/.claude/agents). It copies agent files into a new managed team
+// directory under ~/.config/toasters/user/teams/{team-name}/.
+func promoteReadOnlyAutoTeam(team agents.Team) error {
 	configDir, err := config.Dir()
 	if err != nil {
 		return fmt.Errorf("getting config directory: %w", err)
@@ -452,8 +462,8 @@ func promoteAutoTeam(team agents.Team) error {
 		return fmt.Errorf("team directory %q already exists", targetDir)
 	}
 
-	// Determine where agent files live for this auto-team.
-	agentsSourceDir := autoTeamAgentsDir(team)
+	// For read-only teams, team.Dir IS the agents directory.
+	agentsSourceDir := team.Dir
 
 	// Discover agent .md files in the source directory.
 	matches, err := filepath.Glob(filepath.Join(agentsSourceDir, "*.md"))
@@ -515,12 +525,8 @@ func promoteAutoTeam(team agents.Team) error {
 		lead = team.Coordinator.Name
 	}
 
-	// Determine the source label for the description.
-	source := filepath.Base(team.Dir)
-	if isReadOnlyTeam(team) {
-		// For read-only teams, use the parent directory name for clarity.
-		source = filepath.Base(filepath.Dir(team.Dir)) + "/" + filepath.Base(team.Dir)
-	}
+	// Use the parent/dir label for clarity (e.g. ".claude/agents").
+	source := filepath.Base(filepath.Dir(team.Dir)) + "/" + filepath.Base(team.Dir)
 
 	// Generate team.md.
 	teamDef := &agentfmt.TeamDef{
@@ -535,19 +541,100 @@ func promoteAutoTeam(team agents.Team) error {
 		return fmt.Errorf("writing team.md: %w", err)
 	}
 
-	slog.Info("promoted auto-team to managed team", "team", team.Name, "target", targetDir, "agents", len(parsed))
+	slog.Info("promoted read-only auto-team to managed team", "team", team.Name, "target", targetDir, "agents", len(parsed))
 	return nil
 }
 
-// autoTeamAgentsDir returns the directory containing agent .md files for an
-// auto-detected team. For auto-teams discovered via DiscoverTeams (with
-// .auto-team marker), agents are in team.Dir/agents/. For read-only teams
-// (legacy), team.Dir IS the agents directory.
-func autoTeamAgentsDir(team agents.Team) string {
-	if isReadOnlyTeam(team) {
-		return team.Dir
+// promoteMarkerAutoTeam handles in-place promotion of bootstrap auto-teams.
+// These teams already live inside user/teams/{name}/ with a .auto-team marker
+// and an agents/ symlink pointing to the real source directory. Promotion
+// replaces the symlink with a real directory containing the parsed agent files,
+// writes team.md, and removes the .auto-team marker.
+func promoteMarkerAutoTeam(team agents.Team) error {
+	agentsSymlink := filepath.Join(team.Dir, "agents")
+
+	// Discover agent .md files via the symlink (which points to the real source).
+	matches, err := filepath.Glob(filepath.Join(agentsSymlink, "*.md"))
+	if err != nil {
+		return fmt.Errorf("globbing agent files in %s: %w", agentsSymlink, err)
 	}
-	return filepath.Join(team.Dir, "agents")
+	if len(matches) == 0 {
+		return fmt.Errorf("no agent files found in %s", agentsSymlink)
+	}
+
+	// Parse all agent files first — fail fast before any writes.
+	type parsedAgent struct {
+		stem string
+		def  *agentfmt.AgentDef
+	}
+	var parsed []parsedAgent
+	for _, path := range matches {
+		defType, def, err := agentfmt.ParseFile(path)
+		if err != nil {
+			slog.Warn("skipping unparseable agent during promotion", "path", path, "error", err)
+			continue
+		}
+		if defType != agentfmt.DefAgent {
+			slog.Warn("skipping non-agent file during promotion", "path", path, "type", defType)
+			continue
+		}
+		agentDef, ok := def.(*agentfmt.AgentDef)
+		if !ok {
+			slog.Warn("unexpected type for agent definition", "path", path)
+			continue
+		}
+		stem := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+		parsed = append(parsed, parsedAgent{stem: stem, def: agentDef})
+	}
+	if len(parsed) == 0 {
+		return fmt.Errorf("no valid agent definitions found in %s", agentsSymlink)
+	}
+
+	// Remove the agents/ symlink and replace it with a real directory.
+	if err := os.Remove(agentsSymlink); err != nil {
+		return fmt.Errorf("removing agents symlink %s: %w", agentsSymlink, err)
+	}
+	if err := os.MkdirAll(agentsSymlink, 0o755); err != nil {
+		return fmt.Errorf("creating agents directory %s: %w", agentsSymlink, err)
+	}
+
+	// Write each agent file in toasters format. On failure, log and continue —
+	// partial state is acceptable; we do not attempt to restore the symlink.
+	var agentNames []string
+	for _, pa := range parsed {
+		agentPath := filepath.Join(agentsSymlink, pa.stem+".md")
+		if err := writeAgentFile(agentPath, pa.def); err != nil {
+			slog.Error("failed to write agent file during promotion", "path", agentPath, "error", err)
+			continue
+		}
+		agentNames = append(agentNames, pa.def.Name)
+	}
+
+	// Determine the lead agent.
+	lead := ""
+	if team.Coordinator != nil {
+		lead = team.Coordinator.Name
+	}
+
+	// Write team.md into the team directory.
+	teamDef := &agentfmt.TeamDef{
+		Name:        team.Name,
+		Description: fmt.Sprintf("Promoted from %s", team.Name),
+		Lead:        lead,
+		Agents:      agentNames,
+	}
+	teamMDPath := filepath.Join(team.Dir, "team.md")
+	if err := writeTeamFile(teamMDPath, teamDef); err != nil {
+		return fmt.Errorf("writing team.md: %w", err)
+	}
+
+	// Remove the .auto-team marker to complete the promotion.
+	if err := os.Remove(filepath.Join(team.Dir, ".auto-team")); err != nil {
+		slog.Warn("failed to remove .auto-team marker", "dir", team.Dir, "error", err)
+	}
+
+	slog.Info("promoted bootstrap auto-team in-place", "team", team.Name, "dir", team.Dir, "agents", len(parsed))
+	return nil
 }
 
 // writeAgentFile writes an AgentDef as a toasters-format .md file with YAML

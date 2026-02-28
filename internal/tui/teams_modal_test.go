@@ -342,14 +342,13 @@ func TestPromoteAutoTeamCmd_ReturnsTeamPromotedMsg(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // TestPromoteAutoTeam_CreatesExpectedStructure is a filesystem-level test of
-// the underlying promoteAutoTeam function.  It verifies that a successful
-// promotion creates:
-//   - <userTeamsDir>/<teamName>/team.md
-//   - <userTeamsDir>/<teamName>/agents/<stem>.md  (one per source agent)
+// the underlying promoteAutoTeam function for the real-world bootstrap case:
+// the auto-team already lives inside user/teams/{name}/ (team.Dir IS the
+// target directory), with a .auto-team marker and an agents/ symlink pointing
+// to a separate source directory.
 //
-// Because promoteAutoTeam calls config.Dir() (which reads $HOME), we set up a
-// fake home directory via t.TempDir() and override HOME for the duration of
-// the test.
+// This is the case that previously always failed with "team directory already
+// exists" because promoteAutoTeam computed targetDir == team.Dir.
 func TestPromoteAutoTeam_CreatesExpectedStructure(t *testing.T) {
 	// Not parallel: modifies HOME env var.
 
@@ -357,26 +356,101 @@ func TestPromoteAutoTeam_CreatesExpectedStructure(t *testing.T) {
 	fakeHome := t.TempDir()
 	t.Setenv("HOME", fakeHome)
 
-	// Build the source auto-team directory.
-	sourceDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(sourceDir, ".auto-team"), []byte{}, 0o644); err != nil {
+	// Build the real agent source directory (simulates ~/.claude/agents or similar).
+	agentSourceDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(agentSourceDir, "coder.md"), []byte(agentFileContent("coder", "writes code")), 0o644); err != nil {
+		t.Fatalf("writing agent file: %v", err)
+	}
+
+	// Build the bootstrap auto-team directory inside user/teams/ — this is
+	// where bootstrap places auto-teams: ~/.config/toasters/user/teams/{name}/.
+	userTeamsDir := filepath.Join(fakeHome, ".config", "toasters", "user", "teams")
+	teamDir := filepath.Join(userTeamsDir, "my-team")
+	if err := os.MkdirAll(teamDir, 0o755); err != nil {
+		t.Fatalf("creating team dir: %v", err)
+	}
+
+	// Write the .auto-team marker.
+	if err := os.WriteFile(filepath.Join(teamDir, ".auto-team"), []byte{}, 0o644); err != nil {
 		t.Fatalf("writing .auto-team: %v", err)
 	}
-	agentsDir := filepath.Join(sourceDir, "agents")
-	if err := os.MkdirAll(agentsDir, 0o755); err != nil {
-		t.Fatalf("creating agents dir: %v", err)
+
+	// Create the agents/ symlink pointing to the real source directory.
+	agentsSymlink := filepath.Join(teamDir, "agents")
+	if err := os.Symlink(agentSourceDir, agentsSymlink); err != nil {
+		t.Fatalf("creating agents symlink: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(agentsDir, "coder.md"), []byte(agentFileContent("coder", "writes code")), 0o644); err != nil {
+
+	// team.Dir is the same as the target directory — this is the bug scenario.
+	team := agents.Team{
+		Name: "my-team",
+		Dir:  teamDir,
+	}
+
+	if err := promoteAutoTeam(team); err != nil {
+		t.Fatalf("promoteAutoTeam returned unexpected error: %v", err)
+	}
+
+	// Verify the expected in-place structure.
+
+	// team.md must exist in team.Dir.
+	teamMDPath := filepath.Join(teamDir, "team.md")
+	if _, err := os.Stat(teamMDPath); err != nil {
+		t.Errorf("team.md not found at %s: %v", teamMDPath, err)
+	}
+
+	// agents/ must now be a real directory (not a symlink).
+	info, err := os.Lstat(agentsSymlink)
+	if err != nil {
+		t.Fatalf("agents/ not found at %s: %v", agentsSymlink, err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		t.Error("agents/ should be a real directory after promotion, not a symlink")
+	}
+	if !info.IsDir() {
+		t.Error("agents/ should be a directory after promotion")
+	}
+
+	// agents/coder.md must exist inside the real directory.
+	agentMDPath := filepath.Join(teamDir, "agents", "coder.md")
+	if _, err := os.Stat(agentMDPath); err != nil {
+		t.Errorf("agents/coder.md not found at %s: %v", agentMDPath, err)
+	}
+
+	// .auto-team marker must be removed.
+	markerPath := filepath.Join(teamDir, ".auto-team")
+	if _, err := os.Stat(markerPath); err == nil {
+		t.Error(".auto-team marker should be removed after promotion")
+	}
+}
+
+// TestPromoteReadOnlyAutoTeam_CreatesExpectedStructure tests the legacy
+// read-only auto-team path (e.g. ~/.claude/agents), where team.Dir is the
+// agents directory itself and a new managed team directory is created under
+// user/teams/. This calls promoteReadOnlyAutoTeam directly to avoid the
+// getCachedHomeDir sync.Once cache interfering with isReadOnlyTeam.
+func TestPromoteReadOnlyAutoTeam_CreatesExpectedStructure(t *testing.T) {
+	// Not parallel: modifies HOME env var.
+
+	fakeHome := t.TempDir()
+	t.Setenv("HOME", fakeHome)
+
+	// Simulate a read-only agents directory (e.g. ~/.claude/agents).
+	// team.Dir IS the agents directory for read-only teams.
+	agentsSourceDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(agentsSourceDir, "coder.md"), []byte(agentFileContent("coder", "writes code")), 0o644); err != nil {
 		t.Fatalf("writing agent file: %v", err)
 	}
 
 	team := agents.Team{
 		Name: "my-team",
-		Dir:  sourceDir,
+		Dir:  agentsSourceDir,
 	}
 
-	if err := promoteAutoTeam(team); err != nil {
-		t.Fatalf("promoteAutoTeam returned unexpected error: %v", err)
+	// Call promoteReadOnlyAutoTeam directly to bypass the isReadOnlyTeam check
+	// (which relies on getCachedHomeDir, a sync.Once that may be stale in tests).
+	if err := promoteReadOnlyAutoTeam(team); err != nil {
+		t.Fatalf("promoteReadOnlyAutoTeam returned unexpected error: %v", err)
 	}
 
 	// Verify the expected directory structure under the fake home.
@@ -396,14 +470,17 @@ func TestPromoteAutoTeam_CreatesExpectedStructure(t *testing.T) {
 	}
 }
 
-// TestPromoteAutoTeam_FailsIfTargetExists verifies that promoteAutoTeam returns
-// an error (rather than silently overwriting) when the target directory already
-// exists.
+// TestPromoteAutoTeam_FailsIfTargetExists verifies that promoteReadOnlyAutoTeam
+// returns an error (rather than silently overwriting) when the target directory
+// already exists. This applies to the read-only (legacy) path only.
 func TestPromoteAutoTeam_FailsIfTargetExists(t *testing.T) {
 	// Not parallel: modifies HOME env var.
 
 	fakeHome := t.TempDir()
 	t.Setenv("HOME", fakeHome)
+
+	// Use an arbitrary source directory (content doesn't matter — we fail before reading it).
+	sourceDir := t.TempDir()
 
 	// Pre-create the target directory to simulate a collision.
 	userTeamsDir := filepath.Join(fakeHome, ".config", "toasters", "user", "teams")
@@ -412,16 +489,12 @@ func TestPromoteAutoTeam_FailsIfTargetExists(t *testing.T) {
 		t.Fatalf("pre-creating target dir: %v", err)
 	}
 
-	sourceDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(sourceDir, ".auto-team"), []byte{}, 0o644); err != nil {
-		t.Fatalf("writing .auto-team: %v", err)
-	}
-
 	team := agents.Team{Name: "my-team", Dir: sourceDir}
 
-	err := promoteAutoTeam(team)
+	// Call promoteReadOnlyAutoTeam directly to test the collision guard.
+	err := promoteReadOnlyAutoTeam(team)
 	if err == nil {
-		t.Error("promoteAutoTeam should return an error when the target directory already exists")
+		t.Error("promoteReadOnlyAutoTeam should return an error when the target directory already exists")
 	}
 }
 
@@ -433,16 +506,22 @@ func TestPromoteAutoTeam_FailsWithNoAgentFiles(t *testing.T) {
 	fakeHome := t.TempDir()
 	t.Setenv("HOME", fakeHome)
 
-	sourceDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(sourceDir, ".auto-team"), []byte{}, 0o644); err != nil {
+	// Build a bootstrap auto-team inside user/teams/ with an empty agents/ symlink target.
+	emptySourceDir := t.TempDir() // empty — no .md files
+
+	userTeamsDir := filepath.Join(fakeHome, ".config", "toasters", "user", "teams")
+	teamDir := filepath.Join(userTeamsDir, "empty-team")
+	if err := os.MkdirAll(teamDir, 0o755); err != nil {
+		t.Fatalf("creating team dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(teamDir, ".auto-team"), []byte{}, 0o644); err != nil {
 		t.Fatalf("writing .auto-team: %v", err)
 	}
-	// Create agents/ dir but leave it empty.
-	if err := os.MkdirAll(filepath.Join(sourceDir, "agents"), 0o755); err != nil {
-		t.Fatalf("creating agents dir: %v", err)
+	if err := os.Symlink(emptySourceDir, filepath.Join(teamDir, "agents")); err != nil {
+		t.Fatalf("creating agents symlink: %v", err)
 	}
 
-	team := agents.Team{Name: "empty-team", Dir: sourceDir}
+	team := agents.Team{Name: "empty-team", Dir: teamDir}
 
 	err := promoteAutoTeam(team)
 	if err == nil {
@@ -457,26 +536,35 @@ func TestPromoteAutoTeam_FailsWithNoAgentFiles(t *testing.T) {
 // TestPromoteAutoTeamCmd_SuccessPath verifies the full happy path end-to-end:
 // the cmd returned by promoteAutoTeamCmd, when executed, produces a
 // teamPromotedMsg with nil error and the correct team name.
+//
+// This test models the real-world bootstrap case: team.Dir is already inside
+// user/teams/ with a .auto-team marker and an agents/ symlink.
 func TestPromoteAutoTeamCmd_SuccessPath(t *testing.T) {
 	// Not parallel: modifies HOME env var.
 
 	fakeHome := t.TempDir()
 	t.Setenv("HOME", fakeHome)
 
-	// Build a valid auto-team source.
-	sourceDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(sourceDir, ".auto-team"), []byte{}, 0o644); err != nil {
-		t.Fatalf("writing .auto-team: %v", err)
-	}
-	agentsDir := filepath.Join(sourceDir, "agents")
-	if err := os.MkdirAll(agentsDir, 0o755); err != nil {
-		t.Fatalf("creating agents dir: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(agentsDir, "builder.md"), []byte(agentFileContent("builder", "builds things")), 0o644); err != nil {
+	// Build the real agent source directory.
+	agentSourceDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(agentSourceDir, "builder.md"), []byte(agentFileContent("builder", "builds things")), 0o644); err != nil {
 		t.Fatalf("writing agent file: %v", err)
 	}
 
-	team := agents.Team{Name: "build-team", Dir: sourceDir}
+	// Build the bootstrap auto-team directory inside user/teams/.
+	userTeamsDir := filepath.Join(fakeHome, ".config", "toasters", "user", "teams")
+	teamDir := filepath.Join(userTeamsDir, "build-team")
+	if err := os.MkdirAll(teamDir, 0o755); err != nil {
+		t.Fatalf("creating team dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(teamDir, ".auto-team"), []byte{}, 0o644); err != nil {
+		t.Fatalf("writing .auto-team: %v", err)
+	}
+	if err := os.Symlink(agentSourceDir, filepath.Join(teamDir, "agents")); err != nil {
+		t.Fatalf("creating agents symlink: %v", err)
+	}
+
+	team := agents.Team{Name: "build-team", Dir: teamDir}
 
 	cmd := promoteAutoTeamCmd(team)
 	if cmd == nil {
