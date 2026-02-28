@@ -8,7 +8,7 @@ Toasters is a Go-based TUI orchestration tool for agentic coding work. It coordi
 
 ```bash
 go build ./...          # Build
-go test ./...           # Test (19 test packages, see list below)
+go test ./...           # Test (17 test packages)
 go run main.go          # Run the TUI
 ```
 
@@ -30,8 +30,8 @@ internal/
                             #   Import: ImportClaudeCode, ImportOpenCode (lossless)
                             #   Export: ExportClaudeCode, ExportOpenCode (lossy with Warning list)
                             #   Auto-detection via ParseAgent/ParseFile (inspects frontmatter fields)
-  agents/                   # Agent discovery, parsing, team management (uses agentfmt for parsing)
-  anthropic/                # Anthropic API client + OAuth/Keychain
+  anthropic/                # Keychain/OAuth token management for Anthropic API
+                            #   keychain.go: ReadKeychainAccessToken(), token refresh with mutex
   bootstrap/                # First-run bootstrap + upgrade migration
                             #   Copies embedded defaults to ~/.config/toasters/system/
                             #   Creates user/ directory structure, auto-team detection
@@ -43,10 +43,10 @@ internal/
                             #   Schema: jobs, tasks, skills, agents, teams, team_agents, feed_entries,
                             #   sessions, progress_reports, artifacts
                             #   RebuildDefinitions: transactional delete-all + insert-all for definition tables
-  llm/                      # Legacy LLM types (OpenAI wire format, used by llm/client)
-    client/                 # OpenAI-compatible streaming client
-    tools/                  # Tool executor with registry-based dispatch (handlers in focused files)
-  loader/                   # File-to-DB loader + fsnotify watcher
+                            #   db.Team and db.Agent are the canonical types used everywhere
+  httputil/                 # Shared SSRF protection and safe HTTP clients
+                            #   IsPrivateIP(), NewSafeClient(), SafeGet() — used by runtime and operator
+  loader/                   # File-to-DB loader + fsnotify watcher (single source of truth for definitions)
                             #   Walks system/ + user/ dirs, parses .md files with agentfmt
                             #   Resolves agent references (team-local → shared → system)
                             #   Watcher: 200ms debounce, .md filtering, dynamic dir watching
@@ -57,16 +57,21 @@ internal/
                             #   Team lead tools: complete_task, report_blocker, report_progress
                             #   Worker tools: report_progress, query_team_context
                             #   Operator tools: consult_agent (composition-based), surface_to_user, query_job, query_teams
+                            #   Conversation truncation: boundary-aware (never splits tool-call/result pairs)
   progress/                 # Progress tool handlers (report_progress, etc.)
   provider/                 # Multi-provider LLM client (OpenAI, Anthropic, registry)
   runtime/                  # In-process agent runtime (sessions, core tools, spawn)
-    composite_tools.go      # CompositeTools wrapper combining CoreTools + MCP tools
+                            #   composite_tools.go: CompositeTools wrapper combining CoreTools + MCP tools
+                            #   Shutdown: WaitGroup-based with 10s timeout (no busy-wait)
   sse/                      # Shared SSE parsing (reader, Anthropic event types, OpenAI chunk types)
+  tooldef/                  # Shared ToolDef type (used by runtime, progress, mcp)
   tui/                      # Bubble Tea TUI (model, views, grid, modals, streaming, activity feed, CRUD)
-    progress_poll.go        # SQLite polling loop for real-time progress display
-    skills_modal.go         # Skills browse/CRUD modal (create, edit, delete skills)
-    agents_modal.go         # Agents browse/CRUD modal (create, edit, delete agents)
-    teams_modal.go          # Teams browse modal with auto-team promotion (Ctrl+P)
+                            #   All interaction flows through the operator event loop (no legacy direct-LLM path)
+                            #   team_view.go: TeamView type bundles db.Team + coordinator + workers from store
+                            #   progress_poll.go: SQLite polling loop for real-time progress display
+                            #   skills_modal.go: Skills browse/CRUD modal (create, edit, delete skills)
+                            #   agents_modal.go: Agents browse/CRUD modal (create, edit, delete agents)
+                            #   teams_modal.go: Teams browse modal with auto-team promotion (Ctrl+P)
 ```
 
 ## Architecture
@@ -99,7 +104,7 @@ internal/
 
 ## Code Conventions
 
-- **Packages**: lowercase single word (`agents`, `config`, `llm`, `tui`, `operator`)
+- **Packages**: lowercase single word (`config`, `compose`, `tui`, `operator`)
 - **Types**: PascalCase (`Agent`, `Team`, `Job`)
 - **Constants**: SCREAMING_SNAKE or PascalCase for exported (`InputHeight`)
 - **Error handling**: Always `if err != nil` with `fmt.Errorf("context: %w", err)` wrapping. Return errors, don't log and swallow.
@@ -134,38 +139,64 @@ Key settings:
 - **Shift+Enter**: Newline in input
 - **Ctrl+G**: Toggle grid screen (dynamic NxM agent slot view, scales with terminal size)
 - **Ctrl+C**: Quit
-- **Slash commands**: `/help`, `/new`, `/exit`, `/quit`, `/mcp`, `/teams`, `/skills`, `/agents`, `/anthropic`, `/job`
+- **Slash commands**: `/help`, `/new`, `/exit`, `/quit`, `/mcp`, `/teams`, `/skills`, `/agents`, `/job`
 - **Prompt mode**: Numbered options when operator asks user a question
 
 ## Testing
 
-Tests exist across 19 test packages. They use standard Go testing with `t.TempDir()` for file I/O and helper functions for assertions. Run `golangci-lint run` for linting — the codebase currently has 0 lint findings.
+Tests exist across 17 test packages. They use standard Go testing with `t.TempDir()` for file I/O and helper functions for assertions. Run `golangci-lint run` for linting — the codebase currently has 0 lint findings.
 
-Key coverage numbers: `llm/tools` 88.3%, `llm/client` 87.7%, `runtime` 87.0%, `provider` 84.9%, `db` 83.6%, `mcp` 83%, `agents` 72.1%, `config` 65.7%.
+## Tech Debt Execution Plan
 
-## Tech Debt Execution Plan (Pre-Phase 3)
+Identified via comprehensive codebase health audits. Organized into waves by risk and dependency order.
 
-Identified via comprehensive codebase health audit (code-reviewer, security-auditor, concurrency-reviewer, refactorer). Findings are organized into three waves by risk and dependency order. Waves 1 and 2 were completed pre-Phase 2. Wave 3 was completed pre-Phase 3. All tech debt is resolved.
-
-### Wave 1 — Safety Fixes ✅
+### Pre-Phase 2 Waves 1-2 ✅
 
 **Status: Complete (pre-Phase 2)**
 
-All data race and security fixes completed: CONC-B1–B4 (mutex/lock fixes), SEC-C1–C4 (HTTP timeouts, SSRF, path restriction), SEC-H1–H2 (response limits, OAuth encoding).
+Wave 1: All data race and security fixes (CONC-B1–B4, SEC-C1–C4, SEC-H1–H2).
+Wave 2: All 16 quick wins (ARCH-H3/H4, DUP-M1, MOD-M1–M7, LINT, CONC-H1–H3/M1, SEC-H3).
 
-### Wave 2 — Quick Wins ✅
-
-**Status: Complete (2026-02-25, pre-Phase 2)**
-
-All 16 items completed: ARCH-H3/H4 (Anthropic client consolidation), DUP-M1 (tilde helper), MOD-M1–M7 (modern Go idioms), LINT (15 findings), CONC-H1–H3/M1 (session cleanup, subscribe fix, debounce, regex), SEC-H3 (HTTP context).
-
-### Wave 3 — Structural Improvements ✅
+### Pre-Phase 3 Wave 3 ✅
 
 **Status: Complete (2026-02-25, pre-Phase 3)**
 
-- [x] **ARCH-H1**: Consolidated Anthropic SSE parsing — extracted shared `internal/sse` package with SSE reader, Anthropic event types, and OpenAI chunk types. ~400 lines of duplication eliminated across `anthropic/`, `provider/`, `llm/client/`.
-- [x] **ARCH-H2**: Converged on single `provider.Provider` interface — migrated TUI, cmd, and tools from `llm.*` types to `provider.*` types. Deleted 261-line adapter layer (`convert.go`) and 638-line adapter tests. Net -1,041 lines.
-- [x] **DESIGN-H1**: Decomposed TUI Model — extracted `chatState`, `streamingState`, `gridState`, `promptState`, `progressState`, `modalState` sub-models. Introduced `ModelConfig` struct replacing 11-parameter constructor.
-- [x] **DESIGN-M1**: Tool registry pattern for `ExecuteTool` — replaced 365-line switch with `map[string]toolHandler` dispatch. Handlers extracted into focused files (`handler_web.go`, `handler_jobs.go`, `handler_sessions.go`, `handler_interactive.go`).
-- [x] **MOD-M8**: Migrated 43 `log.Printf` calls across 14 files to `slog.Warn`/`slog.Info`/`slog.Error` structured logging with key-value fields.
-- [x] **ARCH-GATEWAY**: Removed legacy Claude CLI gateway infrastructure — deleted `internal/gateway/`, `internal/claude/`, `internal/orchestration/`, `cmd/mcp_server.go`, `internal/tui/claude.go`, `internal/llm/tools/handler_gateway.go`. Removed `ClaudeConfig`, gateway slot state from TUI, `list_slots`/`kill_slot` tools, `/claude` and `/kill` slash commands, and `BuildOperatorPrompt()`/`defaultSystemPrompt` hard-coded prompts. Operator system prompt now composed from `defaults/system/agents/operator.md` via the standard composition pipeline.
+ARCH-H1 (SSE consolidation), ARCH-H2 (single provider interface), DESIGN-H1 (TUI decomposition), DESIGN-M1 (tool registry), MOD-M8 (slog migration), ARCH-GATEWAY (legacy gateway removal).
+
+### Pre-Phase 4 Wave 1 — Safety & Cleanup ✅
+
+**Status: Complete (2026-02-27)**
+
+Full details: `PRE_PHASE_4_WAVE_1.md`
+
+- [x] **SEC-CRITICAL-1**: Fixed `setup_workspace` command injection — URL scheme validation, flag injection rejection, repo name validation, `--` separator
+- [x] **SEC-HIGH-2**: Expanded `.gitignore` (1 → 27 lines) — covers DB, logs, config, env, coverage, IDE files
+- [x] **DEAD-1**: Deleted ~4,600 lines of legacy `llm` package family — extracted keychain helpers to `internal/anthropic/keychain.go`, deleted `internal/llm/client/`, `internal/llm/types.go`, `internal/llm/provider.go`, `internal/anthropic/client.go`
+- [x] **STRUCT-1** (partial): Extracted shared SSRF protection into `internal/httputil/` — consolidated duplicate `privateNetworks`/`isPrivateIP` from runtime and operator tools
+- [x] **SEC-MEDIUM-1/2**: Added 10MB limit to `editFile`, 50MB limit to `writeFile`
+- [x] **CONC-4**: Replaced `Runtime.Shutdown()` busy-wait with `sync.WaitGroup` + 10s timeout
+- [x] **QUAL-1**: Fixed `fetchWebpage` to use `http.NewRequestWithContext`
+- [x] **SEC-MEDIUM-3**: Added `sync.Mutex` to `ReadKeychainAccessToken()` for token refresh serialization
+
+### Pre-Phase 4 Wave 2 — Structural Preparation ✅
+
+**Status: Complete (2026-02-27)**
+
+Full details: `PRE_PHASE_4_WAVE_2.md`
+
+- [x] **DEAD-2**: Consolidated dual agent/team type systems — deleted `internal/agents/` package (755 lines), replaced with `TeamView` in TUI backed by `db.Store` queries, removed duplicate file watcher and `DiscoverTeams()` from boot sequence. Single source of truth: `loader` → `db.Store`.
+- [x] **DEAD-3 + STRUCT-1**: Deleted `internal/llm/tools/` operator tool dispatcher (2,802 lines) — superseded by operator's `SystemTools`. Removed `internal/llm/` directory entirely.
+- [x] **ARCH-5**: Removed legacy TUI streaming path — deleted `startStream`, `sendAnthropicMessage`, `waitForChunk`, `StreamChunkMsg`/`StreamDoneMsg`/`ToolCallMsg`/`ToolResultMsg` handlers, `executeToolsCmd`, `tool_exec.go`, `/anthropic` command. All interaction now flows through the operator event loop.
+- [x] **ARCH-3**: Fixed conversation window truncation — boundary-aware `truncateMessages()` that never splits tool-call/result pairs
+- [x] **ARCH-2/CONC-2**: Fixed self-send deadlock potential — `EventTaskStarted` handled inline instead of sent through event channel
+- [x] **STRUCT-2**: Consolidated `ToolDef` type — shared `internal/tooldef/` package replaces duplicate definitions in runtime and progress
+- [x] **CONC-6**: Fixed post-shutdown TUI sends — nil-guard all `prog.Send()` call sites, clear atomic pointer after `prog.Run()` returns
+
+### Remaining Findings (from PRE_PHASE_4_ARCH_REVIEW.md)
+
+17 findings resolved across Waves 1-2. Remaining open findings (23) are tracked in `PRE_PHASE_4_ARCH_REVIEW.md` Section 10. Key remaining items for future waves:
+- **ARCH-1/CONC-5**: Operator blocks during tool execution (non-blocking tool execution — large effort)
+- **SEC-HIGH-1**: Shell tool sandboxing (design tradeoff — large effort)
+- **SEC-HIGH-3**: API key management improvements
+- **ARCH-4**: Operator → TUI backpressure
+- Various LOW findings (STRUCT-3/4/7, CONC-7/8, QUAL-2–7)
