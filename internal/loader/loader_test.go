@@ -792,3 +792,161 @@ func TestLoad_UnparseableFileSkipped(t *testing.T) {
 		t.Errorf("expected 1 skill (bad skipped), got %d", len(skills))
 	}
 }
+
+func TestLoad_UserAgentShadowsSystem(t *testing.T) {
+	store := openTestStore(t)
+	configDir := t.TempDir()
+	ctx := context.Background()
+
+	// System planner agent.
+	writeFile(t, filepath.Join(configDir, "system", "agents", "planner.md"), plannerAgentMD)
+
+	// User agent with the same name — should shadow the system one.
+	userPlannerMD := `---
+name: Planner
+description: Custom user planner
+mode: worker
+model: claude-sonnet-4-20250514
+---
+You are the user's custom planner.
+`
+	writeFile(t, filepath.Join(configDir, "user", "agents", "planner.md"), userPlannerMD)
+
+	l := New(store, configDir)
+	if err := l.Load(ctx); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	agents, err := store.ListAgents(ctx)
+	if err != nil {
+		t.Fatalf("ListAgents: %v", err)
+	}
+	if len(agents) != 1 {
+		t.Fatalf("expected 1 agent (user shadows system), got %d", len(agents))
+	}
+	if agents[0].ID != "planner" {
+		t.Errorf("agent ID = %q, want %q", agents[0].ID, "planner")
+	}
+	if agents[0].Source != "user" {
+		t.Errorf("agent source = %q, want %q (user should shadow system)", agents[0].Source, "user")
+	}
+	if agents[0].Description != "Custom user planner" {
+		t.Errorf("agent description = %q, want %q", agents[0].Description, "Custom user planner")
+	}
+}
+
+func TestLoad_UserSkillShadowsSystem(t *testing.T) {
+	store := openTestStore(t)
+	configDir := t.TempDir()
+	ctx := context.Background()
+
+	// System skill.
+	writeFile(t, filepath.Join(configDir, "system", "skills", "orchestration.md"), orchestrationSkillMD)
+
+	// User skill with the same name — should shadow the system one.
+	userOrchMD := `---
+name: Orchestration
+description: Custom orchestration skill
+---
+Custom orchestration instructions.
+`
+	writeFile(t, filepath.Join(configDir, "user", "skills", "orchestration.md"), userOrchMD)
+
+	l := New(store, configDir)
+	if err := l.Load(ctx); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	skills, err := store.ListSkills(ctx)
+	if err != nil {
+		t.Fatalf("ListSkills: %v", err)
+	}
+	if len(skills) != 1 {
+		t.Fatalf("expected 1 skill (user shadows system), got %d", len(skills))
+	}
+	if skills[0].ID != "orchestration" {
+		t.Errorf("skill ID = %q, want %q", skills[0].ID, "orchestration")
+	}
+	if skills[0].Source != "user" {
+		t.Errorf("skill source = %q, want %q (user should shadow system)", skills[0].Source, "user")
+	}
+	if skills[0].Prompt != "Custom orchestration instructions." {
+		t.Errorf("skill prompt = %q, want %q", skills[0].Prompt, "Custom orchestration instructions.")
+	}
+}
+
+func TestLoad_UserAgentShadowsSystem_TeamResolution(t *testing.T) {
+	store := openTestStore(t)
+	configDir := t.TempDir()
+	ctx := context.Background()
+
+	// System team with operator and planner.
+	writeFile(t, filepath.Join(configDir, "system", "team.md"), systemTeamMD)
+	writeFile(t, filepath.Join(configDir, "system", "agents", "operator.md"), operatorAgentMD)
+	writeFile(t, filepath.Join(configDir, "system", "agents", "planner.md"), plannerAgentMD)
+
+	// User overrides planner.
+	userPlannerMD := `---
+name: Planner
+description: Custom user planner
+mode: worker
+model: claude-sonnet-4-20250514
+---
+You are the user's custom planner.
+`
+	writeFile(t, filepath.Join(configDir, "user", "agents", "planner.md"), userPlannerMD)
+
+	l := New(store, configDir)
+	if err := l.Load(ctx); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	// Should have 2 agents: operator (system) + planner (user).
+	agents, err := store.ListAgents(ctx)
+	if err != nil {
+		t.Fatalf("ListAgents: %v", err)
+	}
+	if len(agents) != 2 {
+		t.Fatalf("expected 2 agents, got %d", len(agents))
+	}
+
+	agentsByID := make(map[string]*db.Agent)
+	for _, a := range agents {
+		agentsByID[a.ID] = a
+	}
+
+	// Operator should still be system.
+	op, ok := agentsByID["operator"]
+	if !ok {
+		t.Fatal("operator agent not found")
+	}
+	if op.Source != "system" {
+		t.Errorf("operator source = %q, want %q", op.Source, "system")
+	}
+
+	// Planner should be user version.
+	planner, ok := agentsByID["planner"]
+	if !ok {
+		t.Fatal("planner agent not found")
+	}
+	if planner.Source != "user" {
+		t.Errorf("planner source = %q, want %q", planner.Source, "user")
+	}
+	if planner.Description != "Custom user planner" {
+		t.Errorf("planner description = %q, want %q", planner.Description, "Custom user planner")
+	}
+
+	// System team should still resolve planner as a team agent.
+	teamAgents, err := store.ListTeamAgents(ctx, "system")
+	if err != nil {
+		t.Fatalf("ListTeamAgents: %v", err)
+	}
+
+	taByAgent := make(map[string]*db.TeamAgent)
+	for _, ta := range teamAgents {
+		taByAgent[ta.AgentID] = ta
+	}
+	if _, ok := taByAgent["planner"]; !ok {
+		t.Error("planner should still be in system team agents after shadowing")
+	}
+}

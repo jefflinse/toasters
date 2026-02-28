@@ -65,12 +65,38 @@ func (l *Loader) Load(ctx context.Context) error {
 	}
 
 	// 2. Walk user/skills/.
+	// User skills shadow system skills with the same ID.
 	userSkills := l.loadSkills(filepath.Join(l.configDir, "user", "skills"), "user")
-	skills = append(skills, userSkills...)
+	userSkillIDs := make(map[string]bool, len(userSkills))
+	for _, sk := range userSkills {
+		userSkillIDs[sk.ID] = true
+	}
+	filtered := skills[:0]
+	for _, sk := range skills {
+		if !userSkillIDs[sk.ID] {
+			filtered = append(filtered, sk)
+		}
+	}
+	skills = append(filtered, userSkills...)
 
 	// 3. Walk user/agents/ (shared agents).
+	// User agents shadow system agents with the same ID.
 	userAgents := l.loadAgents(filepath.Join(l.configDir, "user", "agents"), "user", "")
-	agents = append(agents, userAgents...)
+	userAgentIDs := make(map[string]bool, len(userAgents))
+	for _, a := range userAgents {
+		userAgentIDs[a.ID] = true
+	}
+	filteredAgents := agents[:0]
+	for _, a := range agents {
+		if !userAgentIDs[a.ID] {
+			filteredAgents = append(filteredAgents, a)
+		} else {
+			// Remove shadowed agent from systemAgents index so team
+			// references resolve to the user version.
+			delete(systemAgents, a.Name)
+		}
+	}
+	agents = append(filteredAgents, userAgents...)
 	for _, a := range userAgents {
 		sharedAgents[a.Name] = a.ID
 	}
