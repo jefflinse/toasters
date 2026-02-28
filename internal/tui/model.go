@@ -20,7 +20,6 @@ import (
 
 	"github.com/jefflinse/toasters/internal/agentfmt"
 	"github.com/jefflinse/toasters/internal/agents"
-	"github.com/jefflinse/toasters/internal/config"
 	"github.com/jefflinse/toasters/internal/db"
 	"github.com/jefflinse/toasters/internal/llm/tools"
 	"github.com/jefflinse/toasters/internal/loader"
@@ -1260,12 +1259,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		slug := loader.Slugify(teamDef.Name)
 
 		// Determine the user teams directory.
-		cfgDir, err := config.Dir()
-		if err != nil {
-			cmds = append(cmds, m.addToast("⚠ Team generation failed: "+err.Error(), toastWarning))
-			return m, tea.Batch(cmds...)
-		}
-		userTeamsDir := filepath.Join(cfgDir, "user", "teams")
+		userTeamsDir := m.teamsDir
 		teamDir := filepath.Join(userTeamsDir, slug)
 		agentsSubDir := filepath.Join(teamDir, "agents")
 

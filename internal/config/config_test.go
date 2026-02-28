@@ -179,9 +179,31 @@ func TestLoad_MissingConfigFile_AppliesDefaults(t *testing.T) {
 	if cfg.Operator.Model != "" {
 		t.Errorf("Operator.Model: got %q, want %q", cfg.Operator.Model, "")
 	}
-	wantTeamsDir := filepath.Join(tmpHome, ".config", "toasters", "teams")
+	wantTeamsDir := filepath.Join(tmpHome, ".config", "toasters", "user", "teams")
 	if cfg.Operator.TeamsDir != wantTeamsDir {
 		t.Errorf("Operator.TeamsDir: got %q, want %q", cfg.Operator.TeamsDir, wantTeamsDir)
+	}
+}
+
+// TestLoad_TeamsDir_DefaultsToUserTeams is a regression test for a bug where
+// operator.teams_dir defaulted to ~/.config/toasters/teams (the old pre-migration
+// path) instead of the correct ~/.config/toasters/user/teams. New teams created
+// via the TUI would be written to the wrong directory when no config file was present.
+func TestLoad_TeamsDir_DefaultsToUserTeams(t *testing.T) {
+	resetViper(t)
+
+	// Point viper at an empty temp dir — no config.yaml exists.
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	wantTeamsDir := filepath.Join(tmpHome, ".config", "toasters", "user", "teams")
+	if cfg.Operator.TeamsDir != wantTeamsDir {
+		t.Errorf("Operator.TeamsDir: got %q, want %q\n(regression: default must be user/teams, not the old teams/ path)", cfg.Operator.TeamsDir, wantTeamsDir)
 	}
 }
 

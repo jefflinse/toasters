@@ -79,7 +79,7 @@ func Load() (*Config, error) {
 	viper.SetDefault("operator.endpoint", "http://localhost:1234")
 	viper.SetDefault("operator.api_key", "")
 	viper.SetDefault("operator.model", "")
-	viper.SetDefault("operator.teams_dir", filepath.Join(home, ".config", "toasters", "teams"))
+	viper.SetDefault("operator.teams_dir", filepath.Join(home, ".config", "toasters", "user", "teams"))
 	viper.SetDefault("agents.default_provider", "")
 	viper.SetDefault("agents.default_model", "")
 
