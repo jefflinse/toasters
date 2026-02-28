@@ -193,7 +193,10 @@ func (m *Model) renderRuntimeGridCell(rs *runtimeSlot, cellW, cellH, innerW, inn
 	if agentLabel == "" {
 		agentLabel = "runtime"
 	}
-	if rs.teamName != "" {
+	// The agentName may already be team-scoped (e.g. "auto-opencode/orchestrator")
+	// from the loader's ID construction. Only prepend teamName if it's not already
+	// a prefix to avoid double-prefixing like "auto-opencode/auto-opencode/orchestrator".
+	if rs.teamName != "" && !strings.HasPrefix(agentLabel, rs.teamName+"/") {
 		agentLabel = rs.teamName + "/" + agentLabel
 	}
 	// Short job ID (first 8 chars).

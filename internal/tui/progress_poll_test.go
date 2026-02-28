@@ -60,6 +60,9 @@ func (m *mockStore) UpdateTaskResult(ctx context.Context, id string, resultSumma
 func (m *mockStore) AssignTask(ctx context.Context, id string, teamID string) error {
 	return nil
 }
+func (m *mockStore) PreAssignTaskTeam(ctx context.Context, id string, teamID string) error {
+	return nil
+}
 func (m *mockStore) AddTaskDependency(ctx context.Context, taskID, dependsOn string) error {
 	return nil
 }

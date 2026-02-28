@@ -324,6 +324,19 @@ func (s *SQLiteStore) AssignTask(ctx context.Context, id string, teamID string) 
 	return checkRowsAffected(result, "task", id)
 }
 
+// PreAssignTaskTeam sets the team_id on a pending task without changing its status.
+// This is used to pre-assign a team for later execution while keeping the task pending.
+func (s *SQLiteStore) PreAssignTaskTeam(ctx context.Context, id string, teamID string) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	result, err := s.db.ExecContext(ctx,
+		"UPDATE tasks SET team_id = ?, updated_at = ? WHERE id = ? AND status = ?",
+		teamID, now, id, string(TaskStatusPending))
+	if err != nil {
+		return fmt.Errorf("pre-assigning task team: %w", err)
+	}
+	return checkRowsAffected(result, "task", id)
+}
+
 func (s *SQLiteStore) AddTaskDependency(ctx context.Context, taskID, dependsOn string) error {
 	_, err := s.db.ExecContext(ctx,
 		"INSERT INTO task_dependencies (task_id, depends_on) VALUES (?, ?)",

@@ -315,18 +315,38 @@ func (st *SystemTools) assignTask(ctx context.Context, args json.RawMessage) (st
 		return "", fmt.Errorf("team %q has no lead agent configured; cannot assign task", team.Name)
 	}
 
-	// 4. Update task: set status to in_progress and assign team.
+	// 4. Enforce serial execution: if another task in this job is already in progress,
+	// pre-assign the team (so assignNextTask can pick it up later) but don't start it.
+	allTasks, err := st.store.ListTasksForJob(ctx, task.JobID)
+	if err != nil {
+		return "", fmt.Errorf("checking job tasks: %w", err)
+	}
+	for _, t := range allTasks {
+		if t.ID != params.TaskID && t.Status == db.TaskStatusInProgress {
+			// Pre-assign the team so assignNextTask can start this task when it's ready.
+			if err := st.store.PreAssignTaskTeam(ctx, params.TaskID, params.TeamID); err != nil {
+				return "", fmt.Errorf("pre-assigning team: %w", err)
+			}
+			return fmt.Sprintf(
+				"Task %q queued for team %s — task %q is currently in progress. "+
+					"This task will start automatically when the current task completes.",
+				task.Title, team.Name, t.Title,
+			), nil
+		}
+	}
+
+	// 5. No task in progress — start this one. Set status to in_progress and assign team.
 	if err := st.store.AssignTask(ctx, params.TaskID, params.TeamID); err != nil {
 		return "", fmt.Errorf("assigning task: %w", err)
 	}
 
-	// 5. Compose the team lead agent.
+	// 6. Compose the team lead agent.
 	composed, err := st.composer.Compose(ctx, team.LeadAgent, params.TeamID)
 	if err != nil {
 		return "", fmt.Errorf("composing team lead: %w", err)
 	}
 
-	// 6. Spawn team lead goroutine (fire-and-forget) with the job's workspace dir.
+	// 7. Spawn team lead goroutine (fire-and-forget) with the job's workspace dir.
 	if st.spawner == nil {
 		return "", fmt.Errorf("cannot assign task: no agent spawner configured")
 	}
@@ -343,7 +363,7 @@ func (st *SystemTools) assignTask(ctx context.Context, args json.RawMessage) (st
 		}
 	}
 
-	// 7. Send EventTaskStarted to the event channel.
+	// 8. Send EventTaskStarted to the event channel.
 	trySendEvent(ctx, st.eventCh, Event{
 		Type: EventTaskStarted,
 		Payload: TaskStartedPayload{

@@ -19,6 +19,7 @@ type Store interface {
 	UpdateTaskStatus(ctx context.Context, id string, status TaskStatus, summary string) error
 	UpdateTaskResult(ctx context.Context, id string, resultSummary, recommendations string) error
 	AssignTask(ctx context.Context, id string, teamID string) error
+	PreAssignTaskTeam(ctx context.Context, id string, teamID string) error
 	AddTaskDependency(ctx context.Context, taskID, dependsOn string) error
 	GetReadyTasks(ctx context.Context, jobID string) ([]*Task, error)
 
