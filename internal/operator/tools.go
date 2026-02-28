@@ -233,8 +233,8 @@ func (ot *operatorTools) consultAgent(ctx context.Context, args json.RawMessage)
 
 	// Build the filtered tool list from the agent's declared tools. This
 	// ensures each system agent only sees the tools it's supposed to have
-	// (e.g. planner gets create_job/create_task/assign_task/query_job_context,
-	// not surface_to_user or query_teams).
+	// (e.g. planner gets create_job/create_task/assign_task/query_teams/query_job_context,
+	// not surface_to_user or query_job).
 	var agentTools []runtime.ToolDef
 	if len(composed.Tools) > 0 {
 		allDefs := toolExecutor.Definitions()
