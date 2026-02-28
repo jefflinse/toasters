@@ -21,6 +21,17 @@
 10. [Consolidated Findings Registry](#10-consolidated-findings-registry)
 11. [Recommended Execution Order](#11-recommended-execution-order)
 
+**Appendices** (operational reference for executing fixes):
+- [A: Relationship to CLAUDE.md](#appendix-a-relationship-to-claudemd)
+- [B: Startup Wiring — cmd/root.go Boot Sequence](#appendix-b-startup-wiring--cmdrootgo-boot-sequence)
+- [C: Exact Business Logic in TUI — Functions to Extract](#appendix-c-exact-business-logic-in-tui--functions-to-extract)
+- [D: internal/agents Import Sites (for DEAD-2)](#appendix-d-internalagents-import-sites-for-dead-2-consolidation)
+- [E: Dead Code Deletion Plan (DEAD-1)](#appendix-e-dead-code-deletion-plan-dead-1)
+- [F: Verification Commands](#appendix-f-verification-commands)
+- [G: TUI Model Field Inventory](#appendix-g-tui-model-field-inventory)
+- [H: Store Interface (30 Methods)](#appendix-h-store-interface-30-methods)
+- [I: Event Types](#appendix-i-event-types)
+
 ---
 
 ## 1. Executive Summary
@@ -724,7 +735,199 @@ These are the actual client/server split tasks, informed by the analysis above.
 
 ---
 
-## Appendix A: TUI Model Field Inventory
+## Appendix A: Relationship to CLAUDE.md
+
+This review **supplements** CLAUDE.md. CLAUDE.md is the living project reference (architecture, conventions, commands). This review is a point-in-time audit with specific findings and remediation plans.
+
+- CLAUDE.md's "Tech Debt Execution Plan" section documents Waves 1-3 as complete. This review defines Wave 4 (pre-Phase 4) work.
+- CLAUDE.md's "Project Structure" section is the canonical file map. This review adds analysis of what's wrong with that structure.
+- If a finding in this review has been fixed, update the finding's status in Section 10 and note the commit hash.
+
+---
+
+## Appendix B: Startup Wiring — `cmd/root.go` Boot Sequence
+
+This is the single most important file for understanding how everything connects. The boot sequence (in `runTUI()`) is:
+
+```
+1.  bootstrap.Run()           — copy embedded defaults to ~/.config/toasters/system/
+2.  config.Load()             — read ~/.config/toasters/config.yaml via Viper
+3.  slog.SetDefault()         — redirect logging to ~/.config/toasters/toasters.log
+4.  agents.DiscoverTeams()    — load teams from filesystem (DEAD-2: parallel system)
+5.  db.Open()                 — open SQLite, run migrations, WAL mode
+6.  loader.New() + Load()     — parse .md files → rebuild definition tables in DB
+7.  compose.New()             — create Composer (reads from DB at runtime)
+8.  provider.NewRegistry()    — register all configured LLM providers
+9.  runtime.New()             — create Runtime (session manager)
+10. mcp.NewManager()          — connect to MCP servers, discover tools
+11. rt.SetMCPCaller()         — wire MCP into runtime (TruncatingCaller wrapper)
+12. tools.NewToolExecutor()   — create legacy operator tool executor (DEAD-2/STRUCT-1)
+13. Create operator provider  — Anthropic or OpenAI based on config
+14. compose.Compose("operator", "system") — build operator system prompt
+15. operator.New()            — create Operator with 3 callbacks (onText, onEvent, onTurnDone)
+16. tui.NewModel()            — create TUI Model with all dependencies
+17. tea.NewProgram()          — create Bubble Tea program
+18. p.Store(prog)             — store atomic pointer (callbacks can now send to TUI)
+19. op.Start(opCtx)           — launch operator event loop goroutine
+20. Background goroutine      — generate team awareness, send greeting via operator
+21. loader.NewWatcher()       — start fsnotify watcher for .md file changes
+22. agents.WatchRecursive()   — start SECOND file watcher (DEAD-2: parallel system)
+23. prog.Run()                — enter Bubble Tea event loop (blocks until exit)
+24. Deferred cleanup          — rt.Shutdown(), mcpManager.Close(), sqliteStore.Close()
+```
+
+**Key wiring points:**
+- The `atomic.Pointer[tea.Program]` (`p`) bridges operator/runtime callbacks to the TUI
+- Three operator callbacks use `p.Load().Send()`: `OnText` → `OperatorTextMsg`, `OnEvent` → `OperatorEventMsg`, `OnTurnDone` → `OperatorDoneMsg`
+- `runtime.OnSessionStarted` callback spawns a goroutine that forwards `SessionEvent`s as `RuntimeSessionEventMsg`
+- Steps 4 and 22 are the parallel agent system (DEAD-2) — they duplicate work done by steps 6 and 21
+
+---
+
+## Appendix C: Exact Business Logic in TUI — Functions to Extract
+
+These are the specific functions that contain domain logic and must move server-side for the client/server split:
+
+### Team Management (internal/tui/teams_modal.go)
+
+| Function | Lines | What It Does |
+|----------|-------|-------------|
+| `promoteAutoTeam()` | ~80 | Copies agent files from auto-detected dir, creates team dir, writes team.md |
+| `promoteReadOnlyAutoTeam()` | ~60 | Same but for read-only source dirs (copies instead of moves) |
+| `promoteMarkerAutoTeam()` | ~50 | Handles `.auto-team` marker-based auto-teams |
+| `addAgentToTeam()` | ~50 | Parses team.md, appends agent name, writes team.md, copies agent file |
+| `writeAgentFile()` | ~20 | Serializes AgentDef to YAML frontmatter + body, writes to disk |
+| `writeTeamFile()` | ~20 | Serializes TeamDef to YAML frontmatter + body, writes to disk |
+| `isReadOnlyTeam()` | ~5 | Checks if team dir is outside config dir |
+| `isSystemTeam()` | ~5 | Checks if team dir is under system/ |
+| `isAutoTeam()` | ~5 | Checks team.IsAuto flag |
+| `maybeAutoDetectCoordinator()` | ~60 | Calls `provider.ChatCompletion()` to pick best lead agent |
+| `copyFile()` | ~15 | File copy helper |
+
+### Agent/Skill CRUD (internal/tui/agents_modal.go, skills_modal.go)
+
+| Function | File | Lines | What It Does |
+|----------|------|-------|-------------|
+| `createAgentFile()` | agents_modal.go | ~30 | Writes template .md file with YAML frontmatter |
+| `writeGeneratedAgentFile()` | agents_modal.go | ~40 | Writes LLM-generated content, deduplicates filename |
+| `addSkillToAgent()` | agents_modal.go | ~30 | Parses agent file, appends skill, writes back |
+| `filterSkillsForAgent()` | agents_modal.go | ~15 | Filters skills not already on agent |
+| `createSkillFile()` | skills_modal.go | ~30 | Writes template .md file |
+| `writeGeneratedSkillFile()` | skills_modal.go | ~30 | Writes LLM-generated content, deduplicates filename |
+
+### LLM Generation (internal/tui/llm_generate.go)
+
+| Function | Lines | What It Does |
+|----------|-------|-------------|
+| `generateSkillCmd()` | ~60 | Calls `provider.ChatCompletion()` with generation prompt, parses result |
+| `generateAgentCmd()` | ~70 | Same for agents, includes team context |
+| `generateTeamCmd()` | ~80 | Same for teams, includes available agents list |
+| `stripCodeFences()` | ~15 | Removes markdown code fences from LLM output |
+
+### Team Generation Handler (internal/tui/model.go, Update() method)
+
+The `teamGeneratedMsg` case in `Update()` (~100 lines starting around line 1258) contains: directory slug derivation, `os.MkdirAll`, team.md writing, agent file copying from DB, and loader reload triggering.
+
+---
+
+## Appendix D: `internal/agents` Import Sites (for DEAD-2 consolidation)
+
+These are every place that imports `internal/agents` — all must be rewired when consolidating:
+
+| File | What It Uses | Replacement Strategy |
+|------|-------------|---------------------|
+| `cmd/root.go` | `agents.DiscoverTeams()`, `agents.Team`, `agents.WatchRecursive()` | Use `db.Store.ListTeams()` + `loader.Watcher` instead |
+| `cmd/awareness.go` | `agents.Team` (for `summarizeTeam`) | Accept `db.Team` or a simpler struct |
+| `internal/llm/tools/tools.go` | `agents.Team` (stored as field, used for `assign_team` tool) | Use `db.Store.ListTeams()` at call time, or accept `db.Team` |
+| `internal/llm/tools/handler_jobs.go` | `agents.Team` (for workspace dir lookup) | Use `db.Store.GetTeam()` |
+| `internal/llm/tools/handler_sessions.go` | `agents.Team` (for `assign_team` dispatch) | Use `db.Store.GetTeam()` + `db.Store.ListTeamAgents()` |
+| `internal/tui/model.go` | `agents.Team` (stored as `m.teams` field) | Use `db.Store.ListTeams()` via progress poll |
+| `internal/tui/panels.go` | `agents.Team` (for left panel rendering) | Accept `db.Team` |
+| `internal/tui/teams_modal.go` | `agents.Team`, `agents.DiscoverTeams()`, `agents.ParseFile()` | Use `db.Store` + `agentfmt` directly |
+| `internal/tui/grid.go` | `agents.Team` (for grid slot labels) | Accept `db.Team` |
+| `internal/tui/helpers.go` | `agents.Team` (for session slot team lookup) | Accept `db.Team` |
+| `internal/tui/streaming.go` | `agents.Team` (for legacy path team lookup) | Remove with ARCH-5 (legacy path removal) |
+| `internal/tui/prompt.go` | `agents.Team` (for dispatch confirmation) | Accept `db.Team` |
+
+---
+
+## Appendix E: Dead Code Deletion Plan (DEAD-1)
+
+### Step 1: Extract keychain helpers (~200 lines to keep)
+
+Create `internal/anthropic/keychain.go` containing:
+- `ReadKeychainAccessToken() (string, error)` (exported, used by `provider/anthropic.go`)
+- `readKeychainCredentials() (*keychainCredentials, error)` (unexported)
+- `readKeychainBlob(service string) ([]byte, error)` (unexported)
+- `writeKeychainBlob(blob []byte) error` (unexported)
+- `refreshAccessToken(creds) (*tokenResponse, error)` (unexported)
+- `formatAPIError(resp) error` (unexported)
+- Types: `keychainCredentials`, `keychainBlob`, `keychainOauth`, `tokenResponse`
+- Constants: `keychainService`, `keychainAccount`, `oauthTokenURL`
+
+### Step 2: Delete dead files
+
+| Action | File |
+|--------|------|
+| DELETE | `internal/llm/types.go` |
+| DELETE | `internal/llm/provider.go` |
+| DELETE | `internal/llm/doc.go` |
+| DELETE | `internal/llm/client/client.go` |
+| DELETE | `internal/llm/client/client_test.go` |
+| DELETE | `internal/llm/client/doc.go` |
+| GUTTED | `internal/anthropic/client.go` → delete everything except keychain functions (moved to keychain.go) |
+| PRUNED | `internal/anthropic/client_test.go` → keep only tests for keychain functions |
+
+### Step 3: Verify
+
+```bash
+go build ./...                    # must pass
+go test ./...                     # must pass
+grep -r "internal/llm/client" .   # must return nothing
+grep -r "internal/llm\"" .        # must return only llm/tools imports
+```
+
+---
+
+## Appendix F: Verification Commands
+
+Quick checks to confirm findings still exist (run from repo root):
+
+```bash
+# DEAD-1: Legacy llm package still exists?
+ls internal/llm/types.go internal/llm/client/client.go 2>/dev/null
+
+# DEAD-2: Dual agent system still active?
+grep -r "agents.DiscoverTeams" cmd/ internal/
+
+# STRUCT-1: Duplicated SSRF protection?
+grep -rn "privateNetworks" internal/
+
+# SEC-CRITICAL-1: setup_workspace still vulnerable?
+grep -n 'exec.CommandContext.*"git".*"clone"' internal/operator/workspace_tools.go
+
+# SEC-HIGH-2: .gitignore still minimal?
+wc -l .gitignore
+
+# CONC-4: Shutdown still busy-waits?
+grep -n "time.Sleep" internal/runtime/runtime.go
+
+# ARCH-3: Naive message truncation?
+grep -n "maxMessages" internal/operator/operator.go
+
+# ARCH-5: Legacy stream path still exists?
+grep -n "startStream" internal/tui/streaming.go
+
+# QUAL-1: fetchWebpage missing context?
+grep -n "http.NewRequest(" internal/llm/tools/tools.go
+
+# All tests pass?
+go test ./... -count=1
+```
+
+---
+
+## Appendix G: TUI Model Field Inventory
 
 The TUI `Model` struct has ~60 fields organized into sub-models:
 
@@ -743,7 +946,7 @@ The TUI `Model` struct has ~60 fields organized into sub-models:
 | Layout cache | `lpWidth`, `sbWidth`, `leftPanelHidden`, `sidebarHidden`, `leftPanelWidthOverride` | Panel sizing |
 | Toasts | `toasts`, `nextToastID` | Notification stack |
 
-## Appendix B: Store Interface (30 Methods)
+## Appendix H: Store Interface (30 Methods)
 
 | Category | Methods | Count |
 |----------|---------|-------|
@@ -758,7 +961,7 @@ The TUI `Model` struct has ~60 fields organized into sub-models:
 | Artifacts | `LogArtifact`, `ListArtifactsForJob` | 2 |
 | Lifecycle | `Close` | 1 |
 
-## Appendix C: Event Types
+## Appendix I: Event Types
 
 | Event | Mechanical? | LLM-Routed? | Description |
 |-------|-------------|-------------|-------------|
