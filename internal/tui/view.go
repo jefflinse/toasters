@@ -707,22 +707,10 @@ func (m *Model) renderOutputModal(title, content string, scroll int) (string, in
 	// as literal text in the viewport.
 	cleanContent := xansi.Strip(content)
 
-	// Step 2: Apply dim styling to tool event lines on the clean content string,
-	// before any markdown rendering. This avoids nesting ANSI escape sequences
-	// inside Glamour-rendered output (which would corrupt the display).
-	rawLines := strings.Split(cleanContent, "\n")
-	for i, line := range rawLines {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "⚙") || strings.HasPrefix(trimmed, "→") {
-			rawLines[i] = DimStyle.Render(line)
-		}
-	}
-	dimmedContent := strings.Join(rawLines, "\n")
-
-	// Step 2: Optionally render markdown on the dimmed content, then split into lines.
+	// Step 2: Optionally render markdown on the clean content, then split into lines.
 	var allLines []string
-	if m.outputMdRender != nil && looksLikeMarkdown(dimmedContent) {
-		rendered, err := m.outputMdRender.Render(dimmedContent)
+	if m.outputMdRender != nil && looksLikeMarkdown(cleanContent) {
+		rendered, err := m.outputMdRender.Render(cleanContent)
 		if err == nil {
 			allLines = strings.Split(strings.TrimRight(rendered, "\n"), "\n")
 		} else {
@@ -730,7 +718,18 @@ func (m *Model) renderOutputModal(title, content string, scroll int) (string, in
 		}
 	}
 	if allLines == nil {
-		allLines = strings.Split(dimmedContent, "\n")
+		allLines = strings.Split(cleanContent, "\n")
+	}
+
+	// Step 3: Apply dim styling to tool event lines AFTER markdown rendering,
+	// so DimStyle ANSI codes are never fed into Glamour (which would render
+	// them as literal text).
+	for i, line := range allLines {
+		stripped := xansi.Strip(line)
+		trimmed := strings.TrimSpace(stripped)
+		if strings.HasPrefix(trimmed, "⚙") || strings.HasPrefix(trimmed, "→") {
+			allLines[i] = DimStyle.Render(stripped)
+		}
 	}
 
 	// Compute scroll bounds.

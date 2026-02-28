@@ -225,9 +225,8 @@ func (m *Model) renderRuntimeGridCell(rs *runtimeSlot, cellW, cellH, innerW, inn
 			all = all[:2]
 		}
 		if rs.status == "active" {
-			// Slowly cycle colors through the task text to signal in-progress work.
 			for _, l := range all {
-				taskLines = append(taskLines, rainbowText(l, m.spinnerFrame))
+				taskLines = append(taskLines, l)
 			}
 		} else {
 			// Dim for completed/killed.
