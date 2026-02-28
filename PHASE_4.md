@@ -251,8 +251,8 @@ Items deferred from earlier phases that may be addressed in Phase 4 or later:
 | MCP resource/prompt support | Phase 3 | Only MCP tools are consumed; resources and prompts are future scope |
 | Remove Claude CLI subprocess fallback | Phase 3 | Keep as-is in case it's still useful |
 | Async `consult_agent` in operator event loop | Phase 3 review | `handleUserMessage` blocks the event loop during LLM calls (30-60s). Consider spawning consultations in goroutines |
-| Auto-team re-import on restart | Bug fix (2026-02-27) | Bootstrap re-creates auto-team entries (e.g. `auto-opencode`) on every startup, even if the user previously deleted them. Need to persist a "dismissed" state (e.g. a `.auto-team-dismissed` marker or a DB record) so deleted auto-teams are not re-imported unless the user explicitly opts back in |
-| `workspace_dir` accepts any directory | Phase 3 review | `create_job` validates existence but not location. Consider restricting to home directory |
+| ~~Auto-team re-import on restart~~ | ~~Bug fix (2026-02-27)~~ | ✅ Fixed in pre-Phase 4 Wave 4 — `.dismissed/<name>` marker files persist dismiss state |
+| ~~`workspace_dir` accepts any directory~~ | ~~Phase 3 review~~ | ✅ Fixed in pre-Phase 4 Wave 4 — `create_job` and `assign_task` validate workspace is under `$HOME` |
 
 ---
 

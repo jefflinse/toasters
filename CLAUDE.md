@@ -8,7 +8,7 @@ Toasters is a Go-based TUI orchestration tool for agentic coding work. It coordi
 
 ```bash
 go build ./...          # Build
-go test ./...           # Test (17 test packages)
+go test ./...           # Test (18 test packages)
 go run main.go          # Run the TUI
 ```
 
@@ -30,12 +30,15 @@ internal/
                             #   Import: ImportClaudeCode, ImportOpenCode (lossless)
                             #   Export: ExportClaudeCode, ExportOpenCode (lossy with Warning list)
                             #   Auto-detection via ParseAgent/ParseFile (inspects frontmatter fields)
+                            #   Type detection: team fields → agent-only fields → skill (default)
+                            #   Note: "tools" is NOT agent-only (skills can declare tools too)
                             #   1 MiB file size limit on all Parse* functions
   anthropic/                # Keychain/OAuth token management for Anthropic API
                             #   keychain.go: ReadKeychainAccessToken(), token refresh with mutex
   bootstrap/                # First-run bootstrap + upgrade migration
                             #   Copies embedded defaults to ~/.config/toasters/system/
                             #   Creates user/ directory structure, auto-team detection
+                            #   Auto-team dismiss markers: .dismissed/<name> prevents re-import
   compose/                  # Runtime composition / prompt assembly
                             #   Loads agent → skills → team culture → merges tools → resolves provider/model
                             #   Returns ComposedAgent ready for session creation
@@ -54,6 +57,7 @@ internal/
                             #   Watcher: 200ms debounce, .md filtering, dynamic dir watching
   mcp/                      # MCP client manager, tool conversion, namespacing, result truncation/slimming, server status tracking
                             #   Parallel server connection via WaitGroup, recover() on Call for shutdown safety
+                            #   Dangerous env var filtering (LD_PRELOAD, DYLD_*, etc.) on stdio subprocess creation
   operator/                 # Operator event loop, typed events, system/team tools
                             #   Event loop: mechanical handling + selective LLM routing
                             #   System tools: create_job, create_task, assign_task, query_teams, query_job
@@ -147,7 +151,7 @@ Key settings:
 
 ## Testing
 
-Tests exist across 17 test packages. They use standard Go testing with `t.TempDir()` for file I/O and helper functions for assertions. Run `golangci-lint run` for linting — the codebase currently has 0 lint findings.
+Tests exist across 18 test packages. They use standard Go testing with `t.TempDir()` for file I/O and helper functions for assertions. Run `golangci-lint run` for linting — the codebase currently has 0 lint findings.
 
 ## Tech Debt Execution Plan
 
@@ -221,11 +225,24 @@ Full details: `PRE_PHASE_4_WAVE_2.md`
 - [x] Added doc comments on exported `agentfmt` export functions and `loader.Slugify`
 - [x] Cleaned up 14 stale/resolved deferred items from `PHASE_4.md`
 
+### Pre-Phase 4 Wave 4 — QOL Batch ✅
+
+**Status: Complete (2026-02-28)**
+
+6 QOL fixes with security hardening and test coverage — reviewed by code-reviewer, security-auditor, and concurrency-reviewer.
+
+- [x] **SEC-MEDIUM-5**: Filter dangerous env vars (`LD_PRELOAD`, `DYLD_*`, `LD_DEBUG_OUTPUT`, etc.) from MCP subprocess config — 12-var denylist
+- [x] **workspace_dir validation**: `create_job` and `assign_task` reject workspace directories outside `$HOME` — symlink-aware with `EvalSymlinks`
+- [x] **QUAL-2**: Added 13 tests for `cmd/awareness.go` pure functions with mock provider
+- [x] **Auto-team dismiss bug**: Persist `.dismissed/<name>` marker files so deleted auto-teams are not re-created on restart
+- [x] **QUAL-6**: Removed `tools` from `agentOnlyFields` — skills with tools no longer misclassified as agents
+- [x] **ARCH-4**: Batch operator text tokens (~16ms) via `textBatcher` before flushing to TUI — prevents message queue flooding
+
 ### Remaining Findings (from PRE_PHASE_4_ARCH_REVIEW.md)
 
-27 findings resolved across Waves 1-3. Remaining open findings (13) are tracked in `PRE_PHASE_4_ARCH_REVIEW.md` Section 10. Key remaining items for future waves:
+33 findings resolved across Waves 1-4. Remaining open findings (7) are tracked in `PRE_PHASE_4_ARCH_REVIEW.md` Section 10. Key remaining items for future waves:
 - **ARCH-1/CONC-5**: Operator blocks during tool execution (non-blocking tool execution — large effort)
 - **SEC-HIGH-1**: Shell tool sandboxing (design tradeoff — large effort)
-- **ARCH-4**: Operator → TUI backpressure
-- **SEC-MEDIUM-5**: MCP subprocess trust
-- Various LOW findings (CONC-7, QUAL-2/4/5/6)
+- **CONC-7**: Subscriber event drops (intentional design, no fix needed)
+- **QUAL-4**: `RebuildDefinitions` duplicates insert logic (low impact)
+- **QUAL-5**: No incremental definition updates (not needed at current scale)

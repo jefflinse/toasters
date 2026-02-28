@@ -664,7 +664,7 @@ Auto-detection of file type (skill/agent/team) and format (Toasters/Claude Code/
 | ARCH-1 | MEDIUM | Architecture | Operator blocks during tool execution | |
 | ARCH-2 | MEDIUM | Architecture | Self-send deadlock potential | ✅ Wave 2 |
 | ARCH-3 | MEDIUM | Architecture | Naive conversation window truncation | ✅ Wave 2 |
-| ARCH-4 | MEDIUM | Architecture | No backpressure from operator to TUI | |
+| ARCH-4 | MEDIUM | Architecture | No backpressure from operator to TUI | ✅ Wave 4 (textBatcher, 16ms accumulation) |
 | ARCH-5 | MEDIUM | Architecture | Legacy dual-path complexity in TUI | ✅ Wave 2 |
 | STRUCT-2 | MEDIUM | Architecture | `ToolDef` type duplication | ✅ Wave 2 |
 | DEAD-3 | MEDIUM | Dead Code | `llm/tools` package misplacement | ✅ Wave 2 (deleted — superseded by operator SystemTools) |
@@ -677,7 +677,7 @@ Auto-detection of file type (skill/agent/team) and format (Toasters/Claude Code/
 | SEC-MEDIUM-2 | MEDIUM | Security | `writeFile` no content size limit | ✅ Wave 1 |
 | SEC-MEDIUM-3 | MEDIUM | Security | Token refresh race condition | ✅ Wave 1 |
 | SEC-MEDIUM-4 | MEDIUM | Security | `glob` pattern traversal | ✅ Wave 3 (base dir validation) |
-| SEC-MEDIUM-5 | MEDIUM | Security | MCP subprocess trust | |
+| SEC-MEDIUM-5 | MEDIUM | Security | MCP subprocess trust | ✅ Wave 4 (12-var env denylist) |
 | QUAL-1 | MEDIUM | Quality | `fetchWebpage` missing context | ✅ Wave 1 |
 | STRUCT-3 | LOW | Architecture | `ProviderConfig` duplication | ✅ Wave 3 (consolidated to provider pkg) |
 | STRUCT-4 | LOW | Architecture | `MCPCaller` interface duplication | ✅ Wave 3 (consolidated to tooldef pkg) |
@@ -687,11 +687,11 @@ Auto-detection of file type (skill/agent/team) and format (Toasters/Claude Code/
 | CONC-6 | LOW | Concurrency | Post-shutdown TUI sends | ✅ Wave 2 |
 | CONC-7 | LOW | Concurrency | Subscriber event drops (intentional) | |
 | CONC-8 | LOW | Concurrency | MCP sequential connection | ✅ Wave 3 (parallel via WaitGroup) |
-| QUAL-2 | LOW | Quality | No tests for `cmd/` package | |
+| QUAL-2 | LOW | Quality | No tests for `cmd/` package | ✅ Wave 4 (13 tests for awareness.go) |
 | QUAL-3 | LOW | Quality | Store optional everywhere pattern | ✅ Wave 3 (nil guards removed, store required) |
 | QUAL-4 | LOW | Quality | `RebuildDefinitions` duplicates insert logic | |
 | QUAL-5 | LOW | Quality | No incremental definition updates | |
-| QUAL-6 | LOW | Quality | `agentfmt` type detection is heuristic | |
+| QUAL-6 | LOW | Quality | `agentfmt` type detection is heuristic | ✅ Wave 4 (tools removed from agentOnlyFields) |
 | QUAL-7 | LOW | Quality | `SplitFrontmatter` Windows line endings | ✅ Wave 3 (\\r in TrimRight) |
 
 ### By Category
