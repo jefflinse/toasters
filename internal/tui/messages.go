@@ -243,6 +243,11 @@ type OperatorEventMsg struct {
 	Event operator.Event
 }
 
+// editorFinishedMsg is sent when an external $EDITOR process completes.
+type editorFinishedMsg struct {
+	err error
+}
+
 // ChatEntry consolidates the per-message data that was previously spread
 // across four parallel slices (messages, timestamps, reasoning, claudeMeta).
 // Reasoning and ClaudeMeta are only meaningful for assistant-role messages;

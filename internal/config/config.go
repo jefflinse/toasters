@@ -2,22 +2,26 @@ package config
 
 import (
 	"errors"
+	"io/fs"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
+
+	"github.com/jefflinse/toasters/internal/provider"
 )
 
 // Config holds all application configuration.
 type Config struct {
-	WorkspaceDir string           `mapstructure:"workspace_dir"`
-	DatabasePath string           `mapstructure:"database_path"`
-	Operator     OperatorConfig   `mapstructure:"operator"`
-	Providers    []ProviderConfig `mapstructure:"providers"`
-	Agents       AgentsConfig     `mapstructure:"agents"`
-	MCP          MCPConfig        `mapstructure:"mcp"`
+	WorkspaceDir string                    `mapstructure:"workspace_dir"`
+	DatabasePath string                    `mapstructure:"database_path"`
+	Operator     OperatorConfig            `mapstructure:"operator"`
+	Providers    []provider.ProviderConfig `mapstructure:"providers"`
+	Agents       AgentsConfig              `mapstructure:"agents"`
+	MCP          MCPConfig                 `mapstructure:"mcp"`
 }
 
 // MCPServerConfig holds configuration for a single MCP server.
@@ -35,15 +39,6 @@ type MCPServerConfig struct {
 // MCPConfig holds configuration for all MCP servers.
 type MCPConfig struct {
 	Servers []MCPServerConfig `mapstructure:"servers"`
-}
-
-// ProviderConfig holds configuration for a single LLM provider.
-type ProviderConfig struct {
-	Name     string `mapstructure:"name"`
-	Type     string `mapstructure:"type"` // "openai" or "anthropic"
-	Endpoint string `mapstructure:"endpoint"`
-	APIKey   string `mapstructure:"api_key"`
-	Model    string `mapstructure:"model"`
 }
 
 // AgentsConfig holds default provider/model settings for agents.
@@ -96,8 +91,58 @@ func Load() (*Config, error) {
 	}
 
 	expandMCPEnvVars(&cfg)
+	warnPlaintextAPIKeys(&cfg)
+	ensureConfigFilePermissions()
 
 	return &cfg, nil
+}
+
+// isPlaintextKey returns true if key is a non-empty API key value that does
+// not use the ${ENV_VAR} syntax for environment variable substitution.
+func isPlaintextKey(key string) bool {
+	return key != "" && !strings.Contains(key, "${")
+}
+
+// warnPlaintextAPIKeys checks all configured providers and the operator config
+// for plaintext API keys and emits slog warnings recommending env var syntax.
+func warnPlaintextAPIKeys(cfg *Config) {
+	if isPlaintextKey(cfg.Operator.APIKey) {
+		slog.Warn("plaintext API key in config",
+			"provider", "operator",
+			"recommendation", "use ${ENV_VAR} syntax instead",
+		)
+	}
+	for _, p := range cfg.Providers {
+		if isPlaintextKey(p.APIKey) {
+			slog.Warn("plaintext API key in config",
+				"provider", p.Name,
+				"recommendation", "use ${ENV_VAR} syntax instead",
+			)
+		}
+	}
+}
+
+// ensureConfigFilePermissions checks the config file permissions and tightens
+// them to 0600 if group or other bits are set (i.e. perm & 0077 != 0).
+func ensureConfigFilePermissions() {
+	cfgFile := viper.ConfigFileUsed()
+	if cfgFile == "" {
+		return
+	}
+	info, err := os.Stat(cfgFile)
+	if err != nil {
+		return
+	}
+	perm := info.Mode().Perm()
+	if perm&0077 != 0 {
+		slog.Warn("config file permissions too open, restricting to 0600",
+			"path", cfgFile,
+			"was", perm.String(),
+		)
+		if err := os.Chmod(cfgFile, fs.FileMode(0600)); err != nil {
+			slog.Error("failed to chmod config file", "path", cfgFile, "error", err)
+		}
+	}
 }
 
 // expandMCPEnvVars expands ${VAR} references in MCP server configuration fields

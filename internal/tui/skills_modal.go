@@ -37,11 +37,6 @@ type skillsModalState struct {
 	generating    bool   // true while LLM call is in flight
 }
 
-// editorFinishedMsg is sent when an external $EDITOR process completes.
-type editorFinishedMsg struct {
-	err error
-}
-
 // updateSkillsModal handles all key presses when the skills modal is open.
 func (m *Model) updateSkillsModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	// When typing a generation prompt, intercept all keys.

@@ -329,12 +329,34 @@ func generateBasicTeamMD(path, dirName string) error {
 	return os.WriteFile(path, []byte(content), 0o644)
 }
 
-// humanizeDirName converts a kebab-case directory name to a title-cased name.
-// e.g. "dev-team" → "Dev Team", "qa" → "Qa".
+// abbreviations maps lowercase words to their preferred casing for common
+// abbreviations that should not be simple title-cased.
+var abbreviations = map[string]string{
+	"qa":     "QA",
+	"ci":     "CI",
+	"cd":     "CD",
+	"api":    "API",
+	"ui":     "UI",
+	"ux":     "UX",
+	"db":     "DB",
+	"ml":     "ML",
+	"ai":     "AI",
+	"sre":    "SRE",
+	"devops": "DevOps",
+}
+
+// humanizeDirName converts a kebab-case directory name to a human-readable name.
+// Common abbreviations (QA, CI, API, etc.) are uppercased; other words are title-cased.
+// e.g. "dev-team" → "Dev Team", "qa" → "QA", "api-gateway" → "API Gateway".
 func humanizeDirName(name string) string {
 	parts := strings.Split(name, "-")
 	for i, p := range parts {
-		if len(p) > 0 {
+		if len(p) == 0 {
+			continue
+		}
+		if replacement, ok := abbreviations[strings.ToLower(p)]; ok {
+			parts[i] = replacement
+		} else {
 			parts[i] = strings.ToUpper(p[:1]) + p[1:]
 		}
 	}

@@ -624,6 +624,67 @@ func TestDefinitions(t *testing.T) {
 	})
 }
 
+// TestDefinitionsByName verifies that DefinitionsByName returns a map keyed by
+// tool name containing all the same tools as Definitions().
+func TestDefinitionsByName(t *testing.T) {
+	dir := t.TempDir()
+
+	t.Run("without spawner", func(t *testing.T) {
+		ct := NewCoreTools(dir)
+		byName := ct.DefinitionsByName()
+
+		expected := []string{"read_file", "write_file", "edit_file", "glob", "grep", "shell", "web_fetch"}
+		for _, name := range expected {
+			if _, ok := byName[name]; !ok {
+				t.Errorf("missing tool %q in DefinitionsByName()", name)
+			}
+		}
+
+		if _, ok := byName["spawn_agent"]; ok {
+			t.Error("spawn_agent should not be present without spawner")
+		}
+	})
+
+	t.Run("with spawner", func(t *testing.T) {
+		ct := NewCoreTools(dir, WithSpawner(&mockSpawner{}, 0, 3))
+		byName := ct.DefinitionsByName()
+
+		if _, ok := byName["spawn_agent"]; !ok {
+			t.Error("spawn_agent should be present with spawner")
+		}
+	})
+
+	t.Run("with denylist", func(t *testing.T) {
+		ct := NewCoreTools(dir, WithDenylist([]string{"shell", "web_fetch"}))
+		byName := ct.DefinitionsByName()
+
+		if _, ok := byName["shell"]; ok {
+			t.Error("shell should be excluded when denylisted")
+		}
+		if _, ok := byName["web_fetch"]; ok {
+			t.Error("web_fetch should be excluded when denylisted")
+		}
+		if _, ok := byName["read_file"]; !ok {
+			t.Error("read_file should still be present when not denylisted")
+		}
+	})
+
+	t.Run("matches Definitions count", func(t *testing.T) {
+		ct := NewCoreTools(dir, WithSpawner(&mockSpawner{}, 0, 3), WithStore(&noopStore{}))
+		defs := ct.Definitions()
+		byName := ct.DefinitionsByName()
+
+		if len(byName) != len(defs) {
+			t.Errorf("DefinitionsByName() has %d entries, Definitions() has %d", len(byName), len(defs))
+		}
+		for _, d := range defs {
+			if _, ok := byName[d.Name]; !ok {
+				t.Errorf("tool %q in Definitions() but missing from DefinitionsByName()", d.Name)
+			}
+		}
+	})
+}
+
 func TestSpawnAgent(t *testing.T) {
 	dir := t.TempDir()
 
@@ -1042,6 +1103,138 @@ func TestSessionTask(t *testing.T) {
 	sess := newSession("sess-task", mp, opts, &mockToolExecutor{})
 
 	assertEqual(t, "test task description", sess.Task())
+}
+
+// TestProgressToolWithStore verifies that calling a progress tool with a
+// non-nil store works correctly (no nil panic). This validates the removal
+// of the store nil guards — the store is always required.
+func TestProgressToolWithStore(t *testing.T) {
+	dir := t.TempDir()
+	store := &noopStore{}
+	ct := NewCoreTools(dir, WithStore(store))
+
+	result, err := ct.Execute(context.Background(), "report_task_progress", mustJSON(t, map[string]any{
+		"job_id":  "job-1",
+		"status":  "in_progress",
+		"message": "working on it",
+	}))
+	assertNoError(t, err)
+	assertContains(t, result, "progress reported")
+}
+
+// TestProgressToolDefinitionsIncluded verifies that progress tool definitions
+// are always included in Definitions() (store is required, no nil guard).
+func TestProgressToolDefinitionsIncluded(t *testing.T) {
+	dir := t.TempDir()
+	store := &noopStore{}
+	ct := NewCoreTools(dir, WithStore(store))
+	defs := ct.Definitions()
+
+	names := make(map[string]bool, len(defs))
+	for _, d := range defs {
+		names[d.Name] = true
+	}
+
+	progressTools := []string{
+		"report_task_progress", "report_blocker", "update_task_status",
+		"request_review", "query_job_context", "log_artifact",
+	}
+	for _, name := range progressTools {
+		if !names[name] {
+			t.Errorf("missing progress tool definition: %s", name)
+		}
+	}
+}
+
+// TestGlobTraversal verifies that glob patterns that would resolve the base
+// directory outside the workspace are rejected.
+func TestGlobTraversal(t *testing.T) {
+	dir := t.TempDir()
+	ct := NewCoreTools(dir)
+
+	t.Run("recursive pattern escapes workspace", func(t *testing.T) {
+		_, err := ct.Execute(context.Background(), "glob", mustJSON(t, map[string]any{
+			"pattern": "../../**/*.conf",
+		}))
+		assertError(t, err)
+		assertContains(t, err.Error(), "glob base directory is outside workspace")
+	})
+
+	t.Run("non-recursive pattern escapes workspace", func(t *testing.T) {
+		_, err := ct.Execute(context.Background(), "glob", mustJSON(t, map[string]any{
+			"pattern": "../../etc/*.conf",
+		}))
+		assertError(t, err)
+		assertContains(t, err.Error(), "glob base directory is outside workspace")
+	})
+
+	t.Run("pattern within workspace succeeds", func(t *testing.T) {
+		writeTestFile(t, dir, "sub/test.go", "package sub")
+		result, err := ct.Execute(context.Background(), "glob", mustJSON(t, map[string]any{
+			"pattern": "sub/*.go",
+		}))
+		assertNoError(t, err)
+		assertContains(t, result, "test.go")
+	})
+}
+
+// TestDenylist verifies that denylisted tools are rejected by Execute() and
+// excluded from Definitions().
+func TestDenylist(t *testing.T) {
+	dir := t.TempDir()
+
+	t.Run("execute rejects denylisted tool", func(t *testing.T) {
+		ct := NewCoreTools(dir, WithDenylist([]string{"shell", "web_fetch"}))
+		_, err := ct.Execute(context.Background(), "shell", mustJSON(t, map[string]any{
+			"command": "echo hello",
+		}))
+		assertError(t, err)
+		assertContains(t, err.Error(), `tool "shell" is not allowed for this agent`)
+	})
+
+	t.Run("execute allows non-denylisted tool", func(t *testing.T) {
+		writeTestFile(t, dir, "test.txt", "hello")
+		ct := NewCoreTools(dir, WithDenylist([]string{"shell"}))
+		result, err := ct.Execute(context.Background(), "read_file", mustJSON(t, map[string]any{
+			"path": "test.txt",
+		}))
+		assertNoError(t, err)
+		assertContains(t, result, "hello")
+	})
+
+	t.Run("definitions excludes denylisted tools", func(t *testing.T) {
+		ct := NewCoreTools(dir, WithDenylist([]string{"shell", "web_fetch"}))
+		defs := ct.Definitions()
+
+		names := make(map[string]bool, len(defs))
+		for _, d := range defs {
+			names[d.Name] = true
+		}
+
+		if names["shell"] {
+			t.Error("shell should be excluded from definitions when denylisted")
+		}
+		if names["web_fetch"] {
+			t.Error("web_fetch should be excluded from definitions when denylisted")
+		}
+		if !names["read_file"] {
+			t.Error("read_file should still be present when not denylisted")
+		}
+	})
+
+	t.Run("empty denylist has no effect", func(t *testing.T) {
+		ct := NewCoreTools(dir, WithDenylist(nil))
+		defs := ct.Definitions()
+
+		names := make(map[string]bool, len(defs))
+		for _, d := range defs {
+			names[d.Name] = true
+		}
+
+		if !names["shell"] {
+			t.Error("shell should be present with empty denylist")
+		}
+	})
 }
 
 // --- Test helpers ---

@@ -9,6 +9,8 @@ import (
 // ExportClaudeCode converts an AgentDef into Claude Code format YAML frontmatter
 // and body. Fields that have no Claude Code equivalent are dropped and returned
 // as warnings. Claude Code uses camelCase field names.
+//
+// Exported for a planned agent definition export/conversion feature.
 func ExportClaudeCode(def *AgentDef) (string, string, []Warning) {
 	if def == nil {
 		return "", "", nil

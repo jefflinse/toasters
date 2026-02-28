@@ -1,12 +1,17 @@
 package config
 
 import (
+	"bytes"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
+
+	"github.com/jefflinse/toasters/internal/provider"
 )
 
 // resetViper clears all viper global state between tests.
@@ -551,4 +556,231 @@ func TestBindFlags_DoesNotPanic(t *testing.T) {
 	// viper.BindPFlag handles nil gracefully.
 	cmd := &cobra.Command{Use: "test"}
 	BindFlags(cmd) // should not panic
+}
+
+// --- isPlaintextKey tests ---
+
+func TestIsPlaintextKey_EmptyString_ReturnsFalse(t *testing.T) {
+	if isPlaintextKey("") {
+		t.Error("expected false for empty string")
+	}
+}
+
+func TestIsPlaintextKey_PlaintextKey_ReturnsTrue(t *testing.T) {
+	if !isPlaintextKey("sk-abc123") {
+		t.Error("expected true for plaintext key")
+	}
+}
+
+func TestIsPlaintextKey_EnvVarSyntax_ReturnsFalse(t *testing.T) {
+	if isPlaintextKey("${ANTHROPIC_API_KEY}") {
+		t.Error("expected false for env var syntax")
+	}
+}
+
+func TestIsPlaintextKey_MixedEnvVarSyntax_ReturnsFalse(t *testing.T) {
+	// A value like "Bearer ${TOKEN}" still contains ${, so it's not plaintext.
+	if isPlaintextKey("Bearer ${TOKEN}") {
+		t.Error("expected false for mixed env var syntax")
+	}
+}
+
+// --- warnPlaintextAPIKeys tests ---
+
+func TestWarnPlaintextAPIKeys_PlaintextOperatorKey_Warns(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	old := slog.Default()
+	slog.SetDefault(logger)
+	defer slog.SetDefault(old)
+
+	cfg := &Config{
+		Operator: OperatorConfig{APIKey: "sk-plaintext-key"},
+	}
+	warnPlaintextAPIKeys(cfg)
+
+	output := buf.String()
+	if !strings.Contains(output, "plaintext API key in config") {
+		t.Errorf("expected warning about plaintext API key, got: %s", output)
+	}
+	if !strings.Contains(output, "provider=operator") {
+		t.Errorf("expected provider=operator in warning, got: %s", output)
+	}
+}
+
+func TestWarnPlaintextAPIKeys_EnvVarOperatorKey_NoWarning(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	old := slog.Default()
+	slog.SetDefault(logger)
+	defer slog.SetDefault(old)
+
+	cfg := &Config{
+		Operator: OperatorConfig{APIKey: "${ANTHROPIC_API_KEY}"},
+	}
+	warnPlaintextAPIKeys(cfg)
+
+	output := buf.String()
+	if strings.Contains(output, "plaintext API key") {
+		t.Errorf("expected no warning for env var syntax, got: %s", output)
+	}
+}
+
+func TestWarnPlaintextAPIKeys_PlaintextProviderKey_Warns(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	old := slog.Default()
+	slog.SetDefault(logger)
+	defer slog.SetDefault(old)
+
+	cfg := &Config{
+		Providers: []provider.ProviderConfig{
+			{Name: "my-provider", APIKey: "sk-abc123"},
+		},
+	}
+	warnPlaintextAPIKeys(cfg)
+
+	output := buf.String()
+	if !strings.Contains(output, "plaintext API key in config") {
+		t.Errorf("expected warning about plaintext API key, got: %s", output)
+	}
+	if !strings.Contains(output, "provider=my-provider") {
+		t.Errorf("expected provider=my-provider in warning, got: %s", output)
+	}
+}
+
+func TestWarnPlaintextAPIKeys_EmptyKeys_NoWarning(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	old := slog.Default()
+	slog.SetDefault(logger)
+	defer slog.SetDefault(old)
+
+	cfg := &Config{
+		Operator:  OperatorConfig{APIKey: ""},
+		Providers: []provider.ProviderConfig{{Name: "p1", APIKey: ""}},
+	}
+	warnPlaintextAPIKeys(cfg)
+
+	output := buf.String()
+	if strings.Contains(output, "plaintext API key") {
+		t.Errorf("expected no warning for empty keys, got: %s", output)
+	}
+}
+
+func TestWarnPlaintextAPIKeys_MultipleProviders_WarnsOnlyPlaintext(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	old := slog.Default()
+	slog.SetDefault(logger)
+	defer slog.SetDefault(old)
+
+	cfg := &Config{
+		Providers: []provider.ProviderConfig{
+			{Name: "safe", APIKey: "${MY_KEY}"},
+			{Name: "unsafe", APIKey: "sk-hardcoded"},
+		},
+	}
+	warnPlaintextAPIKeys(cfg)
+
+	output := buf.String()
+	if strings.Contains(output, "provider=safe") {
+		t.Errorf("should not warn for env var key, got: %s", output)
+	}
+	if !strings.Contains(output, "provider=unsafe") {
+		t.Errorf("should warn for plaintext key, got: %s", output)
+	}
+}
+
+// --- ensureConfigFilePermissions tests ---
+
+func TestEnsureConfigFilePermissions_TooOpen_RestrictsTo0600(t *testing.T) {
+	resetViper(t)
+
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+
+	configDir := filepath.Join(tmpHome, ".config", "toasters")
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		t.Fatalf("creating config dir: %v", err)
+	}
+
+	cfgPath := filepath.Join(configDir, "config.yaml")
+	if err := os.WriteFile(cfgPath, []byte("operator:\n  model: test\n"), 0644); err != nil {
+		t.Fatalf("writing config: %v", err)
+	}
+
+	// Load config so viper knows the config file path.
+	_, err := Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// After Load, permissions should have been tightened.
+	info, err := os.Stat(cfgPath)
+	if err != nil {
+		t.Fatalf("stat config: %v", err)
+	}
+	perm := info.Mode().Perm()
+	if perm != 0600 {
+		t.Errorf("expected permissions 0600, got %04o", perm)
+	}
+}
+
+func TestEnsureConfigFilePermissions_Already0600_NoChange(t *testing.T) {
+	resetViper(t)
+
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+
+	configDir := filepath.Join(tmpHome, ".config", "toasters")
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		t.Fatalf("creating config dir: %v", err)
+	}
+
+	cfgPath := filepath.Join(configDir, "config.yaml")
+	if err := os.WriteFile(cfgPath, []byte("operator:\n  model: test\n"), 0600); err != nil {
+		t.Fatalf("writing config: %v", err)
+	}
+
+	// Capture slog output to verify no warning is emitted.
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	old := slog.Default()
+	slog.SetDefault(logger)
+	defer slog.SetDefault(old)
+
+	_, err := Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	output := buf.String()
+	if strings.Contains(output, "permissions too open") {
+		t.Errorf("should not warn when permissions are already 0600, got: %s", output)
+	}
+
+	// Permissions should remain 0600.
+	info, err := os.Stat(cfgPath)
+	if err != nil {
+		t.Fatalf("stat config: %v", err)
+	}
+	perm := info.Mode().Perm()
+	if perm != 0600 {
+		t.Errorf("expected permissions 0600, got %04o", perm)
+	}
+}
+
+func TestEnsureConfigFilePermissions_NoConfigFile_NoError(t *testing.T) {
+	resetViper(t)
+
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+
+	// No config file — Load should succeed and ensureConfigFilePermissions
+	// should silently return (viper.ConfigFileUsed() returns "").
+	_, err := Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 }

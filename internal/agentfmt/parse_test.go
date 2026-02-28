@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/jefflinse/toasters/internal/agentfmt"
@@ -1169,5 +1170,61 @@ You are an OpenCode agent.`
 	}
 	if agent.Body != "You are an OpenCode agent." {
 		t.Errorf("Body = %q, want %q", agent.Body, "You are an OpenCode agent.")
+	}
+}
+
+func TestSplitFrontmatter_WindowsLineEndings(t *testing.T) {
+	t.Parallel()
+
+	content := "---\r\nname: win-agent\r\ndescription: Windows line endings\r\n---\r\nBody with CRLF."
+	fmYAML, body, err := agentfmt.SplitFrontmatter(content)
+	if err != nil {
+		t.Fatalf("SplitFrontmatter: %v", err)
+	}
+	if fmYAML == "" {
+		t.Fatal("fmYAML is empty, want non-empty")
+	}
+	// The YAML should contain the name field (may have trailing \r from split).
+	if !strings.Contains(fmYAML, "name: win-agent") {
+		t.Errorf("fmYAML = %q, want to contain %q", fmYAML, "name: win-agent")
+	}
+	if !strings.Contains(body, "Body with CRLF.") {
+		t.Errorf("body = %q, want to contain %q", body, "Body with CRLF.")
+	}
+}
+
+func TestParseFile_OversizedFile(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+
+	// Create a file that exceeds the 1 MiB limit.
+	path := filepath.Join(dir, "huge.md")
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatalf("creating file: %v", err)
+	}
+	// Write a valid frontmatter header, then pad to exceed 1 MiB.
+	header := "---\nname: huge\n---\n"
+	if _, err := f.WriteString(header); err != nil {
+		_ = f.Close()
+		t.Fatalf("writing header: %v", err)
+	}
+	// Write enough data to exceed 1 MiB (1048576 bytes).
+	padding := make([]byte, 1048576)
+	for i := range padding {
+		padding[i] = 'x'
+	}
+	if _, err := f.Write(padding); err != nil {
+		_ = f.Close()
+		t.Fatalf("writing padding: %v", err)
+	}
+	_ = f.Close()
+
+	_, _, err = agentfmt.ParseFile(path)
+	if err == nil {
+		t.Fatal("expected error for oversized file, got nil")
+	}
+	if !strings.Contains(err.Error(), "too large") {
+		t.Errorf("error = %q, want to contain %q", err.Error(), "too large")
 	}
 }

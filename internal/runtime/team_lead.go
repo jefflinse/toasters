@@ -26,18 +26,19 @@ func (r *Runtime) SpawnTeamLead(ctx context.Context, composed *compose.ComposedA
 	// session start; here we pass nil Tools so the session builds its own
 	// CoreTools stack (which will include spawn_agent at depth 0).
 	opts := SpawnOpts{
-		AgentID:        composed.AgentID,
-		ProviderName:   composed.Provider,
-		Model:          composed.Model,
-		SystemPrompt:   composed.SystemPrompt,
-		InitialMessage: taskDescription,
-		ExtraTools:     extraTools,
-		JobID:          jobID,
-		TaskID:         taskID,
-		TeamName:       composed.TeamID,
-		WorkDir:        workDir,
-		Depth:          0,
-		MaxDepth:       defaultMaxDepth,
+		AgentID:         composed.AgentID,
+		ProviderName:    composed.Provider,
+		Model:           composed.Model,
+		SystemPrompt:    composed.SystemPrompt,
+		InitialMessage:  taskDescription,
+		DisallowedTools: composed.DisallowedTools,
+		ExtraTools:      extraTools,
+		JobID:           jobID,
+		TaskID:          taskID,
+		TeamName:        composed.TeamID,
+		WorkDir:         workDir,
+		Depth:           0,
+		MaxDepth:        defaultMaxDepth,
 	}
 
 	// Apply tool filter from composition if specified.
@@ -45,31 +46,18 @@ func (r *Runtime) SpawnTeamLead(ctx context.Context, composed *compose.ComposedA
 	// triggers the filter path, bypassing the denylist only when Tools is
 	// truly unset (nil).
 	if composed.Tools != nil {
-		// Build a temporary CoreTools solely to call Definitions() and resolve
-		// tool names to ToolDef values for SpawnOpts.Tools.
-		//
-		// WARNING — coupling risk: this tmp instance is constructed independently
-		// from the CoreTools that SpawnAgent will build for the actual session.
-		// If those two construction paths ever diverge (e.g. different options),
-		// the ToolDef values here could describe tools the session's executor
-		// doesn't actually have. Keep this construction in sync with how
-		// SpawnAgent builds its own CoreTools.
-		//
-		// TODO: expose a ToolDefsByName() helper on CoreTools to eliminate this
-		// throwaway instance and the coupling risk entirely.
+		// Build a temporary CoreTools to resolve tool names to ToolDef values.
 		tmp := NewCoreTools(
 			workDir,
 			WithShell(true),
 			WithSpawner(r, 0, defaultMaxDepth),
 			WithStore(r.store),
 		)
-		allDefs := tmp.Definitions()
+		byName := tmp.DefinitionsByName()
 		if extraTools != nil {
-			allDefs = append(allDefs, extraTools.Definitions()...)
-		}
-		byName := make(map[string]ToolDef, len(allDefs))
-		for _, td := range allDefs {
-			byName[td.Name] = td
+			for _, td := range extraTools.Definitions() {
+				byName[td.Name] = td
+			}
 		}
 		var toolDefs []ToolDef
 		for _, name := range composed.Tools {

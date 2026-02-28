@@ -118,14 +118,7 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 	// Create provider registry and register configured providers.
 	registry := provider.NewRegistry()
 	for _, pc := range cfg.Providers {
-		provCfg := provider.ProviderConfig{
-			Name:     pc.Name,
-			Type:     pc.Type,
-			Endpoint: pc.Endpoint,
-			APIKey:   pc.APIKey,
-			Model:    pc.Model,
-		}
-		p, provErr := provider.NewFromConfig(provCfg)
+		p, provErr := provider.NewFromConfig(pc)
 		if provErr != nil {
 			slog.Warn("failed to create provider", "provider", pc.Name, "error", provErr)
 			continue

@@ -190,7 +190,7 @@ func TestRun_UpgradeMigration(t *testing.T) {
 		t.Error("generated team.md is empty")
 	}
 	content := string(data)
-	if !strings.Contains(content, "Qa Team") {
+	if !strings.Contains(content, "QA Team") {
 		t.Errorf("generated team.md doesn't contain humanized name: %s", content)
 	}
 
@@ -337,10 +337,16 @@ func TestHumanizeDirName(t *testing.T) {
 		want  string
 	}{
 		{"dev-team", "Dev Team"},
-		{"qa", "Qa"},
+		{"qa", "QA"},
+		{"qa-team", "QA Team"},
+		{"api-gateway", "API Gateway"},
+		{"my-ci-cd-pipeline", "My CI CD Pipeline"},
 		{"my-cool-team", "My Cool Team"},
 		{"single", "Single"},
 		{"", ""},
+		{"devops", "DevOps"},
+		{"sre-team", "SRE Team"},
+		{"ui-ux", "UI UX"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {

@@ -814,33 +814,33 @@ func (m *Model) renderTeamsModal() string {
 	}
 
 	// Inner width after modal border + padding (border=2, padding=2 each side).
-	innerW := modalW - TeamsModalStyle.GetHorizontalFrameSize()
+	innerW := modalW - ModalStyle.GetHorizontalFrameSize()
 	if innerW < 10 {
 		innerW = 10
 	}
 
 	// Left panel: ~32 chars inner content.
 	leftInnerW := 30
-	leftPanelW := leftInnerW + TeamsPanelStyle.GetHorizontalFrameSize()
+	leftPanelW := leftInnerW + ModalPanelStyle.GetHorizontalFrameSize()
 	if leftPanelW > innerW/2 {
 		leftPanelW = innerW / 2
-		leftInnerW = leftPanelW - TeamsPanelStyle.GetHorizontalFrameSize()
+		leftInnerW = leftPanelW - ModalPanelStyle.GetHorizontalFrameSize()
 	}
 
 	// Right panel: remaining width.
 	rightPanelW := innerW - leftPanelW - 1 // -1 for spacing
-	rightInnerW := rightPanelW - TeamsPanelStyle.GetHorizontalFrameSize()
+	rightInnerW := rightPanelW - ModalPanelStyle.GetHorizontalFrameSize()
 	if rightInnerW < 5 {
 		rightInnerW = 5
 	}
 
 	// Panel inner height (subtract border + footer line).
 	footerLines := 1
-	panelH := modalH - TeamsModalStyle.GetVerticalFrameSize() - footerLines - 1
+	panelH := modalH - ModalStyle.GetVerticalFrameSize() - footerLines - 1
 	if panelH < 5 {
 		panelH = 5
 	}
-	panelInnerH := panelH - TeamsPanelStyle.GetVerticalFrameSize()
+	panelInnerH := panelH - ModalPanelStyle.GetVerticalFrameSize()
 	if panelInnerH < 3 {
 		panelInnerH = 3
 	}
@@ -866,9 +866,9 @@ func (m *Model) renderTeamsModal() string {
 			line += " 🔒"
 		}
 		if i == m.teamsModal.teamIdx {
-			line = TeamsSelectedStyle.Width(leftInnerW).Render(line)
+			line = ModalSelectedStyle.Width(leftInnerW).Render(line)
 		} else if isReadOnlyTeam(t) {
-			line = TeamsReadOnlyStyle.Render(line)
+			line = ModalReadOnlyStyle.Render(line)
 		}
 		leftLines = append(leftLines, line)
 	}
@@ -912,9 +912,9 @@ func (m *Model) renderTeamsModal() string {
 	leftContent := strings.Join(leftLines, "\n")
 	var leftPanel string
 	if m.teamsModal.focus == 0 {
-		leftPanel = TeamsFocusedPanel.Width(leftPanelW).Height(panelH).Render(leftContent)
+		leftPanel = ModalFocusedPanel.Width(leftPanelW).Height(panelH).Render(leftContent)
 	} else {
-		leftPanel = TeamsPanelStyle.Width(leftPanelW).Height(panelH).Render(leftContent)
+		leftPanel = ModalPanelStyle.Width(leftPanelW).Height(panelH).Render(leftContent)
 	}
 
 	// --- Right panel: team detail or picker overlay ---
@@ -955,7 +955,7 @@ func (m *Model) renderTeamsModal() string {
 				}
 				line := fmt.Sprintf(" %s %s", icon, truncateStr(a.Name, rightInnerW-4))
 				if i == m.teamsModal.pickerIdx {
-					line = TeamsSelectedStyle.Width(rightInnerW).Render(line)
+					line = ModalSelectedStyle.Width(rightInnerW).Render(line)
 				}
 				rightLines = append(rightLines, line)
 			}
@@ -1078,7 +1078,7 @@ func (m *Model) renderTeamsModal() string {
 			}
 			line := prefix + truncateStr(a.Name, rightInnerW-4)
 			if m.teamsModal.focus == 1 && i == m.teamsModal.agentIdx {
-				line = TeamsSelectedStyle.Width(rightInnerW).Render(line)
+				line = ModalSelectedStyle.Width(rightInnerW).Render(line)
 			}
 			rightLines = append(rightLines, line)
 		}
@@ -1086,7 +1086,7 @@ func (m *Model) renderTeamsModal() string {
 		// Delete confirmation.
 		if m.teamsModal.confirmDelete {
 			rightLines = append(rightLines, "")
-			rightLines = append(rightLines, TeamsWarningStyle.Render(
+			rightLines = append(rightLines, ModalWarningStyle.Render(
 				fmt.Sprintf("⚠ Delete '%s'? [Enter] confirm  [Esc] cancel", truncateStr(tv.Name(), rightInnerW-30)),
 			))
 		}
@@ -1103,9 +1103,9 @@ func (m *Model) renderTeamsModal() string {
 	rightContent := strings.Join(rightLines, "\n")
 	var rightPanel string
 	if m.teamsModal.focus == 1 {
-		rightPanel = TeamsFocusedPanel.Width(rightPanelW).Height(panelH).Render(rightContent)
+		rightPanel = ModalFocusedPanel.Width(rightPanelW).Height(panelH).Render(rightContent)
 	} else {
-		rightPanel = TeamsPanelStyle.Width(rightPanelW).Height(panelH).Render(rightContent)
+		rightPanel = ModalPanelStyle.Width(rightPanelW).Height(panelH).Render(rightContent)
 	}
 
 	// Join panels horizontally.
@@ -1153,7 +1153,7 @@ func (m *Model) renderTeamsModal() string {
 
 	inner := lipgloss.JoinVertical(lipgloss.Left, panels, footer)
 
-	modal := TeamsModalStyle.Width(modalW).Render(inner)
+	modal := ModalStyle.Width(modalW).Render(inner)
 
 	return lipgloss.Place(m.width, m.height,
 		lipgloss.Center, lipgloss.Center,

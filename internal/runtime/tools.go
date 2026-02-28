@@ -45,7 +45,8 @@ type CoreTools struct {
 	depth        int          // current spawn depth
 	maxDepth     int          // max spawn depth
 	httpClient   *http.Client // for web_fetch; nil uses webFetchClient
-	store        db.Store     // may be nil; for progress tools
+	store        db.Store     // required; for progress tools
+	denylist     map[string]bool
 	sessionID    string
 	agentID      string
 	jobID        string
@@ -86,6 +87,20 @@ func WithSessionContext(sessionID, agentID, jobID, taskID string) CoreToolsOptio
 	}
 }
 
+// WithDenylist sets the tool denylist. Tools in the denylist are excluded from
+// Definitions() and rejected by Execute().
+func WithDenylist(names []string) CoreToolsOption {
+	return func(ct *CoreTools) {
+		if len(names) == 0 {
+			return
+		}
+		ct.denylist = make(map[string]bool, len(names))
+		for _, n := range names {
+			ct.denylist[n] = true
+		}
+	}
+}
+
 // WithProvider sets the provider name and model for child agent spawns.
 func WithProvider(providerName, model string) CoreToolsOption {
 	return func(ct *CoreTools) {
@@ -109,6 +124,10 @@ func NewCoreTools(workDir string, opts ...CoreToolsOption) *CoreTools {
 
 // Execute dispatches a tool call by name.
 func (ct *CoreTools) Execute(ctx context.Context, name string, args json.RawMessage) (string, error) {
+	if ct.denylist[name] {
+		return "", fmt.Errorf("tool %q is not allowed for this agent", name)
+	}
+
 	switch name {
 	case "read_file":
 		return ct.readFile(ctx, args)
@@ -127,9 +146,6 @@ func (ct *CoreTools) Execute(ctx context.Context, name string, args json.RawMess
 	case "spawn_agent":
 		return ct.spawnAgent(ctx, args)
 	case "report_task_progress":
-		if ct.store == nil {
-			return "progress reporting not available (no store)", nil
-		}
 		var params progress.ReportTaskProgressParams
 		if err := json.Unmarshal(args, &params); err != nil {
 			return "", fmt.Errorf("parsing report_task_progress args: %w", err)
@@ -139,9 +155,6 @@ func (ct *CoreTools) Execute(ctx context.Context, name string, args json.RawMess
 		}
 		return progress.ReportTaskProgress(ctx, ct.store, params)
 	case "report_blocker":
-		if ct.store == nil {
-			return "progress reporting not available (no store)", nil
-		}
 		var params progress.ReportBlockerParams
 		if err := json.Unmarshal(args, &params); err != nil {
 			return "", fmt.Errorf("parsing report_blocker args: %w", err)
@@ -151,18 +164,12 @@ func (ct *CoreTools) Execute(ctx context.Context, name string, args json.RawMess
 		}
 		return progress.ReportBlocker(ctx, ct.store, params)
 	case "update_task_status":
-		if ct.store == nil {
-			return "progress reporting not available (no store)", nil
-		}
 		var params progress.UpdateTaskStatusParams
 		if err := json.Unmarshal(args, &params); err != nil {
 			return "", fmt.Errorf("parsing update_task_status args: %w", err)
 		}
 		return progress.UpdateTaskStatus(ctx, ct.store, params)
 	case "request_review":
-		if ct.store == nil {
-			return "progress reporting not available (no store)", nil
-		}
 		var params progress.RequestReviewParams
 		if err := json.Unmarshal(args, &params); err != nil {
 			return "", fmt.Errorf("parsing request_review args: %w", err)
@@ -172,18 +179,12 @@ func (ct *CoreTools) Execute(ctx context.Context, name string, args json.RawMess
 		}
 		return progress.RequestReview(ctx, ct.store, params)
 	case "query_job_context":
-		if ct.store == nil {
-			return "progress reporting not available (no store)", nil
-		}
 		var params progress.QueryJobContextParams
 		if err := json.Unmarshal(args, &params); err != nil {
 			return "", fmt.Errorf("parsing query_job_context args: %w", err)
 		}
 		return progress.QueryJobContext(ctx, ct.store, params)
 	case "log_artifact":
-		if ct.store == nil {
-			return "progress reporting not available (no store)", nil
-		}
 		var params progress.LogArtifactParams
 		if err := json.Unmarshal(args, &params); err != nil {
 			return "", fmt.Errorf("parsing log_artifact args: %w", err)
@@ -303,12 +304,31 @@ func (ct *CoreTools) Definitions() []ToolDef {
 		})
 	}
 
-	// Include progress tools if a store is available.
-	if ct.store != nil {
-		defs = append(defs, progress.ProgressToolDefs()...)
+	// Progress tools — always included (store is required).
+	defs = append(defs, progress.ProgressToolDefs()...)
+
+	// Filter out denylisted tools.
+	if len(ct.denylist) > 0 {
+		filtered := make([]ToolDef, 0, len(defs))
+		for _, d := range defs {
+			if !ct.denylist[d.Name] {
+				filtered = append(filtered, d)
+			}
+		}
+		defs = filtered
 	}
 
 	return defs
+}
+
+// DefinitionsByName returns tool definitions keyed by tool name.
+func (ct *CoreTools) DefinitionsByName() map[string]ToolDef {
+	defs := ct.Definitions()
+	byName := make(map[string]ToolDef, len(defs))
+	for _, td := range defs {
+		byName[td.Name] = td
+	}
+	return byName
 }
 
 // resolvePath resolves a path relative to workDir and validates it doesn't escape the sandbox.
@@ -528,7 +548,17 @@ func (ct *CoreTools) glob(_ context.Context, args json.RawMessage) (string, erro
 			return "", fmt.Errorf("glob: %w", err)
 		}
 	} else {
+		// Validate that the pattern's base directory doesn't escape the workspace.
 		fullPattern := filepath.Join(absWorkDir, params.Pattern)
+		patternDir := filepath.Dir(fullPattern)
+		absPatternDir, err2 := filepath.Abs(patternDir)
+		if err2 != nil {
+			return "", fmt.Errorf("resolving glob pattern directory: %w", err2)
+		}
+		if !strings.HasPrefix(absPatternDir, absWorkDir+string(filepath.Separator)) && absPatternDir != absWorkDir {
+			return "", fmt.Errorf("glob base directory is outside workspace")
+		}
+
 		matches, err = filepath.Glob(fullPattern)
 		if err != nil {
 			return "", fmt.Errorf("glob: %w", err)
@@ -568,8 +598,17 @@ func (ct *CoreTools) globRecursive(root, pattern string) ([]string, error) {
 		baseDir = root
 	}
 
+	// Validate that the resolved base directory is within the workspace.
+	absBaseDir, err := filepath.Abs(baseDir)
+	if err != nil {
+		return nil, fmt.Errorf("resolving glob base directory: %w", err)
+	}
+	if !strings.HasPrefix(absBaseDir, root+string(filepath.Separator)) && absBaseDir != root {
+		return nil, fmt.Errorf("glob base directory is outside workspace")
+	}
+
 	var matches []string
-	err := filepath.WalkDir(baseDir, func(path string, d fs.DirEntry, err error) error {
+	err = filepath.WalkDir(baseDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil // skip errors
 		}
@@ -798,11 +837,7 @@ func (ct *CoreTools) spawnAgent(ctx context.Context, args json.RawMessage) (stri
 	// request tools that are conditionally available (e.g. shell, spawn_agent).
 	var toolDefs []ToolDef
 	if len(params.Tools) > 0 {
-		defs := ct.Definitions()
-		available := make(map[string]ToolDef, len(defs))
-		for _, td := range defs {
-			available[td.Name] = td
-		}
+		available := ct.DefinitionsByName()
 		for _, name := range params.Tools {
 			if td, ok := available[name]; ok {
 				toolDefs = append(toolDefs, td)

@@ -14,13 +14,6 @@ import (
 	"github.com/jefflinse/toasters/internal/config"
 )
 
-// MCPCaller is the interface for dispatching MCP tool calls.
-// Defined here so other packages can depend on this interface without
-// importing internal/mcp directly.
-type MCPCaller interface {
-	Call(ctx context.Context, namespacedName string, args json.RawMessage) (string, error)
-}
-
 // ServerConnectionState represents the connection state of an MCP server.
 type ServerConnectionState string
 
@@ -78,13 +71,127 @@ func NewManager() *Manager {
 	}
 }
 
-// Connect connects to all configured MCP servers, discovers their tools,
-// and builds the tool index. Failed servers are logged and skipped.
-func (m *Manager) Connect(ctx context.Context, servers []config.MCPServerConfig) error {
-	var newServers []serverEntry
-	var newStatuses []ServerStatus
-	newToolIndex := make(map[string]toolIndexEntry)
+// connectResult holds the outcome of connecting to a single MCP server.
+type connectResult struct {
+	server *serverEntry // non-nil on success
+	status ServerStatus // always populated
+	tools  []ToolInfo   // tools discovered (empty on failure)
+}
 
+// connectServer connects to a single MCP server, discovers its tools, and
+// returns the result. On failure, the result contains a ServerFailed status
+// and a nil server entry.
+func connectServer(ctx context.Context, cfg config.MCPServerConfig) connectResult {
+	failStatus := func(errMsg string) connectResult {
+		return connectResult{
+			status: ServerStatus{
+				Name:      cfg.Name,
+				Transport: cfg.Transport,
+				State:     ServerFailed,
+				Error:     errMsg,
+				Config:    cfg,
+			},
+		}
+	}
+
+	c, err := createClient(cfg)
+	if err != nil {
+		slog.Warn("failed to create MCP client", "server", cfg.Name, "error", err)
+		return failStatus(fmt.Sprintf("creating client: %v", err))
+	}
+
+	// Start the transport (for SSE/HTTP clients that need explicit start).
+	if err := c.Start(ctx); err != nil {
+		slog.Warn("failed to start MCP client", "server", cfg.Name, "error", err)
+		_ = c.Close()
+		return failStatus(fmt.Sprintf("starting client: %v", err))
+	}
+
+	// Initialize the MCP session.
+	_, err = c.Initialize(ctx, mcptypes.InitializeRequest{
+		Params: mcptypes.InitializeParams{
+			ProtocolVersion: mcptypes.LATEST_PROTOCOL_VERSION,
+			ClientInfo: mcptypes.Implementation{
+				Name:    "toasters",
+				Version: "0.1.0",
+			},
+		},
+	})
+	if err != nil {
+		slog.Warn("failed to initialize MCP server", "server", cfg.Name, "error", err)
+		_ = c.Close()
+		return failStatus(fmt.Sprintf("initializing: %v", err))
+	}
+
+	// Discover tools.
+	toolsResult, err := c.ListTools(ctx, mcptypes.ListToolsRequest{})
+	if err != nil {
+		slog.Warn("failed to list MCP tools", "server", cfg.Name, "error", err)
+		_ = c.Close()
+		return failStatus(fmt.Sprintf("listing tools: %v", err))
+	}
+
+	// Build whitelist set for fast lookup.
+	whitelist := make(map[string]bool, len(cfg.EnabledTools))
+	for _, name := range cfg.EnabledTools {
+		whitelist[name] = true
+	}
+
+	var tools []ToolInfo
+	for _, t := range toolsResult.Tools {
+		// Reject tool names containing "__" to preserve namespace integrity.
+		if strings.Contains(t.Name, "__") {
+			slog.Warn("skipping MCP tool: name must not contain '__'", "tool", t.Name, "server", cfg.Name)
+			continue
+		}
+
+		// Apply whitelist filter.
+		if len(whitelist) > 0 && !whitelist[t.Name] {
+			continue
+		}
+
+		// Marshal the input schema to JSON.
+		schemaBytes, err := json.Marshal(t.InputSchema)
+		if err != nil {
+			slog.Warn("failed to marshal MCP tool schema", "tool", t.Name, "server", cfg.Name, "error", err)
+			schemaBytes = json.RawMessage(`{"type":"object","properties":{}}`)
+		}
+
+		tools = append(tools, ToolInfo{
+			NamespacedName: cfg.Name + "__" + t.Name,
+			OriginalName:   t.Name,
+			ServerName:     cfg.Name,
+			Description:    t.Description,
+			InputSchema:    schemaBytes,
+		})
+	}
+
+	slog.Info("MCP server connected", "server", cfg.Name, "tools", len(tools))
+
+	return connectResult{
+		server: &serverEntry{
+			name:   cfg.Name,
+			client: c,
+			tools:  tools,
+			cfg:    cfg,
+		},
+		status: ServerStatus{
+			Name:      cfg.Name,
+			Transport: cfg.Transport,
+			State:     ServerConnected,
+			ToolCount: len(tools),
+			Tools:     tools,
+			Config:    cfg,
+		},
+		tools: tools,
+	}
+}
+
+// Connect connects to all configured MCP servers in parallel, discovers their
+// tools, and builds the tool index. Failed servers are logged and skipped.
+func (m *Manager) Connect(ctx context.Context, servers []config.MCPServerConfig) error {
+	// Filter out invalid configs upfront (no goroutine needed).
+	var validConfigs []config.MCPServerConfig
 	for _, cfg := range servers {
 		if cfg.Name == "" {
 			slog.Warn("skipping MCP server with empty name")
@@ -94,132 +201,42 @@ func (m *Manager) Connect(ctx context.Context, servers []config.MCPServerConfig)
 			slog.Warn("skipping MCP server: name must not contain '__'", "server", cfg.Name)
 			continue
 		}
+		validConfigs = append(validConfigs, cfg)
+	}
 
-		c, err := createClient(cfg)
-		if err != nil {
-			slog.Warn("failed to create MCP client", "server", cfg.Name, "error", err)
-			newStatuses = append(newStatuses, ServerStatus{
-				Name:      cfg.Name,
-				Transport: cfg.Transport,
-				State:     ServerFailed,
-				Error:     fmt.Sprintf("creating client: %v", err),
-				Config:    cfg,
-			})
-			continue
+	// Connect to all valid servers in parallel.
+	// Results are stored in a pre-allocated slice indexed by position,
+	// so no mutex is needed for writes.
+	results := make([]connectResult, len(validConfigs))
+	var wg sync.WaitGroup
+	for i, cfg := range validConfigs {
+		wg.Add(1)
+		go func(idx int, cfg config.MCPServerConfig) {
+			defer wg.Done()
+			results[idx] = connectServer(ctx, cfg)
+		}(i, cfg)
+	}
+	wg.Wait()
+
+	// Assemble the final state from results. This runs single-threaded
+	// after all goroutines have finished, so no mutex is needed.
+	var newServers []serverEntry
+	var newStatuses []ServerStatus
+	newToolIndex := make(map[string]toolIndexEntry)
+
+	for _, r := range results {
+		newStatuses = append(newStatuses, r.status)
+		if r.server == nil {
+			continue // failed server
 		}
-
-		// Start the transport (for SSE/HTTP clients that need explicit start).
-		if err := c.Start(ctx); err != nil {
-			slog.Warn("failed to start MCP client", "server", cfg.Name, "error", err)
-			_ = c.Close()
-			newStatuses = append(newStatuses, ServerStatus{
-				Name:      cfg.Name,
-				Transport: cfg.Transport,
-				State:     ServerFailed,
-				Error:     fmt.Sprintf("starting client: %v", err),
-				Config:    cfg,
-			})
-			continue
-		}
-
-		// Initialize the MCP session.
-		_, err = c.Initialize(ctx, mcptypes.InitializeRequest{
-			Params: mcptypes.InitializeParams{
-				ProtocolVersion: mcptypes.LATEST_PROTOCOL_VERSION,
-				ClientInfo: mcptypes.Implementation{
-					Name:    "toasters",
-					Version: "0.1.0",
-				},
-			},
-		})
-		if err != nil {
-			slog.Warn("failed to initialize MCP server", "server", cfg.Name, "error", err)
-			_ = c.Close()
-			newStatuses = append(newStatuses, ServerStatus{
-				Name:      cfg.Name,
-				Transport: cfg.Transport,
-				State:     ServerFailed,
-				Error:     fmt.Sprintf("initializing: %v", err),
-				Config:    cfg,
-			})
-			continue
-		}
-
-		// Discover tools.
-		toolsResult, err := c.ListTools(ctx, mcptypes.ListToolsRequest{})
-		if err != nil {
-			slog.Warn("failed to list MCP tools", "server", cfg.Name, "error", err)
-			_ = c.Close()
-			newStatuses = append(newStatuses, ServerStatus{
-				Name:      cfg.Name,
-				Transport: cfg.Transport,
-				State:     ServerFailed,
-				Error:     fmt.Sprintf("listing tools: %v", err),
-				Config:    cfg,
-			})
-			continue
-		}
-
-		// Build whitelist set for fast lookup.
-		whitelist := make(map[string]bool, len(cfg.EnabledTools))
-		for _, name := range cfg.EnabledTools {
-			whitelist[name] = true
-		}
-
-		var tools []ToolInfo
-		for _, t := range toolsResult.Tools {
-			// Reject tool names containing "__" to preserve namespace integrity.
-			if strings.Contains(t.Name, "__") {
-				slog.Warn("skipping MCP tool: name must not contain '__'", "tool", t.Name, "server", cfg.Name)
-				continue
-			}
-
-			// Apply whitelist filter.
-			if len(whitelist) > 0 && !whitelist[t.Name] {
-				continue
-			}
-
-			// Marshal the input schema to JSON.
-			schemaBytes, err := json.Marshal(t.InputSchema)
-			if err != nil {
-				slog.Warn("failed to marshal MCP tool schema", "tool", t.Name, "server", cfg.Name, "error", err)
-				schemaBytes = json.RawMessage(`{"type":"object","properties":{}}`)
-			}
-
-			tools = append(tools, ToolInfo{
-				NamespacedName: cfg.Name + "__" + t.Name,
-				OriginalName:   t.Name,
-				ServerName:     cfg.Name,
-				Description:    t.Description,
-				InputSchema:    schemaBytes,
-			})
-		}
-
 		serverIdx := len(newServers)
-		newServers = append(newServers, serverEntry{
-			name:   cfg.Name,
-			client: c,
-			tools:  tools,
-			cfg:    cfg,
-		})
-
-		for _, tool := range tools {
+		newServers = append(newServers, *r.server)
+		for _, tool := range r.tools {
 			newToolIndex[tool.NamespacedName] = toolIndexEntry{
 				serverIdx:    serverIdx,
 				originalName: tool.OriginalName,
 			}
 		}
-
-		newStatuses = append(newStatuses, ServerStatus{
-			Name:      cfg.Name,
-			Transport: cfg.Transport,
-			State:     ServerConnected,
-			ToolCount: len(tools),
-			Tools:     tools,
-			Config:    cfg,
-		})
-
-		slog.Info("MCP server connected", "server", cfg.Name, "tools", len(tools))
 	}
 
 	m.mu.Lock()
@@ -235,10 +252,16 @@ func (m *Manager) Connect(ctx context.Context, servers []config.MCPServerConfig)
 // It holds only a read lock to look up the server, then releases before
 // making the (potentially slow) MCP call.
 //
-// Note: calls that have already acquired the server reference are still
-// concurrent with Close(). This is acceptable — the fix below prevents new
-// calls from entering after Close() has zeroed the index.
-func (m *Manager) Call(ctx context.Context, namespacedName string, args json.RawMessage) (string, error) {
+// A deferred recover() catches panics from use-after-close when an in-flight
+// call races with Close(). This converts the panic into a descriptive error.
+func (m *Manager) Call(ctx context.Context, namespacedName string, args json.RawMessage) (result string, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			result = ""
+			err = fmt.Errorf("MCP call to %q failed (server may be closing): %v", namespacedName, r)
+		}
+	}()
+
 	m.mu.RLock()
 	entry, ok := m.toolIndex[namespacedName]
 	if !ok {
@@ -257,20 +280,20 @@ func (m *Manager) Call(ctx context.Context, namespacedName string, args json.Raw
 		}
 	}
 
-	result, err := server.client.CallTool(ctx, mcptypes.CallToolRequest{
+	callResult, callErr := server.client.CallTool(ctx, mcptypes.CallToolRequest{
 		Params: mcptypes.CallToolParams{
 			Name:      originalName,
 			Arguments: argsMap,
 		},
 	})
-	if err != nil {
-		return "", fmt.Errorf("calling MCP tool %q: %w", namespacedName, err)
+	if callErr != nil {
+		return "", fmt.Errorf("calling MCP tool %q: %w", namespacedName, callErr)
 	}
 
-	if result.IsError {
+	if callResult.IsError {
 		// Extract error text from content blocks.
 		var parts []string
-		for _, c := range result.Content {
+		for _, c := range callResult.Content {
 			if tc, ok := c.(mcptypes.TextContent); ok {
 				parts = append(parts, tc.Text)
 			}
@@ -280,7 +303,7 @@ func (m *Manager) Call(ctx context.Context, namespacedName string, args json.Raw
 
 	// Join text content blocks into a single string.
 	var textParts []string
-	for _, c := range result.Content {
+	for _, c := range callResult.Content {
 		if tc, ok := c.(mcptypes.TextContent); ok {
 			textParts = append(textParts, tc.Text)
 		}

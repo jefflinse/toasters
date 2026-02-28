@@ -474,8 +474,14 @@ var (
 	multipleHyphens   = regexp.MustCompile(`-{2,}`)
 )
 
-// Slugify converts a name to a URL-safe identifier.
-// "Go Development" → "go-development", "Senior Go Dev" → "senior-go-dev".
+// Slugify converts a human-readable name to a filesystem-safe slug suitable for
+// use as a filename. It lowercases the input, replaces spaces with hyphens, strips
+// non-alphanumeric characters, and collapses consecutive hyphens.
+//
+// Examples: "Go Development" → "go-development", "Senior Go Dev" → "senior-go-dev".
+//
+// Slugify is exported because TUI CRUD operations in internal/tui use it to generate
+// consistent filenames when creating skills, agents, and teams on disk.
 func Slugify(name string) string {
 	s := strings.ToLower(name)
 	s = strings.ReplaceAll(s, " ", "-")

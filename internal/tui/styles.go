@@ -224,43 +224,35 @@ var (
 	// ColorAccent is the accent color used for focused borders in modals.
 	ColorAccent = compat.AdaptiveColor{Light: lipgloss.Color("51"), Dark: lipgloss.Color("51")}
 
-	// TeamsModalStyle wraps the entire teams modal.
-	TeamsModalStyle = lipgloss.NewStyle().
+	// ModalStyle wraps the entire modal overlay.
+	ModalStyle = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(ColorAccent).
 			Padding(0, 1)
 
-	// TeamsPanelStyle styles an unfocused panel within the teams modal.
-	TeamsPanelStyle = lipgloss.NewStyle().
+	// ModalPanelStyle styles an unfocused panel within a modal.
+	ModalPanelStyle = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(ColorBorder)
 
-	// TeamsFocusedPanel styles the focused panel within the teams modal.
-	TeamsFocusedPanel = lipgloss.NewStyle().
+	// ModalFocusedPanel styles the focused panel within a modal.
+	ModalFocusedPanel = lipgloss.NewStyle().
 				Border(lipgloss.RoundedBorder()).
 				BorderForeground(ColorAccent)
 
-	// TeamsSelectedStyle highlights the selected item in a teams panel.
-	TeamsSelectedStyle = lipgloss.NewStyle().
+	// ModalSelectedStyle highlights the selected item in a modal panel.
+	ModalSelectedStyle = lipgloss.NewStyle().
 				Background(lipgloss.Color("#333333")).
 				Bold(true)
 
-	// TeamsReadOnlyStyle dims read-only team entries.
-	TeamsReadOnlyStyle = lipgloss.NewStyle().
+	// ModalReadOnlyStyle dims read-only entries in a modal.
+	ModalReadOnlyStyle = lipgloss.NewStyle().
 				Foreground(ColorDim)
 
-	// TeamsWarningStyle styles delete-confirmation warnings.
-	TeamsWarningStyle = lipgloss.NewStyle().
+	// ModalWarningStyle styles delete-confirmation warnings in a modal.
+	ModalWarningStyle = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("196")).
 				Bold(true)
-
-	// Modal style aliases — shared across teams, skills, and agents modals.
-	ModalStyle         = TeamsModalStyle
-	ModalPanelStyle    = TeamsPanelStyle
-	ModalFocusedPanel  = TeamsFocusedPanel
-	ModalSelectedStyle = TeamsSelectedStyle
-	ModalReadOnlyStyle = TeamsReadOnlyStyle
-	ModalWarningStyle  = TeamsWarningStyle
 
 	// Toast notification styles.
 	ToastBaseStyle = lipgloss.NewStyle().

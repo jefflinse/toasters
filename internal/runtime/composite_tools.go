@@ -7,12 +7,6 @@ import (
 	"strings"
 )
 
-// MCPCaller dispatches MCP tool calls. Implemented by *mcp.Manager.
-// Defined here to avoid importing internal/mcp from internal/runtime.
-type MCPCaller interface {
-	Call(ctx context.Context, name string, args json.RawMessage) (string, error)
-}
-
 // CompositeTools wraps CoreTools and adds MCP tool dispatch.
 type CompositeTools struct {
 	core    *CoreTools

@@ -62,17 +62,18 @@ func systemLeadToolNames() []string {
 
 // ComposedAgent is the fully resolved agent ready for session creation.
 type ComposedAgent struct {
-	AgentID      string
-	Name         string
-	SystemPrompt string   // fully assembled prompt
-	Tools        []string // merged tool names (after denylist)
-	Provider     string   // resolved provider name
-	Model        string   // resolved model name
-	Temperature  *float64
-	MaxTurns     *int
-	TeamID       string // empty if not on a team
-	Role         string // "lead" or "worker"
-	WorkDir      string // inherited from job/config
+	AgentID         string
+	Name            string
+	SystemPrompt    string   // fully assembled prompt
+	Tools           []string // merged tool names (after denylist)
+	DisallowedTools []string // original denylist for defense-in-depth enforcement
+	Provider        string   // resolved provider name
+	Model           string   // resolved model name
+	Temperature     *float64
+	MaxTurns        *int
+	TeamID          string // empty if not on a team
+	Role            string // "lead" or "worker"
+	WorkDir         string // inherited from job/config
 }
 
 // Store is the subset of db.Store needed by the composer.
@@ -143,16 +144,17 @@ func (c *Composer) Compose(ctx context.Context, agentID string, teamID string) (
 	model := c.resolveModel(agent, team)
 
 	return &ComposedAgent{
-		AgentID:      agent.ID,
-		Name:         agent.Name,
-		SystemPrompt: systemPrompt,
-		Tools:        tools,
-		Provider:     provider,
-		Model:        model,
-		Temperature:  agent.Temperature,
-		MaxTurns:     agent.MaxTurns,
-		TeamID:       teamID,
-		Role:         role,
+		AgentID:         agent.ID,
+		Name:            agent.Name,
+		SystemPrompt:    systemPrompt,
+		Tools:           tools,
+		DisallowedTools: parseStringArray(agent.DisallowedTools),
+		Provider:        provider,
+		Model:           model,
+		Temperature:     agent.Temperature,
+		MaxTurns:        agent.MaxTurns,
+		TeamID:          teamID,
+		Role:            role,
 	}, nil
 }
 

@@ -35,6 +35,7 @@ func ProgressToolDefs() []ToolDef {
 				"properties": {
 					"job_id":      {"type": "string", "description": "The job ID"},
 					"task_id":     {"type": "string", "description": "The task ID (optional)"},
+					"agent_id":    {"type": "string", "description": "The agent ID (optional)"},
 					"description": {"type": "string", "description": "What is blocking you"},
 					"severity":    {"type": "string", "enum": ["low", "medium", "high"], "description": "Severity of the blocker"}
 				},
@@ -63,6 +64,7 @@ func ProgressToolDefs() []ToolDef {
 				"properties": {
 					"job_id":        {"type": "string", "description": "The job ID"},
 					"task_id":       {"type": "string", "description": "The task ID (optional)"},
+					"agent_id":      {"type": "string", "description": "The agent ID (optional)"},
 					"artifact_path": {"type": "string", "description": "Path to the artifact to review"},
 					"notes":         {"type": "string", "description": "Notes for the reviewer"}
 				},

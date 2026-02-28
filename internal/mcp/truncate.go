@@ -5,19 +5,21 @@ import (
 	"encoding/json"
 	"fmt"
 	"unicode/utf8"
+
+	"github.com/jefflinse/toasters/internal/tooldef"
 )
 
-// TruncatingCaller wraps an MCPCaller and truncates results that exceed maxLen.
+// TruncatingCaller wraps a tooldef.MCPCaller and truncates results that exceed maxLen.
 // This is useful for wrapping a Manager before passing it to packages that
 // cannot import internal/mcp directly (e.g. internal/runtime).
 type TruncatingCaller struct {
-	inner  MCPCaller
+	inner  tooldef.MCPCaller
 	maxLen int
 }
 
 // NewTruncatingCaller creates a TruncatingCaller that wraps the given caller.
 // If maxLen <= 0, DefaultMaxResultLen is used.
-func NewTruncatingCaller(inner MCPCaller, maxLen int) *TruncatingCaller {
+func NewTruncatingCaller(inner tooldef.MCPCaller, maxLen int) *TruncatingCaller {
 	if maxLen <= 0 {
 		maxLen = DefaultMaxResultLen
 	}

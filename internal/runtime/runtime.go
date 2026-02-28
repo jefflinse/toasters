@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
+	"github.com/gofrs/uuid/v5"
 	"github.com/jefflinse/toasters/internal/db"
 	"github.com/jefflinse/toasters/internal/provider"
 )
@@ -57,7 +57,11 @@ func (r *Runtime) SpawnAgent(ctx context.Context, opts SpawnOpts) (*Session, err
 		return nil, fmt.Errorf("provider %q not found", opts.ProviderName)
 	}
 
-	id := uuid.New().String()
+	uuidVal, err := uuid.NewV4()
+	if err != nil {
+		return nil, fmt.Errorf("generating session ID: %w", err)
+	}
+	id := uuidVal.String()
 
 	// Determine spawn depth for child agents.
 	depth := opts.Depth
@@ -79,14 +83,17 @@ func (r *Runtime) SpawnAgent(ctx context.Context, opts SpawnOpts) (*Session, err
 	if opts.ToolExecutor != nil {
 		tools = opts.ToolExecutor
 	} else {
-		coreTools := NewCoreTools(
-			opts.WorkDir,
+		coreOpts := []CoreToolsOption{
 			WithShell(true),
 			WithSpawner(r, depth, maxDepth),
 			WithStore(r.store),
 			WithSessionContext(id, opts.AgentID, opts.JobID, opts.TaskID),
 			WithProvider(opts.ProviderName, opts.Model),
-		)
+		}
+		if len(opts.DisallowedTools) > 0 {
+			coreOpts = append(coreOpts, WithDenylist(opts.DisallowedTools))
+		}
+		coreTools := NewCoreTools(opts.WorkDir, coreOpts...)
 		if mcpCaller != nil {
 			tools = NewCompositeTools(coreTools, mcpCaller, mcpDefs)
 		} else {

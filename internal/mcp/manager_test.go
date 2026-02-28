@@ -318,6 +318,102 @@ func TestManager_Connect_SkipsFailedStart(t *testing.T) {
 	}
 }
 
+// TestManager_Connect_ParallelMultipleServers verifies that Connect handles
+// multiple servers (mix of success and failure) correctly when connecting in parallel.
+func TestManager_Connect_ParallelMultipleServers(t *testing.T) {
+	t.Parallel()
+
+	m := NewManager()
+	err := m.Connect(context.Background(), []config.MCPServerConfig{
+		{Name: "bad1", Transport: "grpc"},               // unsupported transport
+		{Name: "bad2", Transport: "stdio"},              // missing command
+		{Name: "bad3", Transport: "sse"},                // missing URL
+		{Name: "bad4", Transport: "http"},               // missing URL
+		{Name: "", Transport: "stdio", Command: "echo"}, // empty name (filtered pre-goroutine)
+	})
+	if err != nil {
+		t.Fatalf("Connect returned error: %v", err)
+	}
+
+	// All servers should have failed (except empty name which is skipped entirely).
+	statuses := m.Servers()
+	if len(statuses) != 4 {
+		t.Fatalf("expected 4 statuses (empty name skipped), got %d", len(statuses))
+	}
+	for _, s := range statuses {
+		if s.State != ServerFailed {
+			t.Errorf("expected server %q to be failed, got %q", s.Name, s.State)
+		}
+	}
+
+	// No servers should be connected.
+	m.mu.RLock()
+	serverCount := len(m.servers)
+	m.mu.RUnlock()
+	if serverCount != 0 {
+		t.Errorf("expected 0 connected servers, got %d", serverCount)
+	}
+}
+
+// TestManager_Connect_ParallelRealServers verifies parallel connection with
+// real stdio servers (mix of working and failing).
+func TestManager_Connect_ParallelRealServers(t *testing.T) {
+	if testMCPServerBin == "" {
+		t.Skip("test MCP server binary not available")
+	}
+
+	m := NewManager()
+	err := m.Connect(context.Background(), []config.MCPServerConfig{
+		{Name: "good1", Transport: "stdio", Command: testMCPServerBin},
+		{Name: "bad1", Transport: "grpc"},
+		{Name: "good2", Transport: "stdio", Command: testMCPServerBin},
+		{Name: "bad2", Transport: "stdio"}, // missing command
+	})
+	if err != nil {
+		t.Fatalf("Connect returned error: %v", err)
+	}
+	defer func() { _ = m.Close() }()
+
+	statuses := m.Servers()
+	if len(statuses) != 4 {
+		t.Fatalf("expected 4 statuses, got %d", len(statuses))
+	}
+
+	connected := 0
+	failed := 0
+	for _, s := range statuses {
+		switch s.State {
+		case ServerConnected:
+			connected++
+		case ServerFailed:
+			failed++
+		}
+	}
+	if connected != 2 {
+		t.Errorf("expected 2 connected servers, got %d", connected)
+	}
+	if failed != 2 {
+		t.Errorf("expected 2 failed servers, got %d", failed)
+	}
+
+	// Verify both good servers' tools are accessible.
+	tools := m.Tools()
+	if len(tools) == 0 {
+		t.Fatal("expected tools from connected servers, got 0")
+	}
+
+	// Verify tool index is correct — each tool should be callable.
+	for _, tool := range tools {
+		result, err := m.Call(context.Background(), tool.NamespacedName, json.RawMessage(`{}`))
+		if err != nil {
+			t.Errorf("Call(%q) returned error: %v", tool.NamespacedName, err)
+		}
+		if result == "" {
+			t.Errorf("Call(%q) returned empty result", tool.NamespacedName)
+		}
+	}
+}
+
 // TestManager_Connect_WithInProcessServer tests Connect using a real in-process
 // MCP server via mcptest, injected directly into the manager's internal state.
 func TestManager_Connect_WithInProcessServer(t *testing.T) {
@@ -889,6 +985,82 @@ func TestManager_Servers_ConcurrentAccess(t *testing.T) {
 			_ = m.Tools()
 		}()
 	}
+
+	wg.Wait()
+}
+
+// --- Call recover ---
+
+// TestManager_Call_RecoverFromPanic verifies that Call() recovers from panics
+// (e.g., when a server client is used after Close()) and returns a descriptive error.
+func TestManager_Call_RecoverFromPanic(t *testing.T) {
+	t.Parallel()
+
+	// Create a manager with a nil client pointer to trigger a panic on CallTool.
+	m := NewManager()
+	m.mu.Lock()
+	m.servers = []serverEntry{
+		{
+			name:   "panicsrv",
+			client: nil, // nil client will panic when CallTool is called
+			tools: []ToolInfo{
+				{NamespacedName: "panicsrv__tool", OriginalName: "tool", ServerName: "panicsrv"},
+			},
+		},
+	}
+	m.toolIndex = map[string]toolIndexEntry{
+		"panicsrv__tool": {serverIdx: 0, originalName: "tool"},
+	}
+	m.mu.Unlock()
+
+	result, err := m.Call(context.Background(), "panicsrv__tool", json.RawMessage(`{}`))
+	if err == nil {
+		t.Fatal("expected error from recovered panic, got nil")
+	}
+	if result != "" {
+		t.Errorf("expected empty result from recovered panic, got %q", result)
+	}
+	if !containsStr(err.Error(), "server may be closing") {
+		t.Errorf("expected 'server may be closing' in error, got: %v", err)
+	}
+	if !containsStr(err.Error(), "panicsrv__tool") {
+		t.Errorf("expected tool name in error, got: %v", err)
+	}
+}
+
+// TestManager_Call_ConcurrentWithClose verifies that Call() does not panic
+// when racing with Close(). The recover wrapper should catch any panics.
+func TestManager_Call_ConcurrentWithClose(t *testing.T) {
+	t.Parallel()
+
+	client := newTestMCPClient(t, []testTool{
+		{name: "tool", description: "A tool", result: "ok"},
+	})
+
+	m := newManagerWithClient(t, "srv", client, []ToolInfo{
+		{NamespacedName: "srv__tool", OriginalName: "tool", ServerName: "srv", Description: "A tool"},
+	})
+
+	var wg sync.WaitGroup
+	const goroutines = 20
+
+	// Spawn goroutines that call the tool concurrently.
+	for range goroutines {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			// Each call may succeed, return "not found" (after Close zeroes the index),
+			// or return a recovered-panic error. None should panic the process.
+			_, _ = m.Call(context.Background(), "srv__tool", json.RawMessage(`{}`))
+		}()
+	}
+
+	// Close the manager while calls are in flight.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		_ = m.Close()
+	}()
 
 	wg.Wait()
 }

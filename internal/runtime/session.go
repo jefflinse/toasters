@@ -25,10 +25,19 @@ type Session struct {
 	prov         provider.Provider
 	model        string
 	systemPrompt string
-	messages     []provider.Message
-	tools        []provider.Tool
-	toolExec     ToolExecutor
-	maxTurns     int
+	// messages holds the full conversation history (user, assistant, tool messages).
+	//
+	// Concurrency contract:
+	//   - Written only by Run(), which is the session's single main goroutine.
+	//   - Safe to read after <-Done() closes (Run has exited, no further writes).
+	//   - Do NOT read while the session is active without holding mu.
+	//
+	// FinalText() and InitialMessage() acquire mu, so they are safe at any time,
+	// but callers that need a consistent view of the full slice should wait for Done().
+	messages []provider.Message
+	tools    []provider.Tool
+	toolExec ToolExecutor
+	maxTurns int
 
 	// State — tokensIn/tokensOut use atomic for lock-free reads.
 	status    string // "active", "completed", "failed", "cancelled"
@@ -286,6 +295,8 @@ func (s *Session) Subscribe() <-chan SessionEvent {
 }
 
 // Snapshot returns a read-only view of the session state.
+// Safe to call at any time (acquires mu for mutable fields).
+// After <-Done(), the returned values are final.
 func (s *Session) Snapshot() SessionSnapshot {
 	s.mu.Lock()
 	status := s.status
@@ -307,6 +318,8 @@ func (s *Session) Snapshot() SessionSnapshot {
 }
 
 // FinalText returns the last assistant message text (for spawn_agent results).
+// Safe to call at any time (acquires mu), but the result is only meaningful
+// after <-Done() closes, since Run() may still be appending messages.
 func (s *Session) FinalText() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -346,6 +359,8 @@ func (s *Session) SystemPrompt() string {
 }
 
 // InitialMessage returns the initial user message, if any.
+// Safe to call at any time (acquires mu). The initial message is set at
+// construction and never modified, so the value is stable even before Done().
 func (s *Session) InitialMessage() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()

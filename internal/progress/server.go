@@ -10,32 +10,13 @@ import (
 	mcpserver "github.com/mark3labs/mcp-go/server"
 )
 
-// NewMCPServer creates an MCP server that exposes the 6 progress tools.
-// The server uses the provided store for all database operations.
-func NewMCPServer(store db.Store) *mcpserver.MCPServer {
-	s := mcpserver.NewMCPServer(
-		"toasters",
-		"1.0.0",
-	)
+// toolHandler is a function that handles an MCP tool call.
+type toolHandler func(ctx context.Context, store db.Store, req mcp.CallToolRequest) (*mcp.CallToolResult, error)
 
-	// report_task_progress
-	s.AddTool(
-		mcp.NewToolWithRawSchema(
-			"report_task_progress",
-			"Report progress on a task. Use this to keep the orchestrator informed of what you're doing.",
-			[]byte(`{
-				"type": "object",
-				"properties": {
-					"job_id":   {"type": "string", "description": "The job ID"},
-					"task_id":  {"type": "string", "description": "The task ID (optional)"},
-					"agent_id": {"type": "string", "description": "The agent ID (optional)"},
-					"status":   {"type": "string", "description": "Current status: in_progress, completed, failed, blocked"},
-					"message":  {"type": "string", "description": "What you are currently doing or have done"}
-				},
-				"required": ["job_id", "status", "message"]
-			}`),
-		),
-		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+// toolHandlers maps tool names to their handler functions.
+func toolHandlers() map[string]toolHandler {
+	return map[string]toolHandler{
+		"report_task_progress": func(ctx context.Context, store db.Store, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			var params ReportTaskProgressParams
 			if err := req.BindArguments(&params); err != nil {
 				return mcp.NewToolResultError(fmt.Sprintf("invalid arguments: %v", err)), nil
@@ -46,26 +27,7 @@ func NewMCPServer(store db.Store) *mcpserver.MCPServer {
 			}
 			return mcp.NewToolResultText(result), nil
 		},
-	)
-
-	// report_blocker
-	s.AddTool(
-		mcp.NewToolWithRawSchema(
-			"report_blocker",
-			"Report that you are blocked and cannot proceed without help.",
-			[]byte(`{
-				"type": "object",
-				"properties": {
-					"job_id":      {"type": "string", "description": "The job ID"},
-					"task_id":     {"type": "string", "description": "The task ID (optional)"},
-					"agent_id":    {"type": "string", "description": "The agent ID (optional)"},
-					"description": {"type": "string", "description": "What is blocking you"},
-					"severity":    {"type": "string", "enum": ["low", "medium", "high"], "description": "Severity of the blocker"}
-				},
-				"required": ["job_id", "description", "severity"]
-			}`),
-		),
-		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		"report_blocker": func(ctx context.Context, store db.Store, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			var params ReportBlockerParams
 			if err := req.BindArguments(&params); err != nil {
 				return mcp.NewToolResultError(fmt.Sprintf("invalid arguments: %v", err)), nil
@@ -76,25 +38,7 @@ func NewMCPServer(store db.Store) *mcpserver.MCPServer {
 			}
 			return mcp.NewToolResultText(result), nil
 		},
-	)
-
-	// update_task_status
-	s.AddTool(
-		mcp.NewToolWithRawSchema(
-			"update_task_status",
-			"Update the status of a task in the job tracker.",
-			[]byte(`{
-				"type": "object",
-				"properties": {
-					"job_id":  {"type": "string", "description": "The job ID"},
-					"task_id": {"type": "string", "description": "The task ID"},
-					"status":  {"type": "string", "enum": ["pending", "in_progress", "completed", "failed", "blocked", "cancelled"], "description": "New task status"},
-					"summary": {"type": "string", "description": "Optional summary of what was done"}
-				},
-				"required": ["job_id", "task_id", "status"]
-			}`),
-		),
-		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		"update_task_status": func(ctx context.Context, store db.Store, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			var params UpdateTaskStatusParams
 			if err := req.BindArguments(&params); err != nil {
 				return mcp.NewToolResultError(fmt.Sprintf("invalid arguments: %v", err)), nil
@@ -105,26 +49,7 @@ func NewMCPServer(store db.Store) *mcpserver.MCPServer {
 			}
 			return mcp.NewToolResultText(result), nil
 		},
-	)
-
-	// request_review
-	s.AddTool(
-		mcp.NewToolWithRawSchema(
-			"request_review",
-			"Request a review of an artifact you have produced.",
-			[]byte(`{
-				"type": "object",
-				"properties": {
-					"job_id":        {"type": "string", "description": "The job ID"},
-					"task_id":       {"type": "string", "description": "The task ID (optional)"},
-					"agent_id":      {"type": "string", "description": "The agent ID (optional)"},
-					"artifact_path": {"type": "string", "description": "Path to the artifact to review"},
-					"notes":         {"type": "string", "description": "Notes for the reviewer"}
-				},
-				"required": ["job_id", "artifact_path"]
-			}`),
-		),
-		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		"request_review": func(ctx context.Context, store db.Store, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			var params RequestReviewParams
 			if err := req.BindArguments(&params); err != nil {
 				return mcp.NewToolResultError(fmt.Sprintf("invalid arguments: %v", err)), nil
@@ -135,22 +60,7 @@ func NewMCPServer(store db.Store) *mcpserver.MCPServer {
 			}
 			return mcp.NewToolResultText(result), nil
 		},
-	)
-
-	// query_job_context
-	s.AddTool(
-		mcp.NewToolWithRawSchema(
-			"query_job_context",
-			"Query the current state of a job: overview, task statuses, recent progress, and artifacts.",
-			[]byte(`{
-				"type": "object",
-				"properties": {
-					"job_id": {"type": "string", "description": "The job ID to query"}
-				},
-				"required": ["job_id"]
-			}`),
-		),
-		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		"query_job_context": func(ctx context.Context, store db.Store, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			var params QueryJobContextParams
 			if err := req.BindArguments(&params); err != nil {
 				return mcp.NewToolResultError(fmt.Sprintf("invalid arguments: %v", err)), nil
@@ -161,26 +71,7 @@ func NewMCPServer(store db.Store) *mcpserver.MCPServer {
 			}
 			return mcp.NewToolResultText(result), nil
 		},
-	)
-
-	// log_artifact
-	s.AddTool(
-		mcp.NewToolWithRawSchema(
-			"log_artifact",
-			"Log an artifact (file, report, etc.) produced during the job.",
-			[]byte(`{
-				"type": "object",
-				"properties": {
-					"job_id":  {"type": "string", "description": "The job ID"},
-					"task_id": {"type": "string", "description": "The task ID (optional)"},
-					"type":    {"type": "string", "description": "Artifact type: code, report, investigation, test_results, other"},
-					"path":    {"type": "string", "description": "File path of the artifact"},
-					"summary": {"type": "string", "description": "Brief description of the artifact"}
-				},
-				"required": ["job_id", "type", "path"]
-			}`),
-		),
-		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		"log_artifact": func(ctx context.Context, store db.Store, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			var params LogArtifactParams
 			if err := req.BindArguments(&params); err != nil {
 				return mcp.NewToolResultError(fmt.Sprintf("invalid arguments: %v", err)), nil
@@ -191,7 +82,34 @@ func NewMCPServer(store db.Store) *mcpserver.MCPServer {
 			}
 			return mcp.NewToolResultText(result), nil
 		},
+	}
+}
+
+// NewMCPServer creates an MCP server that exposes the 6 progress tools.
+// The server uses the provided store for all database operations.
+// Tool schemas are sourced from ProgressToolDefs() to avoid duplication.
+func NewMCPServer(store db.Store) *mcpserver.MCPServer {
+	s := mcpserver.NewMCPServer(
+		"toasters",
+		"1.0.0",
 	)
+
+	handlers := toolHandlers()
+
+	for _, td := range ProgressToolDefs() {
+		handler, ok := handlers[td.Name]
+		if !ok {
+			// Programming error: ProgressToolDefs has a tool with no handler.
+			panic(fmt.Sprintf("no handler registered for progress tool %q", td.Name))
+		}
+
+		s.AddTool(
+			mcp.NewToolWithRawSchema(td.Name, td.Description, td.Parameters),
+			func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+				return handler(ctx, store, req)
+			},
+		)
+	}
 
 	return s
 }

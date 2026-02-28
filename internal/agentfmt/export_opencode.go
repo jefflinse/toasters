@@ -4,6 +4,8 @@ package agentfmt
 // and body. Fields that have no OpenCode equivalent are dropped and returned
 // as warnings. OpenCode uses snake_case field names with some differences from
 // the Toasters superset (e.g., "steps" instead of "max_turns").
+//
+// Exported for a planned agent definition export/conversion feature.
 func ExportOpenCode(def *AgentDef) (string, string, []Warning) {
 	if def == nil {
 		return "", "", nil
