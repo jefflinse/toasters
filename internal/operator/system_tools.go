@@ -350,7 +350,9 @@ func (st *SystemTools) assignTask(ctx context.Context, args json.RawMessage) (st
 	if st.spawner == nil {
 		return "", fmt.Errorf("cannot assign task: no agent spawner configured")
 	}
-	if err := st.spawner.SpawnTeamLead(ctx, composed, params.TaskID, task.JobID, job.WorkspaceDir); err != nil {
+	// Build the initial message for the team lead from the task and job context.
+	initialMsg := fmt.Sprintf("Task: %s\n\nJob: %s\n%s", task.Title, job.Title, job.Description)
+	if err := st.spawner.SpawnTeamLead(ctx, composed, params.TaskID, task.JobID, job.WorkspaceDir, initialMsg); err != nil {
 		return "", fmt.Errorf("spawning team lead: %w", err)
 	}
 

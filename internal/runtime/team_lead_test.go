@@ -45,7 +45,7 @@ func TestSpawnTeamLead_CreatesSession(t *testing.T) {
 		TeamID:       "team-1",
 	}
 
-	err := rt.SpawnTeamLead(context.Background(), composed, "task-1", "job-1", t.TempDir())
+	err := rt.SpawnTeamLead(context.Background(), composed, "task-1", "job-1", t.TempDir(), "Initialize the project")
 	assertNoError(t, err)
 
 	// OnSessionStarted must have fired.
@@ -105,7 +105,7 @@ func TestSpawnTeamLead_DepthIsZero(t *testing.T) {
 		// No Tools filter — session gets the full CoreTools set.
 	}
 
-	err := rt.SpawnTeamLead(context.Background(), composed, "task-1", "job-1", t.TempDir())
+	err := rt.SpawnTeamLead(context.Background(), composed, "task-1", "job-1", t.TempDir(), "Check depth")
 	assertNoError(t, err)
 
 	if startedSess == nil {
@@ -165,7 +165,7 @@ func TestSpawnTeamLead_WithToolFilter(t *testing.T) {
 		Tools: []string{"read_file", "spawn_agent"},
 	}
 
-	err := rt.SpawnTeamLead(context.Background(), composed, "task-1", "job-1", t.TempDir())
+	err := rt.SpawnTeamLead(context.Background(), composed, "task-1", "job-1", t.TempDir(), "Filter test")
 	assertNoError(t, err)
 
 	if startedSess == nil {
@@ -211,7 +211,7 @@ func TestSpawnTeamLead_ProviderNotFound(t *testing.T) {
 		SystemPrompt: "You are a team lead.",
 	}
 
-	err := rt.SpawnTeamLead(context.Background(), composed, "task-1", "job-1", t.TempDir())
+	err := rt.SpawnTeamLead(context.Background(), composed, "task-1", "job-1", t.TempDir(), "Provider test")
 	assertError(t, err)
 	assertContains(t, err.Error(), "not found")
 }

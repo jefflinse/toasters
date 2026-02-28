@@ -26,16 +26,17 @@ type mockSpawner struct {
 }
 
 type spawnCall struct {
-	Composed *compose.ComposedAgent
-	TaskID   string
-	JobID    string
-	WorkDir  string
+	Composed        *compose.ComposedAgent
+	TaskID          string
+	JobID           string
+	WorkDir         string
+	TaskDescription string
 }
 
-func (m *mockSpawner) SpawnTeamLead(_ context.Context, composed *compose.ComposedAgent, taskID string, jobID string, workDir string) error {
+func (m *mockSpawner) SpawnTeamLead(_ context.Context, composed *compose.ComposedAgent, taskID string, jobID string, workDir string, taskDescription string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.calls = append(m.calls, spawnCall{Composed: composed, TaskID: taskID, JobID: jobID, WorkDir: workDir})
+	m.calls = append(m.calls, spawnCall{Composed: composed, TaskID: taskID, JobID: jobID, WorkDir: workDir, TaskDescription: taskDescription})
 	return nil
 }
 
