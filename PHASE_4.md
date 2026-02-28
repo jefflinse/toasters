@@ -260,6 +260,7 @@ Items deferred from earlier phases that may be addressed in Phase 4 or later:
 | Non-standard UUID format in `operator/system_tools.go` | Phase 3 review | `newID()` uses `crypto/rand` hex format; `runtime` uses `google/uuid`. Standardize on `google/uuid` |
 | Shared `editorFinishedMsg` type location | Phase 3 review | Defined in `skills_modal.go` but used by `agents_modal.go`. Move to a common file |
 | `reloadTeamsForModal` discards errors | Phase 3 review | `agents.DiscoverTeams` error silently dropped; user gets empty list with no feedback |
+| Auto-team re-import on restart | Bug fix (2026-02-27) | Bootstrap re-creates auto-team entries (e.g. `auto-opencode`) on every startup, even if the user previously deleted them. Need to persist a "dismissed" state (e.g. a `.auto-team-dismissed` marker or a DB record) so deleted auto-teams are not re-imported unless the user explicitly opts back in |
 | `generateBasicTeamMD` produces "Qa" for short words | Phase 3 review | `humanizeDirName` doesn't handle common abbreviations (QA, CI, etc.) |
 | `.gitignore` gaps | Phase 3 review | Missing `*.db`, `*.log`, `.env`, `config.yaml`, `coverage.out` patterns |
 | `disallowed_tools` denylist not enforced at execution time | Phase 3 review | LLM is told about filtered tools but `CoreTools.Execute` doesn't enforce the denylist. Defense-in-depth gap |
