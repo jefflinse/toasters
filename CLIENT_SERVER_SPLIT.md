@@ -50,6 +50,7 @@ Split the Toasters monolithic TUI application into a client/server architecture 
 - Breaking changes to definition file format
 - Conversation persistence (future feature — not required for the split)
 - File editing in remote mode (`openInEditor()` disabled for remote clients; future feature)
+- `Last-Event-ID` SSE replay (future optimization — on reconnect, clients fetch full state via REST instead; ring buffer replay would reduce reconnect latency for short disconnects)
 
 ---
 
@@ -70,7 +71,7 @@ Reviewed by **tui-engineer** and **api-designer** on 2026-02-28. Both approved t
 | **DB types in TUI** | Define service-level DTO types. The TUI imports only `service` types, never `db` types directly. |
 | **`openInEditor()` in remote mode** | Disabled for remote clients. Show a toast explaining why. Fetch-edit-upload is a future feature. |
 | **Definition source paths** | Include `source_path` in API responses. Useful for debugging, and this is a single-user tool. |
-| **State on reconnect** | Dual strategy: (1) `Last-Event-ID` replay for short disconnects via server-side ring buffer (~1000 events). (2) If gap too large, client falls back to full state fetch via REST endpoints (`ListActiveSessions`, `ListJobs`, `OperatorStatus`), then subscribes for future events. |
+| **State on reconnect** | Full state fetch: on reconnect, the client calls REST endpoints (`ListActiveSessions`, `ListJobs`, `OperatorStatus`) to rebuild its entire view, then subscribes to SSE for future events. Always works regardless of disconnect duration. `Last-Event-ID` replay via server-side ring buffer is deferred as a future optimization. |
 | **SSE event design** | Unified event envelope with sequence numbers, typed discriminator, and correlation IDs (`turn_id`, `operation_id`, `session_id`). 15-second heartbeat to keep connections alive. |
 | **Endpoint naming** | Use `/skills/generate` not `/generate/skill`. Actions on resources, not verbs as top-level paths. |
 | **Pagination** | Add pagination to all list endpoints from day one (cursor-based or offset/limit). |
@@ -300,12 +301,12 @@ The TUI engineer estimates Phase 1 at 5–8 days (vs. original 3–5) due to fil
 
 - [ ] **Status:** Not started
 - **Agent:** builder
-- **Description:** Implement `internal/server.Server` wrapping `service.Service` over HTTP with SSE. Use Go stdlib `net/http` (Go 1.22+ method routing). Support multiple concurrent SSE clients via fan-out broadcast. Embeddable: `server.New(svc, opts...) *Server` with `Start(addr string) error` and `Shutdown(ctx context.Context) error`. Server must `Flush()` after every SSE event write. Buffer last ~1000 events in a ring buffer for `Last-Event-ID` replay on reconnect.
+- **Description:** Implement `internal/server.Server` wrapping `service.Service` over HTTP with SSE. Use Go stdlib `net/http` (Go 1.22+ method routing). Support multiple concurrent SSE clients via fan-out broadcast. Embeddable: `server.New(svc, opts...) *Server` with `Start(addr string) error` and `Shutdown(ctx context.Context) error`. Server must `Flush()` after every SSE event write.
 - **Blocking concern B4:** Implement `GET /api/v1/sessions/:id` returning full session detail for reconnection hydration.
 - **Acceptance criteria:**
   - [ ] All REST endpoints implemented
   - [ ] SSE event stream delivers all service events to all connected clients
-  - [ ] SSE events include sequence numbers; `Last-Event-ID` replay works
+  - [ ] SSE events include sequence numbers for ordering
   - [ ] 15-second heartbeat on SSE stream
   - [ ] Server starts, serves, and shuts down cleanly
   - [ ] Multiple clients can connect simultaneously
@@ -316,12 +317,12 @@ The TUI engineer estimates Phase 1 at 5–8 days (vs. original 3–5) due to fil
 
 - [ ] **Status:** Not started
 - **Agent:** builder
-- **Description:** Implement `internal/client.RemoteClient` satisfying `service.Service` via HTTP calls to the server + SSE for the event stream. Drop-in replacement for `LocalService`. On SSE reconnect: attempt `Last-Event-ID` replay first; if gap too large, fall back to full state fetch via REST endpoints then re-subscribe.
+- **Description:** Implement `internal/client.RemoteClient` satisfying `service.Service` via HTTP calls to the server + SSE for the event stream. Drop-in replacement for `LocalService`. On SSE reconnect: fetch full state via REST endpoints (`ListActiveSessions`, `ListJobs`, `OperatorStatus`), then re-subscribe to SSE for future events.
 - **Acceptance criteria:**
   - [ ] `RemoteClient` implements full `Service` interface
   - [ ] All operations work over HTTP
   - [ ] Event stream works over SSE with auto-reconnection
-  - [ ] Reconnect uses `Last-Event-ID` replay; falls back to full state fetch if gap too large
+  - [ ] On reconnect, client fetches full state via REST then re-subscribes to SSE
   - [ ] Connection errors surfaced as typed errors
   - [ ] TUI can use `RemoteClient` as drop-in for `LocalService`
 
@@ -333,7 +334,7 @@ The TUI engineer estimates Phase 1 at 5–8 days (vs. original 3–5) due to fil
 - **Acceptance criteria:**
   - [ ] Integration tests for all API endpoints
   - [ ] SSE event delivery tests (including multi-client fan-out)
-  - [ ] `Last-Event-ID` replay tests
+  - [ ] Reconnect state hydration tests (full state fetch + re-subscribe)
   - [ ] Concurrent client tests
   - [ ] Graceful shutdown tests
 
@@ -407,10 +408,10 @@ The TUI engineer estimates Phase 1 at 5–8 days (vs. original 3–5) due to fil
 
 - [ ] **Status:** Not started
 - **Agent:** builder
-- **Description:** Auto-reconnection with exponential backoff (cap at 30s), event replay after reconnect via `Last-Event-ID`, graceful degradation when server unreachable (TUI shows "disconnected" status in sidebar), queued messages sent after reconnection.
+- **Description:** Auto-reconnection with exponential backoff (cap at 30s), full state fetch on reconnect (REST endpoints → re-subscribe SSE), graceful degradation when server unreachable (TUI shows "disconnected" status in sidebar), queued messages sent after reconnection.
 - **Acceptance criteria:**
   - [ ] TUI reconnects automatically after server restart
-  - [ ] No events lost during brief disconnects (server buffers ~1000 recent events)
+  - [ ] On reconnect, full state is fetched via REST before re-subscribing to SSE
   - [ ] TUI shows connection status (connected/reconnecting/disconnected)
   - [ ] Queued messages sent after reconnection
   - [ ] Exponential backoff caps at 30 seconds
