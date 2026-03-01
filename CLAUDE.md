@@ -246,3 +246,17 @@ Full details: `PRE_PHASE_4_WAVE_2.md`
 - **CONC-7**: Subscriber event drops (intentional design, no fix needed)
 - **QUAL-4**: `RebuildDefinitions` duplicates insert logic (low impact)
 - **QUAL-5**: No incremental definition updates (not needed at current scale)
+
+## Current Work: Client/Server Architecture Split
+
+**Status:** Planning complete, ready to execute Phase 1
+**Tracking document:** [`CLIENT_SERVER_SPLIT.md`](CLIENT_SERVER_SPLIT.md)
+
+Splitting the monolithic TUI into a client/server architecture. The orchestration engine (operator, runtime, store, MCP, loader, compose, providers) becomes a long-running server; the TUI becomes a thin client. REST + SSE protocol. 4 phases:
+
+1. **Phase 1: Service Extraction** (5–8 days) — Extract business logic from TUI into `internal/service` package with composed `Service` interface. Rewire TUI to use it. No networking yet.
+2. **Phase 2: Server** (3–5 days) — HTTP server with SSE event streaming. `RemoteClient` as drop-in for `LocalService`.
+3. **Phase 3: Mode Wiring** (1–2 days) — `toasters serve` (headless), `toasters --server <addr>` (remote TUI), CLI subcommands.
+4. **Phase 4: Hardening** (2–3 days) — Token auth, connection resilience, security audit.
+
+Plan reviewed by tui-engineer and api-designer. All blocking concerns documented in the tracking doc.
