@@ -2,10 +2,9 @@ package tui
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -18,13 +17,7 @@ import (
 	"github.com/charmbracelet/glamour"
 	xansi "github.com/charmbracelet/x/ansi"
 
-	"github.com/jefflinse/toasters/internal/agentfmt"
-	"github.com/jefflinse/toasters/internal/db"
-	"github.com/jefflinse/toasters/internal/loader"
-	"github.com/jefflinse/toasters/internal/mcp"
-	"github.com/jefflinse/toasters/internal/operator"
-	"github.com/jefflinse/toasters/internal/provider"
-	"github.com/jefflinse/toasters/internal/runtime"
+	"github.com/jefflinse/toasters/internal/service"
 )
 
 const (
@@ -37,19 +30,8 @@ const (
 )
 
 // ModelConfig holds all dependencies and configuration needed to create a Model.
-// It replaces the 11-parameter NewModel constructor signature.
 type ModelConfig struct {
-	Client         provider.Provider
-	WorkspaceDir   string
-	TeamsDir       string
-	Teams          []TeamView
-	Awareness      string
-	Store          db.Store
-	Runtime        *runtime.Runtime
-	MCPManager     *mcp.Manager
-	Operator       *operator.Operator
-	OperatorModel  string // configured operator model name; shown in sidebar before first response
-	OperatorPrompt string // system prompt for the operator, composed from operator.md
+	Service service.Service
 }
 
 // streamingState holds all state related to the active operator stream.
@@ -78,9 +60,9 @@ type promptModeState struct {
 	promptSelected int      // cursor index
 	promptCustom   bool     // true when user selected "Custom response..." and is typing
 
-	confirmDispatch bool              // true when promptMode is a dispatch confirmation
-	changingTeam    bool              // true when promptMode is the "change team" sub-prompt
-	pendingDispatch provider.ToolCall // the assign_team call awaiting confirmation
+	confirmDispatch bool             // true when promptMode is a dispatch confirmation
+	changingTeam    bool             // true when promptMode is the "change team" sub-prompt
+	pendingDispatch service.ToolCall // the assign_team call awaiting confirmation
 }
 
 // promptModalState holds all state for the prompt-viewing modal overlay.
@@ -102,7 +84,7 @@ type outputModalState struct {
 type blockerModalState struct {
 	show        bool
 	jobID       string
-	blocker     *Blocker
+	blocker     *service.Blocker
 	questionIdx int
 	inputText   string
 }
@@ -122,26 +104,25 @@ type scrollState struct {
 	lastScrollTime   time.Time // when the last scroll event occurred
 }
 
-// progressState holds all state populated by the SQLite progress polling loop.
+// progressState holds all state populated by the progress update events.
 type progressState struct {
-	jobs             []*db.Job
-	tasks            map[string][]*db.Task
-	reports          map[string][]*db.ProgressReport
-	activeSessions   []*db.AgentSession
-	runtimeSnapshots []runtime.SessionSnapshot // live snapshots with real token counts
-	feedEntries      []*db.FeedEntry           // recent activity feed entries from SQLite
+	jobs             []service.Job
+	tasks            map[string][]service.Task
+	reports          map[string][]service.ProgressReport
+	activeSessions   []service.AgentSession
+	runtimeSnapshots []service.SessionSnapshot // live snapshots with real token counts
+	feedEntries      []service.FeedEntry       // recent activity feed entries
 }
 
 // chatState holds all state related to the chat conversation history and
 // collapsible message display.
 type chatState struct {
-	entries           []ChatEntry  // consolidated chat history (messages, timestamps, reasoning, metadata)
-	completionMsgIdx  map[int]bool // indices of team-completion messages in entries
-	expandedMsgs      map[int]bool // which completion messages are currently expanded
-	selectedMsgIdx    int          // currently selected message index (-1 = none)
-	expandedReasoning map[int]bool // which entry indices have reasoning expanded
-	collapsedTools    map[int]bool // true = expanded; absent/false = collapsed (default)
-
+	entries           []service.ChatEntry // consolidated chat history (messages, timestamps, reasoning, metadata)
+	completionMsgIdx  map[int]bool        // indices of team-completion messages in entries
+	expandedMsgs      map[int]bool        // which completion messages are currently expanded
+	selectedMsgIdx    int                 // currently selected message index (-1 = none)
+	expandedReasoning map[int]bool        // which entry indices have reasoning expanded
+	collapsedTools    map[int]bool        // true = expanded; absent/false = collapsed (default)
 }
 
 // Model is the root Bubble Tea model for the toasters TUI.
@@ -149,7 +130,8 @@ type Model struct {
 	width  int
 	height int
 
-	llmClient      provider.Provider
+	svc            service.Service
+	configDir      string
 	chatViewport   viewport.Model
 	input          textarea.Model
 	stats          SessionStats
@@ -168,16 +150,16 @@ type Model struct {
 	progress    progressState
 	chat        chatState
 
-	jobs         []*db.Job
-	blockers     map[string]*Blocker // keyed by job ID
+	jobs         []service.Job
+	blockers     map[string]*service.Blocker // keyed by job ID
 	selectedJob  int
 	selectedTeam int
 	focused      focusedPanel
 
-	teams        []TeamView // available teams
-	teamsDir     string     // path to the configured teams directory
-	awareness    string     // team-awareness content used to build the operator prompt
-	systemPrompt string     // assembled at startup; prepended to every LLM call
+	teams        []service.TeamView // available teams
+	teamsDir     string             // path to the configured teams directory
+	awareness    string             // team-awareness content used to build the operator prompt
+	systemPrompt string             // assembled at startup; prepended to every LLM call
 
 	// Teams modal state.
 	teamsModal teamsModalState
@@ -226,16 +208,8 @@ type Model struct {
 	toasts      []toast
 	nextToastID int
 
-	// MCP server manager — may be nil if no MCP servers are configured.
-	mcpManager *mcp.Manager
-
-	// Phase 1 integration: persistence and provider runtime.
-	store           db.Store                // may be nil — graceful degradation
-	runtime         *runtime.Runtime        // may be nil
+	// Runtime session tracking.
 	runtimeSessions map[string]*runtimeSlot // keyed by session ID
-
-	// Phase 2 integration: operator event loop.
-	operator *operator.Operator // may be nil — graceful degradation
 
 	// Log view state.
 	logView logViewState
@@ -266,14 +240,6 @@ type runtimeSlot struct {
 
 // NewModel returns an initialized root model.
 func NewModel(cfg ModelConfig) Model {
-	client := cfg.Client
-	teamsDir := cfg.TeamsDir
-	teams := cfg.Teams
-	awareness := cfg.Awareness
-	store := cfg.Store
-	rt := cfg.Runtime
-	mcpMgr := cfg.MCPManager
-	op := cfg.Operator
 	ta := textarea.New()
 	ta.Placeholder = "Type your message here..."
 	ta.Prompt = ""
@@ -307,34 +273,20 @@ func NewModel(cfg ModelConfig) Model {
 	vp.KeyMap = viewport.KeyMap{}
 
 	m := Model{
-		llmClient:    client,
+		svc:          cfg.Service,
 		chatViewport: vp,
 		input:        ta,
-		store:        store,
-		runtime:      rt,
-		mcpManager:   mcpMgr,
-		operator:     op,
 		stats: SessionStats{
-			Endpoint:  client.Name(),
-			ModelName: cfg.OperatorModel,
 			Connected: false,
 		},
 	}
 
-	m.jobs = []*db.Job{}
-	m.blockers = make(map[string]*Blocker)
+	m.jobs = []service.Job{}
+	m.blockers = make(map[string]*service.Blocker)
 	m.selectedJob = 0
 	m.focused = focusChat
 
-	m.teamsDir = teamsDir
-	m.teams = teams
-	m.awareness = awareness
-	m.systemPrompt = cfg.OperatorPrompt
-	if awareness == "" {
-		m.loading = true
-	} else {
-		m.initMessages()
-	}
+	m.loading = true
 
 	m.selectedAgentSlot = 0
 	m.grid.gridFocusCell = 0
@@ -359,17 +311,12 @@ func (m *Model) Init() tea.Cmd {
 		loadingTick(), // drive the loading screen animation
 		spinnerTick(), // drive braille spinner animations
 	}
-	if m.store != nil {
-		cmds = append(cmds, scheduleProgressPoll())
+
+	// Fetch configDir from the service for display and path construction.
+	if m.svc != nil {
+		m.configDir, _ = m.svc.System().ConfigDir(context.Background())
 	}
-	// Fire MCP status toasts if servers are configured.
-	if m.mcpManager != nil {
-		if servers := m.mcpManager.Servers(); len(servers) > 0 {
-			cmds = append(cmds, func() tea.Msg {
-				return MCPStatusMsg{Servers: servers}
-			})
-		}
-	}
+
 	return tea.Batch(cmds...)
 }
 
@@ -760,8 +707,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.stream.streaming {
 				m.stream.streaming = false
 				if m.stream.currentResponse != "" {
-					m.appendEntry(ChatEntry{
-						Message:    provider.Message{Role: "assistant", Content: m.stream.currentResponse},
+					m.appendEntry(service.ChatEntry{
+						Message: service.ChatMessage{
+							Role:    service.MessageRoleAssistant,
+							Content: m.stream.currentResponse,
+						},
 						Timestamp:  time.Now(),
 						Reasoning:  m.stream.currentReasoning,
 						ClaudeMeta: m.stream.operatorByline,
@@ -794,10 +744,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				// Open jobs modal pre-selected on current job.
 				m.jobsModal = jobsModalState{
-					show:     true,
-					jobIdx:   m.selectedJob,
-					tasks:    make(map[string][]*db.Task),
-					progress: make(map[string][]*db.ProgressReport),
+					show:   true,
+					jobIdx: m.selectedJob,
 				}
 				m.loadJobsForModal()
 				m.loadJobDetail()
@@ -879,9 +827,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.input.Reset()
 					m.cmdPopup.show = false
 					m.jobsModal = jobsModalState{
-						show:     true,
-						tasks:    make(map[string][]*db.Task),
-						progress: make(map[string][]*db.ProgressReport),
+						show: true,
 					}
 					m.loadJobsForModal()
 					if len(m.jobsModal.jobs) > 0 {
@@ -891,10 +837,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				case "/mcp":
 					m.input.Reset()
 					m.cmdPopup.show = false
-					m.mcpModal = mcpModalState{
-						show:    true,
-						servers: m.mcpManager.Servers(), // nil-receiver safe
-					}
+					m.mcpModal = mcpModalState{show: true}
+					// servers field will be populated when mcpModal is updated to use service types
 					return m, nil
 				}
 				// /job <prompt> — create a new job via the operator LLM.
@@ -1020,13 +964,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case AppReadyMsg:
 		m.awareness = msg.Awareness
-		// System prompt is already set from cfg.OperatorPrompt in NewModel().
 		m.initMessages()
 		m.loading = false
 		// Inject the pre-fetched greeting directly — no stream, no flash.
 		if msg.Greeting != "" {
-			m.appendEntry(ChatEntry{
-				Message:   provider.Message{Role: "assistant", Content: msg.Greeting},
+			m.appendEntry(service.ChatEntry{
+				Message: service.ChatMessage{
+					Role:    service.MessageRoleAssistant,
+					Content: msg.Greeting,
+				},
 				Timestamp: time.Now(),
 			})
 			m.updateViewportContent()
@@ -1067,87 +1013,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Batch(cmds...)
 		}
 
-		// Parse the generated team.md to extract the team name.
-		parsed, err := agentfmt.ParseBytes([]byte(msg.content), agentfmt.DefTeam)
-		if err != nil {
-			cmds = append(cmds, m.addToast("⚠ Team generation failed: invalid team definition", toastWarning))
-			return m, tea.Batch(cmds...)
-		}
-		teamDef, ok := parsed.(*agentfmt.TeamDef)
-		if !ok || teamDef.Name == "" {
-			cmds = append(cmds, m.addToast("⚠ Team generation failed: missing team name", toastWarning))
-			return m, tea.Batch(cmds...)
-		}
-
-		// Derive the directory slug from the team name.
-		slug := loader.Slugify(teamDef.Name)
-
-		// Determine the user teams directory.
-		userTeamsDir := m.teamsDir
-		teamDir := filepath.Join(userTeamsDir, slug)
-		agentsSubDir := filepath.Join(teamDir, "agents")
-
-		// Fail if the team directory already exists.
-		if _, statErr := os.Stat(teamDir); statErr == nil {
-			cmds = append(cmds, m.addToast("⚠ Team directory already exists: "+slug, toastWarning))
-			return m, tea.Batch(cmds...)
-		}
-
-		// Create the team directory structure.
-		if err := os.MkdirAll(agentsSubDir, 0o755); err != nil {
-			cmds = append(cmds, m.addToast("⚠ Team generation failed: "+err.Error(), toastWarning))
-			return m, tea.Batch(cmds...)
-		}
-
-		// Write team.md.
-		if err := os.WriteFile(filepath.Join(teamDir, "team.md"), []byte(msg.content), 0o644); err != nil {
-			_ = os.RemoveAll(teamDir)
-			cmds = append(cmds, m.addToast("⚠ Team generation failed: "+err.Error(), toastWarning))
-			return m, tea.Batch(cmds...)
-		}
-
-		// Copy agent files for each named agent.
-		copiedCount := 0
-		if m.store != nil && len(msg.agentNames) > 0 {
-			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-			allAgents, listErr := m.store.ListAgents(ctx)
-			cancel()
-			if listErr != nil {
-				slog.Warn("failed to list agents for team generation copy", "error", listErr)
-			} else {
-				// Build a name→agent map for fast lookup.
-				agentByName := make(map[string]*db.Agent, len(allAgents))
-				for _, a := range allAgents {
-					agentByName[a.Name] = a
-				}
-				for _, name := range msg.agentNames {
-					a, found := agentByName[name]
-					if !found {
-						slog.Warn("generated team references unknown agent, skipping", "agent", name)
-						continue
-					}
-					if a.SourcePath == "" {
-						slog.Warn("generated team agent has no source path, skipping", "agent", name)
-						continue
-					}
-					agentSlug := loader.Slugify(a.Name)
-					if agentSlug == "" {
-						agentSlug = loader.Slugify(a.ID)
-					}
-					destPath := filepath.Join(agentsSubDir, agentSlug+".md")
-					if err := copyFile(a.SourcePath, destPath); err != nil {
-						slog.Warn("failed to copy agent file for generated team", "agent", name, "error", err)
-						continue
-					}
-					copiedCount++
-				}
-			}
-		}
+		// The service has already written the team directory and triggered a reload.
+		// Extract team name from the generated team.md content (YAML frontmatter name: field).
+		agentCount := len(msg.agentNames)
+		teamName := extractFrontmatterName(msg.content)
 
 		// Reload and select the newly created team.
 		m.reloadTeamsForModal()
 		for i, t := range m.teamsModal.teams {
-			if t.Name() == teamDef.Name {
+			if t.Name() == teamName {
 				m.teamsModal.teamIdx = i
 				m.refreshSelectedTeamDef()
 				break
@@ -1155,7 +1029,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		cmds = append(cmds, m.addToast(
-			fmt.Sprintf("✓ Team '%s' generated with %d agents", teamDef.Name, copiedCount),
+			fmt.Sprintf("✓ Team '%s' generated with %d agents", teamName, agentCount),
 			toastSuccess,
 		))
 		return m, tea.Batch(cmds...)
@@ -1189,26 +1063,25 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(cmds...)
 
 	case RuntimeSessionEventMsg:
-		ev := msg.Event
-		slot, ok := m.runtimeSessions[ev.SessionID]
+		slot, ok := m.runtimeSessions[msg.SessionID]
 		if !ok {
 			return m, nil // unknown session, ignore
 		}
-		switch ev.Type {
-		case runtime.SessionEventText:
-			slot.output.WriteString(ev.Text)
-		case runtime.SessionEventToolCall:
-			if ev.ToolCall != nil {
-				fmt.Fprintf(&slot.output, "\n⚙ %s\n", ev.ToolCall.Name)
-				label := activityLabel(ev.ToolCall.Name, ev.ToolCall.Arguments)
-				slot.activities = append(slot.activities, activityItem{label: label, toolName: ev.ToolCall.Name})
+		switch msg.EventType {
+		case "text":
+			slot.output.WriteString(msg.Text)
+		case "tool_call":
+			if msg.ToolName != "" {
+				fmt.Fprintf(&slot.output, "\n⚙ %s\n", msg.ToolName)
+				label := activityLabel(msg.ToolName, json.RawMessage(msg.ToolInput))
+				slot.activities = append(slot.activities, activityItem{label: label, toolName: msg.ToolName})
 				if len(slot.activities) > 6 {
 					slot.activities = slot.activities[len(slot.activities)-6:]
 				}
 			}
-		case runtime.SessionEventToolResult:
-			if ev.ToolResult != nil {
-				result := xansi.Strip(ev.ToolResult.Result)
+		case "tool_result":
+			if msg.ToolOutput != "" {
+				result := xansi.Strip(msg.ToolOutput)
 				if len(result) > 200 {
 					result = result[:200] + "..."
 				}
@@ -1217,7 +1090,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		// Live-update the output modal if it's showing this session.
-		if m.outputModal.show && m.outputModal.sessionID == ev.SessionID {
+		if m.outputModal.show && m.outputModal.sessionID == msg.SessionID {
 			m.outputModal.content = slot.output.String()
 			// Auto-tail: keep scroll at bottom if user hasn't scrolled up.
 			// Use fullscreen modal dimensions (m.height - 4) to match renderOutputModal.
@@ -1248,24 +1121,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		slot.endTime = time.Now()
 
 		cmds = append(cmds, m.addToast("🍞 "+msg.AgentName+" is done (runtime).", toastSuccess))
-
-		// If this session was working on a task that's already been handled
-		// by the operator event loop (team lead called complete_task, report_blocker,
-		// etc.), skip the operator notification to avoid duplicate handling.
-		if msg.TaskID != "" && m.store != nil {
-			taskHandled := false
-			ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
-			if task, err := m.store.GetTask(ctx, msg.TaskID); err == nil {
-				switch task.Status {
-				case db.TaskStatusCompleted, db.TaskStatusFailed, db.TaskStatusBlocked:
-					taskHandled = true
-				}
-			}
-			cancel()
-			if taskHandled {
-				return m, tea.Batch(cmds...)
-			}
-		}
 
 		// Build completion notification and send it to the operator.
 		outputTail := slot.output.String()
@@ -1416,10 +1271,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var connectedCount, totalTools int
 		for _, s := range msg.Servers {
 			switch s.State {
-			case mcp.ServerConnected:
+			case service.MCPServerStateConnected:
 				connectedCount++
 				totalTools += s.ToolCount
-			case mcp.ServerFailed:
+			case service.MCPServerStateFailed:
 				toastCmds = append(toastCmds, m.addToast(
 					fmt.Sprintf("⚠ MCP: %s failed", s.Name),
 					toastWarning,
@@ -1463,28 +1318,19 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			return m, m.addToast("⚠ Generation failed: "+msg.err.Error(), toastWarning)
 		}
-		path, err := writeGeneratedSkillFile(msg.content)
-		if err != nil {
-			slog.Error("failed to write generated skill file", "error", err)
-			return m, m.addToast("⚠ Failed to save skill: "+err.Error(), toastWarning)
-		}
+		// The service has already written the file and triggered a reload.
+		// Extract the skill name from the generated content and reload the modal.
+		skillName := extractFrontmatterName(msg.content)
 		m.reloadSkillsForModal()
-		// Select the newly created skill by matching its source path.
+		// Select the newly created skill by matching its name.
 		for i, sk := range m.skillsModal.skills {
-			if sk.SourcePath == path {
+			if sk.Name == skillName {
 				m.skillsModal.skillIdx = i
 				break
 			}
 		}
-		// Extract the skill name for the toast from the parsed content.
-		skillName := ""
-		if parsed, err := agentfmt.ParseBytes([]byte(msg.content), agentfmt.DefSkill); err == nil {
-			if skillDef, ok := parsed.(*agentfmt.SkillDef); ok {
-				skillName = skillDef.Name
-			}
-		}
 		if skillName == "" {
-			skillName = filepath.Base(path)
+			skillName = "generated skill"
 		}
 		return m, m.addToast("✓ Skill '"+skillName+"' generated", toastSuccess)
 
@@ -1493,18 +1339,19 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			return m, m.addToast("⚠ Generation failed: "+msg.err.Error(), toastWarning)
 		}
-		path, agentName, err := writeGeneratedAgentFile(msg.content)
-		if err != nil {
-			slog.Error("failed to write generated agent file", "error", err)
-			return m, m.addToast("⚠ Failed to save agent: "+err.Error(), toastWarning)
-		}
+		// The service has already written the file and triggered a reload.
+		// Extract the agent name from the generated content and reload the modal.
+		agentName := extractFrontmatterName(msg.content)
 		m.reloadAgentsForModal()
-		// Select the newly created agent by matching its source path.
+		// Select the newly created agent by matching its name.
 		for i, a := range m.agentsModal.agents {
-			if a.SourcePath == path {
+			if a.Name == agentName {
 				m.agentsModal.agentIdx = i
 				break
 			}
+		}
+		if agentName == "" {
+			agentName = "generated agent"
 		}
 		return m, m.addToast("✓ Agent '"+agentName+"' generated", toastSuccess)
 
@@ -1540,15 +1387,22 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.stats.TotalResponseTime += m.stats.LastResponseTime
 			m.stats.TotalResponses++
 		}
-		m.stats.CompletionTokens += m.stats.CompletionTokensLive
+		m.stats.CompletionTokens += msg.TokensOut
+		m.stats.ReasoningTokens += msg.ReasoningTokens
 		m.stats.CompletionTokensLive = 0
 		if m.stream.currentResponse != "" {
 			byline := "operator"
-			if m.stats.ModelName != "" {
+			if msg.ModelName != "" {
+				byline = "operator · " + msg.ModelName
+				m.stats.ModelName = msg.ModelName
+			} else if m.stats.ModelName != "" {
 				byline = "operator · " + m.stats.ModelName
 			}
-			m.appendEntry(ChatEntry{
-				Message:    provider.Message{Role: "assistant", Content: m.stream.currentResponse},
+			m.appendEntry(service.ChatEntry{
+				Message: service.ChatMessage{
+					Role:    service.MessageRoleAssistant,
+					Content: m.stream.currentResponse,
+				},
 				Timestamp:  time.Now(),
 				ClaudeMeta: byline,
 			})
@@ -1566,9 +1420,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case OperatorEventMsg:
 		slog.Debug("operator event", "type", msg.Event.Type)
 		// Render visible operator events as styled system entries in the chat.
-		if line := formatOperatorEvent(msg.Event); line != "" {
-			m.appendEntry(ChatEntry{
-				Message:    provider.Message{Role: "assistant", Content: line},
+		if line := formatServiceEvent(msg.Event); line != "" {
+			m.appendEntry(service.ChatEntry{
+				Message: service.ChatMessage{
+					Role:    service.MessageRoleAssistant,
+					Content: line,
+				},
 				Timestamp:  time.Now(),
 				ClaudeMeta: "feed-event",
 			})
@@ -1576,12 +1433,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if !m.scroll.userScrolled {
 				m.chatViewport.GotoBottom()
 			}
-		}
-		return m, nil
-
-	case progressPollTickMsg:
-		if m.store != nil {
-			return m, progressPollCmd(m.store, m.runtime)
 		}
 		return m, nil
 
@@ -1595,7 +1446,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Keep m.jobs in sync so the Jobs panel (which reads m.jobs via
 		// displayJobs) reflects the latest polled state.
 		m.jobs = msg.Jobs
-		return m, scheduleProgressPoll()
+		return m, nil
 
 	case logTailTickMsg:
 		return m.handleLogTailTick()
@@ -1606,4 +1457,77 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	return m, tea.Batch(cmds...)
+}
+
+// extractFrontmatterName extracts the name: field from a YAML frontmatter block.
+// Returns empty string if not found. Used to get the name from generated definition content.
+func extractFrontmatterName(content string) string {
+	// Find the frontmatter block between --- delimiters.
+	if !strings.HasPrefix(content, "---") {
+		return ""
+	}
+	rest := content[3:]
+	// Skip optional newline after opening ---
+	if strings.HasPrefix(rest, "\n") {
+		rest = rest[1:]
+	}
+	end := strings.Index(rest, "\n---")
+	if end < 0 {
+		return ""
+	}
+	fm := rest[:end]
+	for _, line := range strings.Split(fm, "\n") {
+		if strings.HasPrefix(line, "name:") {
+			name := strings.TrimSpace(strings.TrimPrefix(line, "name:"))
+			// Strip surrounding quotes if present.
+			name = strings.Trim(name, `"'`)
+			return name
+		}
+	}
+	return ""
+}
+
+// formatServiceEvent returns a styled single-line string for a service.Event,
+// or empty string if the event type should not be displayed in the feed.
+// This is the service-layer equivalent of formatOperatorEvent (defined in helpers.go).
+func formatServiceEvent(ev service.Event) string {
+	switch ev.Type {
+	case service.EventTypeTaskStarted:
+		if p, ok := ev.Payload.(service.TaskStartedPayload); ok {
+			return FeedTaskStartedStyle.Render(fmt.Sprintf("⚡ %s started task: %q", p.TeamID, p.Title))
+		}
+		return FeedTaskStartedStyle.Render("⚡ task started")
+
+	case service.EventTypeTaskCompleted:
+		if p, ok := ev.Payload.(service.TaskCompletedPayload); ok {
+			return FeedTaskCompletedStyle.Render(fmt.Sprintf("✓ %s completed task", p.TeamID))
+		}
+		return FeedTaskCompletedStyle.Render("✓ task completed")
+
+	case service.EventTypeTaskFailed:
+		if p, ok := ev.Payload.(service.TaskFailedPayload); ok {
+			return FeedTaskFailedStyle.Render(fmt.Sprintf("✗ %s failed task: %s", p.TeamID, p.Error))
+		}
+		return FeedTaskFailedStyle.Render("✗ task failed")
+
+	case service.EventTypeBlockerReported:
+		if p, ok := ev.Payload.(service.BlockerReportedPayload); ok {
+			return FeedBlockerReportedStyle.Render(fmt.Sprintf("🚫 %s reported blocker: %s", p.TeamID, p.Description))
+		}
+		return FeedBlockerReportedStyle.Render("🚫 blocker reported")
+
+	case service.EventTypeJobCompleted:
+		if p, ok := ev.Payload.(service.JobCompletedPayload); ok {
+			return FeedJobCompleteStyle.Render(fmt.Sprintf("✅ Job %q complete", p.Title))
+		}
+		return FeedJobCompleteStyle.Render("✅ job complete")
+
+	case service.EventTypeProgressUpdate:
+		// Progress updates are too noisy for the main feed — skip.
+		return ""
+
+	default:
+		slog.Debug("unhandled service event type in feed", "type", ev.Type)
+		return ""
+	}
 }

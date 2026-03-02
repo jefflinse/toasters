@@ -11,8 +11,6 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
-
-	"github.com/jefflinse/toasters/internal/config"
 )
 
 // logViewState holds all state for the fullscreen log tail view.
@@ -68,19 +66,19 @@ func readLogCmd(path string) tea.Cmd {
 	}
 }
 
-// logPath returns the absolute path to the toasters log file.
-func logFilePath() string {
-	dir, err := config.Dir()
-	if err != nil {
+// logFilePath returns the absolute path to the toasters log file,
+// derived from the model's cached configDir.
+func (m *Model) logFilePath() string {
+	if m.configDir == "" {
 		return ""
 	}
-	return filepath.Join(dir, "toasters.log")
+	return filepath.Join(m.configDir, "toasters.log")
 }
 
 // openLogView opens the log view, reads the current log content, and starts the tail poll.
 func (m *Model) openLogView() tea.Cmd {
 	if m.logView.logPath == "" {
-		m.logView.logPath = logFilePath()
+		m.logView.logPath = m.logFilePath()
 	}
 	m.logView.show = true
 	m.logView.atBottom = true

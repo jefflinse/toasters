@@ -256,7 +256,7 @@ Full details: `PRE_PHASE_4_WAVE_2.md`
 
 ## Current Work: Client/Server Architecture Split
 
-**Status:** Phase 1 in progress — Steps 1.1 and 1.2 complete, Step 1.3 next
+**Status:** Phase 1 in progress — Steps 1.1 and 1.2 complete, Step 1.3 in progress
 **Tracking document:** [`CLIENT_SERVER_SPLIT.md`](CLIENT_SERVER_SPLIT.md)
 
 Splitting the monolithic TUI into a client/server architecture. The orchestration engine (operator, runtime, store, MCP, loader, compose, providers) becomes a long-running server; the TUI becomes a thin client. REST + SSE protocol. 4 phases:
@@ -276,5 +276,5 @@ Plan reviewed by tui-engineer and api-designer. All blocking concerns documented
 - `events.go` — unified event stream: 19 event types, `Event` envelope with sequence numbers + correlation IDs, `EventService.Subscribe(ctx)`
 
 **Step 1.2: Implement LocalService** ✅ — `internal/service/local.go` created; full `Service` interface satisfied; reviewed by concurrency-reviewer, security-auditor, and code-reviewer; all blocking findings fixed
-**Step 1.3: Rewire TUI** — not started
+**Step 1.3: Rewire TUI** — in progress; 8 of ~15 TUI files complete (`messages.go`, `model.go`, `helpers.go`, `blocker_modal.go`, `log_view.go`, `panels.go`, `streaming.go`, `mcp_modal.go`); remaining: `team_view.go` (delete), `teams_modal.go`, `skills_modal.go`, `agents_modal.go`, `jobs_modal.go`, `llm_generate.go`, `progress_poll.go` (delete), new `event_consumer.go`, `cmd/root.go` rewrite, test file updates
 **Step 1.4: Service Tests** — not started

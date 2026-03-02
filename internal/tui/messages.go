@@ -6,11 +6,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/jefflinse/toasters/internal/db"
-	"github.com/jefflinse/toasters/internal/mcp"
-	"github.com/jefflinse/toasters/internal/operator"
-	"github.com/jefflinse/toasters/internal/provider"
-	"github.com/jefflinse/toasters/internal/runtime"
+	"github.com/jefflinse/toasters/internal/service"
 )
 
 // Toast notification types.
@@ -93,12 +89,12 @@ func estimateTokens(s string) int {
 
 // progressPollMsg carries the latest progress data from SQLite, fired every 500ms.
 type progressPollMsg struct {
-	Jobs            []*db.Job
-	Tasks           map[string][]*db.Task
-	Progress        map[string][]*db.ProgressReport
-	Sessions        []*db.AgentSession
-	RuntimeSessions []runtime.SessionSnapshot // live snapshots with real token counts
-	FeedEntries     []*db.FeedEntry           // recent activity feed entries
+	Jobs            []service.Job
+	Tasks           map[string][]service.Task
+	Progress        map[string][]service.ProgressReport
+	Sessions        []service.AgentSession
+	RuntimeSessions []service.SessionSnapshot // live snapshots with real token counts
+	FeedEntries     []service.FeedEntry       // recent activity feed entries
 }
 
 // progressPollTickMsg is an internal tick that triggers the next poll.
@@ -107,7 +103,7 @@ type progressPollTickMsg struct{}
 // Message types for the Bubble Tea event loop.
 
 type ModelsMsg struct {
-	Models []provider.ModelInfo
+	Models []service.ModelInfo
 	Err    error
 }
 
@@ -124,8 +120,15 @@ type RuntimeSessionStartedMsg struct {
 }
 
 // RuntimeSessionEventMsg carries a runtime session event to the TUI.
+// It carries the event data inline rather than importing runtime.SessionEvent.
 type RuntimeSessionEventMsg struct {
-	Event runtime.SessionEvent
+	SessionID  string
+	EventType  string // "text", "tool_call", "tool_result", "done", "error"
+	Text       string // populated for text events
+	ToolName   string // populated for tool_call events
+	ToolInput  string // populated for tool_call events (JSON arguments)
+	ToolOutput string // populated for tool_result events
+	IsError    bool   // true if this is an error event
 }
 
 // RuntimeSessionDoneMsg is sent when a runtime session completes.
@@ -140,13 +143,13 @@ type RuntimeSessionDoneMsg struct {
 
 // TeamsReloadedMsg is sent by the hot-reload watcher when the teams directory changes.
 type TeamsReloadedMsg struct {
-	Teams     []TeamView
+	Teams     []service.TeamView
 	Awareness string
 }
 
 // JobsReloadedMsg is sent when jobs are reloaded (e.g. from SQLite polling).
 type JobsReloadedMsg struct {
-	Jobs []*db.Job
+	Jobs []service.Job
 }
 
 // AppReadyMsg is sent when the app has finished loading and is ready to start.
@@ -219,12 +222,12 @@ type TeamsAutoDetectDoneMsg struct {
 // blockerAnswersSubmittedMsg is sent when the user has submitted answers for a blocker.
 type blockerAnswersSubmittedMsg struct {
 	jobID   string
-	blocker *Blocker
+	blocker *service.Blocker
 }
 
 // MCPStatusMsg is sent after MCP connection completes to trigger startup toasts.
 type MCPStatusMsg struct {
-	Servers []mcp.ServerStatus
+	Servers []service.MCPServerStatus
 }
 
 // DefinitionsReloadedMsg is sent when definition files change and are reloaded.
@@ -236,25 +239,19 @@ type OperatorTextMsg struct {
 }
 
 // OperatorDoneMsg is sent when the operator finishes processing a turn.
-type OperatorDoneMsg struct{}
+type OperatorDoneMsg struct {
+	ModelName       string
+	TokensIn        int
+	TokensOut       int
+	ReasoningTokens int
+}
 
 // OperatorEventMsg carries an operator event for TUI display.
 type OperatorEventMsg struct {
-	Event operator.Event
+	Event service.Event
 }
 
 // editorFinishedMsg is sent when an external $EDITOR process completes.
 type editorFinishedMsg struct {
 	err error
-}
-
-// ChatEntry consolidates the per-message data that was previously spread
-// across four parallel slices (messages, timestamps, reasoning, claudeMeta).
-// Reasoning and ClaudeMeta are only meaningful for assistant-role messages;
-// for other roles they are empty strings.
-type ChatEntry struct {
-	Message    provider.Message
-	Timestamp  time.Time
-	Reasoning  string
-	ClaudeMeta string
 }

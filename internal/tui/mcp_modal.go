@@ -8,16 +8,16 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
-	"github.com/jefflinse/toasters/internal/mcp"
+	"github.com/jefflinse/toasters/internal/service"
 )
 
 // mcpModalState holds all state for the /mcp modal overlay.
 type mcpModalState struct {
 	show      bool
-	servers   []mcp.ServerStatus // snapshot taken when modal opens
-	serverIdx int                // selected server in left panel
-	toolIdx   int                // selected tool in right panel (for scrolling)
-	focus     int                // 0=left panel (servers), 1=right panel (tools)
+	servers   []service.MCPServerStatus // snapshot taken when modal opens
+	serverIdx int                       // selected server in left panel
+	toolIdx   int                       // selected tool in right panel (for scrolling)
+	focus     int                       // 0=left panel (servers), 1=right panel (tools)
 }
 
 // updateMCPModal handles all key presses when the MCP modal is open.
@@ -131,7 +131,7 @@ func (m *Model) renderMCPModal() string {
 	} else {
 		for i, s := range servers {
 			var icon string
-			if s.State == mcp.ServerConnected {
+			if s.State == service.MCPServerStateConnected {
 				icon = ConnectedStyle.Render("✓")
 			} else {
 				icon = ErrorStyle.Render("✗")
@@ -173,37 +173,20 @@ func (m *Model) renderMCPModal() string {
 		rightLines = append(rightLines, DimStyle.Render(strings.Repeat("─", rightInnerW)))
 
 		// Status line.
-		if server.State == mcp.ServerConnected {
+		if server.State == service.MCPServerStateConnected {
 			rightLines = append(rightLines, "Status: "+ConnectedStyle.Render("✓ connected"))
 		} else {
 			rightLines = append(rightLines, "Status: "+ErrorStyle.Render("✗ failed"))
 		}
 
 		// Error line (if failed).
-		if server.State == mcp.ServerFailed && server.Error != "" {
+		if server.State == service.MCPServerStateFailed && server.Error != "" {
 			errText := wrapText("Error: "+server.Error, rightInnerW)
 			rightLines = append(rightLines, ErrorStyle.Render(errText))
 		}
 
 		// Transport line.
 		rightLines = append(rightLines, "Transport: "+server.Transport)
-
-		// Connection info.
-		switch server.Transport {
-		case "stdio":
-			cmd := server.Config.Command
-			if len(server.Config.Args) > 0 {
-				cmd += " " + strings.Join(server.Config.Args, " ")
-			}
-			rightLines = append(rightLines, "Command: "+truncateStr(cmd, rightInnerW-9))
-		case "sse", "http":
-			rightLines = append(rightLines, "URL: "+truncateStr(server.Config.URL, rightInnerW-5))
-		}
-
-		// Filter info.
-		if len(server.Config.EnabledTools) > 0 {
-			rightLines = append(rightLines, fmt.Sprintf("Filter: %d tools enabled", server.ToolCount))
-		}
 
 		// Blank line before tools section.
 		rightLines = append(rightLines, "")
@@ -212,7 +195,7 @@ func (m *Model) renderMCPModal() string {
 		rightLines = append(rightLines, fmt.Sprintf("Tools (%d)", server.ToolCount))
 
 		// How many lines are left for tools after header rows.
-		// Count: name, divider, status, [error], transport, connection, [filter], blank, tools-header.
+		// Count: name, divider, status, [error], transport, blank, tools-header.
 		headerRows := len(rightLines)
 		toolAreaH := panelInnerH - headerRows
 		if toolAreaH < 1 {

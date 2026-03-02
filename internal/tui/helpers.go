@@ -11,10 +11,12 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
-	"github.com/jefflinse/toasters/internal/db"
-	"github.com/jefflinse/toasters/internal/operator"
-	"github.com/jefflinse/toasters/internal/provider"
+	"github.com/jefflinse/toasters/internal/service"
 )
+
+// ChatEntry is a package-level alias for service.ChatEntry so that files not
+// yet migrated to the service layer can continue to use the unqualified name.
+type ChatEntry = service.ChatEntry
 
 // wrapText wraps s to fit within maxWidth columns.
 func wrapText(s string, maxWidth int) string {
@@ -323,8 +325,8 @@ func (m *Model) appendHelpMessage() {
 		"**Slash Command Autocomplete**\n" +
 		"Type `/` to open the command picker. Use ↑↓ to navigate, Tab or Enter to select, Esc to dismiss."
 
-	m.appendEntry(ChatEntry{
-		Message:   provider.Message{Role: "assistant", Content: helpText},
+	m.appendEntry(service.ChatEntry{
+		Message:   service.ChatMessage{Role: service.MessageRoleAssistant, Content: helpText},
 		Timestamp: time.Now(),
 	})
 	m.stats.MessageCount++
@@ -340,8 +342,8 @@ func (m *Model) appendHelpMessage() {
 func (m *Model) initMessages() {
 	m.chat.entries = nil
 	if m.systemPrompt != "" {
-		m.appendEntry(ChatEntry{
-			Message:   provider.Message{Role: "system", Content: m.systemPrompt},
+		m.appendEntry(service.ChatEntry{
+			Message:   service.ChatMessage{Role: service.MessageRoleSystem, Content: m.systemPrompt},
 			Timestamp: time.Now(),
 		})
 		m.stats.SystemPromptTokens = estimateTokens(m.systemPrompt)
@@ -355,11 +357,11 @@ func (m *Model) initMessages() {
 	m.chat.collapsedTools = make(map[int]bool)
 	m.prompt.confirmDispatch = false
 	m.prompt.changingTeam = false
-	m.prompt.pendingDispatch = provider.ToolCall{}
+	m.prompt.pendingDispatch = service.ToolCall{}
 }
 
 // appendEntry adds a new chat entry to the conversation history.
-func (m *Model) appendEntry(e ChatEntry) {
+func (m *Model) appendEntry(e service.ChatEntry) {
 	m.chat.entries = append(m.chat.entries, e)
 }
 
@@ -374,7 +376,7 @@ func (m *Model) appendEntry(e ChatEntry) {
 //  2. Visual tool-call indicator messages — entries with ClaudeMeta "tool-call-indicator"
 //     that have no ToolCalls set (i.e. the "⚙ calling foo…" text lines). Entries
 //     with ToolCalls set ARE real tool_use records and must be kept.
-func isDisplayOnly(e ChatEntry) bool {
+func isDisplayOnly(e service.ChatEntry) bool {
 	switch e.ClaudeMeta {
 	case "ask-user-prompt", "dispatch-confirm", "kill-confirm", "escalate-prompt", "feed-event":
 		return true
@@ -385,10 +387,10 @@ func isDisplayOnly(e ChatEntry) bool {
 	return false
 }
 
-// messagesFromEntries extracts the provider.Message slice from entries for passing to the LLM client.
+// messagesFromEntries extracts the service.ChatMessage slice from entries.
 // Display-only entries (visual indicators, confirmation prompts) are filtered out.
-func (m *Model) messagesFromEntries() []provider.Message {
-	msgs := make([]provider.Message, 0, len(m.chat.entries))
+func (m *Model) messagesFromEntries() []service.ChatMessage {
+	msgs := make([]service.ChatMessage, 0, len(m.chat.entries))
 	for _, e := range m.chat.entries {
 		if isDisplayOnly(e) {
 			continue
@@ -403,7 +405,7 @@ func (m *Model) messagesFromEntries() []provider.Message {
 // (e.g. the startup greeting) are shown alongside the art.
 func (m *Model) hasConversation() bool {
 	for _, entry := range m.chat.entries {
-		if entry.Message.Role == "user" {
+		if entry.Message.Role == service.MessageRoleUser {
 			return true
 		}
 	}
@@ -458,40 +460,40 @@ func (m *Model) newSession() {
 //   - Completed, failed, and cancelled jobs updated more than 24 hours ago are hidden.
 //   - Sort order: Active first (by CreatedAt asc), then Paused (by CreatedAt asc),
 //     then Completed/Failed/Cancelled (by CreatedAt asc).
-func (m Model) displayJobs() []*db.Job {
+func (m Model) displayJobs() []service.Job {
 	now := time.Now()
 	cutoff := now.Add(-24 * time.Hour)
 
-	var active, paused, done []*db.Job
+	var active, paused, done []service.Job
 	for _, j := range m.jobs {
 		switch j.Status {
-		case db.JobStatusCompleted, db.JobStatusFailed, db.JobStatusCancelled:
+		case service.JobStatusCompleted, service.JobStatusFailed, service.JobStatusCancelled:
 			if !j.UpdatedAt.IsZero() && j.UpdatedAt.Before(cutoff) {
 				continue // hide stale terminal-state jobs
 			}
 			done = append(done, j)
-		case db.JobStatusPaused:
+		case service.JobStatusPaused:
 			paused = append(paused, j)
 		default:
 			active = append(active, j)
 		}
 	}
 
-	result := make([]*db.Job, 0, len(active)+len(paused)+len(done))
+	result := make([]service.Job, 0, len(active)+len(paused)+len(done))
 	result = append(result, active...)
 	result = append(result, paused...)
 	result = append(result, done...)
 	return result
 }
 
-// jobByID returns the job with the given ID, or nil, false if not found.
-func (m *Model) jobByID(id string) (*db.Job, bool) {
+// jobByID returns the job with the given ID, or zero value and false if not found.
+func (m *Model) jobByID(id string) (service.Job, bool) {
 	for _, j := range m.jobs {
 		if j.ID == id {
 			return j, true
 		}
 	}
-	return nil, false
+	return service.Job{}, false
 }
 
 // sortedRuntimeSessions returns the runtime sessions sorted for display:
@@ -576,71 +578,28 @@ func (m *Model) runtimeSessionForGridCell(cellIdx int) *runtimeSlot {
 	return nil
 }
 
-// formatOperatorEvent returns a styled single-line string for an operator event,
-// or empty string if the event type should not be displayed in the feed.
-func formatOperatorEvent(ev operator.Event) string {
-	switch ev.Type {
-	case operator.EventTaskStarted:
-		if p, ok := ev.Payload.(operator.TaskStartedPayload); ok {
-			return FeedTaskStartedStyle.Render(fmt.Sprintf("⚡ %s started task: %q", p.TeamID, p.Title))
-		}
-		return FeedTaskStartedStyle.Render("⚡ task started")
-
-	case operator.EventTaskCompleted:
-		if p, ok := ev.Payload.(operator.TaskCompletedPayload); ok {
-			return FeedTaskCompletedStyle.Render(fmt.Sprintf("✓ %s completed task", p.TeamID))
-		}
-		return FeedTaskCompletedStyle.Render("✓ task completed")
-
-	case operator.EventTaskFailed:
-		if p, ok := ev.Payload.(operator.TaskFailedPayload); ok {
-			return FeedTaskFailedStyle.Render(fmt.Sprintf("✗ %s failed task: %s", p.TeamID, p.Error))
-		}
-		return FeedTaskFailedStyle.Render("✗ task failed")
-
-	case operator.EventBlockerReported:
-		if p, ok := ev.Payload.(operator.BlockerReportedPayload); ok {
-			return FeedBlockerReportedStyle.Render(fmt.Sprintf("🚫 %s reported blocker: %s", p.TeamID, p.Description))
-		}
-		return FeedBlockerReportedStyle.Render("🚫 blocker reported")
-
-	case operator.EventJobComplete:
-		if p, ok := ev.Payload.(operator.JobCompletePayload); ok {
-			return FeedJobCompleteStyle.Render(fmt.Sprintf("✅ Job %q complete", p.Title))
-		}
-		return FeedJobCompleteStyle.Render("✅ job complete")
-
-	case operator.EventProgressUpdate:
-		// Progress updates are too noisy for the main feed — skip.
-		return ""
-
-	default:
-		slog.Debug("unhandled operator event type in feed", "type", ev.Type)
-		return ""
-	}
-}
-
-// formatFeedEntry returns a styled single-line string for a db.FeedEntry.
-func formatFeedEntry(entry *db.FeedEntry) string {
+// formatFeedEntry returns a styled single-line string for a service.FeedEntry.
+func formatFeedEntry(entry service.FeedEntry) string {
 	switch entry.EntryType {
-	case db.FeedEntrySystemEvent:
+	case service.FeedEntryTypeSystemEvent:
 		return FeedSystemEventStyle.Render("  ⚙ " + entry.Content)
-	case db.FeedEntryConsultationTrace:
+	case service.FeedEntryTypeConsultationTrace:
 		return FeedConsultationTraceStyle.Render("    ↳ " + entry.Content)
-	case db.FeedEntryTaskStarted:
+	case service.FeedEntryTypeTaskStarted:
 		return FeedTaskStartedStyle.Render("⚡ " + entry.Content)
-	case db.FeedEntryTaskCompleted:
+	case service.FeedEntryTypeTaskCompleted:
 		return FeedTaskCompletedStyle.Render("✓ " + entry.Content)
-	case db.FeedEntryTaskFailed:
+	case service.FeedEntryTypeTaskFailed:
 		return FeedTaskFailedStyle.Render("✗ " + entry.Content)
-	case db.FeedEntryBlockerReported:
+	case service.FeedEntryTypeBlockerReported:
 		return FeedBlockerReportedStyle.Render("🚫 " + entry.Content)
-	case db.FeedEntryJobComplete:
+	case service.FeedEntryTypeJobComplete:
 		return FeedJobCompleteStyle.Render("✅ " + entry.Content)
-	case db.FeedEntryUserMessage, db.FeedEntryOperatorMessage:
+	case service.FeedEntryTypeUserMessage, service.FeedEntryTypeOperatorMessage:
 		// These are already rendered as chat entries; skip to avoid duplication.
 		return ""
 	default:
+		slog.Debug("unhandled feed entry type", "type", entry.EntryType)
 		return DimStyle.Render(entry.Content)
 	}
 }

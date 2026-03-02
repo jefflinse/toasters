@@ -8,8 +8,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/jefflinse/toasters/internal/operator"
-	"github.com/jefflinse/toasters/internal/provider"
+	"github.com/jefflinse/toasters/internal/service"
 )
 
 // sendMessage takes the current input, appends it to history, and routes it
@@ -27,7 +26,7 @@ func (m *Model) sendMessage() tea.Cmd {
 	m.cmdPopup.selectedIdx = 0
 
 	m.appendEntry(ChatEntry{
-		Message:   provider.Message{Role: "user", Content: text},
+		Message:   service.ChatMessage{Role: service.MessageRoleUser, Content: text},
 		Timestamp: time.Now(),
 	})
 	m.stats.MessageCount++
@@ -38,22 +37,22 @@ func (m *Model) sendMessage() tea.Cmd {
 	m.updateViewportContent()
 	m.chatViewport.GotoBottom()
 
-	if m.operator == nil {
+	if m.svc == nil {
 		return nil
 	}
 
 	m.stream.streaming = true
 	m.stream.currentResponse = ""
 	m.stats.ResponseStart = time.Now()
-	op := m.operator
+	svc := m.svc
 	return tea.Batch(
 		func() tea.Msg {
 			ctx := context.Background()
-			_ = op.Send(ctx, operator.Event{
-				Type:    operator.EventUserMessage,
-				Payload: operator.UserMessagePayload{Text: text},
-			})
-			// Send returns immediately — OperatorDoneMsg is fired by the
+			_, err := svc.Operator().SendMessage(ctx, text)
+			if err != nil {
+				return OperatorDoneMsg{}
+			}
+			// SendMessage returns immediately — OperatorDoneMsg is fired by the
 			// OnTurnDone callback wired in cmd/root.go when the turn completes.
 			return nil
 		},
@@ -65,27 +64,27 @@ func (m *Model) sendMessage() tea.Cmd {
 // is currently streaming, the notification is sent asynchronously (the operator
 // will queue it). Returns a tea.Cmd that performs the send.
 func (m *Model) notifyOperator(notification string) tea.Cmd {
-	if m.operator == nil {
+	if m.svc == nil {
 		return nil
 	}
-	op := m.operator
+	svc := m.svc
 	return func() tea.Msg {
 		ctx := context.Background()
-		_ = op.Send(ctx, operator.Event{
-			Type:    operator.EventUserMessage,
-			Payload: operator.UserMessagePayload{Text: notification},
-		})
+		_, err := svc.Operator().SendMessage(ctx, notification)
+		if err != nil {
+			return OperatorDoneMsg{}
+		}
 		return nil
 	}
 }
 
 // fetchModels returns a command that fetches available models from the LLM server.
 func (m Model) fetchModels() tea.Cmd {
-	client := m.llmClient
+	svc := m.svc
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		models, err := client.Models(ctx)
+		models, err := svc.System().ListModels(ctx)
 		return ModelsMsg{Models: models, Err: err}
 	}
 }

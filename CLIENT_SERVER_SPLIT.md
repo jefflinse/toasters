@@ -362,10 +362,44 @@ The progress polling goroutine and 15s heartbeat goroutine start lazily on the f
 
 ### Step 1.3: Rewire TUI to Use the Service
 
-- [ ] **Status:** Not started
+- [ ] **Status:** In progress (2026-03-01) — 8 of ~15 TUI files complete; codebase does not yet build
 - **Agent:** builder
 - **Description:** Modify the TUI to use `service.Service` instead of directly accessing `db.Store`, `provider.Provider`, `runtime.Runtime`, and the filesystem. The `Model` struct should hold a `service.Service` instead of individual component references. The event stream subscription replaces the current `p.Send(tea.Msg)` callback wiring — a goroutine consumes service events and translates them to `tea.Msg` values.
 - **Blocking concern B6:** `openInEditor()` stays in TUI but must be disabled when using a remote service. Show a toast explaining why.
+
+#### Progress (as of 2026-03-01)
+
+**Completed files (no internal imports remaining):**
+- `messages.go` — all tea.Msg types use service types; `ChatEntry` removed (use `service.ChatEntry`)
+- `model.go` — `ModelConfig` simplified to `Service service.Service`; `Model` struct loses `store`/`runtime`/`llmClient`/`mcpManager`/`operator`; gains `svc`/`configDir`
+- `helpers.go` — `ChatEntry` type alias added; `formatFeedEntry`, `displayJobs`, `jobByID`, `hasBlocker` use service types; `formatOperatorEvent` removed (superseded by `formatServiceEvent` in model.go)
+- `blocker_modal.go` — local `Blocker`/`BlockerQuestion` types deleted; using `service.Blocker`/`service.BlockerQuestion`
+- `log_view.go` — `config.Dir()` replaced with `m.configDir`
+- `panels.go` — all `db.JobStatus*`/`db.TaskStatus*`/`mcp.Server*` constants replaced with service equivalents
+- `streaming.go` — `sendMessage`/`notifyOperator` use `svc.Operator().SendMessage()`; `fetchModels` uses `svc.System().ListModels()`
+- `mcp_modal.go` — using `service.MCPServerStatus` flat fields
+
+**Remaining files (still reference internal packages):**
+- `team_view.go` — DELETE entirely (all types/functions moved to service)
+- `teams_modal.go` — ~400 lines of filesystem ops → service calls; `*db.Agent`/`TeamView` → service types
+- `skills_modal.go` — `m.store`/`m.llmClient` → service calls
+- `agents_modal.go` — `m.store`/`m.llmClient` → service calls
+- `jobs_modal.go` — `m.store` → `m.svc.Jobs()` calls
+- `llm_generate.go` — `provider.Provider`/`agentfmt`/`*db.Agent` → service calls
+- `progress_poll.go` — DELETE entirely
+- `event_consumer.go` — CREATE new (service event → tea.Msg translation goroutine)
+- `cmd/root.go` — rewrite to create `LocalService`, wire callbacks, start event consumer
+- Test files: `progress_poll_test.go`, `helpers_test.go`, `mcp_modal_test.go`, `model_completion_test.go`
+
+#### Key design decisions locked during implementation
+
+- `progressPollCmd` eliminated — replaced by `ConsumeServiceEvents` goroutine subscribing to `svc.Events().Subscribe(ctx)`
+- Session events deferred — `RuntimeSessionEventMsg` stays wired from `cmd/root.go` callbacks directly (not service event stream); `RuntimeSessionEventMsg` now carries inline fields (no `runtime.SessionEvent`)
+- `textBatcher` stays in `cmd/root.go`
+- `tui.TeamView` deleted — `service.TeamView` used everywhere
+- `OperatorDoneMsg` gains `ModelName`, `TokensIn`, `TokensOut`, `ReasoningTokens` fields
+- `service.ProgressState` field names: `Jobs`, `Tasks`, `Reports` (not `Progress`), `ActiveSessions`, `LiveSnapshots`, `FeedEntries`
+
 - **Acceptance criteria:**
   - [ ] TUI no longer imports `db`, `provider`, `runtime`, `compose`, `loader`, `mcp`, `config`, `agentfmt`, or `bootstrap` directly
   - [ ] `cmd/root.go` creates a `LocalService` and passes it to the TUI

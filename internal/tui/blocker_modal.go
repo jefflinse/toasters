@@ -9,27 +9,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
-	"github.com/jefflinse/toasters/internal/db"
+	"github.com/jefflinse/toasters/internal/service"
 )
-
-// BlockerQuestion is a single question posed by a blocked team.
-type BlockerQuestion struct {
-	Text    string
-	Options []string
-	Answer  string
-}
-
-// Blocker represents a blocker that needs user input.
-type Blocker struct {
-	Team           string
-	BlockerSummary string
-	Context        string
-	WhatWasTried   string
-	WhatIsNeeded   string
-	Questions      []BlockerQuestion
-	Answered       bool
-	RawBody        string
-}
 
 // updateBlockerModal handles all key presses when the blocker modal is open.
 func (m *Model) updateBlockerModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -108,7 +89,7 @@ func (m *Model) updateBlockerModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 }
 
 // hasBlocker reports whether the given job has an unanswered blocker recorded.
-func (m Model) hasBlocker(j *db.Job) bool {
+func (m Model) hasBlocker(j service.Job) bool {
 	b, ok := m.blockers[j.ID]
 	return ok && b != nil && !b.Answered
 }

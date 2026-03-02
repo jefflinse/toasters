@@ -2,14 +2,14 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
 
 	"charm.land/lipgloss/v2"
 
-	"github.com/jefflinse/toasters/internal/db"
-	"github.com/jefflinse/toasters/internal/mcp"
+	"github.com/jefflinse/toasters/internal/service"
 )
 
 func leftPanelWidth(termWidth int) int {
@@ -113,15 +113,15 @@ func (m Model) renderLeftPanel(panelWidth, panelHeight int) string {
 			// Job name row with status prefix icon.
 			var statusPrefix string
 			switch j.Status {
-			case db.JobStatusActive:
+			case service.JobStatusActive:
 				statusPrefix = "▶ "
-			case db.JobStatusPaused:
+			case service.JobStatusPaused:
 				statusPrefix = "⏸ "
-			case db.JobStatusCompleted:
+			case service.JobStatusCompleted:
 				statusPrefix = "✓ "
-			case db.JobStatusSettingUp:
+			case service.JobStatusSettingUp:
 				statusPrefix = "⚙ "
-			case db.JobStatusDecomposing:
+			case service.JobStatusDecomposing:
 				statusPrefix = "◈ "
 			default:
 				statusPrefix = "· "
@@ -135,7 +135,7 @@ func (m Model) renderLeftPanel(panelWidth, panelHeight int) string {
 			}
 
 			// Child items: only show for active/paused jobs (not completed).
-			if j.Status != db.JobStatusCompleted {
+			if j.Status != service.JobStatusCompleted {
 				// BLOCKED child (always first if present).
 				if m.hasBlocker(j) {
 					blockerLine := "  ⚠ BLOCKED"
@@ -143,16 +143,16 @@ func (m Model) renderLeftPanel(panelWidth, panelHeight int) string {
 				}
 
 				// SQLite task progress summary and subitems (single lookup).
-				if dbTasks := m.progress.tasks[j.ID]; len(dbTasks) > 0 {
-					summary := renderJobProgressSummary(dbTasks)
+				if tasks := m.progress.tasks[j.ID]; len(tasks) > 0 {
+					summary := renderJobProgressSummary(tasks)
 					if summary != "" {
 						topLines = append(topLines, DimStyle.Render("  ")+summary)
 					}
-					for _, task := range dbTasks {
+					for _, task := range tasks {
 						indicator, style := taskStatusIndicator(task.Status)
 						taskLine := "  " + indicator + " " + truncateStr(task.Title, contentWidth-5)
 						topLines = append(topLines, style.Render(taskLine))
-						if task.TeamID != "" && (task.Status == db.TaskStatusInProgress || task.Status == db.TaskStatusBlocked) {
+						if task.TeamID != "" && (task.Status == service.TaskStatusInProgress || task.Status == service.TaskStatusBlocked) {
 							teamLine := "    " + style.Render(indicator) + " " + TaskPendingStyle.Render(truncateStr(task.TeamID, contentWidth-7))
 							topLines = append(topLines, teamLine)
 						}
@@ -244,7 +244,7 @@ func (m Model) renderLeftPanel(panelWidth, panelHeight int) string {
 			workerCount := fmt.Sprintf("(%d workers)", len(t.Workers))
 			// Append badge for auto teams.
 			badge := ""
-			if isAutoTeam(t) {
+			if t.IsAuto() {
 				badge = " ↻"
 			}
 			name := truncateStr(t.Name(), contentWidth-2)
@@ -320,19 +320,19 @@ func (m Model) renderSidebar(sbWidth int) string {
 	mcpSB.WriteString("\n")
 
 	hasMCP := false
-	if m.mcpManager != nil {
-		servers := m.mcpManager.Servers()
-		if len(servers) > 0 {
+	if m.svc != nil {
+		servers, err := m.svc.System().ListMCPServers(context.Background())
+		if err == nil && len(servers) > 0 {
 			hasMCP = true
 			var totalTools int
 			for _, s := range servers {
 				var icon string
 				var style lipgloss.Style
 				switch s.State {
-				case mcp.ServerConnected:
+				case service.MCPServerStateConnected:
 					icon = "✓"
 					style = ConnectedStyle
-				case mcp.ServerFailed:
+				case service.MCPServerStateFailed:
 					icon = "✗"
 					style = ErrorStyle
 				default:
@@ -343,7 +343,7 @@ func (m Model) renderSidebar(sbWidth int) string {
 
 				label := s.Name
 				toolInfo := fmt.Sprintf("(%d tools)", s.ToolCount)
-				if s.State == mcp.ServerFailed {
+				if s.State == service.MCPServerStateFailed {
 					toolInfo = "(failed)"
 				}
 
@@ -471,52 +471,52 @@ func sidebarRow(label, value string) string {
 		SidebarValueStyle.Render(value) + "\n"
 }
 
-// taskStatusIndicator returns the status indicator rune and style for a db task status.
-func taskStatusIndicator(status db.TaskStatus) (string, lipgloss.Style) {
+// taskStatusIndicator returns the status indicator rune and style for a service task status.
+func taskStatusIndicator(status service.TaskStatus) (string, lipgloss.Style) {
 	switch status {
-	case db.TaskStatusPending:
+	case service.TaskStatusPending:
 		return "○", dbTaskPendingStyle
-	case db.TaskStatusInProgress:
+	case service.TaskStatusInProgress:
 		return "◉", dbTaskInProgressStyle
-	case db.TaskStatusCompleted:
+	case service.TaskStatusCompleted:
 		return "✓", dbTaskCompletedStyle
-	case db.TaskStatusFailed:
+	case service.TaskStatusFailed:
 		return "✗", dbTaskFailedStyle
-	case db.TaskStatusBlocked:
+	case service.TaskStatusBlocked:
 		return "⊘", dbTaskBlockedStyle
-	case db.TaskStatusCancelled:
+	case service.TaskStatusCancelled:
 		return "—", dbTaskCancelledStyle
 	default:
 		return "?", dbTaskPendingStyle
 	}
 }
 
-// renderJobProgressSummary returns a summary line for a job's SQLite task progress.
+// renderJobProgressSummary returns a summary line for a job's task progress.
 // Returns an empty string if there are no tasks.
-func renderJobProgressSummary(tasks []*db.Task) string {
+func renderJobProgressSummary(tasks []service.Task) string {
 	if len(tasks) == 0 {
 		return ""
 	}
 	var completed, blocked, failed int
 	for _, t := range tasks {
 		switch t.Status {
-		case db.TaskStatusCompleted:
+		case service.TaskStatusCompleted:
 			completed++
-		case db.TaskStatusBlocked:
+		case service.TaskStatusBlocked:
 			blocked++
-		case db.TaskStatusFailed:
+		case service.TaskStatusFailed:
 			failed++
 		}
 	}
 	if blocked > 0 {
-		_, style := taskStatusIndicator(db.TaskStatusBlocked)
+		_, style := taskStatusIndicator(service.TaskStatusBlocked)
 		return style.Render("⚠ BLOCKED")
 	}
 	if failed > 0 {
-		_, style := taskStatusIndicator(db.TaskStatusFailed)
+		_, style := taskStatusIndicator(service.TaskStatusFailed)
 		return style.Render(fmt.Sprintf("%d failed", failed))
 	}
-	_, style := taskStatusIndicator(db.TaskStatusCompleted)
+	_, style := taskStatusIndicator(service.TaskStatusCompleted)
 	return style.Render(fmt.Sprintf("%d/%d tasks ✓", completed, len(tasks)))
 }
 
