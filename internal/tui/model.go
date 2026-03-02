@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -31,7 +30,8 @@ const (
 
 // ModelConfig holds all dependencies and configuration needed to create a Model.
 type ModelConfig struct {
-	Service service.Service
+	Service   service.Service
+	ConfigDir string // path to the toasters configuration directory
 }
 
 // streamingState holds all state related to the active operator stream.
@@ -274,6 +274,7 @@ func NewModel(cfg ModelConfig) Model {
 
 	m := Model{
 		svc:          cfg.Service,
+		configDir:    cfg.ConfigDir,
 		chatViewport: vp,
 		input:        ta,
 		stats: SessionStats{
@@ -312,10 +313,7 @@ func (m *Model) Init() tea.Cmd {
 		spinnerTick(), // drive braille spinner animations
 	}
 
-	// Fetch configDir from the service for display and path construction.
-	if m.svc != nil {
-		m.configDir, _ = m.svc.System().ConfigDir(context.Background())
-	}
+	// configDir is set from ModelConfig during NewModel; no service call needed.
 
 	return tea.Batch(cmds...)
 }
@@ -1379,8 +1377,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case OperatorDoneMsg:
-		slog.Debug("operator turn done")
+		slog.Debug("operator turn done", "err", msg.Err)
 		m.stream.streaming = false
+		if msg.Err != nil {
+			m.err = msg.Err
+			m.updateViewportContent()
+			cmds = append(cmds, m.input.Focus())
+			return m, tea.Batch(cmds...)
+		}
 		if !m.stats.ResponseStart.IsZero() {
 			m.stats.LastResponseTime = time.Since(m.stats.ResponseStart)
 			m.stats.TotalResponseTime += m.stats.LastResponseTime

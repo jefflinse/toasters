@@ -244,6 +244,7 @@ type OperatorDoneMsg struct {
 	TokensIn        int
 	TokensOut       int
 	ReasoningTokens int
+	Err             error // non-nil if the turn failed (e.g. SendMessage error)
 }
 
 // OperatorEventMsg carries an operator event for TUI display.

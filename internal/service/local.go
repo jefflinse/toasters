@@ -31,6 +31,20 @@ import (
 // Compile-time assertion that LocalService satisfies the Service interface.
 var _ Service = (*LocalService)(nil)
 
+// Size limits for input validation.
+const (
+	maxMessageLen = 102400           // 100KB — maximum user message size
+	maxPromptLen  = 51200            // 50KB — maximum generation prompt size
+	maxCopySize   = 50 * 1024 * 1024 // 50MB — maximum file copy size
+)
+
+// maxConcurrentOps bounds the number of concurrent async operations (generate,
+// promote, detect) that can run simultaneously.
+const maxConcurrentOps = 5
+
+// maxHistoryEntries bounds the conversation history kept for reconnect hydration.
+const maxHistoryEntries = 1000
+
 // LocalConfig holds the dependencies for LocalService.
 type LocalConfig struct {
 	Store         db.Store
@@ -66,8 +80,16 @@ type LocalService struct {
 	startOnce   sync.Once
 
 	// Operator turn correlation.
-	turnMu        sync.Mutex
-	currentTurnID string
+	turnMu          sync.Mutex
+	currentTurnID   string
+	pendingResponse strings.Builder // accumulates text during a turn
+
+	// Conversation history for reconnect hydration.
+	historyMu sync.Mutex
+	history   []ChatEntry
+
+	// asyncSem bounds concurrent async operations (generate, promote, detect).
+	asyncSem chan struct{}
 }
 
 // localJobService wraps LocalService to implement JobService without conflicting
@@ -99,11 +121,28 @@ func NewLocal(cfg LocalConfig) *LocalService {
 		ctx:         ctx,
 		cancel:      cancel,
 		subscribers: make(map[uint64]chan Event),
+		asyncSem:    make(chan struct{}, maxConcurrentOps),
 	}
 }
 
 // Shutdown cancels the service lifetime context, stopping background goroutines.
 func (s *LocalService) Shutdown() { s.cancel() }
+
+// tryAcquireAsync attempts to acquire a slot for an async operation.
+// Returns false if the semaphore is full (too many concurrent operations).
+func (s *LocalService) tryAcquireAsync() bool {
+	select {
+	case s.asyncSem <- struct{}{}:
+		return true
+	default:
+		return false
+	}
+}
+
+// releaseAsync releases a slot after an async operation completes.
+func (s *LocalService) releaseAsync() {
+	<-s.asyncSem
+}
 
 // SetOperator sets the operator on the service after construction. This is
 // needed because the operator's callbacks reference the service, creating a
@@ -145,9 +184,13 @@ func (s *LocalService) subscribe(ctx context.Context) <-chan Event {
 		go s.heartbeatLoop()
 	})
 
-	// Remove subscriber when context is cancelled.
+	// Remove subscriber when either the subscriber's context or the service
+	// context is cancelled, whichever comes first.
 	go func() {
-		<-ctx.Done()
+		select {
+		case <-ctx.Done():
+		case <-s.ctx.Done():
+		}
 		s.mu.Lock()
 		delete(s.subscribers, id)
 		close(ch) // close under the same lock to prevent use-after-close
@@ -289,6 +332,7 @@ func (s *LocalService) buildProgressState() ProgressState {
 func (s *LocalService) BroadcastOperatorText(text, reasoning string) {
 	s.turnMu.Lock()
 	turnID := s.currentTurnID
+	s.pendingResponse.WriteString(text)
 	s.turnMu.Unlock()
 
 	s.broadcast(Event{
@@ -389,7 +433,17 @@ func (s *LocalService) BroadcastOperatorDone(modelName string, tokensIn, tokensO
 	s.turnMu.Lock()
 	turnID := s.currentTurnID
 	s.currentTurnID = ""
+	responseText := s.pendingResponse.String()
+	s.pendingResponse.Reset()
 	s.turnMu.Unlock()
+
+	if responseText != "" {
+		s.appendHistory(ChatEntry{
+			Message:    ChatMessage{Role: MessageRoleAssistant, Content: responseText},
+			Timestamp:  time.Now(),
+			ClaudeMeta: fmt.Sprintf("operator · %s", modelName),
+		})
+	}
 
 	s.broadcast(Event{
 		Type:   EventTypeOperatorDone,
@@ -422,6 +476,9 @@ func (s *LocalService) SendMessage(ctx context.Context, message string) (string,
 	if s.cfg.Operator == nil {
 		return "", fmt.Errorf("operator not configured")
 	}
+	if len(message) > maxMessageLen {
+		return "", fmt.Errorf("message too large: %d bytes exceeds maximum %d", len(message), maxMessageLen)
+	}
 
 	uuidVal, err := uuid.NewV4()
 	if err != nil {
@@ -446,6 +503,11 @@ func (s *LocalService) SendMessage(ctx context.Context, message string) (string,
 		s.turnMu.Unlock()
 		return "", fmt.Errorf("sending message to operator: %w", err)
 	}
+
+	s.appendHistory(ChatEntry{
+		Message:   ChatMessage{Role: MessageRoleUser, Content: message},
+		Timestamp: time.Now(),
+	})
 
 	return turnID, nil
 }
@@ -475,6 +537,50 @@ func (s *LocalService) Status(_ context.Context) (OperatorStatus, error) {
 		CurrentTurnID: turnID,
 		ModelName:     s.cfg.OperatorModel,
 	}, nil
+}
+
+// appendHistory appends a ChatEntry to the conversation history, capping at
+// maxHistoryEntries by dropping the oldest entries when the limit is exceeded.
+func (s *LocalService) appendHistory(entry ChatEntry) {
+	s.historyMu.Lock()
+	defer s.historyMu.Unlock()
+	s.history = append(s.history, entry)
+	if len(s.history) > maxHistoryEntries {
+		// Drop oldest entries to stay within the limit.
+		excess := len(s.history) - maxHistoryEntries
+		copy(s.history, s.history[excess:])
+		s.history = s.history[:maxHistoryEntries]
+	}
+}
+
+// History returns the conversation history for the current session.
+func (s *LocalService) History(_ context.Context) ([]ChatEntry, error) {
+	s.historyMu.Lock()
+	defer s.historyMu.Unlock()
+	result := make([]ChatEntry, len(s.history))
+	copy(result, s.history)
+	return result, nil
+}
+
+// RespondToBlocker submits the user's answers to a blocker reported by an agent.
+func (s *LocalService) RespondToBlocker(ctx context.Context, jobID, taskID string, answers []string) error {
+	if s.cfg.Operator == nil {
+		return fmt.Errorf("operator not configured")
+	}
+
+	// Format the answers into a structured message for the operator.
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("Blocker response for job %s, task %s:\n", jobID, taskID))
+	for i, answer := range answers {
+		sb.WriteString(fmt.Sprintf("Answer %d: %s\n", i+1, answer))
+	}
+
+	return s.cfg.Operator.Send(ctx, operator.Event{
+		Type: operator.EventUserResponse,
+		Payload: operator.UserResponsePayload{
+			Text: sb.String(),
+		},
+	})
 }
 
 // ---------------------------------------------------------------------------
@@ -518,7 +624,7 @@ func (s *LocalService) CreateSkill(ctx context.Context, name string) (Skill, err
 	name = sanitizeName(name)
 	skillsDir := filepath.Join(s.cfg.ConfigDir, "user", "skills")
 	if err := os.MkdirAll(skillsDir, 0o755); err != nil {
-		return Skill{}, fmt.Errorf("creating skills dir: %w", err)
+		return Skill{}, sanitizeError(fmt.Errorf("creating skills dir: %w", err))
 	}
 
 	filename := loader.Slugify(name) + ".md"
@@ -541,7 +647,7 @@ Your skill prompt goes here. This text will be injected into agents that use thi
 `, name)
 
 	if err := os.WriteFile(path, []byte(template), 0o644); err != nil {
-		return Skill{}, fmt.Errorf("writing skill file: %w", err)
+		return Skill{}, sanitizeError(fmt.Errorf("writing skill file: %w", err))
 	}
 
 	if s.cfg.Loader != nil {
@@ -553,7 +659,7 @@ Your skill prompt goes here. This text will be injected into agents that use thi
 	// Find the created skill by name.
 	skills, err := s.ListSkills(ctx)
 	if err != nil {
-		return Skill{}, fmt.Errorf("listing skills after creation: %w", err)
+		return Skill{}, sanitizeError(fmt.Errorf("listing skills after creation: %w", err))
 	}
 	for _, sk := range skills {
 		if sk.Name == name {
@@ -578,17 +684,17 @@ func (s *LocalService) DeleteSkill(ctx context.Context, id string) error {
 	allowedDir := filepath.Join(s.cfg.ConfigDir, "user")
 	realSkillPath, err := filepath.EvalSymlinks(sk.SourcePath)
 	if err != nil {
-		return fmt.Errorf("resolving skill path: %w", err)
+		return sanitizeError(fmt.Errorf("resolving skill path: %w", err))
 	}
 	realAllowedDir, err := filepath.EvalSymlinks(allowedDir)
 	if err != nil {
-		return fmt.Errorf("resolving allowed dir: %w", err)
+		return sanitizeError(fmt.Errorf("resolving allowed dir: %w", err))
 	}
 	if !strings.HasPrefix(realSkillPath+string(filepath.Separator), realAllowedDir+string(filepath.Separator)) {
-		return fmt.Errorf("skill source path %q is outside user directory", sk.SourcePath)
+		return sanitizeError(fmt.Errorf("skill source path is outside user directory"))
 	}
 	if err := os.Remove(realSkillPath); err != nil {
-		return fmt.Errorf("removing skill file: %w", err)
+		return sanitizeError(fmt.Errorf("removing skill file: %w", err))
 	}
 	if s.cfg.Loader != nil {
 		if err := s.cfg.Loader.Load(ctx); err != nil {
@@ -604,6 +710,9 @@ func (s *LocalService) GenerateSkill(ctx context.Context, prompt string) (string
 	if s.cfg.Provider == nil {
 		return "", fmt.Errorf("LLM provider not configured")
 	}
+	if len(prompt) > maxPromptLen {
+		return "", fmt.Errorf("prompt too large: %d bytes exceeds maximum %d", len(prompt), maxPromptLen)
+	}
 
 	uuidVal, err := uuid.NewV4()
 	if err != nil {
@@ -611,7 +720,13 @@ func (s *LocalService) GenerateSkill(ctx context.Context, prompt string) (string
 	}
 	operationID := uuidVal.String()
 
+	if !s.tryAcquireAsync() {
+		return "", fmt.Errorf("too many concurrent operations (max %d)", maxConcurrentOps)
+	}
+
 	go func() {
+		defer s.releaseAsync()
+
 		genCtx, genCancel := context.WithTimeout(s.ctx, 30*time.Second)
 		defer genCancel()
 		content, genErr := s.generateSkillContent(genCtx, prompt)
@@ -624,7 +739,7 @@ func (s *LocalService) GenerateSkill(ctx context.Context, prompt string) (string
 				OperationID: operationID,
 				Payload: OperationFailedPayload{
 					Kind:  "generate_skill",
-					Error: genErr.Error(),
+					Error: sanitizeErrorString(genErr),
 				},
 			})
 			return
@@ -640,7 +755,7 @@ func (s *LocalService) GenerateSkill(ctx context.Context, prompt string) (string
 				OperationID: operationID,
 				Payload: OperationFailedPayload{
 					Kind:  "generate_skill",
-					Error: writeErr.Error(),
+					Error: sanitizeErrorString(writeErr),
 				},
 			})
 			return
@@ -771,7 +886,7 @@ func (s *LocalService) CreateAgent(ctx context.Context, name string) (Agent, err
 	name = sanitizeName(name)
 	agentsDir := filepath.Join(s.cfg.ConfigDir, "user", "agents")
 	if err := os.MkdirAll(agentsDir, 0o755); err != nil {
-		return Agent{}, fmt.Errorf("creating agents dir: %w", err)
+		return Agent{}, sanitizeError(fmt.Errorf("creating agents dir: %w", err))
 	}
 
 	filename := loader.Slugify(name) + ".md"
@@ -795,7 +910,7 @@ Your agent system prompt goes here.
 `, name)
 
 	if err := os.WriteFile(path, []byte(template), 0o644); err != nil {
-		return Agent{}, fmt.Errorf("writing agent file: %w", err)
+		return Agent{}, sanitizeError(fmt.Errorf("writing agent file: %w", err))
 	}
 
 	if s.cfg.Loader != nil {
@@ -807,7 +922,7 @@ Your agent system prompt goes here.
 	// Find the created agent by name.
 	agents, err := s.ListAgents(ctx)
 	if err != nil {
-		return Agent{}, fmt.Errorf("listing agents after creation: %w", err)
+		return Agent{}, sanitizeError(fmt.Errorf("listing agents after creation: %w", err))
 	}
 	for _, a := range agents {
 		if a.Name == name {
@@ -833,17 +948,17 @@ func (s *LocalService) DeleteAgent(ctx context.Context, id string) error {
 	allowedDir := filepath.Join(s.cfg.ConfigDir, "user")
 	realAgentPath, err := filepath.EvalSymlinks(a.SourcePath)
 	if err != nil {
-		return fmt.Errorf("resolving agent path: %w", err)
+		return sanitizeError(fmt.Errorf("resolving agent path: %w", err))
 	}
 	realAllowedDir, err := filepath.EvalSymlinks(allowedDir)
 	if err != nil {
-		return fmt.Errorf("resolving allowed dir: %w", err)
+		return sanitizeError(fmt.Errorf("resolving allowed dir: %w", err))
 	}
 	if !strings.HasPrefix(realAgentPath+string(filepath.Separator), realAllowedDir+string(filepath.Separator)) {
-		return fmt.Errorf("agent source path %q is outside user directory", a.SourcePath)
+		return sanitizeError(fmt.Errorf("agent source path is outside user directory"))
 	}
 	if err := os.Remove(realAgentPath); err != nil {
-		return fmt.Errorf("removing agent file: %w", err)
+		return sanitizeError(fmt.Errorf("removing agent file: %w", err))
 	}
 	if s.cfg.Loader != nil {
 		if err := s.cfg.Loader.Load(ctx); err != nil {
@@ -868,25 +983,25 @@ func (s *LocalService) AddSkillToAgent(ctx context.Context, agentID string, skil
 
 	realSrc, err := filepath.EvalSymlinks(a.SourcePath)
 	if err != nil {
-		return fmt.Errorf("resolving agent path: %w", err)
+		return sanitizeError(fmt.Errorf("resolving agent path: %w", err))
 	}
 	realAllowed, err := filepath.EvalSymlinks(s.cfg.ConfigDir)
 	if err != nil {
-		return fmt.Errorf("resolving config dir: %w", err)
+		return sanitizeError(fmt.Errorf("resolving config dir: %w", err))
 	}
 	if !strings.HasPrefix(realSrc+string(filepath.Separator), realAllowed+string(filepath.Separator)) {
-		return fmt.Errorf("agent source path %q is outside config directory", a.SourcePath)
+		return sanitizeError(fmt.Errorf("agent source path is outside config directory"))
 	}
 
 	def, err := agentfmt.ParseAgent(realSrc)
 	if err != nil {
-		return fmt.Errorf("parsing agent file: %w", err)
+		return sanitizeError(fmt.Errorf("parsing agent file: %w", err))
 	}
 
 	def.Skills = append(def.Skills, skillName)
 
 	if err := writeAgentFile(realSrc, def); err != nil {
-		return fmt.Errorf("writing agent file: %w", err)
+		return sanitizeError(fmt.Errorf("writing agent file: %w", err))
 	}
 
 	if s.cfg.Loader != nil {
@@ -903,6 +1018,9 @@ func (s *LocalService) GenerateAgent(ctx context.Context, prompt string) (string
 	if s.cfg.Provider == nil {
 		return "", fmt.Errorf("LLM provider not configured")
 	}
+	if len(prompt) > maxPromptLen {
+		return "", fmt.Errorf("prompt too large: %d bytes exceeds maximum %d", len(prompt), maxPromptLen)
+	}
 
 	uuidVal, err := uuid.NewV4()
 	if err != nil {
@@ -910,7 +1028,13 @@ func (s *LocalService) GenerateAgent(ctx context.Context, prompt string) (string
 	}
 	operationID := uuidVal.String()
 
+	if !s.tryAcquireAsync() {
+		return "", fmt.Errorf("too many concurrent operations (max %d)", maxConcurrentOps)
+	}
+
 	go func() {
+		defer s.releaseAsync()
+
 		genCtx, genCancel := context.WithTimeout(s.ctx, 30*time.Second)
 		defer genCancel()
 		content, genErr := s.generateAgentContent(genCtx, prompt)
@@ -923,7 +1047,7 @@ func (s *LocalService) GenerateAgent(ctx context.Context, prompt string) (string
 				OperationID: operationID,
 				Payload: OperationFailedPayload{
 					Kind:  "generate_agent",
-					Error: genErr.Error(),
+					Error: sanitizeErrorString(genErr),
 				},
 			})
 			return
@@ -939,7 +1063,7 @@ func (s *LocalService) GenerateAgent(ctx context.Context, prompt string) (string
 				OperationID: operationID,
 				Payload: OperationFailedPayload{
 					Kind:  "generate_agent",
-					Error: writeErr.Error(),
+					Error: sanitizeErrorString(writeErr),
 				},
 			})
 			return
@@ -1050,27 +1174,27 @@ func (s *LocalService) CreateTeam(ctx context.Context, name string) (TeamView, e
 		return TeamView{}, fmt.Errorf("invalid team name %q: produces empty slug", name)
 	}
 	if err := os.MkdirAll(s.cfg.TeamsDir, 0o755); err != nil {
-		return TeamView{}, fmt.Errorf("creating teams dir: %w", err)
+		return TeamView{}, sanitizeError(fmt.Errorf("creating teams dir: %w", err))
 	}
 	realTeamsDir, err := filepath.EvalSymlinks(s.cfg.TeamsDir)
 	if err != nil {
-		return TeamView{}, fmt.Errorf("resolving teams dir: %w", err)
+		return TeamView{}, sanitizeError(fmt.Errorf("resolving teams dir: %w", err))
 	}
 	teamDir := filepath.Join(realTeamsDir, slug)
 	if !strings.HasPrefix(teamDir+string(filepath.Separator), realTeamsDir+string(filepath.Separator)) {
 		return TeamView{}, fmt.Errorf("team name %q escapes teams directory", name)
 	}
 	if err := os.MkdirAll(teamDir, 0o755); err != nil {
-		return TeamView{}, fmt.Errorf("creating team directory: %w", err)
+		return TeamView{}, sanitizeError(fmt.Errorf("creating team directory: %w", err))
 	}
 
 	teamMDContent := fmt.Sprintf("---\nname: %s\ndescription: \nlead: \n---\n", name)
 	if err := os.WriteFile(filepath.Join(teamDir, "team.md"), []byte(teamMDContent), 0o644); err != nil {
-		return TeamView{}, fmt.Errorf("writing team.md: %w", err)
+		return TeamView{}, sanitizeError(fmt.Errorf("writing team.md: %w", err))
 	}
 
 	if err := os.MkdirAll(filepath.Join(teamDir, "agents"), 0o755); err != nil {
-		return TeamView{}, fmt.Errorf("creating agents directory: %w", err)
+		return TeamView{}, sanitizeError(fmt.Errorf("creating agents directory: %w", err))
 	}
 
 	if s.cfg.Loader != nil {
@@ -1081,7 +1205,7 @@ func (s *LocalService) CreateTeam(ctx context.Context, name string) (TeamView, e
 
 	views, err := s.buildTeamViews(ctx)
 	if err != nil {
-		return TeamView{}, err
+		return TeamView{}, sanitizeError(err)
 	}
 	for _, tv := range views {
 		if tv.Team.Name == name {
@@ -1120,11 +1244,11 @@ func (s *LocalService) DeleteTeam(ctx context.Context, id string) error {
 	realTeamsDir, err2 := filepath.EvalSymlinks(s.cfg.TeamsDir)
 	if err1 == nil && err2 == nil && strings.HasPrefix(realTeamDir, realTeamsDir+string(filepath.Separator)) {
 		if err := os.RemoveAll(realTeamDir); err != nil {
-			return fmt.Errorf("removing team directory: %w", err)
+			return sanitizeError(fmt.Errorf("removing team directory: %w", err))
 		}
 	} else {
 		slog.Error("refusing to delete team outside teams directory", "dir", tv.Dir(), "teamsDir", s.cfg.TeamsDir)
-		return fmt.Errorf("team directory %q is outside the teams directory", tv.Dir())
+		return fmt.Errorf("team directory is outside the teams directory")
 	}
 
 	if s.cfg.Loader != nil {
@@ -1155,14 +1279,14 @@ func (s *LocalService) AddAgentToTeam(ctx context.Context, teamID string, agentI
 
 	realSrc, err := filepath.EvalSymlinks(a.SourcePath)
 	if err != nil {
-		return fmt.Errorf("resolving agent path: %w", err)
+		return sanitizeError(fmt.Errorf("resolving agent path: %w", err))
 	}
 	realAllowed, err := filepath.EvalSymlinks(s.cfg.ConfigDir)
 	if err != nil {
-		return fmt.Errorf("resolving config dir: %w", err)
+		return sanitizeError(fmt.Errorf("resolving config dir: %w", err))
 	}
 	if !strings.HasPrefix(realSrc+string(filepath.Separator), realAllowed+string(filepath.Separator)) {
-		return fmt.Errorf("agent source path %q is outside config directory", a.SourcePath)
+		return sanitizeError(fmt.Errorf("agent source path is outside config directory"))
 	}
 
 	teamMDPath := filepath.Join(tv.Dir(), "team.md")
@@ -1186,13 +1310,13 @@ func (s *LocalService) AddAgentToTeam(ctx context.Context, teamID string, agentI
 	}
 
 	if err := writeTeamFile(teamMDPath, teamDef); err != nil {
-		return fmt.Errorf("writing team.md: %w", err)
+		return sanitizeError(fmt.Errorf("writing team.md: %w", err))
 	}
 
 	// Copy the agent's source file into the team's agents directory.
 	agentsDir := filepath.Join(tv.Dir(), "agents")
 	if err := os.MkdirAll(agentsDir, 0o755); err != nil {
-		return fmt.Errorf("creating agents directory: %w", err)
+		return sanitizeError(fmt.Errorf("creating agents directory: %w", err))
 	}
 
 	slug := loader.Slugify(a.Name)
@@ -1202,7 +1326,7 @@ func (s *LocalService) AddAgentToTeam(ctx context.Context, teamID string, agentI
 	destPath := filepath.Join(agentsDir, slug+".md")
 
 	if err := copyFile(realSrc, destPath); err != nil {
-		return fmt.Errorf("copying agent file: %w", err)
+		return sanitizeError(fmt.Errorf("copying agent file: %w", err))
 	}
 
 	if s.cfg.Loader != nil {
@@ -1224,7 +1348,7 @@ func (s *LocalService) SetCoordinator(ctx context.Context, teamID string, agentN
 	}
 
 	if err := setCoordinator(tv.Dir(), agentName); err != nil {
-		return err
+		return sanitizeError(err)
 	}
 
 	if s.cfg.Loader != nil {
@@ -1255,7 +1379,13 @@ func (s *LocalService) PromoteTeam(ctx context.Context, teamID string) (string, 
 	}
 	operationID := uuidVal.String()
 
+	if !s.tryAcquireAsync() {
+		return "", fmt.Errorf("too many concurrent operations (max %d)", maxConcurrentOps)
+	}
+
 	go func() {
+		defer s.releaseAsync()
+
 		var promoteErr error
 		if isServiceReadOnlyTeam(tv) {
 			promoteErr = s.promoteReadOnlyAutoTeam(tv)
@@ -1273,7 +1403,7 @@ func (s *LocalService) PromoteTeam(ctx context.Context, teamID string) (string, 
 				OperationID: operationID,
 				Payload: OperationFailedPayload{
 					Kind:  "promote_team",
-					Error: promoteErr.Error(),
+					Error: sanitizeErrorString(promoteErr),
 				},
 			})
 			return
@@ -1310,6 +1440,9 @@ func (s *LocalService) GenerateTeam(ctx context.Context, prompt string) (string,
 	if s.cfg.Provider == nil {
 		return "", fmt.Errorf("LLM provider not configured")
 	}
+	if len(prompt) > maxPromptLen {
+		return "", fmt.Errorf("prompt too large: %d bytes exceeds maximum %d", len(prompt), maxPromptLen)
+	}
 	if s.cfg.Store == nil {
 		return "", fmt.Errorf("store not configured")
 	}
@@ -1331,7 +1464,13 @@ func (s *LocalService) GenerateTeam(ctx context.Context, prompt string) (string,
 	agentsCopy := make([]*db.Agent, len(dbAgents))
 	copy(agentsCopy, dbAgents)
 
+	if !s.tryAcquireAsync() {
+		return "", fmt.Errorf("too many concurrent operations (max %d)", maxConcurrentOps)
+	}
+
 	go func() {
+		defer s.releaseAsync()
+
 		genCtx, genCancel := context.WithTimeout(s.ctx, 30*time.Second)
 		defer genCancel()
 		teamMD, agentNames, genErr := s.generateTeamContent(genCtx, prompt, agentsCopy)
@@ -1344,7 +1483,7 @@ func (s *LocalService) GenerateTeam(ctx context.Context, prompt string) (string,
 				OperationID: operationID,
 				Payload: OperationFailedPayload{
 					Kind:  "generate_team",
-					Error: genErr.Error(),
+					Error: sanitizeErrorString(genErr),
 				},
 			})
 			return
@@ -1360,7 +1499,7 @@ func (s *LocalService) GenerateTeam(ctx context.Context, prompt string) (string,
 				OperationID: operationID,
 				Payload: OperationFailedPayload{
 					Kind:  "generate_team",
-					Error: writeErr.Error(),
+					Error: sanitizeErrorString(writeErr),
 				},
 			})
 			return
@@ -1471,6 +1610,21 @@ func (s *LocalService) writeGeneratedTeamFiles(teamMD string, agentNames []strin
 	teamDir := filepath.Join(s.cfg.TeamsDir, slug)
 	agentsSubDir := filepath.Join(teamDir, "agents")
 
+	// Path traversal check: ensure the team directory stays within TeamsDir.
+	realTeamsDir, err := filepath.EvalSymlinks(s.cfg.TeamsDir)
+	if err != nil {
+		return fmt.Errorf("resolving teams dir: %w", err)
+	}
+	// teamDir doesn't exist yet, so EvalSymlinks on the parent.
+	realTeamDirParent, err := filepath.EvalSymlinks(filepath.Dir(teamDir))
+	if err != nil {
+		return fmt.Errorf("resolving team dir parent: %w", err)
+	}
+	candidateDir := filepath.Join(realTeamDirParent, filepath.Base(teamDir))
+	if !strings.HasPrefix(candidateDir+string(filepath.Separator), realTeamsDir+string(filepath.Separator)) {
+		return fmt.Errorf("team name escapes teams directory")
+	}
+
 	if _, err := os.Stat(teamDir); err == nil {
 		return fmt.Errorf("team directory already exists: %s", slug)
 	}
@@ -1539,7 +1693,13 @@ func (s *LocalService) DetectCoordinator(ctx context.Context, teamID string) (st
 	copy(workers, tv.Workers)
 	teamDir := tv.Dir()
 
+	if !s.tryAcquireAsync() {
+		return "", fmt.Errorf("too many concurrent operations (max %d)", maxConcurrentOps)
+	}
+
 	go func() {
+		defer s.releaseAsync()
+
 		if len(workers) == 0 {
 			if s.ctx.Err() != nil {
 				return // service shutting down
@@ -1581,7 +1741,7 @@ func (s *LocalService) DetectCoordinator(ctx context.Context, teamID string) (st
 				OperationID: operationID,
 				Payload: OperationFailedPayload{
 					Kind:  "detect_coordinator",
-					Error: err.Error(),
+					Error: sanitizeErrorString(err),
 				},
 			})
 			return
@@ -1840,14 +2000,21 @@ func (s *LocalService) ListMCPServers(_ context.Context) ([]MCPServerStatus, err
 	return result, nil
 }
 
-// ConfigDir returns the path to the toasters configuration directory.
-func (s *LocalService) ConfigDir(_ context.Context) (string, error) {
-	return s.cfg.ConfigDir, nil
+// ConfigDir returns the configuration directory path. This is a local-only
+// method, not part of the Service interface and not exposed over HTTP.
+func (s *LocalService) ConfigDir() string {
+	return s.cfg.ConfigDir
 }
 
 // Slugify converts a human-readable name into a filesystem-safe slug.
-func (s *LocalService) Slugify(_ context.Context, name string) string {
+// This is a client-side utility, not exposed over HTTP.
+func Slugify(name string) string {
 	return loader.Slugify(name)
+}
+
+// GetProgressState returns the current full progress state snapshot.
+func (s *LocalService) GetProgressState(_ context.Context) (ProgressState, error) {
+	return s.buildProgressState(), nil
 }
 
 // ---------------------------------------------------------------------------
@@ -2110,7 +2277,9 @@ var (
 	cachedHomeDirOnce sync.Once
 )
 
-func getHomeDir() string {
+// GetHomeDir returns the current user's home directory, cached after the first call.
+// This is a client-side utility used by team classification helpers.
+func GetHomeDir() string {
 	cachedHomeDirOnce.Do(func() {
 		cachedHomeDir, _ = os.UserHomeDir()
 	})
@@ -2120,7 +2289,7 @@ func getHomeDir() string {
 // isServiceReadOnlyTeam returns true if the team's directory is one of the
 // well-known auto-detected read-only directories.
 func isServiceReadOnlyTeam(tv TeamView) bool {
-	home := getHomeDir()
+	home := GetHomeDir()
 	if home == "" {
 		return false
 	}
@@ -2545,10 +2714,17 @@ func copyFile(src, dst string) error {
 		return fmt.Errorf("creating destination file: %w", err)
 	}
 
-	if _, err := io.Copy(out, in); err != nil {
+	n, err := io.Copy(out, io.LimitReader(in, maxCopySize+1))
+	if err != nil {
 		_ = in.Close()
 		_ = out.Close()
 		return fmt.Errorf("copying file contents: %w", err)
+	}
+	if n > maxCopySize {
+		_ = in.Close()
+		_ = out.Close()
+		_ = os.Remove(dst)
+		return fmt.Errorf("source file too large: %d bytes exceeds maximum %d", n, maxCopySize)
 	}
 
 	if err := in.Close(); err != nil {
@@ -2569,21 +2745,26 @@ func (s *LocalService) writeGeneratedSkillFile(content string) (string, error) {
 	slug := "generated-skill"
 	if parsed, err := agentfmt.ParseBytes([]byte(content), agentfmt.DefSkill); err == nil {
 		if skillDef, ok := parsed.(*agentfmt.SkillDef); ok && skillDef.Name != "" {
-			s := loader.Slugify(skillDef.Name)
-			if s != "" {
-				slug = s
+			nameSlug := loader.Slugify(skillDef.Name)
+			if nameSlug != "" {
+				slug = nameSlug
 			}
 		}
 	}
 
 	path := filepath.Join(skillsDir, slug+".md")
 	if _, err := os.Stat(path); err == nil {
-		for i := 2; ; i++ {
+		found := false
+		for i := 2; i < 1000; i++ {
 			candidate := filepath.Join(skillsDir, fmt.Sprintf("%s-%d.md", slug, i))
 			if _, err := os.Stat(candidate); os.IsNotExist(err) {
 				path = candidate
+				found = true
 				break
 			}
+		}
+		if !found {
+			return "", fmt.Errorf("too many skill files with slug %q", slug)
 		}
 	}
 
@@ -2605,9 +2786,9 @@ func (s *LocalService) writeGeneratedAgentFile(content string) (string, string, 
 	if parsed, err := agentfmt.ParseBytes([]byte(content), agentfmt.DefAgent); err == nil {
 		if agentDef, ok := parsed.(*agentfmt.AgentDef); ok && agentDef.Name != "" {
 			agentName = agentDef.Name
-			s := loader.Slugify(agentDef.Name)
-			if s != "" {
-				slug = s
+			nameSlug := loader.Slugify(agentDef.Name)
+			if nameSlug != "" {
+				slug = nameSlug
 			}
 		}
 	}
@@ -2617,12 +2798,17 @@ func (s *LocalService) writeGeneratedAgentFile(content string) (string, string, 
 
 	path := filepath.Join(agentsDir, slug+".md")
 	if _, err := os.Stat(path); err == nil {
-		for i := 2; ; i++ {
+		found := false
+		for i := 2; i < 1000; i++ {
 			candidate := filepath.Join(agentsDir, fmt.Sprintf("%s-%d.md", slug, i))
 			if _, err := os.Stat(candidate); os.IsNotExist(err) {
 				path = candidate
+				found = true
 				break
 			}
+		}
+		if !found {
+			return "", "", fmt.Errorf("too many agent files with slug %q", slug)
 		}
 	}
 

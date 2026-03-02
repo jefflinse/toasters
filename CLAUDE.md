@@ -256,13 +256,14 @@ Full details: `PRE_PHASE_4_WAVE_2.md`
 
 ## Current Work: Client/Server Architecture Split
 
-**Status:** Phase 1 complete ✅ — all steps done, comprehensive review passed, 8 blocking issues fixed; Phase 2 not started
+**Status:** Phase 1 complete ✅; Phase 2 pre-work complete ✅; Phase 2 API design complete ✅; Phase 2 server implementation in progress
 **Tracking document:** [`CLIENT_SERVER_SPLIT.md`](CLIENT_SERVER_SPLIT.md)
+**API specification:** [`API_SPEC.md`](API_SPEC.md)
 
 Splitting the monolithic TUI into a client/server architecture. The orchestration engine (operator, runtime, store, MCP, loader, compose, providers) becomes a long-running server; the TUI becomes a thin client. REST + SSE protocol. 4 phases:
 
 1. **Phase 1: Service Extraction** ✅ — Extract business logic from TUI into `internal/service` package with composed `Service` interface. Rewire TUI to use it. No networking yet.
-2. **Phase 2: Server** (3–5 days) — HTTP server with SSE event streaming. `RemoteClient` as drop-in for `LocalService`.
+2. **Phase 2: Server** (in progress) — HTTP server with SSE event streaming. `RemoteClient` as drop-in for `LocalService`. Pre-work and API design complete; server implementation next.
 3. **Phase 3: Mode Wiring** (1–2 days) — `toasters serve` (headless), `toasters --server <addr>` (remote TUI), CLI subcommands.
 4. **Phase 4: Hardening** (2–3 days) — Token auth, connection resilience, security audit.
 
@@ -290,3 +291,21 @@ Plan reviewed by tui-engineer and api-designer. All blocking concerns documented
 - B8: `RespondToPrompt`/`EventTypeOperatorPrompt` unwired — documented as Phase 2 TODO
 
 23 suggestions documented for Phase 2 pre-work. Full findings in `CLIENT_SERVER_SPLIT.md`.
+
+### Phase 2 Pre-Work Summary ✅
+
+**Status: Complete (2026-03-02)** — 14 of 23 suggestions addressed; reviewed by security-auditor + concurrency-reviewer; 2 blocking issues found and fixed.
+
+Key changes:
+- Input validation: `maxMessageLen` (100KB), `maxPromptLen` (50KB), `maxCopySize` (50MB)
+- Error sanitization: `sanitizeError()` strips filesystem paths from all client-facing errors; `sanitizeErrorString()` for SSE payloads
+- Rate limiting: channel-based semaphore (capacity 5) on all async operations
+- Subscriber lifecycle: cleanup goroutine bounded by service context
+- New interface methods: `History()`, `RespondToBlocker()`, `GetProgressState()`
+- JSON safety: `json:"-"` on `SourcePath` and `WorkspaceDir` fields
+- Interface cleanup: `Slugify` → package-level function, `ConfigDir` → `ModelConfig` field
+- Code deduplication: `stripCodeFences`, `cachedHomeDir`
+
+### Phase 2 API Design ✅
+
+**Status: Complete (2026-03-02)** — `API_SPEC.md` (1,813 lines) covers 36 endpoints (35 REST + 1 SSE), 19 SSE event types, standardized error format, pagination, async operation pattern, reconnect protocol.

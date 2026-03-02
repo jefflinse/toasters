@@ -1,7 +1,7 @@
 # Client/Server Architecture Split
 
 **Created:** 2026-02-28
-**Status:** Phase 1 complete ✅ — all steps done, comprehensive review passed (8 blocking issues fixed, 23 suggestions documented); Phase 2 not started
+**Status:** Phase 1 complete ✅; Phase 2 pre-work complete ✅ (14 suggestions addressed, 2 blocking review fixes); Phase 2 API design complete ✅ (`API_SPEC.md`); Phase 2 server implementation in progress
 **Effort Estimate:** 10–17 days across 4 phases
 
 ---
@@ -507,6 +507,69 @@ Before exposing this service over HTTP, these items must be addressed:
 
 ---
 
+## Phase 2 Pre-Work ✅
+
+**Status: Complete (2026-03-02)**
+
+Addressed 14 of the 23 Phase 1 review suggestions to harden the service layer before HTTP exposure. Reviewed by security-auditor and concurrency-reviewer. 2 blocking issues found and fixed.
+
+### Step P1: Input Validation & Error Sanitization ✅
+
+- [x] **S1**: `maxMessageLen` (100KB) on `SendMessage` — rejects oversized messages
+- [x] **S2**: `maxPromptLen` (50KB) on `GenerateSkill`, `GenerateAgent`, `GenerateTeam`
+- [x] **S4**: `sanitizeError()` in `internal/service/errors.go` — strips absolute filesystem paths from error messages, preserves `errors.Is`/`errors.As` chains via `Unwrap()`
+- [x] **S6**: Path traversal check in `writeGeneratedTeamFiles` using `EvalSymlinks` + `HasPrefix`
+- [x] **S7**: `copyFile` size limit (50MB) via `io.LimitReader`
+- [x] **S21**: Fixed variable shadowing of receiver `s` in `writeGeneratedSkillFile` and `writeGeneratedAgentFile`
+- [x] **S22**: Capped dedup loops in `writeGenerated*File` at 1000 iterations
+- [x] **S23**: `SendMessage` errors surfaced to TUI via `OperatorDoneMsg.Err` field
+
+### Step P2: Async Rate Limiting & Subscriber Lifecycle ✅
+
+- [x] **S5**: Channel-based semaphore (`asyncSem`, capacity 5) gating all async goroutine spawns — `tryAcquireAsync()` / `releaseAsync()` on `GenerateSkill`, `GenerateAgent`, `GenerateTeam`, `PromoteTeam`, `DetectCoordinator`
+- [x] **S16**: Subscriber cleanup goroutine now selects on both `ctx.Done()` and `s.ctx.Done()` — prevents goroutine leaks on service shutdown
+
+### Step P3: Conversation History & Progress Hydration ✅
+
+- [x] **S13**: Added `History(ctx) ([]ChatEntry, error)` to `OperatorService` — in-memory `[]ChatEntry` capped at 1000 entries, appended by `BroadcastOperatorText`/`BroadcastOperatorDone`/`SendMessage`
+- [x] **S14**: Added `RespondToBlocker(ctx, jobID, taskID, answers)` to `OperatorService` — formats answers and sends to operator as `EventUserResponse`
+- [x] **S8** (partial): Added `GetProgressState(ctx) (ProgressState, error)` to `SystemService` — exposes `buildProgressState()` for REST hydration endpoint. Full delta redesign deferred (500ms polling retained for in-process TUI; HTTP clients use REST snapshot + granular SSE events).
+
+### Step P4: Code Cleanup & Deduplication ✅
+
+- [x] **S3**: Added `json:"-"` tags to `Skill.SourcePath`, `Agent.SourcePath`, `Team.SourcePath`, `Job.WorkspaceDir` — omitted from JSON serialization
+- [x] **S9**: Removed `Slugify` and `ConfigDir` from `SystemService` interface — `Slugify` exported as package-level function, `ConfigDir` passed via `ModelConfig`
+- [x] **S19**: Deleted duplicate `stripCodeFences` from `internal/tui/llm_generate.go` (and its test file)
+- [x] **S20**: Deduplicated `cachedHomeDir`/`cachedHomeDirOnce` — exported `GetHomeDir()` from service package, TUI's `teams_modal.go` now calls `service.GetHomeDir()`
+
+### Pre-Work Review (2026-03-02)
+
+**Security Auditor** — 2 blocking (both fixed), 9 suggestions:
+- **B1 FIXED**: `OperationFailedPayload.Error` leaked unsanitized filesystem paths → wrapped with `sanitizeErrorString()`
+- **B2 FIXED**: `Job.WorkspaceDir` missing `json:"-"` tag → added
+- Deferred suggestions: broader path regex, YAML-special char quoting, panic recovery in async goroutines, input validation on `RespondToBlocker`/`RespondToPrompt`, `MaxBytesReader` in HTTP layer
+
+**Concurrency Reviewer** — 0 blocking, 4 suggestions:
+- All patterns correct (semaphore, subscriber cleanup, lock ordering, history cap)
+- Deferred suggestions: `recover()` in async goroutines, lock ordering documentation, sequential callback assumption documentation
+
+### Suggestions Deferred to Phase 2/4
+
+| # | Issue | Deferred To |
+|---|-------|-------------|
+| S10 | `ListAll` redundant with `List(ctx, nil)` | Low priority |
+| S11 | `SessionSnapshot.Status` is `string` not `SessionStatus` | Low priority |
+| S12 | `BlockerReportedPayload` too thin vs. `Blocker` type | Low priority |
+| S15 | `OperationResult.Error` conflates success and failure | Low priority |
+| S17 | Two mutexes with no documented lock ordering | Phase 2 (documentation) |
+| S18 | `buildProgressState` uses `context.Background()` | Low priority |
+| Sec-S2 | `sanitizeName` doesn't handle YAML-special characters | Phase 2 |
+| Sec-S3 | Async goroutines lack panic recovery | Phase 2 |
+| Sec-S4 | `RespondToBlocker` has no input size limits | Phase 2 |
+| Sec-S5 | `RespondToPrompt` has no response length limit | Phase 2 |
+
+---
+
 ## Phase 2: Build the Server
 
 **Goal:** Create the HTTP server with SSE event streaming that exposes the service layer over the network. Embeddable — can run in-process or standalone.
@@ -515,16 +578,16 @@ Before exposing this service over HTTP, these items must be addressed:
 
 ### Step 2.1: Design the API
 
-- [ ] **Status:** Not started
+- [x] **Status:** Complete (2026-03-02) — `API_SPEC.md` written (1,813 lines)
 - **Agent:** api-designer
 - **Description:** Finalize the REST API design (see Proposed REST Endpoint Structure above). Define JSON request/response schemas for each endpoint. Define the SSE event envelope format with sequence numbers and correlation IDs. Define error response format. Add pagination to all list endpoints.
 - **Acceptance criteria:**
-  - [ ] API spec with all endpoints, methods, request/response schemas
-  - [ ] SSE event envelope format with sequence numbers, `turn_id`, `operation_id`, `session_id`
-  - [ ] Error response format standardized (code, message, details)
-  - [ ] Pagination on all list endpoints
-  - [ ] Auth model defined (none for localhost, token for remote)
-- **Gate:** ✋ Human review of API design before implementation
+  - [x] API spec with all endpoints, methods, request/response schemas — 36 endpoints (35 REST + 1 SSE)
+  - [x] SSE event envelope format with sequence numbers, `turn_id`, `operation_id`, `session_id`
+  - [x] Error response format standardized — 7 error codes with consistent envelope
+  - [x] Pagination on all list endpoints — `?limit=N&offset=M` with `{"items": [...], "total": N}`
+  - [x] Auth model defined (none for Phase 2, token for Phase 4)
+- **Gate:** ✅ Human-reviewed and approved 2026-03-02
 
 ### Step 2.2: Implement the Server
 

@@ -77,6 +77,18 @@ type OperatorService interface {
 	// processing) and the model it is using. Used by clients to rebuild state
 	// on reconnect (B4 concern).
 	Status(ctx context.Context) (OperatorStatus, error)
+
+	// History returns the conversation history for the current session.
+	// Used by remote clients to hydrate the chat view on reconnect.
+	// Returns entries in chronological order (oldest first).
+	// The history is bounded to the most recent maxHistoryEntries entries.
+	History(ctx context.Context) ([]ChatEntry, error)
+
+	// RespondToBlocker submits the user's answers to a blocker reported by an agent.
+	// The answers are formatted and sent to the operator as a user response event.
+	// jobID and taskID identify the blocked task; answers correspond to the blocker's
+	// Questions in order.
+	RespondToBlocker(ctx context.Context, jobID, taskID string, answers []string) error
 }
 
 // ---------------------------------------------------------------------------
@@ -303,15 +315,11 @@ type SystemService interface {
 	// configured MCP servers. Includes both connected and failed servers.
 	ListMCPServers(ctx context.Context) ([]MCPServerStatus, error)
 
-	// ConfigDir returns the path to the toasters configuration directory
-	// (e.g. ~/.config/toasters). Used by the TUI for display purposes and
-	// for constructing paths when opening files in an editor.
-	ConfigDir(ctx context.Context) (string, error)
-
-	// Slugify converts a human-readable name into a filesystem-safe slug.
-	// Replaces the tui package's direct use of loader.Slugify. Pure function —
-	// context is accepted for interface uniformity but is not used.
-	Slugify(ctx context.Context, name string) string
+	// GetProgressState returns the current full progress state snapshot.
+	// Used by the HTTP server for the GET /api/v1/progress endpoint,
+	// enabling clients to hydrate their state on connect/reconnect.
+	// For real-time updates, clients should subscribe to the SSE event stream.
+	GetProgressState(ctx context.Context) (ProgressState, error)
 }
 
 // ---------------------------------------------------------------------------

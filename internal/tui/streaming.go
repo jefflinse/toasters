@@ -50,7 +50,7 @@ func (m *Model) sendMessage() tea.Cmd {
 			ctx := context.Background()
 			_, err := svc.Operator().SendMessage(ctx, text)
 			if err != nil {
-				return OperatorDoneMsg{}
+				return OperatorDoneMsg{Err: err}
 			}
 			// SendMessage returns immediately — OperatorDoneMsg is fired by the
 			// OnTurnDone callback wired in cmd/root.go when the turn completes.
@@ -72,7 +72,7 @@ func (m *Model) notifyOperator(notification string) tea.Cmd {
 		ctx := context.Background()
 		_, err := svc.Operator().SendMessage(ctx, notification)
 		if err != nil {
-			return OperatorDoneMsg{}
+			return OperatorDoneMsg{Err: err}
 		}
 		return nil
 	}

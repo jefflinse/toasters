@@ -46,7 +46,7 @@ type Job struct {
 	Description  string
 	Type         string // "bug_fix", "new_feature", "prototype", "review"
 	Status       JobStatus
-	WorkspaceDir string
+	WorkspaceDir string `json:"-"`
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
 	Metadata     json.RawMessage // extensible JSON blob; may be nil
@@ -261,7 +261,7 @@ type Skill struct {
 	Tools       []string // tool names granted by this skill
 	Prompt      string   // the skill's markdown body (injected into agent system prompt)
 	Source      string   // "system", "user", "builtin"
-	SourcePath  string   // absolute path to the .md file; empty for built-ins
+	SourcePath  string   `json:"-"` // absolute path to the .md file; empty for built-ins
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
 }
@@ -285,7 +285,7 @@ type Agent struct {
 	Hidden          bool
 	Disabled        bool
 	Source          string // "system", "user", "auto"
-	SourcePath      string // absolute path to the .md file
+	SourcePath      string `json:"-"` // absolute path to the .md file
 	TeamID          string // empty for shared agents
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
@@ -302,7 +302,7 @@ type Team struct {
 	Model       string   // team default model
 	Culture     string   // team culture document (markdown body)
 	Source      string   // "system", "user", "auto"
-	SourcePath  string   // absolute path to the team directory
+	SourcePath  string   `json:"-"` // absolute path to the team directory
 	IsAuto      bool
 	CreatedAt   time.Time
 	UpdatedAt   time.Time

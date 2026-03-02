@@ -327,10 +327,7 @@ func TestConfigDir_ReturnsConfigured(t *testing.T) {
 	dir := t.TempDir()
 	svc := NewLocal(LocalConfig{ConfigDir: dir})
 
-	got, err := svc.ConfigDir(context.Background())
-	if err != nil {
-		t.Fatalf("ConfigDir() error = %v", err)
-	}
+	got := svc.ConfigDir()
 	if got != dir {
 		t.Errorf("ConfigDir() = %q, want %q", got, dir)
 	}
@@ -353,11 +350,10 @@ func TestSlugify(t *testing.T) {
 		{"numbers", "Agent 42", "agent-42"},
 	}
 
-	svc := newTestService(t)
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			got := svc.Slugify(context.Background(), tt.input)
+			got := Slugify(tt.input)
 			if got != tt.want {
 				t.Errorf("Slugify(%q) = %q, want %q", tt.input, got, tt.want)
 			}

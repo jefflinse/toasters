@@ -302,7 +302,8 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 	}
 
 	m := tui.NewModel(tui.ModelConfig{
-		Service: svc,
+		Service:   svc,
+		ConfigDir: configDir,
 	})
 
 	prog := tea.NewProgram(&m)

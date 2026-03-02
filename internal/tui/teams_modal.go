@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -68,22 +67,10 @@ func (m *Model) promoteAutoTeamCmd(tv service.TeamView) tea.Cmd {
 // Team classification helpers (local equivalents of service-internal helpers)
 // ---------------------------------------------------------------------------
 
-var (
-	cachedHomeDir     string
-	cachedHomeDirOnce sync.Once
-)
-
-func getCachedHomeDir() string {
-	cachedHomeDirOnce.Do(func() {
-		cachedHomeDir, _ = os.UserHomeDir()
-	})
-	return cachedHomeDir
-}
-
 // isReadOnlyTeam returns true if the team's directory is one of the well-known
 // auto-detected read-only directories (e.g. ~/.claude/agents).
 func isReadOnlyTeam(tv service.TeamView) bool {
-	home := getCachedHomeDir()
+	home := service.GetHomeDir()
 	if home == "" {
 		return false
 	}

@@ -23,8 +23,9 @@ func (m *mockSystemService) ListModels(_ context.Context) ([]service.ModelInfo, 
 func (m *mockSystemService) ListMCPServers(_ context.Context) ([]service.MCPServerStatus, error) {
 	return nil, nil
 }
-func (m *mockSystemService) ConfigDir(_ context.Context) (string, error)   { return "", nil }
-func (m *mockSystemService) Slugify(_ context.Context, name string) string { return name }
+func (m *mockSystemService) GetProgressState(_ context.Context) (service.ProgressState, error) {
+	return service.ProgressState{}, nil
+}
 
 // mockDefinitionService implements service.DefinitionService with no-op methods.
 // Tests can override individual fields (e.g. listTeams) to inject behaviour.
