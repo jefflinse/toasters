@@ -567,6 +567,8 @@ Addressed 14 of the 23 Phase 1 review suggestions to harden the service layer be
 | Sec-S3 | Async goroutines lack panic recovery | Phase 2 |
 | Sec-S4 | `RespondToBlocker` has no input size limits | Phase 2 |
 | Sec-S5 | `RespondToPrompt` has no response length limit | Phase 2 |
+| S19 | Operator history endpoint not paginated (returns server-bounded history as single page) | Post-Phase 4 |
+| S20 | Job `workspace_dir` exposed as absolute server path — TUI should display relative paths | Post-Phase 4 |
 
 ---
 
