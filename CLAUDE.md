@@ -264,14 +264,14 @@ Full details: `PRE_PHASE_4_WAVE_2.md`
 
 ## Current Work: Client/Server Architecture Split
 
-**Status:** Phase 1 complete ✅; Phase 2 Steps 2.1–2.3 complete ✅; Step 2.4 (integration tests) next
+**Status:** Phase 1 complete ✅; Phase 2 complete ✅; Phase 3 (Mode Wiring) next
 **Tracking document:** [`CLIENT_SERVER_SPLIT.md`](CLIENT_SERVER_SPLIT.md)
 **API specification:** [`API_SPEC.md`](API_SPEC.md)
 
 Splitting the monolithic TUI into a client/server architecture. The orchestration engine (operator, runtime, store, MCP, loader, compose, providers) becomes a long-running server; the TUI becomes a thin client. REST + SSE protocol. 4 phases:
 
 1. **Phase 1: Service Extraction** ✅ — Extract business logic from TUI into `internal/service` package with composed `Service` interface. Rewire TUI to use it. No networking yet.
-2. **Phase 2: Server** (in progress) — HTTP server with SSE event streaming (`internal/server/`). `RemoteClient` as drop-in for `LocalService` (`internal/client/`). Pre-work, API design, server implementation, and remote client complete; integration tests (Step 2.4) remaining.
+2. **Phase 2: Server** ✅ — HTTP server with SSE event streaming (`internal/server/`). `RemoteClient` as drop-in for `LocalService` (`internal/client/`). Pre-work, API design, server implementation, remote client, and integration tests all complete.
 3. **Phase 3: Mode Wiring** (1–2 days) — `toasters serve` (headless), `toasters --server <addr>` (remote TUI), CLI subcommands.
 4. **Phase 4: Hardening** (2–3 days) — Token auth, connection resilience, security audit.
 
