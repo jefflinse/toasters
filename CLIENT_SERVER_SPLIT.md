@@ -1,7 +1,7 @@
 # Client/Server Architecture Split
 
 **Created:** 2026-02-28
-**Status:** Phase 1 complete ✅; Phase 2 pre-work complete ✅; Phase 2 API design complete ✅; Phase 2 server implementation complete ✅ (Step 2.2); Step 2.3 (Remote Client) next
+**Status:** Phase 1 complete ✅; Phase 2 pre-work complete ✅; Phase 2 API design complete ✅; Phase 2 server implementation complete ✅ (Step 2.2); Phase 2 remote client complete ✅ (Step 2.3); Phase 3 (Mode Wiring) next
 **Effort Estimate:** 10–17 days across 4 phases
 
 ---
@@ -632,16 +632,35 @@ Addressed 14 of the 23 Phase 1 review suggestions to harden the service layer be
 
 ### Step 2.3: Implement the Remote Client
 
-- [ ] **Status:** Not started
+- [x] **Status:** Complete (2026-03-02) — implementation + review + 3 blocking findings fixed + 2 suggestions addressed + lint clean
 - **Agent:** builder
-- **Description:** Implement `internal/client.RemoteClient` satisfying `service.Service` via HTTP calls to the server + SSE for the event stream. Drop-in replacement for `LocalService`. On SSE reconnect: fetch full state via REST endpoints (`ListActiveSessions`, `ListJobs`, `OperatorStatus`), then re-subscribe to SSE for future events.
+- **Description:** Implement `internal/client.RemoteClient` satisfying `service.Service` via HTTP calls to the server + SSE for the event stream. Drop-in replacement for `LocalService`. On SSE reconnect: fetch full state via REST endpoints, emit synthetic `progress.update` event, then re-subscribe to SSE for future events.
+- **Implementation:** 8 files in `internal/client/` (4 production + 4 test), ~6,130 lines total, 137 test functions
+  - `types.go` (976 lines) — wire types, converters, `parseSSEPayload` (19 event types)
+  - `http.go` (244 lines) — HTTP transport, error types, `decodeResponse[T]`, response body limits (10 MiB)
+  - `client.go` (654 lines) — RemoteClient struct, 37 REST methods, `url.PathEscape` on all path params
+  - `events.go` (196 lines) — SSE Subscribe, reconnection with exponential backoff (1s→30s, 10% jitter)
+  - `types_test.go` (1,805 lines) — 14 round-trip tests + 19 SSE payload tests + edge cases
+  - `http_test.go` (1,003 lines) — transport, error mapping, connection errors, context cancellation
+  - `client_test.go` (1,100 lines) — 15 integration tests against real server + mock service
+  - `reconnect_test.go` (152 lines) — context cancellation, channel lifecycle
+- **Review:** Reviewed by code-reviewer, concurrency-reviewer, security-auditor (2026-03-02). 3 blocking findings + 2 key suggestions fixed; remaining suggestions deferred.
+- **Blocking findings (all fixed):**
+  - B1: ✅ Added `url.PathEscape()` on all 17 path parameter interpolation sites
+  - B2: ✅ Added `io.LimitReader` (10 MiB) on response body decoding
+  - B3: ✅ Default `http.Client` with 30s timeout (replaces `http.DefaultClient`)
+- **Key suggestions addressed:**
+  - S4: ✅ `connected` set to `false` on clean shutdown via `defer`
+  - S6: ✅ `time.NewTimer` with explicit `Stop()` in backoff loop
+- **Deferred suggestions:** S1 (400 mapping), S2 (rand/v2), S3 (connected unused), S5 (multi-subscriber connected), S7 (backoff reset), S8 (SSE event size limit), S9 (error sanitization), S10 (TLS enforcement — Phase 4), S11 (auth headers — Phase 4), S12 (baseURL validation), S13 (test coverage gaps)
 - **Acceptance criteria:**
-  - [ ] `RemoteClient` implements full `Service` interface
-  - [ ] All operations work over HTTP
-  - [ ] Event stream works over SSE with auto-reconnection
-  - [ ] On reconnect, client fetches full state via REST then re-subscribes to SSE
-  - [ ] Connection errors surfaced as typed errors
-  - [ ] TUI can use `RemoteClient` as drop-in for `LocalService`
+  - [x] `RemoteClient` implements full `Service` interface (compile-time assertion)
+  - [x] All 37 operations work over HTTP (5 operator + 20 definitions + 4 jobs + 3 sessions + 4 system + 1 SSE)
+  - [x] Event stream works over SSE with auto-reconnection (exponential backoff, synthetic progress.update)
+  - [x] On reconnect, client fetches full state via REST then re-subscribes to SSE
+  - [x] Connection errors surfaced as typed errors (`ErrConnectionFailed`, `ErrConflict`, etc.)
+  - [x] TUI can use `RemoteClient` as drop-in for `LocalService`
+  - [x] 0 lint findings, all tests pass race-clean
 
 ### Step 2.4: Write Server Integration Tests
 

@@ -264,14 +264,14 @@ Full details: `PRE_PHASE_4_WAVE_2.md`
 
 ## Current Work: Client/Server Architecture Split
 
-**Status:** Phase 1 complete ✅; Phase 2 in progress (Step 2.2 server complete ✅, Step 2.3 remote client next)
+**Status:** Phase 1 complete ✅; Phase 2 complete ✅; Phase 3 (Mode Wiring) next
 **Tracking document:** [`CLIENT_SERVER_SPLIT.md`](CLIENT_SERVER_SPLIT.md)
 **API specification:** [`API_SPEC.md`](API_SPEC.md)
 
 Splitting the monolithic TUI into a client/server architecture. The orchestration engine (operator, runtime, store, MCP, loader, compose, providers) becomes a long-running server; the TUI becomes a thin client. REST + SSE protocol. 4 phases:
 
 1. **Phase 1: Service Extraction** ✅ — Extract business logic from TUI into `internal/service` package with composed `Service` interface. Rewire TUI to use it. No networking yet.
-2. **Phase 2: Server** (in progress) — HTTP server with SSE event streaming. `RemoteClient` as drop-in for `LocalService`. Pre-work, API design, and server implementation complete; remote client next.
+2. **Phase 2: Server** ✅ — HTTP server with SSE event streaming (`internal/server/`). `RemoteClient` as drop-in for `LocalService` (`internal/client/`). Pre-work, API design, server implementation, and remote client all complete.
 3. **Phase 3: Mode Wiring** (1–2 days) — `toasters serve` (headless), `toasters --server <addr>` (remote TUI), CLI subcommands.
 4. **Phase 4: Hardening** (2–3 days) — Token auth, connection resilience, security audit.
 
@@ -330,3 +330,14 @@ Key components:
 - `types.go` — wire types with `json:"snake_case"` tags; `eventPayloadToWire` converter for all 19 event types
 - `helpers.go` — `decodeBody` (1 MiB `MaxBytesReader`), pagination, error mapping, `SanitizeErrorMessage`
 - Security: `MaxBytesReader`, SSE connection cap, `WriteTimeout` (30s, disabled for SSE), request ID validation, generic 500 messages
+
+### Phase 2 Remote Client (Step 2.3) ✅
+
+**Status: Complete (2026-03-02)** — `internal/client/` package (8 files, ~6,130 lines, 137 test functions). Reviewed by code-reviewer, security-auditor, concurrency-reviewer; 3 blocking findings + 2 suggestions fixed; 0 lint findings.
+
+Key components:
+- `types.go` — client-side wire types (independent of `internal/server`), 19 wire→service converters, `parseSSEPayload` for all 19 event types
+- `http.go` — HTTP transport (`get`/`post`/`put`/`delete`), typed errors (`ErrConnectionFailed`, `ErrConflict`, etc.), `decodeResponse[T]` with 10 MiB body limit
+- `client.go` — `RemoteClient` struct satisfying `service.Service`, 37 REST methods, `url.PathEscape` on all path params, 30s default timeout
+- `events.go` — SSE `Subscribe()` with auto-reconnection (exponential backoff 1s→30s, 10% jitter), synthetic `progress.update` on reconnect
+- Security: `io.LimitReader` (10 MiB) on all response bodies, `url.PathEscape` on all path parameters, 30s HTTP timeout, `time.NewTimer` with `Stop()` in backoff
