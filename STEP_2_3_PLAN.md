@@ -27,10 +27,10 @@ Build `internal/client/` — a `RemoteClient` implementing `service.Service` ove
   - Converter functions: `wireJobToService`, `wireTaskToService`, `wireSkillToService`, `wireAgentToService`, `wireTeamToService`, `wireTeamViewToService`, etc. — each converts a client wire type to the corresponding `service.*` type
   - A `parseSSEPayload(eventType string, raw json.RawMessage) (any, error)` function that deserializes the raw JSON payload into the correct `service.*Payload` type based on event type (the inverse of the server's `eventPayloadToWire`)
 - **Acceptance criteria:**
-  - [ ] All wire types have JSON tags matching the server's wire types exactly (verified by inspection against `internal/server/types.go`)
-  - [ ] All converter functions produce correct `service.*` types (verified by unit tests in Step 8)
-  - [ ] `parseSSEPayload` handles all 19 event types plus nil payload for `definitions.reloaded`
-  - [ ] No imports from `internal/server`
+  - [x] All wire types have JSON tags matching the server's wire types exactly (verified by inspection against `internal/server/types.go`)
+  - [x] All converter functions produce correct `service.*` types (verified by unit tests in Step 8)
+  - [x] `parseSSEPayload` handles all 19 event types plus nil payload for `definitions.reloaded`
+  - [x] No imports from `internal/server`
 - **Risk notes:**
   - The wire types must match the server's JSON output exactly — any mismatch causes silent data loss. The `omitempty` tags must match too.
   - `wireProgressState` has nested maps (`map[string][]wireTask`) which need careful deserialization.
@@ -58,10 +58,10 @@ Build `internal/client/` — a `RemoteClient` implementing `service.Service` ove
   - Set `Content-Type: application/json` on POST/PUT requests
   - Set `Accept: application/json` on all requests
 - **Acceptance criteria:**
-  - [ ] All HTTP methods correctly construct requests with the base URL
-  - [ ] Non-2xx responses produce typed errors with the server's error message
-  - [ ] Connection failures produce `ErrConnectionFailed`
-  - [ ] Context cancellation is respected
+  - [x] All HTTP methods correctly construct requests with the base URL
+  - [x] Non-2xx responses produce typed errors with the server's error message
+  - [x] Connection failures produce `ErrConnectionFailed`
+  - [x] Context cancellation is respected
 - **Risk notes:**
   - Must handle the case where the server returns a non-JSON body (e.g., nginx error page) gracefully
   - The `decodeResponse` helper should handle both 204 No Content (no body) and responses with bodies
@@ -79,9 +79,9 @@ Build `internal/client/` — a `RemoteClient` implementing `service.Service` ove
   - Top-level methods: `Operator()`, `Definitions()`, `Jobs()`, `Sessions()`, `Events()`, `System()` — each returns the corresponding wrapper
   - Compile-time assertion: `var _ service.Service = (*RemoteClient)(nil)`
 - **Acceptance criteria:**
-  - [ ] `RemoteClient` satisfies `service.Service` at compile time
-  - [ ] All 6 sub-interface accessors return non-nil values
-  - [ ] `Close()` cancels the internal context
+  - [x] `RemoteClient` satisfies `service.Service` at compile time
+  - [x] All 6 sub-interface accessors return non-nil values
+  - [x] `Close()` cancels the internal context
 - **Risk notes:**
   - The sub-interface wrappers for `JobService` and `SessionService` must use separate types (same as `LocalService`) because both have `List`, `Get`, `Cancel` methods
 
@@ -97,11 +97,11 @@ Build `internal/client/` — a `RemoteClient` implementing `service.Service` ove
   - **SessionService:** `List` (GET /sessions → PaginatedResponse[wireSessionSnapshot]), `Get` (GET /sessions/{id} → wireSessionDetail), `Cancel` (POST /sessions/{id}/cancel → 204)
   - Each method: construct request → call HTTP transport → decode wire type → convert to service type → return
 - **Acceptance criteria:**
-  - [ ] Every method constructs the correct URL path with path parameters and query parameters
-  - [ ] Every method correctly deserializes the response and converts to the service type
-  - [ ] 204 No Content responses are handled (no body to decode)
-  - [ ] Error responses are mapped to typed errors
-  - [ ] `JobListFilter` fields are correctly mapped to query parameters (nil fields omitted)
+  - [x] Every method constructs the correct URL path with path parameters and query parameters
+  - [x] Every method correctly deserializes the response and converts to the service type
+  - [x] 204 No Content responses are handled (no body to decode)
+  - [x] Error responses are mapped to typed errors
+  - [x] `JobListFilter` fields are correctly mapped to query parameters (nil fields omitted)
 - **Risk notes:**
   - `HealthResponse.UptimeSeconds` is a float64 that must be converted back to `time.Duration` — use `time.Duration(seconds * float64(time.Second))`
   - `History` returns `PaginatedResponse[wireChatEntry]` — extract `.Items` and convert each
@@ -118,11 +118,11 @@ Build `internal/client/` — a `RemoteClient` implementing `service.Service` ove
   - Async methods return `(operationID string, err error)` — extract from `AsyncResponse.OperationID`
   - List methods extract `.Items` from `PaginatedResponse` and convert each wire type
 - **Acceptance criteria:**
-  - [ ] All 20 DefinitionService methods implemented
-  - [ ] Create methods send correct JSON request bodies
-  - [ ] Async methods (Generate*, Promote, DetectCoordinator) return the operation ID from the 202 response
-  - [ ] Delete methods handle 204 correctly
-  - [ ] List methods handle pagination response format
+  - [x] All 20 DefinitionService methods implemented
+  - [x] Create methods send correct JSON request bodies
+  - [x] Async methods (Generate*, Promote, DetectCoordinator) return the operation ID from the 202 response
+  - [x] Delete methods handle 204 correctly
+  - [x] List methods handle pagination response format
 - **Risk notes:**
   - `wireTeamView` has nested `wireTeam`, optional `*wireAgent` coordinator, and `[]wireAgent` workers — the converter must handle nil coordinator
 
@@ -141,11 +141,11 @@ Build `internal/client/` — a `RemoteClient` implementing `service.Service` ove
   - Channel buffer size: 256 (matches LocalService subscriber buffer)
   - Heartbeat events are converted to `service.Event{Type: EventTypeHeartbeat, Payload: HeartbeatPayload{...}}` and sent through the channel (the TUI's event consumer already ignores them)
 - **Acceptance criteria:**
-  - [ ] `Subscribe()` returns a channel that delivers `service.Event` values
-  - [ ] Events have correct `Type`, `Seq`, `Timestamp`, `TurnID`, `SessionID`, `OperationID`, and typed `Payload`
-  - [ ] The channel is closed when ctx is cancelled
-  - [ ] Connection errors cause the goroutine to exit cleanly (no panic, no goroutine leak)
-  - [ ] All 19 event types are correctly deserialized
+  - [x] `Subscribe()` returns a channel that delivers `service.Event` values
+  - [x] Events have correct `Type`, `Seq`, `Timestamp`, `TurnID`, `SessionID`, `OperationID`, and typed `Payload`
+  - [x] The channel is closed when ctx is cancelled
+  - [x] Connection errors cause the goroutine to exit cleanly (no panic, no goroutine leak)
+  - [x] All 19 event types are correctly deserialized
 - **Risk notes:**
   - The existing `sse.Reader` returns the `event:` type and `data:` payload. The `data:` is the full JSON `SSEEvent` envelope (which also contains the type). The client should use the envelope's `type` field for payload dispatch (not the SSE `event:` line) to stay consistent.
   - The `sse.Reader` currently ignores `id:` lines — this is fine since we get `seq` from the JSON envelope.
@@ -168,12 +168,12 @@ Build `internal/client/` — a `RemoteClient` implementing `service.Service` ove
   - The `Subscribe()` method should return a single channel that survives reconnects — the goroutine replaces the underlying SSE connection but keeps sending to the same channel
   - Add a `connected` state field (atomic bool) that `Health()` can check to return an error when disconnected
 - **Acceptance criteria:**
-  - [ ] After SSE disconnect, the client automatically reconnects with backoff
-  - [ ] On successful reconnect, a synthetic `progress.update` event is emitted
-  - [ ] The channel returned by `Subscribe()` continues to deliver events after reconnect (no new channel needed)
-  - [ ] Backoff caps at 30s with jitter
-  - [ ] Context cancellation stops reconnect attempts
-  - [ ] The `connected` state is updated on connect/disconnect
+  - [x] After SSE disconnect, the client automatically reconnects with backoff
+  - [x] On successful reconnect, a synthetic `progress.update` event is emitted
+  - [x] The channel returned by `Subscribe()` continues to deliver events after reconnect (no new channel needed)
+  - [x] Backoff caps at 30s with jitter
+  - [x] Context cancellation stops reconnect attempts
+  - [x] The `connected` state is updated on connect/disconnect
 - **Risk notes:**
   - The reconnect protocol fetches 4 endpoints in parallel — must use `errgroup` or `sync.WaitGroup` with proper error handling
   - There's a brief window between REST fetches and SSE subscription where events may be missed — this is acceptable per the API spec (the next `progress.update` will carry full state)
@@ -195,9 +195,9 @@ Build `internal/client/` — a `RemoteClient` implementing `service.Service` ove
   - Edge cases: nil coordinator in TeamView, empty slices vs nil, zero-value times, nil Metadata, optional fields with omitempty
   - `wireProgressState` deserialization with nested maps
 - **Acceptance criteria:**
-  - [ ] At least one round-trip test per entity type (Job, Task, Skill, Agent, Team, TeamView, SessionSnapshot, SessionDetail, ChatEntry, ProgressReport, AgentSession, FeedEntry, ModelInfo, MCPServerStatus, ProgressState)
-  - [ ] At least one test per SSE event type for `parseSSEPayload`
-  - [ ] All tests pass with `go test -race`
+  - [x] At least one round-trip test per entity type (Job, Task, Skill, Agent, Team, TeamView, SessionSnapshot, SessionDetail, ChatEntry, ProgressReport, AgentSession, FeedEntry, ModelInfo, MCPServerStatus, ProgressState)
+  - [x] At least one test per SSE event type for `parseSSEPayload`
+  - [x] All tests pass with `go test -race`
 - **Risk notes:**
   - The round-trip tests need reference JSON that matches what the server produces. The test should marshal the wire type and verify the JSON structure rather than comparing against hardcoded strings (which are brittle).
 
@@ -215,10 +215,10 @@ Build `internal/client/` — a `RemoteClient` implementing `service.Service` ove
   - Non-JSON error response body handling
   - Request body encoding for POST/PUT methods
 - **Acceptance criteria:**
-  - [ ] Tests cover all error code mappings (404, 409, 422, 429, 500, 503)
-  - [ ] Tests verify correct URL path construction
-  - [ ] Tests verify context cancellation
-  - [ ] All tests pass with `go test -race`
+  - [x] Tests cover all error code mappings (404, 409, 422, 429, 500, 503)
+  - [x] Tests verify correct URL path construction
+  - [x] Tests verify context cancellation
+  - [x] All tests pass with `go test -race`
 - **Risk notes:** None significant
 
 ### Step 10: Integration Tests — RemoteClient Against Real Server
@@ -235,11 +235,11 @@ Build `internal/client/` — a `RemoteClient` implementing `service.Service` ove
   - Test 202 async responses: verify operation IDs are returned correctly
   - Note: These tests DO import `internal/server` (test-only dependency) — this is acceptable since tests are not compiled into the binary
 - **Acceptance criteria:**
-  - [ ] At least one integration test per sub-interface (6 sub-interfaces)
-  - [ ] SSE event delivery test covers at least 3 event types
-  - [ ] Error propagation test for ErrNotFound
-  - [ ] All tests pass with `go test -race`
-  - [ ] Tests use `t.Cleanup` to shut down server and client
+  - [x] At least one integration test per sub-interface (6 sub-interfaces)
+  - [x] SSE event delivery test covers at least 3 event types
+  - [x] Error propagation test for ErrNotFound
+  - [x] All tests pass with `go test -race`
+  - [x] Tests use `t.Cleanup` to shut down server and client
 - **Risk notes:**
   - The mock service needs to implement all 6 sub-interfaces — consider a `mockService` struct that embeds stubs and only overrides the methods under test
   - SSE tests need to wait for event delivery — use `select` with timeout to avoid hanging tests
@@ -257,10 +257,10 @@ Build `internal/client/` — a `RemoteClient` implementing `service.Service` ove
   - Channel survives reconnect (same channel delivers events before and after)
   - Multiple rapid disconnects don't leak goroutines
 - **Acceptance criteria:**
-  - [ ] Reconnect behavior verified with controlled server shutdown/restart
-  - [ ] Backoff timing verified (may use a clock interface or short durations for testing)
-  - [ ] No goroutine leaks (use `goleak` or manual verification)
-  - [ ] All tests pass with `go test -race`
+  - [x] Reconnect behavior verified with controlled server shutdown/restart
+  - [x] Backoff timing verified (may use a clock interface or short durations for testing)
+  - [x] No goroutine leaks (use `goleak` or manual verification)
+  - [x] All tests pass with `go test -race`
 - **Risk notes:**
   - Reconnect tests are inherently timing-sensitive — use short backoff durations in tests (e.g., 10ms base) and generous timeouts
   - May need a test helper that starts/stops the server to simulate disconnects
@@ -281,8 +281,8 @@ Build `internal/client/` — a `RemoteClient` implementing `service.Service` ove
   - Code quality: follows project conventions, proper doc comments, no dead code
   - Dependency boundaries: no import of `internal/server` in non-test files
 - **Acceptance criteria:**
-  - [ ] No blocking findings
-  - [ ] All suggestions addressed or documented as deferred
+  - [x] No blocking findings (3 blocking findings found and fixed during review)
+  - [x] All suggestions addressed or documented as deferred (11 deferred: S1-S3, S5, S7-S13)
 
 ### Review Checkpoints
 

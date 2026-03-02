@@ -1,7 +1,7 @@
 # Toasters REST API Specification
 
 **Version:** 1.0 (Phase 2)
-**Status:** Draft
+**Status:** Implemented (server: `internal/server/`, client: `internal/client/`)
 **Last Updated:** 2026-03-02
 
 This document specifies the HTTP REST + SSE API for the Toasters server. It maps every method in the `internal/service.Service` interface to an HTTP endpoint. The server exposes this API; the `RemoteClient` consumes it as a drop-in replacement for `LocalService`.
