@@ -70,6 +70,13 @@ internal/
   runtime/                  # In-process agent runtime (sessions, core tools, spawn)
                             #   composite_tools.go: CompositeTools wrapper combining CoreTools + MCP tools
                             #   Shutdown: WaitGroup-based with 10s timeout (no busy-wait)
+  service/                  # Use-case-level service interface (client/server split boundary)
+                            #   service.go: composed Service interface + 6 sub-interfaces (Operator, Definitions,
+                            #               Jobs, Sessions, Events, System)
+                            #   types.go: all service-level DTOs — zero imports from internal packages
+                            #   events.go: unified event stream (19 event types, Event envelope, EventService)
+                            #   LocalService (Step 1.2): in-process impl delegating to db/operator/runtime/mcp
+                            #   RemoteClient (Phase 2): HTTP+SSE impl for connecting to standalone server
   sse/                      # Shared SSE parsing (reader, Anthropic event types, OpenAI chunk types)
   tooldef/                  # Shared ToolDef and MCPCaller types (used by runtime, progress, mcp)
   tui/                      # Bubble Tea TUI (model, views, grid, modals, streaming, activity feed, CRUD)
@@ -249,7 +256,7 @@ Full details: `PRE_PHASE_4_WAVE_2.md`
 
 ## Current Work: Client/Server Architecture Split
 
-**Status:** Planning complete, ready to execute Phase 1
+**Status:** Phase 1 in progress — Steps 1.1 and 1.2 complete, Step 1.3 next
 **Tracking document:** [`CLIENT_SERVER_SPLIT.md`](CLIENT_SERVER_SPLIT.md)
 
 Splitting the monolithic TUI into a client/server architecture. The orchestration engine (operator, runtime, store, MCP, loader, compose, providers) becomes a long-running server; the TUI becomes a thin client. REST + SSE protocol. 4 phases:
@@ -260,3 +267,14 @@ Splitting the monolithic TUI into a client/server architecture. The orchestratio
 4. **Phase 4: Hardening** (2–3 days) — Token auth, connection resilience, security audit.
 
 Plan reviewed by tui-engineer and api-designer. All blocking concerns documented in the tracking doc.
+
+### Phase 1 Progress
+
+**Step 1.1: Service Interface** ✅ — `internal/service/` created with three files:
+- `service.go` — composed `Service` interface with 6 sub-interfaces: `OperatorService`, `DefinitionService`, `JobService`, `SessionService`, `EventService`, `SystemService`
+- `types.go` — all service-level DTO types; zero imports from internal packages
+- `events.go` — unified event stream: 19 event types, `Event` envelope with sequence numbers + correlation IDs, `EventService.Subscribe(ctx)`
+
+**Step 1.2: Implement LocalService** ✅ — `internal/service/local.go` created; full `Service` interface satisfied; reviewed by concurrency-reviewer, security-auditor, and code-reviewer; all blocking findings fixed
+**Step 1.3: Rewire TUI** — not started
+**Step 1.4: Service Tests** — not started

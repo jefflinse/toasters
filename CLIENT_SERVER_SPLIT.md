@@ -1,7 +1,7 @@
 # Client/Server Architecture Split
 
 **Created:** 2026-02-28
-**Status:** Planning
+**Status:** Phase 1 in progress — Steps 1.1 and 1.2 complete
 **Effort Estimate:** 10–17 days across 4 phases
 
 ---
@@ -204,47 +204,161 @@ The TUI engineer estimates Phase 1 at 5–8 days (vs. original 3–5) due to fil
 
 ### Step 1.1: Create the Service Interface
 
-- [ ] **Status:** Not started
+- [x] **Status:** Complete (2026-03-01)
 - **Agent:** api-designer
 - **Description:** Design `internal/service` with a composed `Service` interface (see Proposed Service Interface Structure above). Must capture every operation the TUI currently performs against the store, LLM, or filesystem. Define service-level DTO types (not raw `db.*` types). Define the unified event stream contract that replaces operator callbacks, session subscriptions, and SQLite polling.
 - **Key files:** `internal/service/service.go`, `internal/service/types.go`, `internal/service/events.go`
-- **Blocking concerns to address:**
-  - **B1:** Interface must be use-case-level, not db.Store-level
-  - **B2:** Event subscription must unify all 3 current mechanisms into `Events().Subscribe(ctx)`
-  - **B3:** `SendMessage` must return a `turnID` for response correlation
+- **Blocking concerns addressed:**
+  - **B1 ✅** Interface is use-case-level: 6 domain sub-interfaces (Operator, Definitions, Jobs, Sessions, Events, System)
+  - **B2 ✅** `Events().Subscribe(ctx)` unifies operator callbacks, session subscriptions, and SQLite polling into one channel
+  - **B3 ✅** `SendMessage` returns `turnID`; all `operator.text` / `operator.done` events carry `TurnID`
 - **Acceptance criteria:**
-  - [ ] Composed `Service` interface with domain-specific sub-interfaces and godoc comments
-  - [ ] Service-level DTO types defined (not raw DB types)
-  - [ ] Unified event stream types with sequence numbers, typed discriminator, and correlation IDs
-  - [ ] `SendMessage` returns `turnID`; async operations return `operationID`
-  - [ ] No implementation yet — interface only
-- **Risk:** Getting the interface wrong means rework in every subsequent step. Must study every `m.store.*`, `m.llmClient.*`, filesystem operation, and `tea.Msg` type in the TUI.
-- **Gate:** ✋ Human review of interface design before proceeding
+  - [x] Composed `Service` interface with domain-specific sub-interfaces and godoc comments
+  - [x] Service-level DTO types defined (not raw DB types) — zero internal imports in service package
+  - [x] Unified event stream types with sequence numbers, typed discriminator, and correlation IDs
+  - [x] `SendMessage` returns `turnID`; async operations return `operationID`
+  - [x] No implementation — interface only
+- **Design decisions made during review:**
+  - `GetTeamDef` / `TeamDef` removed — `service.Team` already carries Skills/Provider/Model/Culture; TUI reads from `TeamView.Team` directly
+  - `service.Blocker` + `service.BlockerQuestion` are canonical; TUI-local types in `blocker_modal.go` will be deleted in Step 1.3
+  - `SessionDetail.Output` is a pre-formatted `string` (bounded ~50–100KB in practice; no pagination needed for Phase 1)
+- **Gate:** ✅ Human-reviewed and approved 2026-03-01
 
 ### Step 1.2: Implement the In-Process Service
 
-- [ ] **Status:** Not started
+- [x] **Status:** Complete (2026-03-01)
 - **Agent:** builder
-- **Description:** Implement `internal/service.LocalService` satisfying the `Service` interface by delegating to existing components (`db.Store`, `provider.Provider`, `runtime.Runtime`, `operator.Operator`, etc.). Mechanical extraction of business logic from TUI methods into service methods.
+- **Description:** Implement `internal/service.LocalService` satisfying the `Service` interface by delegating to existing components (`db.Store`, `provider.Provider`, `runtime.Runtime`, `operator.Operator`, etc.). Mechanical extraction of business logic from TUI methods into service methods. All logic lives in `internal/service/local.go`.
 - **Blocking concern B5:** Filesystem operations in modal handlers (~400 lines of team promotion, CRUD) are the hardest extraction. Move verbatim, don't refactor.
-- **Key extractions:**
-  - `reloadSkillsForModal()` → `service.Definitions().ListSkills()`
-  - `reloadAgentsForModal()` → `service.Definitions().ListAgents()`
-  - `reloadTeamsForModal()` → `service.Definitions().ListTeams()`
-  - `createSkillFile()` / `createAgentFile()` → `service.Definitions().CreateSkill()` / `.CreateAgent()`
-  - `promoteAutoTeam()` → `service.Definitions().PromoteTeam()`
-  - `generateSkillCmd()` / `generateAgentCmd()` / `generateTeamCmd()` → `service.Definitions().Generate*()`
-  - `maybeAutoDetectCoordinator()` → `service.Definitions().DetectCoordinator()`
-  - `fetchModels()` → `service.System().ListModels()`
-  - `progressPollCmd()` → replaced by `service.Events().Subscribe()` pushing `progress.update` events
-  - Operator callbacks (`onText`, `onEvent`, `onTurnDone`) → unified into `service.Events().Subscribe()`
-  - Session subscriptions (`session.Subscribe()`) → unified into `service.Events().Subscribe()`
+
+#### LocalConfig struct
+
+```go
+type LocalConfig struct {
+    Store        db.Store
+    Runtime      *runtime.Runtime
+    Operator     *operator.Operator
+    MCPManager   *mcp.Manager
+    Provider     provider.Provider  // operator's LLM provider (for ListModels, generation)
+    Composer     *compose.Composer
+    Loader       *loader.Loader
+    ConfigDir    string
+    WorkspaceDir string
+    TeamsDir     string
+    OperatorModel string  // for OperatorStatus.ModelName
+    StartTime    time.Time  // for Health().Uptime
+}
+```
+
+#### Operator callback wiring design
+
+`operator.Operator` sets callbacks at construction time via `operator.Config` — they cannot be changed after `New()`. Therefore `LocalService` exposes exported broadcast methods that `cmd/root.go` calls from the operator callbacks:
+
+- `BroadcastOperatorText(text, reasoning string)` — called from `OnText`
+- `BroadcastOperatorEvent(ev operator.Event)` — called from `OnEvent`
+- `BroadcastOperatorDone(modelName string, tokensIn, tokensOut, reasoningTokens int)` — called from `OnTurnDone`
+- `BroadcastDefinitionsReloaded()` — called from `loader.NewWatcher` `onChange` callback
+
+This avoids circular dependencies and keeps operator construction unchanged for Step 1.2.
+
+#### Event stream design
+
+`Events().Subscribe(ctx)` multiplexes 3 sources into one `chan Event` per subscriber:
+
+1. **Operator callbacks** — `BroadcastOperator*` methods call `broadcast()` directly
+2. **Progress state pushes** — background goroutine polls SQLite every 500ms (same data as `progressPollCmd`), broadcasts `EventTypeProgressUpdate`
+3. **Session events** — deferred to Step 1.3 (would conflict with existing TUI callback wiring)
+
+The progress polling goroutine and 15s heartbeat goroutine start lazily on the first `Subscribe()` call via `sync.Once`.
+
+`broadcast(ev Event)` is non-blocking: under mutex, iterates subscriber channels, drops events on overflow (bounded buffer size 256).
+
+#### Implementation subtasks
+
+| # | What | Source | Complexity |
+|---|------|--------|------------|
+| 1 | Scaffold `local.go` — `LocalConfig`, `LocalService` struct, `NewLocal()`, sub-interface accessor stubs, `var _ Service = (*LocalService)(nil)` | New | Moderate |
+| 2 | Type mapping helpers — `dbJobToService`, `dbTaskToService`, `dbSkillToService`, `dbAgentToService`, `dbTeamToService`, `runtimeSnapshotToService`, `dbFeedEntryToService`, `mcpServerStatusToService`, `providerModelInfoToService`, `buildTeamViews`, `isReadOnlyTeam`, `isSystemTeam`, `isAutoTeam` | `tui/team_view.go` | Moderate |
+| 3 | Event stream infrastructure — `broadcast()`, subscriber management, progress polling goroutine (500ms), 15s heartbeat goroutine, `BroadcastOperator*()` and `BroadcastDefinitionsReloaded()` methods | `tui/progress_poll.go`, `cmd/root.go` | Moderate |
+| 4 | `OperatorService` — `SendMessage` (generates turnID, sends to operator event loop), `RespondToPrompt`, `Status` | `tui/streaming.go` | Trivial |
+| 5 | `DefinitionService` — Skills: `ListSkills`, `GetSkill`, `CreateSkill`, `DeleteSkill`, `GenerateSkill` (async) | `tui/skills_modal.go`, `tui/llm_generate.go` | Moderate |
+| 6 | `DefinitionService` — Agents: `ListAgents`, `GetAgent`, `CreateAgent`, `DeleteAgent`, `AddSkillToAgent`, `GenerateAgent` (async) | `tui/agents_modal.go`, `tui/llm_generate.go` | Moderate |
+| 7 | `DefinitionService` — Teams: `ListTeams`, `GetTeam`, `CreateTeam`, `DeleteTeam`, `AddAgentToTeam`, `SetCoordinator`, `PromoteTeam` (async, ~400 lines), `GenerateTeam` (async), `DetectCoordinator` (async) | `tui/teams_modal.go`, `tui/team_view.go`, `tui/llm_generate.go` | **Complex** |
+| 8 | `JobService` — `List`, `ListAll`, `Get`, `Cancel` | `tui/jobs_modal.go` | Trivial |
+| 9 | `SessionService` — `List`, `Get`, `Cancel` | `tui/progress_poll.go`, `runtime` | Trivial |
+| 10 | `EventService` — `Subscribe(ctx)` delegates to internal `subscribe()` | Step 3 infrastructure | Trivial |
+| 11 | `SystemService` — `Health`, `ListModels`, `ListMCPServers`, `ConfigDir`, `Slugify` | `tui/streaming.go`, `cmd/root.go` | Trivial |
+| 12 | File-writing helpers copied verbatim from TUI: `writeAgentFile`, `writeTeamFile`, `rewriteMode`, `copyFile`, `writeGeneratedSkillFile`, `writeGeneratedAgentFile`, `stripCodeFences` | Various TUI files | Trivial |
+| 13 | Build verification: `go build ./internal/service/...`, `go vet ./internal/service/...`, `go build ./...` | — | Trivial |
+
+#### Key extraction notes
+
+**Skills (subtask 5):**
+- `ListSkills` ← `tui/skills_modal.go:reloadSkillsForModal()` — queries `store.ListSkills`, maps `*db.Skill` → `service.Skill`
+- `CreateSkill` ← `tui/skills_modal.go:createSkillFile()` — writes template .md to `user/skills/`; replace `config.Dir()` with `cfg.ConfigDir`; trigger `cfg.Loader.Load(ctx)` after write
+- `DeleteSkill` ← `tui/skills_modal.go` enter-key handler — `os.Remove(skill.SourcePath)`; trigger reload
+- `GenerateSkill` ← `tui/llm_generate.go:generateSkillCmd()` — async; goroutine calls LLM, writes file via `writeGeneratedSkillFile`, triggers reload, broadcasts `operation.completed` with `Kind: "generate_skill"`
+
+**Agents (subtask 6):**
+- `ListAgents` ← `tui/agents_modal.go:reloadAgentsForModal()` — same 3-group sort (shared → team-local → system)
+- `CreateAgent` ← `tui/agents_modal.go:createAgentFile()` — writes template .md to `user/agents/`
+- `AddSkillToAgent` ← `tui/agents_modal.go:addSkillToAgent()` — parse agent .md, append skill name, write back
+- `GenerateAgent` ← `tui/llm_generate.go:generateAgentCmd()` — async; broadcasts `Kind: "generate_agent"`
+
+**Teams (subtask 7):**
+- `ListTeams` ← `tui/team_view.go:BuildTeamViews()` + filter out `source == "system"` teams
+- `SetCoordinator` ← `tui/team_view.go:SetCoordinator(teamDir, agentName)` — ~90 lines; globs agents dir, parses each, rewrites `mode:` in agent files, updates `team.md` lead field
+- `PromoteTeam` ← `tui/teams_modal.go:promoteAutoTeam()` + `promoteReadOnlyAutoTeam()` + `promoteMarkerAutoTeam()` — ~150 lines; async; 2 code paths (read-only auto-team copies files to new managed dir; marker auto-team replaces symlink with real dir); replace `config.Dir()` with `cfg.ConfigDir`
+- `GenerateTeam` ← `tui/llm_generate.go:generateTeamCmd()` + `tui/update.go:teamGeneratedMsg handler` — async; LLM returns JSON `{team_md, agent_names}`; goroutine writes team dir + team.md + copies agent files; triggers reload; broadcasts `Kind: "generate_team"` with `Result.AgentNames`
+- `DetectCoordinator` ← `tui/teams_modal.go:maybeAutoDetectCoordinator()` — async; LLM picks coordinator from workers; calls `SetCoordinator` if match found; broadcasts `Kind: "detect_coordinator"` with `Result.Content: agentName`
+- `AddAgentToTeam` ← `tui/teams_modal.go:addAgentToTeam()` — parse team.md, append agent name, write back, copy agent .md file into team's agents/ dir
+- `DeleteTeam` ← `tui/teams_modal.go` enter-key in confirmDelete — write dismiss marker for auto-teams; symlink-aware path validation before `os.RemoveAll`
+
+**Jobs (subtask 8):**
+- `ListAll` ← `tui/jobs_modal.go:loadJobsForModal()` — `store.ListAllJobs`
+- `Get` ← `tui/jobs_modal.go:loadJobDetail()` — `store.GetJob` + `store.ListTasksForJob` + `store.GetRecentProgress`
+- `Cancel` ← `tui/jobs_modal.go` enter-key in confirmCancel — validate status is cancellable, `store.UpdateJobStatus(cancelled)`
+
+**Operator (subtask 4):**
+- `SendMessage` — generates UUID v4 as `turnID`, stores as `svc.currentTurnID` under mutex, sends `operator.EventUserMessage` via `cfg.Operator.Send(ctx, ev)`, returns `turnID`
+- `RespondToPrompt` — sends `operator.EventUserResponse` via `cfg.Operator.Send`
+
+**System (subtask 11):**
+- `ListModels` ← `tui/streaming.go:fetchModels()` — `cfg.Provider.Models(ctx)`
+- `ListMCPServers` — `cfg.MCPManager.Servers()`, map `mcp.ServerStatus` → `service.MCPServerStatus`; map `mcp.ServerConnected` → `service.MCPServerStateConnected`, `mcp.ServerFailed` → `service.MCPServerStateFailed`
+
+#### Type mapping gotchas
+
+- `db.Skill.Tools` is `json.RawMessage` (JSON array of strings) → `service.Skill.Tools []string` via `json.Unmarshal`; nil on error
+- Same for `db.Agent.Tools`, `db.Agent.Skills`, `db.Agent.DisallowedTools`, `db.Team.Skills`
+- `db.Store` has no `GetSkillByName` — after `CreateSkill` writes file and reloads, call `ListSkills` and filter by name to return the created skill
+- `service.TeamView` uses `*Agent` for `Coordinator` and `[]Agent` for `Workers` (value types); `tui.TeamView` uses `*db.Agent` (pointer types) — mapping required
+- `isReadOnlyTeam` / `isSystemTeam` / `isAutoTeam` are pure functions in `tui/team_view.go` — copy verbatim as unexported helpers in `local.go`, adapting `tui.TeamView` → `service.TeamView`
+
+#### Known gaps (deferred to Step 1.3)
+
+- **Session event multiplexing** (`rt.OnSessionStarted` wiring into the event stream) — deferred to avoid conflicting with existing TUI callback wiring
+- **`SessionDetail.Activities`** population — left empty; requires session event tracking infrastructure
+- **`OperatorStatus.State`** accuracy — returns `OperatorStateIdle` always; real state tracking requires operator changes
+- **`turnID` threading** through `OperatorDonePayload` — `turnID` is generated in `SendMessage` and stored in `LocalService`; `BroadcastOperatorDone` includes it; full correlation requires Step 1.3 TUI rewiring
+
+#### Review checkpoints within this step
+
+- After event stream infrastructure (subtask 3): **concurrency-reviewer** inspects `broadcast()`, subscriber management, `sync.Once` goroutine start pattern
+- After team CRUD (subtask 7): **security-auditor** reviews `DeleteTeam` (symlink-aware path validation before `os.RemoveAll`) and `PromoteTeam` (file copies from arbitrary source directories)
+- After build verification (subtask 13): **code-reviewer** full pass on `local.go` for correctness, error handling, "no TUI imports" constraint
+
 - **Acceptance criteria:**
-  - [ ] `LocalService` passes all existing tests
-  - [ ] Every `Service` interface method has a working implementation
-  - [ ] No TUI imports in the service package
-  - [ ] Event stream unifies operator callbacks, session subscriptions, and progress updates
-- **Risk:** Team promotion logic (~400 lines) is the most complex extraction. Move verbatim, don't refactor.
+  - [x] `var _ Service = (*LocalService)(nil)` compiles (full interface satisfaction)
+  - [x] Every `Service` interface method has a working implementation
+  - [x] No TUI imports in the service package
+  - [x] Event stream broadcasts `EventTypeProgressUpdate` via 500ms polling goroutine
+  - [x] Async operations (`GenerateSkill`, `GenerateAgent`, `GenerateTeam`, `PromoteTeam`, `DetectCoordinator`) return `operationID` immediately and push `operation.completed`/`operation.failed` events
+  - [x] `go build ./internal/service/...` passes
+  - [x] `go vet ./internal/service/...` passes
+  - [x] `go build ./...` passes (no regressions elsewhere)
+- **Gate:** ✅ Human-reviewed and approved 2026-03-01
+- **Risk:** Team promotion logic (~400 lines, 2 code paths) is the most complex extraction. Move verbatim, don't refactor. `GenerateTeam` requires tracing the TUI's `teamGeneratedMsg` handler in `tui/update.go` to understand what file writes it performs.
 
 ### Step 1.3: Rewire TUI to Use the Service
 
