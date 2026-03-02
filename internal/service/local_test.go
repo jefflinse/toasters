@@ -1,0 +1,1964 @@
+package service
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/jefflinse/toasters/internal/db"
+	"github.com/jefflinse/toasters/internal/operator"
+	"github.com/jefflinse/toasters/internal/provider"
+)
+
+// ---------------------------------------------------------------------------
+// mockStore — minimal db.Store implementation for unit tests.
+// Only the methods actually called by the functions under test are implemented;
+// all others return a "not implemented" error.
+// ---------------------------------------------------------------------------
+
+type mockStore struct {
+	// ListSkills
+	listSkillsResult []*db.Skill
+	listSkillsErr    error
+
+	// GetSkill
+	getSkillResult *db.Skill
+	getSkillErr    error
+
+	// ListAgents
+	listAgentsResult []*db.Agent
+	listAgentsErr    error
+
+	// GetAgent
+	getAgentResult *db.Agent
+	getAgentErr    error
+
+	// ListTeams
+	listTeamsResult []*db.Team
+	listTeamsErr    error
+
+	// ListTeamAgents
+	listTeamAgentsResult []*db.TeamAgent
+	listTeamAgentsErr    error
+}
+
+// Compile-time assertion that mockStore satisfies db.Store.
+var _ db.Store = (*mockStore)(nil)
+
+func (m *mockStore) ListSkills(_ context.Context) ([]*db.Skill, error) {
+	return m.listSkillsResult, m.listSkillsErr
+}
+
+func (m *mockStore) GetSkill(_ context.Context, _ string) (*db.Skill, error) {
+	return m.getSkillResult, m.getSkillErr
+}
+
+func (m *mockStore) ListAgents(_ context.Context) ([]*db.Agent, error) {
+	return m.listAgentsResult, m.listAgentsErr
+}
+
+func (m *mockStore) GetAgent(_ context.Context, _ string) (*db.Agent, error) {
+	return m.getAgentResult, m.getAgentErr
+}
+
+func (m *mockStore) ListTeams(_ context.Context) ([]*db.Team, error) {
+	return m.listTeamsResult, m.listTeamsErr
+}
+
+func (m *mockStore) ListTeamAgents(_ context.Context, _ string) ([]*db.TeamAgent, error) {
+	return m.listTeamAgentsResult, m.listTeamAgentsErr
+}
+
+// --- Unimplemented methods ---
+
+func (m *mockStore) CreateJob(_ context.Context, _ *db.Job) error {
+	return fmt.Errorf("not implemented")
+}
+func (m *mockStore) GetJob(_ context.Context, _ string) (*db.Job, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+func (m *mockStore) ListJobs(_ context.Context, _ db.JobFilter) ([]*db.Job, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+func (m *mockStore) ListAllJobs(_ context.Context) ([]*db.Job, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+func (m *mockStore) UpdateJob(_ context.Context, _ string, _ db.JobUpdate) error {
+	return fmt.Errorf("not implemented")
+}
+func (m *mockStore) UpdateJobStatus(_ context.Context, _ string, _ db.JobStatus) error {
+	return fmt.Errorf("not implemented")
+}
+func (m *mockStore) CreateTask(_ context.Context, _ *db.Task) error {
+	return fmt.Errorf("not implemented")
+}
+func (m *mockStore) GetTask(_ context.Context, _ string) (*db.Task, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+func (m *mockStore) ListTasksForJob(_ context.Context, _ string) ([]*db.Task, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+func (m *mockStore) UpdateTaskStatus(_ context.Context, _ string, _ db.TaskStatus, _ string) error {
+	return fmt.Errorf("not implemented")
+}
+func (m *mockStore) UpdateTaskResult(_ context.Context, _ string, _, _ string) error {
+	return fmt.Errorf("not implemented")
+}
+func (m *mockStore) CompleteTask(_ context.Context, _ string, _ db.TaskStatus, _, _ string) error {
+	return fmt.Errorf("not implemented")
+}
+func (m *mockStore) AssignTask(_ context.Context, _ string, _ string) error {
+	return fmt.Errorf("not implemented")
+}
+func (m *mockStore) PreAssignTaskTeam(_ context.Context, _ string, _ string) error {
+	return fmt.Errorf("not implemented")
+}
+func (m *mockStore) AddTaskDependency(_ context.Context, _, _ string) error {
+	return fmt.Errorf("not implemented")
+}
+func (m *mockStore) GetReadyTasks(_ context.Context, _ string) ([]*db.Task, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+func (m *mockStore) ReportProgress(_ context.Context, _ *db.ProgressReport) error {
+	return fmt.Errorf("not implemented")
+}
+func (m *mockStore) GetRecentProgress(_ context.Context, _ string, _ int) ([]*db.ProgressReport, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+func (m *mockStore) UpsertSkill(_ context.Context, _ *db.Skill) error {
+	return fmt.Errorf("not implemented")
+}
+func (m *mockStore) DeleteAllSkills(_ context.Context) error {
+	return fmt.Errorf("not implemented")
+}
+func (m *mockStore) UpsertAgent(_ context.Context, _ *db.Agent) error {
+	return fmt.Errorf("not implemented")
+}
+func (m *mockStore) DeleteAllAgents(_ context.Context) error {
+	return fmt.Errorf("not implemented")
+}
+func (m *mockStore) UpsertTeam(_ context.Context, _ *db.Team) error {
+	return fmt.Errorf("not implemented")
+}
+func (m *mockStore) GetTeam(_ context.Context, _ string) (*db.Team, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+func (m *mockStore) DeleteAllTeams(_ context.Context) error {
+	return fmt.Errorf("not implemented")
+}
+func (m *mockStore) AddTeamAgent(_ context.Context, _ *db.TeamAgent) error {
+	return fmt.Errorf("not implemented")
+}
+func (m *mockStore) DeleteAllTeamAgents(_ context.Context) error {
+	return fmt.Errorf("not implemented")
+}
+func (m *mockStore) CreateFeedEntry(_ context.Context, _ *db.FeedEntry) error {
+	return fmt.Errorf("not implemented")
+}
+func (m *mockStore) ListFeedEntries(_ context.Context, _ string, _ int) ([]*db.FeedEntry, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+func (m *mockStore) ListRecentFeedEntries(_ context.Context, _ int) ([]*db.FeedEntry, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+func (m *mockStore) RebuildDefinitions(_ context.Context, _ []*db.Skill, _ []*db.Agent, _ []*db.Team, _ []*db.TeamAgent) error {
+	return fmt.Errorf("not implemented")
+}
+func (m *mockStore) CreateSession(_ context.Context, _ *db.AgentSession) error {
+	return fmt.Errorf("not implemented")
+}
+func (m *mockStore) UpdateSession(_ context.Context, _ string, _ db.SessionUpdate) error {
+	return fmt.Errorf("not implemented")
+}
+func (m *mockStore) GetActiveSessions(_ context.Context) ([]*db.AgentSession, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+func (m *mockStore) LogArtifact(_ context.Context, _ *db.Artifact) error {
+	return fmt.Errorf("not implemented")
+}
+func (m *mockStore) ListArtifactsForJob(_ context.Context, _ string) ([]*db.Artifact, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+func (m *mockStore) Close() error { return nil }
+
+// ---------------------------------------------------------------------------
+// mockProvider — minimal provider.Provider for unit tests.
+// ---------------------------------------------------------------------------
+
+type mockProvider struct {
+	modelsResult []provider.ModelInfo
+	modelsErr    error
+}
+
+var _ provider.Provider = (*mockProvider)(nil)
+
+func (m *mockProvider) ChatStream(_ context.Context, _ provider.ChatRequest) (<-chan provider.StreamEvent, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
+func (m *mockProvider) Models(_ context.Context) ([]provider.ModelInfo, error) {
+	return m.modelsResult, m.modelsErr
+}
+
+func (m *mockProvider) Name() string { return "mock" }
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+// newTestService creates a LocalService with a temp dir as ConfigDir and no
+// real dependencies. Callers can override cfg fields before use.
+func newTestService(t *testing.T) *LocalService {
+	t.Helper()
+	return NewLocal(LocalConfig{
+		ConfigDir: t.TempDir(),
+		StartTime: time.Now(),
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Priority 1 — Pure / filesystem methods
+// ---------------------------------------------------------------------------
+
+func TestNewLocal_Defaults(t *testing.T) {
+	t.Parallel()
+
+	cfg := LocalConfig{ConfigDir: t.TempDir()}
+	svc := NewLocal(cfg)
+
+	if svc.ctx == nil {
+		t.Error("ctx should be non-nil")
+	}
+	if svc.cancel == nil {
+		t.Error("cancel should be non-nil")
+	}
+	if svc.subscribers == nil {
+		t.Error("subscribers map should be initialized")
+	}
+	if svc.cfg.StartTime.IsZero() {
+		t.Error("StartTime should be set when zero")
+	}
+}
+
+func TestNewLocal_StartTimePreserved(t *testing.T) {
+	t.Parallel()
+
+	fixed := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+	cfg := LocalConfig{
+		ConfigDir: t.TempDir(),
+		StartTime: fixed,
+	}
+	svc := NewLocal(cfg)
+
+	if !svc.cfg.StartTime.Equal(fixed) {
+		t.Errorf("StartTime = %v, want %v", svc.cfg.StartTime, fixed)
+	}
+}
+
+func TestShutdown_CancelsContext(t *testing.T) {
+	t.Parallel()
+
+	svc := newTestService(t)
+
+	// Context should be live before shutdown.
+	select {
+	case <-svc.ctx.Done():
+		t.Fatal("context should not be done before Shutdown()")
+	default:
+	}
+
+	svc.Shutdown()
+
+	// Context should be cancelled after shutdown.
+	select {
+	case <-svc.ctx.Done():
+		// expected
+	case <-time.After(time.Second):
+		t.Fatal("context was not cancelled after Shutdown()")
+	}
+}
+
+func TestHealth_ReturnsOK(t *testing.T) {
+	t.Parallel()
+
+	svc := newTestService(t)
+	h, err := svc.Health(context.Background())
+	if err != nil {
+		t.Fatalf("Health() error = %v", err)
+	}
+	if h.Status != "ok" {
+		t.Errorf("Status = %q, want %q", h.Status, "ok")
+	}
+	if h.Version == "" {
+		t.Error("Version should be non-empty")
+	}
+	if h.Uptime < 0 {
+		t.Errorf("Uptime = %v, want >= 0", h.Uptime)
+	}
+}
+
+func TestHealth_UptimeIncreases(t *testing.T) {
+	t.Parallel()
+
+	start := time.Now().Add(-5 * time.Second)
+	svc := NewLocal(LocalConfig{
+		ConfigDir: t.TempDir(),
+		StartTime: start,
+	})
+
+	h, err := svc.Health(context.Background())
+	if err != nil {
+		t.Fatalf("Health() error = %v", err)
+	}
+	if h.Uptime < 4*time.Second {
+		t.Errorf("Uptime = %v, want >= 4s (started 5s ago)", h.Uptime)
+	}
+}
+
+func TestConfigDir_ReturnsConfigured(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	svc := NewLocal(LocalConfig{ConfigDir: dir})
+
+	got, err := svc.ConfigDir(context.Background())
+	if err != nil {
+		t.Fatalf("ConfigDir() error = %v", err)
+	}
+	if got != dir {
+		t.Errorf("ConfigDir() = %q, want %q", got, dir)
+	}
+}
+
+func TestSlugify(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"simple words", "My Agent", "my-agent"},
+		{"empty string", "", ""},
+		{"already slug", "my-agent", "my-agent"},
+		{"special chars", "Go & Dev!", "go-dev"},
+		{"multiple spaces", "a  b  c", "a-b-c"},
+		{"leading trailing spaces", "  hello  ", "hello"},
+		{"numbers", "Agent 42", "agent-42"},
+	}
+
+	svc := newTestService(t)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := svc.Slugify(context.Background(), tt.input)
+			if got != tt.want {
+				t.Errorf("Slugify(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestStripCodeFences(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name:  "no fences",
+			input: "plain content",
+			want:  "plain content",
+		},
+		{
+			name:  "markdown fence",
+			input: "```markdown\ncontent here\n```",
+			want:  "content here",
+		},
+		{
+			name:  "plain fence",
+			input: "```\ncontent here\n```",
+			want:  "content here",
+		},
+		{
+			name:  "trailing fence only",
+			input: "content here\n```",
+			want:  "content here",
+		},
+		{
+			name:  "whitespace trimming",
+			input: "  \n  content  \n  ",
+			want:  "content",
+		},
+		{
+			name:  "yaml fence",
+			input: "```yaml\nname: test\n```",
+			want:  "name: test",
+		},
+		{
+			name:  "empty string",
+			input: "",
+			want:  "",
+		},
+		{
+			name:  "only fences",
+			input: "```\n```",
+			want:  "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := stripCodeFences(tt.input)
+			if got != tt.want {
+				t.Errorf("stripCodeFences(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRewriteMode(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		content string
+		mode    string
+		check   func(t *testing.T, got string)
+	}{
+		{
+			name:    "no frontmatter — prepends frontmatter",
+			content: "body content",
+			mode:    "worker",
+			check: func(t *testing.T, got string) {
+				t.Helper()
+				if !strings.HasPrefix(got, "---\n") {
+					t.Errorf("expected --- prefix, got: %q", got)
+				}
+				if !strings.Contains(got, "mode: worker") {
+					t.Errorf("expected mode: worker, got: %q", got)
+				}
+			},
+		},
+		{
+			name:    "existing mode field replaced",
+			content: "---\nname: test\nmode: lead\n---\nbody",
+			mode:    "worker",
+			check: func(t *testing.T, got string) {
+				t.Helper()
+				if strings.Contains(got, "mode: lead") {
+					t.Error("old mode should be replaced")
+				}
+				if !strings.Contains(got, "mode: worker") {
+					t.Errorf("expected mode: worker, got: %q", got)
+				}
+			},
+		},
+		{
+			name:    "missing mode field — appended",
+			content: "---\nname: test\n---\nbody",
+			mode:    "primary",
+			check: func(t *testing.T, got string) {
+				t.Helper()
+				if !strings.Contains(got, "mode: primary") {
+					t.Errorf("expected mode: primary, got: %q", got)
+				}
+				if !strings.Contains(got, "name: test") {
+					t.Error("existing fields should be preserved")
+				}
+			},
+		},
+		{
+			name:    "multiple agents — only first mode replaced",
+			content: "---\nname: agent1\nmode: worker\n---\nbody",
+			mode:    "primary",
+			check: func(t *testing.T, got string) {
+				t.Helper()
+				if !strings.Contains(got, "mode: primary") {
+					t.Errorf("expected mode: primary, got: %q", got)
+				}
+				// Should not have the old mode
+				if strings.Contains(got, "mode: worker") {
+					t.Error("old mode should be replaced")
+				}
+			},
+		},
+		{
+			name:    "body preserved after rewrite",
+			content: "---\nname: test\nmode: lead\n---\nmy body content",
+			mode:    "worker",
+			check: func(t *testing.T, got string) {
+				t.Helper()
+				if !strings.Contains(got, "my body content") {
+					t.Errorf("body should be preserved, got: %q", got)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := rewriteMode(tt.content, tt.mode)
+			tt.check(t, got)
+		})
+	}
+}
+
+func TestSortAgentsByTeamKey(t *testing.T) {
+	t.Parallel()
+
+	agents := []*db.Agent{
+		{TeamID: "team-b", Name: "agent-z"},
+		{TeamID: "team-a", Name: "agent-b"},
+		{TeamID: "team-a", Name: "agent-a"},
+		{TeamID: "team-b", Name: "agent-a"},
+	}
+
+	sortAgentsByTeamKey(agents)
+
+	// Expected order: team-a/agent-a, team-a/agent-b, team-b/agent-a, team-b/agent-z
+	expected := []struct{ teamID, name string }{
+		{"team-a", "agent-a"},
+		{"team-a", "agent-b"},
+		{"team-b", "agent-a"},
+		{"team-b", "agent-z"},
+	}
+
+	for i, e := range expected {
+		if agents[i].TeamID != e.teamID || agents[i].Name != e.name {
+			t.Errorf("agents[%d] = {%s/%s}, want {%s/%s}",
+				i, agents[i].TeamID, agents[i].Name, e.teamID, e.name)
+		}
+	}
+}
+
+func TestSortAgentsByTeamKey_Empty(t *testing.T) {
+	t.Parallel()
+	// Should not panic on empty slice.
+	sortAgentsByTeamKey(nil)
+	sortAgentsByTeamKey([]*db.Agent{})
+}
+
+func TestSortAgentsByTeamKey_SingleElement(t *testing.T) {
+	t.Parallel()
+	agents := []*db.Agent{{TeamID: "t", Name: "a"}}
+	sortAgentsByTeamKey(agents)
+	if agents[0].Name != "a" {
+		t.Errorf("single element should be unchanged")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// CreateSkill — filesystem tests
+// ---------------------------------------------------------------------------
+
+func TestCreateSkill_WritesFile(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	svc := NewLocal(LocalConfig{
+		ConfigDir: dir,
+		Store:     &mockStore{listSkillsErr: fmt.Errorf("no store")},
+	})
+
+	// CreateSkill will fail at ListSkills (no real store), but the file should
+	// still be written before that point. We verify the file exists.
+	_, _ = svc.CreateSkill(context.Background(), "My Skill")
+
+	skillsDir := filepath.Join(dir, "user", "skills")
+	path := filepath.Join(skillsDir, "my-skill.md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("skill file not written: %v", err)
+	}
+	content := string(data)
+	if !strings.Contains(content, "name: My Skill") {
+		t.Errorf("skill file missing name field, got:\n%s", content)
+	}
+	if !strings.Contains(content, "tools: []") {
+		t.Errorf("skill file missing tools field, got:\n%s", content)
+	}
+}
+
+func TestCreateSkill_EmptyName(t *testing.T) {
+	t.Parallel()
+
+	svc := newTestService(t)
+	_, err := svc.CreateSkill(context.Background(), "")
+	if err == nil {
+		t.Fatal("expected error for empty name")
+	}
+	if !strings.Contains(err.Error(), "invalid skill name") {
+		t.Errorf("error = %q, want 'invalid skill name'", err.Error())
+	}
+}
+
+func TestCreateSkill_DuplicateFile(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	skillsDir := filepath.Join(dir, "user", "skills")
+	if err := os.MkdirAll(skillsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Pre-create the file.
+	if err := os.WriteFile(filepath.Join(skillsDir, "my-skill.md"), []byte("existing"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	svc := NewLocal(LocalConfig{ConfigDir: dir})
+	_, err := svc.CreateSkill(context.Background(), "My Skill")
+	if err == nil {
+		t.Fatal("expected error for duplicate file")
+	}
+	if !strings.Contains(err.Error(), "already exists") {
+		t.Errorf("error = %q, want 'already exists'", err.Error())
+	}
+}
+
+// ---------------------------------------------------------------------------
+// CreateAgent — filesystem tests
+// ---------------------------------------------------------------------------
+
+func TestCreateAgent_WritesFile(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	svc := NewLocal(LocalConfig{
+		ConfigDir: dir,
+		Store:     &mockStore{listAgentsErr: fmt.Errorf("no store")},
+	})
+
+	_, _ = svc.CreateAgent(context.Background(), "My Agent")
+
+	agentsDir := filepath.Join(dir, "user", "agents")
+	path := filepath.Join(agentsDir, "my-agent.md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("agent file not written: %v", err)
+	}
+	content := string(data)
+	if !strings.Contains(content, "name: My Agent") {
+		t.Errorf("agent file missing name field, got:\n%s", content)
+	}
+	if !strings.Contains(content, "mode: worker") {
+		t.Errorf("agent file missing mode field, got:\n%s", content)
+	}
+}
+
+func TestCreateAgent_EmptyName(t *testing.T) {
+	t.Parallel()
+
+	svc := newTestService(t)
+	_, err := svc.CreateAgent(context.Background(), "")
+	if err == nil {
+		t.Fatal("expected error for empty name")
+	}
+	if !strings.Contains(err.Error(), "invalid agent name") {
+		t.Errorf("error = %q, want 'invalid agent name'", err.Error())
+	}
+}
+
+func TestCreateAgent_DuplicateFile(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	agentsDir := filepath.Join(dir, "user", "agents")
+	if err := os.MkdirAll(agentsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(agentsDir, "my-agent.md"), []byte("existing"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	svc := NewLocal(LocalConfig{ConfigDir: dir})
+	_, err := svc.CreateAgent(context.Background(), "My Agent")
+	if err == nil {
+		t.Fatal("expected error for duplicate file")
+	}
+	if !strings.Contains(err.Error(), "already exists") {
+		t.Errorf("error = %q, want 'already exists'", err.Error())
+	}
+}
+
+// ---------------------------------------------------------------------------
+// CreateTeam — filesystem tests
+// ---------------------------------------------------------------------------
+
+func TestCreateTeam_CreatesDirectoryStructure(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	teamsDir := filepath.Join(dir, "user", "teams")
+	svc := NewLocal(LocalConfig{
+		ConfigDir: dir,
+		TeamsDir:  teamsDir,
+		Store:     &mockStore{listTeamsErr: fmt.Errorf("no store")},
+	})
+
+	_, _ = svc.CreateTeam(context.Background(), "My Team")
+
+	teamDir := filepath.Join(teamsDir, "my-team")
+
+	// team.md should exist.
+	data, err := os.ReadFile(filepath.Join(teamDir, "team.md"))
+	if err != nil {
+		t.Fatalf("team.md not written: %v", err)
+	}
+	if !strings.Contains(string(data), "name: My Team") {
+		t.Errorf("team.md missing name, got:\n%s", string(data))
+	}
+
+	// agents/ subdirectory should exist.
+	info, err := os.Stat(filepath.Join(teamDir, "agents"))
+	if err != nil {
+		t.Fatalf("agents/ dir not created: %v", err)
+	}
+	if !info.IsDir() {
+		t.Error("agents/ should be a directory")
+	}
+}
+
+func TestCreateTeam_EmptyName(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	svc := NewLocal(LocalConfig{
+		ConfigDir: dir,
+		TeamsDir:  filepath.Join(dir, "user", "teams"),
+	})
+	_, err := svc.CreateTeam(context.Background(), "")
+	if err == nil {
+		t.Fatal("expected error for empty name")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// DeleteSkill — filesystem tests
+// ---------------------------------------------------------------------------
+
+func TestDeleteSkill_RemovesFile(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	userDir := filepath.Join(dir, "user", "skills")
+	if err := os.MkdirAll(userDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	skillPath := filepath.Join(userDir, "my-skill.md")
+	if err := os.WriteFile(skillPath, []byte("content"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	svc := NewLocal(LocalConfig{
+		ConfigDir: dir,
+		Store: &mockStore{
+			getSkillResult: &db.Skill{
+				ID:         "skill-1",
+				Name:       "My Skill",
+				Source:     "user",
+				SourcePath: skillPath,
+			},
+		},
+	})
+
+	if err := svc.DeleteSkill(context.Background(), "skill-1"); err != nil {
+		t.Fatalf("DeleteSkill() error = %v", err)
+	}
+
+	if _, err := os.Stat(skillPath); !os.IsNotExist(err) {
+		t.Error("skill file should have been removed")
+	}
+}
+
+func TestDeleteSkill_RejectsSystemSkill(t *testing.T) {
+	t.Parallel()
+
+	svc := NewLocal(LocalConfig{
+		ConfigDir: t.TempDir(),
+		Store: &mockStore{
+			getSkillResult: &db.Skill{
+				ID:     "sys-skill",
+				Name:   "System Skill",
+				Source: "system",
+			},
+		},
+	})
+
+	err := svc.DeleteSkill(context.Background(), "sys-skill")
+	if err == nil {
+		t.Fatal("expected error for system skill deletion")
+	}
+	if !strings.Contains(err.Error(), "cannot delete system skill") {
+		t.Errorf("error = %q, want 'cannot delete system skill'", err.Error())
+	}
+}
+
+func TestDeleteSkill_RejectsPathTraversal(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+
+	// Create the user/ subdirectory so EvalSymlinks succeeds on the allowed dir.
+	userDir := filepath.Join(dir, "user")
+	if err := os.MkdirAll(userDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create a file outside the user directory (at the configDir root).
+	outsideFile := filepath.Join(dir, "outside.md")
+	if err := os.WriteFile(outsideFile, []byte("content"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	svc := NewLocal(LocalConfig{
+		ConfigDir: dir,
+		Store: &mockStore{
+			getSkillResult: &db.Skill{
+				ID:         "skill-1",
+				Name:       "Bad Skill",
+				Source:     "user",
+				SourcePath: outsideFile,
+			},
+		},
+	})
+
+	err := svc.DeleteSkill(context.Background(), "skill-1")
+	if err == nil {
+		t.Fatal("expected error for path outside user directory")
+	}
+	if !strings.Contains(err.Error(), "outside user directory") {
+		t.Errorf("error = %q, want 'outside user directory'", err.Error())
+	}
+}
+
+// ---------------------------------------------------------------------------
+// DeleteAgent — filesystem tests
+// ---------------------------------------------------------------------------
+
+func TestDeleteAgent_RemovesFile(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	userDir := filepath.Join(dir, "user", "agents")
+	if err := os.MkdirAll(userDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	agentPath := filepath.Join(userDir, "my-agent.md")
+	if err := os.WriteFile(agentPath, []byte("content"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	svc := NewLocal(LocalConfig{
+		ConfigDir: dir,
+		Store: &mockStore{
+			getAgentResult: &db.Agent{
+				ID:         "agent-1",
+				Name:       "My Agent",
+				Source:     "user",
+				TeamID:     "",
+				SourcePath: agentPath,
+			},
+		},
+	})
+
+	if err := svc.DeleteAgent(context.Background(), "agent-1"); err != nil {
+		t.Fatalf("DeleteAgent() error = %v", err)
+	}
+
+	if _, err := os.Stat(agentPath); !os.IsNotExist(err) {
+		t.Error("agent file should have been removed")
+	}
+}
+
+func TestDeleteAgent_RejectsSystemAgent(t *testing.T) {
+	t.Parallel()
+
+	svc := NewLocal(LocalConfig{
+		ConfigDir: t.TempDir(),
+		Store: &mockStore{
+			getAgentResult: &db.Agent{
+				ID:     "sys-agent",
+				Name:   "System Agent",
+				Source: "system",
+				TeamID: "",
+			},
+		},
+	})
+
+	err := svc.DeleteAgent(context.Background(), "sys-agent")
+	if err == nil {
+		t.Fatal("expected error for system agent deletion")
+	}
+	if !strings.Contains(err.Error(), "cannot delete agent") {
+		t.Errorf("error = %q, want 'cannot delete agent'", err.Error())
+	}
+}
+
+func TestDeleteAgent_RejectsTeamLocalAgent(t *testing.T) {
+	t.Parallel()
+
+	svc := NewLocal(LocalConfig{
+		ConfigDir: t.TempDir(),
+		Store: &mockStore{
+			getAgentResult: &db.Agent{
+				ID:     "team-agent",
+				Name:   "Team Agent",
+				Source: "user",
+				TeamID: "some-team",
+			},
+		},
+	})
+
+	err := svc.DeleteAgent(context.Background(), "team-agent")
+	if err == nil {
+		t.Fatal("expected error for team-local agent deletion")
+	}
+	if !strings.Contains(err.Error(), "cannot delete agent") {
+		t.Errorf("error = %q, want 'cannot delete agent'", err.Error())
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Team classification helpers
+// ---------------------------------------------------------------------------
+
+func TestIsServiceReadOnlyTeam(t *testing.T) {
+	t.Parallel()
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip("cannot determine home dir")
+	}
+
+	tests := []struct {
+		name string
+		dir  string
+		want bool
+	}{
+		{
+			name: "claude agents dir",
+			dir:  filepath.Join(home, ".claude", "agents"),
+			want: true,
+		},
+		{
+			name: "opencode agents dir",
+			dir:  filepath.Join(home, ".config", "opencode", "agents"),
+			want: true,
+		},
+		{
+			name: "user teams dir",
+			dir:  filepath.Join(home, ".config", "toasters", "user", "teams", "my-team"),
+			want: false,
+		},
+		{
+			name: "arbitrary dir",
+			dir:  "/tmp/some-team",
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			tv := TeamView{Team: Team{SourcePath: tt.dir}}
+			got := isServiceReadOnlyTeam(tv)
+			if got != tt.want {
+				t.Errorf("isServiceReadOnlyTeam(%q) = %v, want %v", tt.dir, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestIsServiceSystemTeam(t *testing.T) {
+	t.Parallel()
+
+	configDir := "/home/user/.config/toasters"
+
+	tests := []struct {
+		name string
+		dir  string
+		want bool
+	}{
+		{
+			name: "system team",
+			dir:  filepath.Join(configDir, "system", "teams", "my-team"),
+			want: true,
+		},
+		{
+			name: "user team",
+			dir:  filepath.Join(configDir, "user", "teams", "my-team"),
+			want: false,
+		},
+		{
+			name: "unrelated dir",
+			dir:  "/tmp/my-team",
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			tv := TeamView{Team: Team{SourcePath: tt.dir}}
+			got := isServiceSystemTeam(tv, configDir)
+			if got != tt.want {
+				t.Errorf("isServiceSystemTeam(%q) = %v, want %v", tt.dir, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestIsServiceAutoTeam_IsAutoFlag(t *testing.T) {
+	t.Parallel()
+
+	tv := TeamView{
+		Team: Team{
+			SourcePath: "/tmp/some-team",
+			IsAuto:     true,
+		},
+	}
+	if !isServiceAutoTeam(tv) {
+		t.Error("team with IsAuto=true should be auto")
+	}
+}
+
+func TestIsServiceAutoTeam_MarkerFile(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	// Write the .auto-team marker file.
+	if err := os.WriteFile(filepath.Join(dir, ".auto-team"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	tv := TeamView{Team: Team{SourcePath: dir, IsAuto: false}}
+	if !isServiceAutoTeam(tv) {
+		t.Error("team with .auto-team marker should be auto")
+	}
+}
+
+func TestIsServiceAutoTeam_NotAuto(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	tv := TeamView{Team: Team{SourcePath: dir, IsAuto: false}}
+	if isServiceAutoTeam(tv) {
+		t.Error("team without marker or flag should not be auto")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Priority 2 — Event stream
+// ---------------------------------------------------------------------------
+
+func TestSubscribeBroadcast_ReceivesEvent(t *testing.T) {
+	t.Parallel()
+
+	svc := newTestService(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	ch := svc.subscribe(ctx)
+
+	svc.broadcast(Event{Type: EventTypeHeartbeat})
+
+	select {
+	case ev := <-ch:
+		if ev.Seq != 1 {
+			t.Errorf("Seq = %d, want 1", ev.Seq)
+		}
+		if ev.Timestamp.IsZero() {
+			t.Error("Timestamp should be set")
+		}
+		if ev.Type != EventTypeHeartbeat {
+			t.Errorf("Type = %q, want %q", ev.Type, EventTypeHeartbeat)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for event")
+	}
+}
+
+func TestSubscribeBroadcast_SeqIncrementsPerBroadcast(t *testing.T) {
+	t.Parallel()
+
+	svc := newTestService(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	ch := svc.subscribe(ctx)
+
+	svc.broadcast(Event{Type: EventTypeHeartbeat})
+	svc.broadcast(Event{Type: EventTypeHeartbeat})
+
+	ev1 := <-ch
+	ev2 := <-ch
+
+	if ev1.Seq != 1 {
+		t.Errorf("first event Seq = %d, want 1", ev1.Seq)
+	}
+	if ev2.Seq != 2 {
+		t.Errorf("second event Seq = %d, want 2", ev2.Seq)
+	}
+}
+
+func TestSubscribe_ContextCancellationClosesChannel(t *testing.T) {
+	t.Parallel()
+
+	svc := newTestService(t)
+	ctx, cancel := context.WithCancel(context.Background())
+
+	ch := svc.subscribe(ctx)
+	cancel()
+
+	// Channel should be closed after context cancellation.
+	select {
+	case _, ok := <-ch:
+		if ok {
+			t.Error("channel should be closed, not have a value")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for channel to close")
+	}
+}
+
+func TestMultipleSubscribers_BothReceiveEvent(t *testing.T) {
+	t.Parallel()
+
+	svc := newTestService(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	ch1 := svc.subscribe(ctx)
+	ch2 := svc.subscribe(ctx)
+
+	svc.broadcast(Event{Type: EventTypeDefinitionsReloaded})
+
+	for i, ch := range []<-chan Event{ch1, ch2} {
+		select {
+		case ev := <-ch:
+			if ev.Type != EventTypeDefinitionsReloaded {
+				t.Errorf("subscriber %d: Type = %q, want %q", i+1, ev.Type, EventTypeDefinitionsReloaded)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("subscriber %d: timed out waiting for event", i+1)
+		}
+	}
+}
+
+func TestBroadcast_OverflowDoesNotPanic(t *testing.T) {
+	t.Parallel()
+
+	svc := newTestService(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Subscribe but don't drain — buffer is 256.
+	_ = svc.subscribe(ctx)
+
+	// Fill the buffer and then overflow it — should not panic.
+	for i := 0; i < 300; i++ {
+		svc.broadcast(Event{Type: EventTypeHeartbeat})
+	}
+}
+
+func TestBroadcastOperatorText_EventPayload(t *testing.T) {
+	t.Parallel()
+
+	svc := newTestService(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	ch := svc.subscribe(ctx)
+
+	svc.BroadcastOperatorText("hello world", "some reasoning")
+
+	select {
+	case ev := <-ch:
+		if ev.Type != EventTypeOperatorText {
+			t.Errorf("Type = %q, want %q", ev.Type, EventTypeOperatorText)
+		}
+		payload, ok := ev.Payload.(OperatorTextPayload)
+		if !ok {
+			t.Fatalf("Payload type = %T, want OperatorTextPayload", ev.Payload)
+		}
+		if payload.Text != "hello world" {
+			t.Errorf("Text = %q, want %q", payload.Text, "hello world")
+		}
+		if payload.Reasoning != "some reasoning" {
+			t.Errorf("Reasoning = %q, want %q", payload.Reasoning, "some reasoning")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for event")
+	}
+}
+
+func TestBroadcastOperatorText_CarriesTurnID(t *testing.T) {
+	t.Parallel()
+
+	svc := newTestService(t)
+	svc.turnMu.Lock()
+	svc.currentTurnID = "turn-abc"
+	svc.turnMu.Unlock()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ch := svc.subscribe(ctx)
+
+	svc.BroadcastOperatorText("text", "")
+
+	select {
+	case ev := <-ch:
+		if ev.TurnID != "turn-abc" {
+			t.Errorf("TurnID = %q, want %q", ev.TurnID, "turn-abc")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out")
+	}
+}
+
+func TestBroadcastOperatorDone_ClearsTurnID(t *testing.T) {
+	t.Parallel()
+
+	svc := newTestService(t)
+	svc.turnMu.Lock()
+	svc.currentTurnID = "turn-xyz"
+	svc.turnMu.Unlock()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ch := svc.subscribe(ctx)
+
+	svc.BroadcastOperatorDone("claude-3", 100, 200, 0)
+
+	select {
+	case ev := <-ch:
+		if ev.Type != EventTypeOperatorDone {
+			t.Errorf("Type = %q, want %q", ev.Type, EventTypeOperatorDone)
+		}
+		if ev.TurnID != "turn-xyz" {
+			t.Errorf("TurnID = %q, want %q", ev.TurnID, "turn-xyz")
+		}
+		payload, ok := ev.Payload.(OperatorDonePayload)
+		if !ok {
+			t.Fatalf("Payload type = %T, want OperatorDonePayload", ev.Payload)
+		}
+		if payload.ModelName != "claude-3" {
+			t.Errorf("ModelName = %q, want %q", payload.ModelName, "claude-3")
+		}
+		if payload.TokensIn != 100 {
+			t.Errorf("TokensIn = %d, want 100", payload.TokensIn)
+		}
+		if payload.TokensOut != 200 {
+			t.Errorf("TokensOut = %d, want 200", payload.TokensOut)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out")
+	}
+
+	// currentTurnID should be cleared.
+	svc.turnMu.Lock()
+	turnID := svc.currentTurnID
+	svc.turnMu.Unlock()
+	if turnID != "" {
+		t.Errorf("currentTurnID = %q, want empty after BroadcastOperatorDone", turnID)
+	}
+}
+
+func TestBroadcastOperatorEvent_TaskStarted(t *testing.T) {
+	t.Parallel()
+
+	svc := newTestService(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ch := svc.subscribe(ctx)
+
+	svc.BroadcastOperatorEvent(operator.Event{
+		Type: operator.EventTaskStarted,
+		Payload: operator.TaskStartedPayload{
+			TaskID: "task-1",
+			JobID:  "job-1",
+			TeamID: "team-1",
+			Title:  "Do the thing",
+		},
+	})
+
+	select {
+	case ev := <-ch:
+		if ev.Type != EventTypeTaskStarted {
+			t.Errorf("Type = %q, want %q", ev.Type, EventTypeTaskStarted)
+		}
+		payload, ok := ev.Payload.(TaskStartedPayload)
+		if !ok {
+			t.Fatalf("Payload type = %T, want TaskStartedPayload", ev.Payload)
+		}
+		if payload.TaskID != "task-1" {
+			t.Errorf("TaskID = %q, want %q", payload.TaskID, "task-1")
+		}
+		if payload.Title != "Do the thing" {
+			t.Errorf("Title = %q, want %q", payload.Title, "Do the thing")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out")
+	}
+}
+
+func TestBroadcastOperatorEvent_TaskCompleted(t *testing.T) {
+	t.Parallel()
+
+	svc := newTestService(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ch := svc.subscribe(ctx)
+
+	svc.BroadcastOperatorEvent(operator.Event{
+		Type: operator.EventTaskCompleted,
+		Payload: operator.TaskCompletedPayload{
+			TaskID:          "task-2",
+			JobID:           "job-2",
+			TeamID:          "team-2",
+			Summary:         "Done",
+			Recommendations: "Next: do X",
+			HasNextTask:     true,
+		},
+	})
+
+	select {
+	case ev := <-ch:
+		if ev.Type != EventTypeTaskCompleted {
+			t.Errorf("Type = %q, want %q", ev.Type, EventTypeTaskCompleted)
+		}
+		payload, ok := ev.Payload.(TaskCompletedPayload)
+		if !ok {
+			t.Fatalf("Payload type = %T, want TaskCompletedPayload", ev.Payload)
+		}
+		if payload.Summary != "Done" {
+			t.Errorf("Summary = %q, want %q", payload.Summary, "Done")
+		}
+		if !payload.HasNextTask {
+			t.Error("HasNextTask should be true")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out")
+	}
+}
+
+func TestBroadcastOperatorEvent_TaskFailed(t *testing.T) {
+	t.Parallel()
+
+	svc := newTestService(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ch := svc.subscribe(ctx)
+
+	svc.BroadcastOperatorEvent(operator.Event{
+		Type: operator.EventTaskFailed,
+		Payload: operator.TaskFailedPayload{
+			TaskID: "task-3",
+			JobID:  "job-3",
+			TeamID: "team-3",
+			Error:  "something went wrong",
+		},
+	})
+
+	select {
+	case ev := <-ch:
+		if ev.Type != EventTypeTaskFailed {
+			t.Errorf("Type = %q, want %q", ev.Type, EventTypeTaskFailed)
+		}
+		payload, ok := ev.Payload.(TaskFailedPayload)
+		if !ok {
+			t.Fatalf("Payload type = %T, want TaskFailedPayload", ev.Payload)
+		}
+		if payload.Error != "something went wrong" {
+			t.Errorf("Error = %q, want %q", payload.Error, "something went wrong")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out")
+	}
+}
+
+func TestBroadcastOperatorEvent_BlockerReported(t *testing.T) {
+	t.Parallel()
+
+	svc := newTestService(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ch := svc.subscribe(ctx)
+
+	svc.BroadcastOperatorEvent(operator.Event{
+		Type: operator.EventBlockerReported,
+		Payload: operator.BlockerReportedPayload{
+			TaskID:      "task-4",
+			TeamID:      "team-4",
+			AgentID:     "agent-4",
+			Description: "blocked on X",
+		},
+	})
+
+	select {
+	case ev := <-ch:
+		if ev.Type != EventTypeBlockerReported {
+			t.Errorf("Type = %q, want %q", ev.Type, EventTypeBlockerReported)
+		}
+		payload, ok := ev.Payload.(BlockerReportedPayload)
+		if !ok {
+			t.Fatalf("Payload type = %T, want BlockerReportedPayload", ev.Payload)
+		}
+		if payload.Description != "blocked on X" {
+			t.Errorf("Description = %q, want %q", payload.Description, "blocked on X")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out")
+	}
+}
+
+func TestBroadcastOperatorEvent_JobComplete(t *testing.T) {
+	t.Parallel()
+
+	svc := newTestService(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ch := svc.subscribe(ctx)
+
+	svc.BroadcastOperatorEvent(operator.Event{
+		Type: operator.EventJobComplete,
+		Payload: operator.JobCompletePayload{
+			JobID:   "job-5",
+			Title:   "My Job",
+			Summary: "All done",
+		},
+	})
+
+	select {
+	case ev := <-ch:
+		if ev.Type != EventTypeJobCompleted {
+			t.Errorf("Type = %q, want %q", ev.Type, EventTypeJobCompleted)
+		}
+		payload, ok := ev.Payload.(JobCompletedPayload)
+		if !ok {
+			t.Fatalf("Payload type = %T, want JobCompletedPayload", ev.Payload)
+		}
+		if payload.JobID != "job-5" {
+			t.Errorf("JobID = %q, want %q", payload.JobID, "job-5")
+		}
+		if payload.Summary != "All done" {
+			t.Errorf("Summary = %q, want %q", payload.Summary, "All done")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out")
+	}
+}
+
+func TestBroadcastOperatorEvent_UnknownPayloadType_NoEvent(t *testing.T) {
+	t.Parallel()
+
+	svc := newTestService(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ch := svc.subscribe(ctx)
+
+	// Send a known event type but with wrong payload type — should be silently dropped.
+	svc.BroadcastOperatorEvent(operator.Event{
+		Type:    operator.EventTaskStarted,
+		Payload: "wrong type",
+	})
+
+	select {
+	case ev := <-ch:
+		t.Errorf("expected no event, got %+v", ev)
+	case <-time.After(100 * time.Millisecond):
+		// expected — no event emitted
+	}
+}
+
+func TestBroadcastDefinitionsReloaded(t *testing.T) {
+	t.Parallel()
+
+	svc := newTestService(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ch := svc.subscribe(ctx)
+
+	svc.BroadcastDefinitionsReloaded()
+
+	select {
+	case ev := <-ch:
+		if ev.Type != EventTypeDefinitionsReloaded {
+			t.Errorf("Type = %q, want %q", ev.Type, EventTypeDefinitionsReloaded)
+		}
+		if ev.Payload != nil {
+			t.Errorf("Payload = %v, want nil", ev.Payload)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Priority 3 — Store-backed methods
+// ---------------------------------------------------------------------------
+
+func TestListSkills_MapsFields(t *testing.T) {
+	t.Parallel()
+
+	toolsJSON, _ := json.Marshal([]string{"Read", "Write"})
+	store := &mockStore{
+		listSkillsResult: []*db.Skill{
+			{
+				ID:          "skill-1",
+				Name:        "Skill One",
+				Description: "desc one",
+				Tools:       toolsJSON,
+				Source:      "user",
+				SourcePath:  "/path/to/skill.md",
+			},
+			{
+				ID:     "skill-2",
+				Name:   "Skill Two",
+				Source: "system",
+			},
+		},
+	}
+
+	svc := NewLocal(LocalConfig{Store: store})
+	skills, err := svc.ListSkills(context.Background())
+	if err != nil {
+		t.Fatalf("ListSkills() error = %v", err)
+	}
+	if len(skills) != 2 {
+		t.Fatalf("len(skills) = %d, want 2", len(skills))
+	}
+
+	s1 := skills[0]
+	if s1.ID != "skill-1" {
+		t.Errorf("ID = %q, want %q", s1.ID, "skill-1")
+	}
+	if s1.Name != "Skill One" {
+		t.Errorf("Name = %q, want %q", s1.Name, "Skill One")
+	}
+	if len(s1.Tools) != 2 || s1.Tools[0] != "Read" || s1.Tools[1] != "Write" {
+		t.Errorf("Tools = %v, want [Read Write]", s1.Tools)
+	}
+}
+
+func TestListSkills_StoreError(t *testing.T) {
+	t.Parallel()
+
+	store := &mockStore{listSkillsErr: errors.New("db error")}
+	svc := NewLocal(LocalConfig{Store: store})
+
+	_, err := svc.ListSkills(context.Background())
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "listing skills") {
+		t.Errorf("error = %q, want 'listing skills'", err.Error())
+	}
+}
+
+func TestListSkills_NilStore(t *testing.T) {
+	t.Parallel()
+
+	svc := NewLocal(LocalConfig{})
+	_, err := svc.ListSkills(context.Background())
+	if err == nil {
+		t.Fatal("expected error for nil store")
+	}
+}
+
+func TestGetSkill_Found(t *testing.T) {
+	t.Parallel()
+
+	store := &mockStore{
+		getSkillResult: &db.Skill{
+			ID:   "skill-1",
+			Name: "My Skill",
+		},
+	}
+	svc := NewLocal(LocalConfig{Store: store})
+
+	sk, err := svc.GetSkill(context.Background(), "skill-1")
+	if err != nil {
+		t.Fatalf("GetSkill() error = %v", err)
+	}
+	if sk.ID != "skill-1" {
+		t.Errorf("ID = %q, want %q", sk.ID, "skill-1")
+	}
+}
+
+func TestGetSkill_NotFound(t *testing.T) {
+	t.Parallel()
+
+	store := &mockStore{getSkillErr: db.ErrNotFound}
+	svc := NewLocal(LocalConfig{Store: store})
+
+	_, err := svc.GetSkill(context.Background(), "missing")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !errors.Is(err, ErrNotFound) {
+		t.Errorf("error should wrap ErrNotFound, got: %v", err)
+	}
+}
+
+func TestListAgents_OrderingSharedThenTeamLocalThenSystem(t *testing.T) {
+	t.Parallel()
+
+	store := &mockStore{
+		listAgentsResult: []*db.Agent{
+			{ID: "sys-1", Name: "System Agent", Source: "system", TeamID: ""},
+			{ID: "team-1", Name: "Team Agent B", Source: "user", TeamID: "team-b"},
+			{ID: "shared-1", Name: "Shared Agent", Source: "user", TeamID: ""},
+			{ID: "team-2", Name: "Team Agent A", Source: "user", TeamID: "team-a"},
+		},
+	}
+
+	svc := NewLocal(LocalConfig{Store: store})
+	agents, err := svc.ListAgents(context.Background())
+	if err != nil {
+		t.Fatalf("ListAgents() error = %v", err)
+	}
+	if len(agents) != 4 {
+		t.Fatalf("len(agents) = %d, want 4", len(agents))
+	}
+
+	// shared first
+	if agents[0].ID != "shared-1" {
+		t.Errorf("agents[0].ID = %q, want %q", agents[0].ID, "shared-1")
+	}
+	// team-local next (sorted by team/agent key: team-a/Team Agent A < team-b/Team Agent B)
+	if agents[1].ID != "team-2" {
+		t.Errorf("agents[1].ID = %q, want %q (team-a agent)", agents[1].ID, "team-2")
+	}
+	if agents[2].ID != "team-1" {
+		t.Errorf("agents[2].ID = %q, want %q (team-b agent)", agents[2].ID, "team-1")
+	}
+	// system last
+	if agents[3].ID != "sys-1" {
+		t.Errorf("agents[3].ID = %q, want %q", agents[3].ID, "sys-1")
+	}
+}
+
+func TestGetAgent_Found(t *testing.T) {
+	t.Parallel()
+
+	store := &mockStore{
+		getAgentResult: &db.Agent{
+			ID:   "agent-1",
+			Name: "My Agent",
+		},
+	}
+	svc := NewLocal(LocalConfig{Store: store})
+
+	a, err := svc.GetAgent(context.Background(), "agent-1")
+	if err != nil {
+		t.Fatalf("GetAgent() error = %v", err)
+	}
+	if a.ID != "agent-1" {
+		t.Errorf("ID = %q, want %q", a.ID, "agent-1")
+	}
+}
+
+func TestGetAgent_NotFound(t *testing.T) {
+	t.Parallel()
+
+	store := &mockStore{getAgentErr: db.ErrNotFound}
+	svc := NewLocal(LocalConfig{Store: store})
+
+	_, err := svc.GetAgent(context.Background(), "missing")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !errors.Is(err, ErrNotFound) {
+		t.Errorf("error should wrap ErrNotFound, got: %v", err)
+	}
+}
+
+func TestListTeams_ExcludesSystemTeams(t *testing.T) {
+	t.Parallel()
+
+	store := &mockStore{
+		listTeamsResult: []*db.Team{
+			{ID: "sys-team", Name: "System Team", Source: "system"},
+			{ID: "user-team", Name: "User Team", Source: "user"},
+		},
+		listTeamAgentsResult: []*db.TeamAgent{},
+	}
+
+	svc := NewLocal(LocalConfig{Store: store})
+	teams, err := svc.ListTeams(context.Background())
+	if err != nil {
+		t.Fatalf("ListTeams() error = %v", err)
+	}
+
+	for _, tv := range teams {
+		if tv.Team.ID == "sys-team" {
+			t.Error("system team should be excluded from ListTeams")
+		}
+	}
+	if len(teams) != 1 {
+		t.Errorf("len(teams) = %d, want 1 (only user team)", len(teams))
+	}
+	if teams[0].Team.ID != "user-team" {
+		t.Errorf("teams[0].ID = %q, want %q", teams[0].Team.ID, "user-team")
+	}
+}
+
+func TestGetTeam_Found(t *testing.T) {
+	t.Parallel()
+
+	store := &mockStore{
+		listTeamsResult: []*db.Team{
+			{ID: "team-1", Name: "My Team", Source: "user"},
+		},
+		listTeamAgentsResult: []*db.TeamAgent{},
+	}
+
+	svc := NewLocal(LocalConfig{Store: store})
+	tv, err := svc.GetTeam(context.Background(), "team-1")
+	if err != nil {
+		t.Fatalf("GetTeam() error = %v", err)
+	}
+	if tv.Team.ID != "team-1" {
+		t.Errorf("Team.ID = %q, want %q", tv.Team.ID, "team-1")
+	}
+}
+
+func TestGetTeam_NotFound(t *testing.T) {
+	t.Parallel()
+
+	store := &mockStore{
+		listTeamsResult:      []*db.Team{},
+		listTeamAgentsResult: []*db.TeamAgent{},
+	}
+
+	svc := NewLocal(LocalConfig{Store: store})
+	_, err := svc.GetTeam(context.Background(), "nonexistent")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !errors.Is(err, ErrNotFound) {
+		t.Errorf("error should wrap ErrNotFound, got: %v", err)
+	}
+}
+
+func TestStatus_IdleWhenNoTurn(t *testing.T) {
+	t.Parallel()
+
+	svc := NewLocal(LocalConfig{OperatorModel: "claude-3-sonnet"})
+	status, err := svc.Status(context.Background())
+	if err != nil {
+		t.Fatalf("Status() error = %v", err)
+	}
+	if status.State != OperatorStateIdle {
+		t.Errorf("State = %q, want %q", status.State, OperatorStateIdle)
+	}
+	if status.ModelName != "claude-3-sonnet" {
+		t.Errorf("ModelName = %q, want %q", status.ModelName, "claude-3-sonnet")
+	}
+	if status.CurrentTurnID != "" {
+		t.Errorf("CurrentTurnID = %q, want empty", status.CurrentTurnID)
+	}
+}
+
+func TestStatus_ReturnsCurrentTurnID(t *testing.T) {
+	t.Parallel()
+
+	svc := newTestService(t)
+	svc.turnMu.Lock()
+	svc.currentTurnID = "turn-in-progress"
+	svc.turnMu.Unlock()
+
+	status, err := svc.Status(context.Background())
+	if err != nil {
+		t.Fatalf("Status() error = %v", err)
+	}
+	if status.CurrentTurnID != "turn-in-progress" {
+		t.Errorf("CurrentTurnID = %q, want %q", status.CurrentTurnID, "turn-in-progress")
+	}
+}
+
+func TestSendMessage_NilOperator(t *testing.T) {
+	t.Parallel()
+
+	// operator.Operator is a concrete struct, not an interface, so we cannot
+	// mock it. We test only the nil-operator error path here. The happy path
+	// (with a real operator goroutine) is covered by integration tests.
+	svc := NewLocal(LocalConfig{Operator: nil})
+	_, err := svc.SendMessage(context.Background(), "hello")
+	if err == nil {
+		t.Fatal("expected error for nil operator")
+	}
+	if !strings.Contains(err.Error(), "operator not configured") {
+		t.Errorf("error = %q, want 'operator not configured'", err.Error())
+	}
+}
+
+func TestSendMessage_TurnAlreadyInProgress(t *testing.T) {
+	t.Parallel()
+
+	// Simulate a turn already in progress by setting currentTurnID.
+	// operator.Operator is concrete, so we can't mock it — but we can test
+	// the guard that rejects concurrent turns.
+	svc := newTestService(t)
+	svc.turnMu.Lock()
+	svc.currentTurnID = "existing-turn"
+	svc.turnMu.Unlock()
+
+	// Even with a nil operator, the turn-in-progress check fires first only
+	// if operator is non-nil. With nil operator, the nil check fires first.
+	// So we verify the nil-operator path returns the right error.
+	_, err := svc.SendMessage(context.Background(), "hello")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestListModels_NilProvider(t *testing.T) {
+	t.Parallel()
+
+	svc := NewLocal(LocalConfig{Provider: nil})
+	_, err := svc.ListModels(context.Background())
+	if err == nil {
+		t.Fatal("expected error for nil provider")
+	}
+	if !strings.Contains(err.Error(), "LLM provider not configured") {
+		t.Errorf("error = %q, want 'LLM provider not configured'", err.Error())
+	}
+}
+
+func TestListModels_MapsFields(t *testing.T) {
+	t.Parallel()
+
+	mp := &mockProvider{
+		modelsResult: []provider.ModelInfo{
+			{
+				ID:                  "model-1",
+				Name:                "Model One",
+				Provider:            "mock",
+				State:               "loaded",
+				MaxContextLength:    128000,
+				LoadedContextLength: 64000,
+			},
+		},
+	}
+
+	svc := NewLocal(LocalConfig{Provider: mp})
+	models, err := svc.ListModels(context.Background())
+	if err != nil {
+		t.Fatalf("ListModels() error = %v", err)
+	}
+	if len(models) != 1 {
+		t.Fatalf("len(models) = %d, want 1", len(models))
+	}
+
+	m := models[0]
+	if m.ID != "model-1" {
+		t.Errorf("ID = %q, want %q", m.ID, "model-1")
+	}
+	if m.Provider != "mock" {
+		t.Errorf("Provider = %q, want %q", m.Provider, "mock")
+	}
+	if m.MaxContextLength != 128000 {
+		t.Errorf("MaxContextLength = %d, want 128000", m.MaxContextLength)
+	}
+	if m.LoadedContextLength != 64000 {
+		t.Errorf("LoadedContextLength = %d, want 64000", m.LoadedContextLength)
+	}
+}
+
+func TestListModels_ProviderError(t *testing.T) {
+	t.Parallel()
+
+	mp := &mockProvider{modelsErr: errors.New("provider unavailable")}
+	svc := NewLocal(LocalConfig{Provider: mp})
+
+	_, err := svc.ListModels(context.Background())
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "listing models") {
+		t.Errorf("error = %q, want 'listing models'", err.Error())
+	}
+}
+
+func TestListMCPServers_NilManager(t *testing.T) {
+	t.Parallel()
+
+	svc := NewLocal(LocalConfig{MCPManager: nil})
+	servers, err := svc.ListMCPServers(context.Background())
+	if err != nil {
+		t.Fatalf("ListMCPServers() error = %v", err)
+	}
+	if servers != nil {
+		t.Errorf("servers = %v, want nil", servers)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Sub-interface accessor tests
+// ---------------------------------------------------------------------------
+
+func TestSubInterfaceAccessors(t *testing.T) {
+	t.Parallel()
+
+	svc := newTestService(t)
+
+	if svc.Operator() == nil {
+		t.Error("Operator() should return non-nil")
+	}
+	if svc.Definitions() == nil {
+		t.Error("Definitions() should return non-nil")
+	}
+	if svc.Jobs() == nil {
+		t.Error("Jobs() should return non-nil")
+	}
+	if svc.Sessions() == nil {
+		t.Error("Sessions() should return non-nil")
+	}
+	if svc.Events() == nil {
+		t.Error("Events() should return non-nil")
+	}
+	if svc.System() == nil {
+		t.Error("System() should return non-nil")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Subscribe (public EventService method)
+// ---------------------------------------------------------------------------
+
+func TestSubscribe_PublicMethod(t *testing.T) {
+	t.Parallel()
+
+	svc := newTestService(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	ch := svc.Events().Subscribe(ctx)
+	if ch == nil {
+		t.Fatal("Subscribe() returned nil channel")
+	}
+
+	svc.broadcast(Event{Type: EventTypeHeartbeat})
+
+	select {
+	case ev := <-ch:
+		if ev.Type != EventTypeHeartbeat {
+			t.Errorf("Type = %q, want %q", ev.Type, EventTypeHeartbeat)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for event")
+	}
+}

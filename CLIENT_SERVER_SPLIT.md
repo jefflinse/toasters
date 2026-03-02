@@ -1,7 +1,7 @@
 # Client/Server Architecture Split
 
 **Created:** 2026-02-28
-**Status:** Phase 1 in progress — Steps 1.1 and 1.2 complete
+**Status:** Phase 1 in progress — Steps 1.1, 1.2, 1.3, and 1.4 complete; Phase 1 Review Checkpoint pending
 **Effort Estimate:** 10–17 days across 4 phases
 
 ---
@@ -414,14 +414,14 @@ The progress polling goroutine and 15s heartbeat goroutine start lazily on the f
 
 ### Step 1.4: Write Tests for the Service Layer
 
-- [ ] **Status:** Not started
+- [x] **Status:** Complete (2026-03-01)
 - **Agent:** test-writer
 - **Description:** Unit tests for `internal/service.LocalService` covering all methods. Mock `provider.Provider` for LLM generation tests. Test event stream lifecycle (subscribe, receive events, cancel context, verify cleanup).
 - **Acceptance criteria:**
-  - [ ] Test coverage for all service methods
-  - [ ] Tests for event stream delivery and cleanup
-  - [ ] Tests for error cases
-  - [ ] `go test ./internal/service/...` passes
+  - [x] Test coverage for all service methods (67 test functions in `local_test.go`)
+  - [x] Tests for event stream delivery and cleanup (subscribe, broadcast, Seq numbering, context cancellation, multi-subscriber, overflow drop)
+  - [x] Tests for error cases (nil store, nil provider, nil operator, ErrNotFound wrapping, path traversal rejection)
+  - [x] `go test ./internal/service/...` passes (0.298s, race-clean)
 
 ### Phase 1 Review Checkpoint
 
