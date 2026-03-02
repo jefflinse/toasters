@@ -279,4 +279,4 @@ Plan reviewed by tui-engineer and api-designer. All blocking concerns documented
 **Step 1.3: Rewire TUI** ✅ — complete; all TUI files rewired to use `service.Service`; zero banned imports; `progressPollCmd` replaced by `event_consumer.go`; `team_view.go` and `progress_poll.go` deleted; `cmd/root.go` rewritten
 **Step 1.4: Service Tests** ✅ — complete; 67 test functions in `internal/service/local_test.go`; all pass race-clean
 
-**Phase 1 Review Checkpoint** — next gate: human review of TUI decoupling to verify no residual direct dependencies between TUI and internals
+**Phase 1 Review Checkpoint** ✅ — passed (2026-03-01); app verified running correctly; no residual banned imports in TUI

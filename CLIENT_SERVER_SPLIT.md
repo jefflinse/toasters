@@ -1,7 +1,7 @@
 # Client/Server Architecture Split
 
 **Created:** 2026-02-28
-**Status:** Phase 1 in progress — Steps 1.1, 1.2, 1.3, and 1.4 complete; Phase 1 Review Checkpoint pending
+**Status:** Phase 1 complete ✅ — all steps done, review checkpoint passed; Phase 2 not started
 **Effort Estimate:** 10–17 days across 4 phases
 
 ---
@@ -425,7 +425,8 @@ The progress polling goroutine and 15s heartbeat goroutine start lazily on the f
 
 ### Phase 1 Review Checkpoint
 
-- [ ] **Gate:** ✋ Code review of TUI decoupling — verify no residual direct dependencies
+- [x] **Gate:** ✋ Code review of TUI decoupling — verify no residual direct dependencies
+- **Outcome:** Passed (2026-03-01) — app runs correctly; no residual banned imports in TUI
 
 ---
 
