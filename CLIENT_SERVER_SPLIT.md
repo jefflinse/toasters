@@ -569,6 +569,17 @@ Addressed 14 of the 23 Phase 1 review suggestions to harden the service layer be
 | Sec-S5 | `RespondToPrompt` has no response length limit | Phase 2 |
 | S19 | Operator history endpoint not paginated (returns server-bounded history as single page) | Post-Phase 4 |
 | S20 | Job `workspace_dir` exposed as absolute server path — TUI should display relative paths | Post-Phase 4 |
+| S21 | `limit=0` returns empty results — may surprise clients; reject or treat as default | Low priority |
+| S22 | Jobs `total` field inaccurate with service-layer pagination (returns page count, not total) | Low priority |
+| S23 | `json.Decoder` ignores trailing data — add `dec.More()` check | Low priority |
+| S24 | Missing length limits on `respondToPrompt` response and `respondToBlocker` answers | Phase 2 |
+| S25 | CORS `*` allows cross-origin attacks from any website — restrict to localhost origins | Phase 4 |
+| S26 | Missing security response headers (`nosniff`, `DENY`, `no-store`) | Phase 4 |
+| S27 | JSON decode errors leak Go type names — return generic "invalid JSON" message | Phase 2 |
+| S28 | `tool_calls` serializes as `[]` not `null` — add `omitempty` or update spec | Low priority |
+| S29 | `Addr()` returns configured address, not actual listening address (`:0` case) | Low priority |
+| S30 | `Server.httpSrv` accessed without sync across Start/Shutdown — document call sequence or add mutex | Low priority |
+| S31 | No `DisallowUnknownFields` on JSON decoder — consider for better error messages | Low priority |
 
 ---
 
@@ -593,13 +604,25 @@ Addressed 14 of the 23 Phase 1 review suggestions to harden the service layer be
 
 ### Step 2.2: Implement the Server
 
-- [ ] **Status:** Not started
+- [ ] **Status:** Implementation complete; review findings being addressed
 - **Agent:** builder
 - **Description:** Implement `internal/server.Server` wrapping `service.Service` over HTTP with SSE. Use Go stdlib `net/http` (Go 1.22+ method routing). Support multiple concurrent SSE clients via fan-out broadcast. Embeddable: `server.New(svc, opts...) *Server` with `Start(addr string) error` and `Shutdown(ctx context.Context) error`. Server must `Flush()` after every SSE event write.
 - **Blocking concern B4:** Implement `GET /api/v1/sessions/:id` returning full session detail for reconnection hydration.
+- **Implementation:** 6 files in `internal/server/` — `server.go` (lifecycle + routes), `middleware.go` (5 middleware), `handlers.go` (36 handlers), `sse.go` (SSE + heartbeat), `types.go` (wire types), `helpers.go` (utilities)
+- **Review:** Reviewed by code-reviewer, security-auditor, concurrency-reviewer (2026-03-02). 9 blocking findings, 11 suggestions deferred.
+- **Blocking findings:**
+  - B1: No `MaxBytesReader` — unbounded request body allocation (HIGH)
+  - B2: No SSE connection limit — goroutine/FD exhaustion (HIGH)
+  - B3: Duplicate divergent `pathPattern` regex between server and service packages
+  - B4: Internal 500 errors leak raw error messages to clients
+  - B5: `X-Request-ID` header injection — client value echoed without validation
+  - B6: Wrong error code (`bad_request`) for 415 Content-Type status
+  - B7: Message/prompt length limits inconsistent (chars vs bytes, different values)
+  - B8: Heartbeat SSE event has zero-value `Timestamp`
+  - B9: No `WriteTimeout` — slow-read clients hold connections indefinitely
 - **Acceptance criteria:**
-  - [ ] All REST endpoints implemented
-  - [ ] SSE event stream delivers all service events to all connected clients
+  - [x] All REST endpoints implemented
+  - [x] SSE event stream delivers all service events to all connected clients
   - [ ] SSE events include sequence numbers for ordering
   - [ ] 15-second heartbeat on SSE stream
   - [ ] Server starts, serves, and shuts down cleanly
