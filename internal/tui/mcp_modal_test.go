@@ -7,8 +7,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/jefflinse/toasters/internal/config"
-	"github.com/jefflinse/toasters/internal/mcp"
+	"github.com/jefflinse/toasters/internal/service"
 )
 
 // --------------------------------------------------------------------------
@@ -37,13 +36,13 @@ func TestRenderMCPModal_ConnectedServer(t *testing.T) {
 	m.height = 40
 	m.mcpModal = mcpModalState{
 		show: true,
-		servers: []mcp.ServerStatus{
+		servers: []service.MCPServerStatus{
 			{
 				Name:      "github",
 				Transport: "stdio",
-				State:     mcp.ServerConnected,
+				State:     service.MCPServerStateConnected,
 				ToolCount: 5,
-				Tools: []mcp.ToolInfo{
+				Tools: []service.MCPToolInfo{
 					{OriginalName: "search_repos", Description: "Search repositories"},
 					{OriginalName: "get_file", Description: "Get file contents"},
 				},
@@ -69,11 +68,11 @@ func TestRenderMCPModal_FailedServer(t *testing.T) {
 	m.height = 40
 	m.mcpModal = mcpModalState{
 		show: true,
-		servers: []mcp.ServerStatus{
+		servers: []service.MCPServerStatus{
 			{
 				Name:      "linear",
 				Transport: "sse",
-				State:     mcp.ServerFailed,
+				State:     service.MCPServerStateFailed,
 				Error:     "connection refused",
 				ToolCount: 0,
 			},
@@ -98,9 +97,9 @@ func TestRenderMCPModal_MixedServers(t *testing.T) {
 	m.height = 40
 	m.mcpModal = mcpModalState{
 		show: true,
-		servers: []mcp.ServerStatus{
-			{Name: "github", Transport: "stdio", State: mcp.ServerConnected, ToolCount: 5},
-			{Name: "linear", Transport: "sse", State: mcp.ServerFailed, Error: "timeout"},
+		servers: []service.MCPServerStatus{
+			{Name: "github", Transport: "stdio", State: service.MCPServerStateConnected, ToolCount: 5},
+			{Name: "linear", Transport: "sse", State: service.MCPServerStateFailed, Error: "timeout"},
 		},
 	}
 	result := m.renderMCPModal()
@@ -119,54 +118,53 @@ func TestRenderMCPModal_MixedServers(t *testing.T) {
 	}
 }
 
-func TestRenderMCPModal_ServerWithStdioConfig(t *testing.T) {
+func TestRenderMCPModal_ServerWithStdioTransport(t *testing.T) {
 	t.Parallel()
 	m := newMinimalModel(t)
 	m.width = 120
 	m.height = 40
 	m.mcpModal = mcpModalState{
 		show: true,
-		servers: []mcp.ServerStatus{
+		servers: []service.MCPServerStatus{
 			{
 				Name:      "myserver",
 				Transport: "stdio",
-				State:     mcp.ServerConnected,
+				State:     service.MCPServerStateConnected,
 				ToolCount: 2,
-				Config: config.MCPServerConfig{
-					Command: "npx",
-					Args:    []string{"-y", "@modelcontextprotocol/server-github"},
-				},
 			},
 		},
 	}
 	result := m.renderMCPModal()
-	if !strings.Contains(result, "npx") {
-		t.Error("expected command 'npx' in modal for stdio server")
+	if !strings.Contains(result, "myserver") {
+		t.Error("expected server name 'myserver' in modal for stdio server")
+	}
+	if !strings.Contains(result, "stdio") {
+		t.Error("expected transport 'stdio' in modal for stdio server")
 	}
 }
 
-func TestRenderMCPModal_ServerWithSSEConfig(t *testing.T) {
+func TestRenderMCPModal_ServerWithSSETransport(t *testing.T) {
 	t.Parallel()
 	m := newMinimalModel(t)
 	m.width = 120
 	m.height = 40
 	m.mcpModal = mcpModalState{
 		show: true,
-		servers: []mcp.ServerStatus{
+		servers: []service.MCPServerStatus{
 			{
 				Name:      "remote",
 				Transport: "sse",
-				State:     mcp.ServerConnected,
+				State:     service.MCPServerStateConnected,
 				ToolCount: 3,
-				Config: config.MCPServerConfig{
-					URL: "https://example.com/mcp",
-				},
 			},
 		},
 	}
 	result := m.renderMCPModal()
-	if !strings.Contains(result, "https://example.com/mcp") {
-		t.Error("expected URL in modal for SSE server")
+	if !strings.Contains(result, "remote") {
+		t.Error("expected server name 'remote' in modal for SSE server")
+	}
+	if !strings.Contains(result, "sse") {
+		t.Error("expected transport 'sse' in modal for SSE server")
 	}
 }
 
@@ -179,13 +177,13 @@ func TestRenderMCPModal_ServerWithTools(t *testing.T) {
 		show:      true,
 		serverIdx: 0,
 		focus:     1, // focus on tools panel
-		servers: []mcp.ServerStatus{
+		servers: []service.MCPServerStatus{
 			{
 				Name:      "github",
 				Transport: "stdio",
-				State:     mcp.ServerConnected,
+				State:     service.MCPServerStateConnected,
 				ToolCount: 3,
-				Tools: []mcp.ToolInfo{
+				Tools: []service.MCPToolInfo{
 					{OriginalName: "search_repos", Description: "Search repositories"},
 					{OriginalName: "get_file", Description: "Get file contents"},
 					{OriginalName: "create_issue", Description: "Create an issue"},
@@ -208,28 +206,25 @@ func TestRenderMCPModal_ServerWithTools(t *testing.T) {
 	}
 }
 
-func TestRenderMCPModal_ServerWithEnabledToolsFilter(t *testing.T) {
+func TestRenderMCPModal_ServerWithToolCount(t *testing.T) {
 	t.Parallel()
 	m := newMinimalModel(t)
 	m.width = 120
 	m.height = 40
 	m.mcpModal = mcpModalState{
 		show: true,
-		servers: []mcp.ServerStatus{
+		servers: []service.MCPServerStatus{
 			{
 				Name:      "github",
 				Transport: "stdio",
-				State:     mcp.ServerConnected,
+				State:     service.MCPServerStateConnected,
 				ToolCount: 5,
-				Config: config.MCPServerConfig{
-					EnabledTools: []string{"search_repos", "get_file"},
-				},
 			},
 		},
 	}
 	result := m.renderMCPModal()
-	if !strings.Contains(result, "Filter") {
-		t.Error("expected 'Filter' info when enabled_tools is set")
+	if !strings.Contains(result, "github") {
+		t.Error("expected server name 'github' in modal")
 	}
 }
 
@@ -261,8 +256,8 @@ func TestRenderMCPModal_NarrowTerminal(t *testing.T) {
 	m.height = 25
 	m.mcpModal = mcpModalState{
 		show: true,
-		servers: []mcp.ServerStatus{
-			{Name: "test", Transport: "stdio", State: mcp.ServerConnected, ToolCount: 1},
+		servers: []service.MCPServerStatus{
+			{Name: "test", Transport: "stdio", State: service.MCPServerStateConnected, ToolCount: 1},
 		},
 	}
 	// Should not panic on narrow terminal.
@@ -280,14 +275,14 @@ func TestRenderMCPModal_SecondServerSelected(t *testing.T) {
 	m.mcpModal = mcpModalState{
 		show:      true,
 		serverIdx: 1,
-		servers: []mcp.ServerStatus{
-			{Name: "server1", Transport: "stdio", State: mcp.ServerConnected, ToolCount: 2},
+		servers: []service.MCPServerStatus{
+			{Name: "server1", Transport: "stdio", State: service.MCPServerStateConnected, ToolCount: 2},
 			{
 				Name:      "server2",
 				Transport: "sse",
-				State:     mcp.ServerConnected,
+				State:     service.MCPServerStateConnected,
 				ToolCount: 3,
-				Tools: []mcp.ToolInfo{
+				Tools: []service.MCPToolInfo{
 					{OriginalName: "tool_a"},
 					{OriginalName: "tool_b"},
 					{OriginalName: "tool_c"},
@@ -311,8 +306,8 @@ func TestUpdateMCPModal_EscCloses(t *testing.T) {
 	m := newMinimalModel(t)
 	m.mcpModal = mcpModalState{
 		show: true,
-		servers: []mcp.ServerStatus{
-			{Name: "test", State: mcp.ServerConnected},
+		servers: []service.MCPServerStatus{
+			{Name: "test", State: service.MCPServerStateConnected},
 		},
 	}
 	result, cmd := m.updateMCPModal(specialKey(tea.KeyEscape))
@@ -334,8 +329,8 @@ func TestUpdateMCPModal_TabTogglesFocus(t *testing.T) {
 		m.mcpModal = mcpModalState{
 			show:  true,
 			focus: 0,
-			servers: []mcp.ServerStatus{
-				{Name: "test", State: mcp.ServerConnected},
+			servers: []service.MCPServerStatus{
+				{Name: "test", State: service.MCPServerStateConnected},
 			},
 		}
 		result, _ := m.updateMCPModal(specialKey(tea.KeyTab))
@@ -351,8 +346,8 @@ func TestUpdateMCPModal_TabTogglesFocus(t *testing.T) {
 		m.mcpModal = mcpModalState{
 			show:  true,
 			focus: 1,
-			servers: []mcp.ServerStatus{
-				{Name: "test", State: mcp.ServerConnected},
+			servers: []service.MCPServerStatus{
+				{Name: "test", State: service.MCPServerStateConnected},
 			},
 		}
 		result, _ := m.updateMCPModal(specialKey(tea.KeyTab))
@@ -373,9 +368,9 @@ func TestUpdateMCPModal_DownNavigatesServers(t *testing.T) {
 			show:      true,
 			serverIdx: 0,
 			focus:     0,
-			servers: []mcp.ServerStatus{
-				{Name: "server1", State: mcp.ServerConnected},
-				{Name: "server2", State: mcp.ServerConnected},
+			servers: []service.MCPServerStatus{
+				{Name: "server1", State: service.MCPServerStateConnected},
+				{Name: "server2", State: service.MCPServerStateConnected},
 			},
 		}
 		result, _ := m.updateMCPModal(specialKey(tea.KeyDown))
@@ -396,9 +391,9 @@ func TestUpdateMCPModal_DownNavigatesServers(t *testing.T) {
 			show:      true,
 			serverIdx: 1,
 			focus:     0,
-			servers: []mcp.ServerStatus{
-				{Name: "server1", State: mcp.ServerConnected},
-				{Name: "server2", State: mcp.ServerConnected},
+			servers: []service.MCPServerStatus{
+				{Name: "server1", State: service.MCPServerStateConnected},
+				{Name: "server2", State: service.MCPServerStateConnected},
 			},
 		}
 		result, _ := m.updateMCPModal(specialKey(tea.KeyDown))
@@ -419,9 +414,9 @@ func TestUpdateMCPModal_UpNavigatesServers(t *testing.T) {
 			show:      true,
 			serverIdx: 1,
 			focus:     0,
-			servers: []mcp.ServerStatus{
-				{Name: "server1", State: mcp.ServerConnected},
-				{Name: "server2", State: mcp.ServerConnected},
+			servers: []service.MCPServerStatus{
+				{Name: "server1", State: service.MCPServerStateConnected},
+				{Name: "server2", State: service.MCPServerStateConnected},
 			},
 		}
 		result, _ := m.updateMCPModal(specialKey(tea.KeyUp))
@@ -438,9 +433,9 @@ func TestUpdateMCPModal_UpNavigatesServers(t *testing.T) {
 			show:      true,
 			serverIdx: 0,
 			focus:     0,
-			servers: []mcp.ServerStatus{
-				{Name: "server1", State: mcp.ServerConnected},
-				{Name: "server2", State: mcp.ServerConnected},
+			servers: []service.MCPServerStatus{
+				{Name: "server1", State: service.MCPServerStateConnected},
+				{Name: "server2", State: service.MCPServerStateConnected},
 			},
 		}
 		result, _ := m.updateMCPModal(specialKey(tea.KeyUp))
@@ -462,12 +457,12 @@ func TestUpdateMCPModal_DownNavigatesTools(t *testing.T) {
 			serverIdx: 0,
 			toolIdx:   0,
 			focus:     1, // tools panel
-			servers: []mcp.ServerStatus{
+			servers: []service.MCPServerStatus{
 				{
 					Name:      "github",
-					State:     mcp.ServerConnected,
+					State:     service.MCPServerStateConnected,
 					ToolCount: 3,
-					Tools: []mcp.ToolInfo{
+					Tools: []service.MCPToolInfo{
 						{OriginalName: "tool1"},
 						{OriginalName: "tool2"},
 						{OriginalName: "tool3"},
@@ -490,12 +485,12 @@ func TestUpdateMCPModal_DownNavigatesTools(t *testing.T) {
 			serverIdx: 0,
 			toolIdx:   2,
 			focus:     1,
-			servers: []mcp.ServerStatus{
+			servers: []service.MCPServerStatus{
 				{
 					Name:      "github",
-					State:     mcp.ServerConnected,
+					State:     service.MCPServerStateConnected,
 					ToolCount: 3,
-					Tools: []mcp.ToolInfo{
+					Tools: []service.MCPToolInfo{
 						{OriginalName: "tool1"},
 						{OriginalName: "tool2"},
 						{OriginalName: "tool3"},
@@ -522,12 +517,12 @@ func TestUpdateMCPModal_UpNavigatesTools(t *testing.T) {
 			serverIdx: 0,
 			toolIdx:   1,
 			focus:     1,
-			servers: []mcp.ServerStatus{
+			servers: []service.MCPServerStatus{
 				{
 					Name:      "github",
-					State:     mcp.ServerConnected,
+					State:     service.MCPServerStateConnected,
 					ToolCount: 2,
-					Tools: []mcp.ToolInfo{
+					Tools: []service.MCPToolInfo{
 						{OriginalName: "tool1"},
 						{OriginalName: "tool2"},
 					},
@@ -549,12 +544,12 @@ func TestUpdateMCPModal_UpNavigatesTools(t *testing.T) {
 			serverIdx: 0,
 			toolIdx:   0,
 			focus:     1,
-			servers: []mcp.ServerStatus{
+			servers: []service.MCPServerStatus{
 				{
 					Name:      "github",
-					State:     mcp.ServerConnected,
+					State:     service.MCPServerStateConnected,
 					ToolCount: 2,
-					Tools: []mcp.ToolInfo{
+					Tools: []service.MCPToolInfo{
 						{OriginalName: "tool1"},
 						{OriginalName: "tool2"},
 					},
@@ -577,11 +572,11 @@ func TestUpdateMCPModal_DownResetsToolIdxOnServerChange(t *testing.T) {
 		serverIdx: 0,
 		toolIdx:   2, // was browsing tools on server 0
 		focus:     0, // switch focus to servers
-		servers: []mcp.ServerStatus{
-			{Name: "server1", State: mcp.ServerConnected, ToolCount: 3,
-				Tools: []mcp.ToolInfo{{OriginalName: "a"}, {OriginalName: "b"}, {OriginalName: "c"}}},
-			{Name: "server2", State: mcp.ServerConnected, ToolCount: 1,
-				Tools: []mcp.ToolInfo{{OriginalName: "x"}}},
+		servers: []service.MCPServerStatus{
+			{Name: "server1", State: service.MCPServerStateConnected, ToolCount: 3,
+				Tools: []service.MCPToolInfo{{OriginalName: "a"}, {OriginalName: "b"}, {OriginalName: "c"}}},
+			{Name: "server2", State: service.MCPServerStateConnected, ToolCount: 1,
+				Tools: []service.MCPToolInfo{{OriginalName: "x"}}},
 		},
 	}
 	result, _ := m.updateMCPModal(specialKey(tea.KeyDown))
@@ -614,8 +609,8 @@ func TestMCPStatusMsg_FailedServerCreatesToast(t *testing.T) {
 	t.Parallel()
 	m := newMinimalModel(t)
 	msg := MCPStatusMsg{
-		Servers: []mcp.ServerStatus{
-			{Name: "github", State: mcp.ServerFailed, Error: "connection refused"},
+		Servers: []service.MCPServerStatus{
+			{Name: "github", State: service.MCPServerStateFailed, Error: "connection refused"},
 		},
 	}
 	result, _ := m.Update(msg)
@@ -643,8 +638,8 @@ func TestMCPStatusMsg_ConnectedServerCreatesToast(t *testing.T) {
 	t.Parallel()
 	m := newMinimalModel(t)
 	msg := MCPStatusMsg{
-		Servers: []mcp.ServerStatus{
-			{Name: "github", State: mcp.ServerConnected, ToolCount: 5},
+		Servers: []service.MCPServerStatus{
+			{Name: "github", State: service.MCPServerStateConnected, ToolCount: 5},
 		},
 	}
 	result, _ := m.Update(msg)
@@ -688,10 +683,10 @@ func TestMCPStatusMsg_MixedServersCreatesBothToasts(t *testing.T) {
 	t.Parallel()
 	m := newMinimalModel(t)
 	msg := MCPStatusMsg{
-		Servers: []mcp.ServerStatus{
-			{Name: "github", State: mcp.ServerConnected, ToolCount: 5},
-			{Name: "linear", State: mcp.ServerFailed, Error: "timeout"},
-			{Name: "jira", State: mcp.ServerConnected, ToolCount: 3},
+		Servers: []service.MCPServerStatus{
+			{Name: "github", State: service.MCPServerStateConnected, ToolCount: 5},
+			{Name: "linear", State: service.MCPServerStateFailed, Error: "timeout"},
+			{Name: "jira", State: service.MCPServerStateConnected, ToolCount: 3},
 		},
 	}
 	result, _ := m.Update(msg)
@@ -735,9 +730,9 @@ func TestMCPStatusMsg_OnlyFailedServersNoSummaryToast(t *testing.T) {
 	t.Parallel()
 	m := newMinimalModel(t)
 	msg := MCPStatusMsg{
-		Servers: []mcp.ServerStatus{
-			{Name: "server1", State: mcp.ServerFailed, Error: "err1"},
-			{Name: "server2", State: mcp.ServerFailed, Error: "err2"},
+		Servers: []service.MCPServerStatus{
+			{Name: "server1", State: service.MCPServerStateFailed, Error: "err1"},
+			{Name: "server2", State: service.MCPServerStateFailed, Error: "err2"},
 		},
 	}
 	result, _ := m.Update(msg)
@@ -757,7 +752,7 @@ func TestMCPStatusMsg_OnlyFailedServersNoSummaryToast(t *testing.T) {
 func TestMCPStatusMsg_EmptyServersSlice(t *testing.T) {
 	t.Parallel()
 	m := newMinimalModel(t)
-	msg := MCPStatusMsg{Servers: []mcp.ServerStatus{}}
+	msg := MCPStatusMsg{Servers: []service.MCPServerStatus{}}
 	result, _ := m.Update(msg)
 	model := result.(*Model)
 	if len(model.toasts) != 0 {
@@ -769,9 +764,9 @@ func TestMCPStatusMsg_ToastLevels(t *testing.T) {
 	t.Parallel()
 	m := newMinimalModel(t)
 	msg := MCPStatusMsg{
-		Servers: []mcp.ServerStatus{
-			{Name: "good", State: mcp.ServerConnected, ToolCount: 3},
-			{Name: "bad", State: mcp.ServerFailed, Error: "nope"},
+		Servers: []service.MCPServerStatus{
+			{Name: "good", State: service.MCPServerStateConnected, ToolCount: 3},
+			{Name: "bad", State: service.MCPServerStateFailed, Error: "nope"},
 		},
 	}
 	result, _ := m.Update(msg)
@@ -803,8 +798,8 @@ func TestUpdate_DispatchesToMCPModalWhenOpen(t *testing.T) {
 	m := newMinimalModel(t)
 	m.mcpModal = mcpModalState{
 		show: true,
-		servers: []mcp.ServerStatus{
-			{Name: "test", State: mcp.ServerConnected},
+		servers: []service.MCPServerStatus{
+			{Name: "test", State: service.MCPServerStateConnected},
 		},
 	}
 	// Pressing Esc via Update should close the modal.
@@ -888,12 +883,12 @@ func TestRenderMCPModal_ManyServers(t *testing.T) {
 	m.width = 120
 	m.height = 40
 
-	var servers []mcp.ServerStatus
+	var servers []service.MCPServerStatus
 	for i := range 10 {
-		servers = append(servers, mcp.ServerStatus{
+		servers = append(servers, service.MCPServerStatus{
 			Name:      fmt.Sprintf("server-%d", i),
 			Transport: "stdio",
-			State:     mcp.ServerConnected,
+			State:     service.MCPServerStateConnected,
 			ToolCount: i + 1,
 		})
 	}

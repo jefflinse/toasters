@@ -22,6 +22,7 @@ import (
 	"github.com/jefflinse/toasters/internal/operator"
 	"github.com/jefflinse/toasters/internal/provider"
 	"github.com/jefflinse/toasters/internal/runtime"
+	"github.com/jefflinse/toasters/internal/service"
 	"github.com/jefflinse/toasters/internal/tui"
 )
 
@@ -85,8 +86,6 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 	teamsDir := cfg.Operator.TeamsDir
 
 	// Open SQLite database for persistence (graceful degradation if it fails).
-	// The DB defaults to <workspaceDir>/toasters.db so operational state lives
-	// alongside the workspace, not in the config directory.
 	var store db.Store
 	dbPath, err := config.DatabasePath(cfg, workspaceDir)
 	if err != nil {
@@ -154,17 +153,13 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 		client = provider.NewOpenAI("operator", cfg.Operator.Endpoint, "", cfg.Operator.Model)
 	}
 
-	// Create and start the operator event loop.
-	// The operator is created before the TUI program so we can wire callbacks.
-	// Callbacks use p.Send() which is safe to call before p.Run() — messages
-	// are buffered until the program starts.
-	var op *operator.Operator
+	// p holds the Bubble Tea program pointer; set before operator starts so
+	// callbacks can safely call p.Load() and find a non-nil program.
 	var p atomic.Pointer[tea.Program]
 
 	// notifySessionStarted wires a runtime session into the TUI event loop.
 	// It is used for all sessions — both coordinator sessions (spawned by assign_team)
 	// and child sessions (spawned by spawn_agent) — via rt.OnSessionStarted.
-	// Defined before operator.Start() to avoid a data race on the callback.
 	notifySessionStarted := func(sess *runtime.Session) {
 		snap := sess.Snapshot()
 		if prog := p.Load(); prog != nil {
@@ -180,12 +175,37 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 			})
 		}
 
-		// Forward events in a goroutine.
+		// Forward session events in a goroutine.
 		go func() {
 			events := sess.Subscribe()
 			for ev := range events {
 				if prog := p.Load(); prog != nil {
-					prog.Send(tui.RuntimeSessionEventMsg{Event: ev})
+					var msg tui.RuntimeSessionEventMsg
+					switch ev.Type {
+					case runtime.SessionEventText:
+						msg = tui.RuntimeSessionEventMsg{
+							SessionID: snap.ID,
+							EventType: "text",
+							Text:      ev.Text,
+						}
+					case runtime.SessionEventToolCall:
+						msg = tui.RuntimeSessionEventMsg{
+							SessionID: snap.ID,
+							EventType: "tool_call",
+							ToolName:  ev.ToolCall.Name,
+							ToolInput: string(ev.ToolCall.Arguments),
+						}
+					case runtime.SessionEventToolResult:
+						msg = tui.RuntimeSessionEventMsg{
+							SessionID:  snap.ID,
+							EventType:  "tool_result",
+							ToolOutput: ev.ToolResult.Result,
+							IsError:    ev.ToolResult.Error != "",
+						}
+					default:
+						continue
+					}
+					prog.Send(msg)
 				}
 			}
 			// Session done — send completion message.
@@ -207,8 +227,7 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 	// are forwarded to the TUI through a single path.
 	rt.OnSessionStarted = notifySessionStarted
 
-	// Compose the operator agent from its .md file definition so the system
-	// prompt is file-driven (like all other system agents) rather than hard-coded.
+	// Compose the operator agent from its .md file definition.
 	var operatorPrompt string
 	if composer != nil {
 		composedOperator, composeErr := composer.Compose(context.Background(), "operator", "system")
@@ -219,11 +238,27 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 		}
 	}
 
+	// Create the LocalService — the single service boundary between TUI and engine.
+	svc := service.NewLocal(service.LocalConfig{
+		Store:         store,
+		Runtime:       rt,
+		MCPManager:    mcpManager,
+		Provider:      client,
+		Composer:      composer,
+		Loader:        ldr,
+		ConfigDir:     configDir,
+		WorkspaceDir:  workspaceDir,
+		TeamsDir:      teamsDir,
+		OperatorModel: cfg.Operator.Model,
+		StartTime:     time.Now(),
+	})
+	defer svc.Shutdown()
+
+	// Create and start the operator event loop.
+	var op *operator.Operator
 	if store != nil {
 		textFlush := func(text string) {
-			if prog := p.Load(); prog != nil {
-				prog.Send(tui.OperatorTextMsg{Text: text})
-			}
+			svc.BroadcastOperatorText(text, "")
 		}
 		batcher := newTextBatcher(16*time.Millisecond, textFlush)
 
@@ -241,44 +276,77 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 				batcher.Add(text)
 			},
 			OnEvent: func(event operator.Event) {
-				if prog := p.Load(); prog != nil {
-					prog.Send(tui.OperatorEventMsg{Event: event})
-				}
+				svc.BroadcastOperatorEvent(event)
 			},
 			OnTurnDone: func() {
 				batcher.Flush()
-				if prog := p.Load(); prog != nil {
-					prog.Send(tui.OperatorDoneMsg{})
-				}
+				svc.BroadcastOperatorDone(cfg.Operator.Model, 0, 0, 0)
 			},
 		})
 		if opErr != nil {
 			slog.Warn("failed to create operator", "error", opErr)
-			// op remains nil — degraded mode, handled in the greeting goroutine
 		}
 	}
 
-	// Build initial team views from the store.
-	initialTeams := tui.BuildTeamViews(context.Background(), store)
+	// Wire the operator into the service after creation.
+	if op != nil {
+		svc2 := service.NewLocal(service.LocalConfig{
+			Store:         store,
+			Runtime:       rt,
+			Operator:      op,
+			MCPManager:    mcpManager,
+			Provider:      client,
+			Composer:      composer,
+			Loader:        ldr,
+			ConfigDir:     configDir,
+			WorkspaceDir:  workspaceDir,
+			TeamsDir:      teamsDir,
+			OperatorModel: cfg.Operator.Model,
+			StartTime:     time.Now(),
+		})
+		_ = svc.Shutdown // discard the first service
+		svc = svc2
+		defer svc.Shutdown()
+
+		// Re-wire operator callbacks to the new service.
+		textFlush := func(text string) {
+			svc.BroadcastOperatorText(text, "")
+		}
+		batcher := newTextBatcher(16*time.Millisecond, textFlush)
+		op2, opErr := operator.New(operator.Config{
+			Runtime:      rt,
+			Provider:     client,
+			Model:        cfg.Operator.Model,
+			WorkDir:      workspaceDir,
+			Store:        store,
+			Composer:     composer,
+			Spawner:      rt,
+			SystemPrompt: operatorPrompt,
+			OnText: func(text string) {
+				batcher.Add(text)
+			},
+			OnEvent: func(event operator.Event) {
+				svc.BroadcastOperatorEvent(event)
+			},
+			OnTurnDone: func() {
+				batcher.Flush()
+				svc.BroadcastOperatorDone(cfg.Operator.Model, 0, 0, 0)
+			},
+		})
+		if opErr != nil {
+			slog.Warn("failed to re-create operator with service", "error", opErr)
+		} else {
+			op = op2
+		}
+	}
 
 	m := tui.NewModel(tui.ModelConfig{
-		Client:         client,
-		WorkspaceDir:   workspaceDir,
-		TeamsDir:       teamsDir,
-		Teams:          initialTeams,
-		Awareness:      "",
-		Store:          store,
-		Runtime:        rt,
-		MCPManager:     mcpManager,
-		Operator:       op,
-		OperatorModel:  cfg.Operator.Model,
-		OperatorPrompt: operatorPrompt,
+		Service: svc,
 	})
 
 	prog := tea.NewProgram(&m)
 	// Store prog BEFORE starting the operator so that notifySessionStarted and
 	// all operator callbacks can safely call p.Load() and find a non-nil program.
-	// Bubble Tea buffers Send() calls made before Run() starts, so this is safe.
 	p.Store(prog)
 
 	if op != nil {
@@ -287,19 +355,24 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 		op.Start(opCtx)
 	}
 
-	// Generate team awareness and send the operator greeting in the background
-	// so the TUI appears immediately. Always send AppReadyMsg even on error.
+	// Start the service event consumer — translates service events to TUI messages.
+	consumerCtx, consumerCancel := context.WithCancel(context.Background())
+	defer consumerCancel()
+	go tui.ConsumeServiceEvents(consumerCtx, svc, prog)
+
+	// Generate team awareness and send the operator greeting in the background.
 	go func() {
 		ctx := context.Background()
-		awareness := generateTeamAwareness(ctx, client, tui.BuildTeamViews(ctx, store), configDir)
+
+		// Fetch initial teams from the service for awareness generation.
+		initialTeams, _ := svc.Definitions().ListTeams(ctx)
+		awareness := generateTeamAwareness(ctx, client, initialTeams, configDir)
 
 		if op != nil {
-			// Send AppReadyMsg so the TUI can initialize the system prompt.
 			if prog := p.Load(); prog != nil {
 				prog.Send(tui.AppReadyMsg{Awareness: awareness, Greeting: ""})
 			}
-			// Send the greeting through the operator so it goes through the
-			// operator's conversation history and streams naturally.
+			// Send the greeting through the operator.
 			if err := op.Send(ctx, operator.Event{
 				Type: operator.EventUserMessage,
 				Payload: operator.UserMessagePayload{
@@ -324,11 +397,12 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 	// Watch for definition file changes and reload.
 	if ldr != nil {
 		defWatcher, defWatchErr := loader.NewWatcher(ldr, func() {
+			svc.BroadcastDefinitionsReloaded()
+			// Rebuild team views and send TeamsReloadedMsg.
+			ctx := context.Background()
+			newTeams, _ := svc.Definitions().ListTeams(ctx)
+			newAwareness := generateTeamAwareness(ctx, client, newTeams, configDir)
 			if prog := p.Load(); prog != nil {
-				prog.Send(tui.DefinitionsReloadedMsg{})
-				// Rebuild team views from the store and send to TUI.
-				newTeams := tui.BuildTeamViews(context.Background(), store)
-				newAwareness := generateTeamAwareness(context.Background(), client, newTeams, configDir)
 				prog.Send(tui.TeamsReloadedMsg{Teams: newTeams, Awareness: newAwareness})
 			}
 		})

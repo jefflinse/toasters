@@ -981,8 +981,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case TeamsAutoDetectDoneMsg:
 		m.teamsModal.autoDetecting = false
-		if msg.agentName != "" && msg.err == nil {
-			_ = SetCoordinator(msg.teamDir, msg.agentName)
+		// The service's DetectCoordinator already called SetCoordinator if a match was found.
+		// Just reload the teams list to reflect any changes.
+		if msg.err == nil {
 			m.reloadTeamsForModal()
 		}
 		return m, tea.Batch(cmds...)
@@ -995,11 +996,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			cmds = append(cmds, m.addToast("✓ Promoted '"+msg.teamName+"' to managed team", toastSuccess))
 			m.reloadTeamsForModal()
-			// Select the newly promoted team.
+			// Select the newly promoted team (it is no longer an auto-team after promotion).
 			for i, t := range m.teamsModal.teams {
 				if t.Name() == msg.teamName && !isAutoTeam(t) {
 					m.teamsModal.teamIdx = i
-					m.refreshSelectedTeamDef()
 					break
 				}
 			}
@@ -1023,7 +1023,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		for i, t := range m.teamsModal.teams {
 			if t.Name() == teamName {
 				m.teamsModal.teamIdx = i
-				m.refreshSelectedTeamDef()
 				break
 			}
 		}

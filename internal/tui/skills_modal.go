@@ -3,33 +3,28 @@ package tui
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
-	"github.com/jefflinse/toasters/internal/agentfmt"
-	"github.com/jefflinse/toasters/internal/config"
-	"github.com/jefflinse/toasters/internal/db"
-	"github.com/jefflinse/toasters/internal/loader"
+	"github.com/jefflinse/toasters/internal/service"
 )
 
 // skillsModalState holds all state for the /skills modal overlay.
 type skillsModalState struct {
 	show          bool
-	skills        []*db.Skill // local copy for the modal
-	skillIdx      int         // selected skill in left panel
-	focus         int         // 0=left panel, 1=right panel
-	nameInput     string      // text being typed for new skill name
-	inputMode     bool        // true when typing a new skill name
-	confirmDelete bool        // true when delete confirmation is showing
+	skills        []service.Skill // local copy for the modal
+	skillIdx      int             // selected skill in left panel
+	focus         int             // 0=left panel, 1=right panel
+	nameInput     string          // text being typed for new skill name
+	inputMode     bool            // true when typing a new skill name
+	confirmDelete bool            // true when delete confirmation is showing
 
 	// LLM generation state.
 	generateMode  bool   // true when user is typing a generation prompt
@@ -51,7 +46,7 @@ func (m *Model) updateSkillsModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				m.skillsModal.generateMode = false
 				prompt := m.skillsModal.generateInput
 				m.skillsModal.generateInput = ""
-				return m, generateSkillCmd(m.llmClient, prompt)
+				return m, m.generateSkillAsync(prompt)
 			}
 		case "backspace":
 			if len(m.skillsModal.generateInput) > 0 {
@@ -76,12 +71,15 @@ func (m *Model) updateSkillsModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			name := strings.TrimSpace(m.skillsModal.nameInput)
 			valid := name != "" && !strings.ContainsAny(name, "/\\.\n\r:")
 			if valid {
-				if err := createSkillFile(name); err != nil {
-					slog.Error("failed to create skill file", "name", name, "error", err)
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				sk, err := m.svc.Definitions().CreateSkill(ctx, name)
+				cancel()
+				if err != nil {
+					slog.Error("failed to create skill", "name", name, "error", err)
 				} else {
 					m.reloadSkillsForModal()
-					for i, sk := range m.skillsModal.skills {
-						if sk.Name == name {
+					for i, s := range m.skillsModal.skills {
+						if s.Name == sk.Name {
 							m.skillsModal.skillIdx = i
 							break
 						}
@@ -140,9 +138,6 @@ func (m *Model) updateSkillsModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	case "ctrl+g":
 		if !m.skillsModal.generating {
-			if m.llmClient == nil {
-				return m, m.addToast("⚠ No LLM provider configured", toastWarning)
-			}
 			m.skillsModal.generateMode = true
 			m.skillsModal.generateInput = ""
 		}
@@ -183,95 +178,34 @@ func (m *Model) updateSkillsModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// reloadSkillsForModal refreshes m.skillsModal.skills from the DB.
+// generateSkillAsync starts an async skill generation via the service.
+func (m *Model) generateSkillAsync(prompt string) tea.Cmd {
+	svc := m.svc
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		_, err := svc.Definitions().GenerateSkill(ctx, prompt)
+		if err != nil {
+			return skillGeneratedMsg{err: fmt.Errorf("starting skill generation: %w", err)}
+		}
+		// The actual result arrives via EventTypeOperationCompleted in the event consumer.
+		return nil
+	}
+}
+
+// reloadSkillsForModal refreshes m.skillsModal.skills from the service.
 func (m *Model) reloadSkillsForModal() {
-	if m.store == nil {
+	if m.svc == nil {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	skills, err := m.store.ListSkills(ctx)
+	skills, err := m.svc.Definitions().ListSkills(ctx)
 	if err != nil {
 		slog.Error("failed to list skills for modal", "error", err)
 		return
 	}
 	m.skillsModal.skills = skills
-}
-
-// createSkillFile writes a template .md file for a new skill.
-func createSkillFile(name string) error {
-	cfgDir, err := config.Dir()
-	if err != nil {
-		return fmt.Errorf("getting config dir: %w", err)
-	}
-	skillsDir := filepath.Join(cfgDir, "user", "skills")
-	if err := os.MkdirAll(skillsDir, 0o755); err != nil {
-		return fmt.Errorf("creating skills dir: %w", err)
-	}
-
-	// Sanitize name for filename using Slugify for consistent, safe filenames.
-	filename := loader.Slugify(name) + ".md"
-	if filename == ".md" {
-		return fmt.Errorf("invalid skill name: produces empty filename")
-	}
-	path := filepath.Join(skillsDir, filename)
-
-	if _, err := os.Stat(path); err == nil {
-		return fmt.Errorf("skill file %q already exists", filename)
-	}
-
-	template := fmt.Sprintf(`---
-name: %s
-description: A brief description of what this skill does
-tools: []
----
-
-Your skill prompt goes here. This text will be injected into agents that use this skill.
-`, name)
-
-	return os.WriteFile(path, []byte(template), 0o644)
-}
-
-// writeGeneratedSkillFile writes LLM-generated skill content to the user skills
-// directory. It derives the filename from the skill name in the content, and
-// appends -2, -3, etc. if the file already exists. Returns the written path.
-func writeGeneratedSkillFile(content string) (string, error) {
-	cfgDir, err := config.Dir()
-	if err != nil {
-		return "", fmt.Errorf("getting config dir: %w", err)
-	}
-	skillsDir := filepath.Join(cfgDir, "user", "skills")
-	if err := os.MkdirAll(skillsDir, 0o755); err != nil {
-		return "", fmt.Errorf("creating skills dir: %w", err)
-	}
-
-	// Parse the content to extract the skill name for the filename.
-	slug := "generated-skill"
-	if parsed, err := agentfmt.ParseBytes([]byte(content), agentfmt.DefSkill); err == nil {
-		if skillDef, ok := parsed.(*agentfmt.SkillDef); ok && skillDef.Name != "" {
-			s := loader.Slugify(skillDef.Name)
-			if s != "" {
-				slug = s
-			}
-		}
-	}
-
-	// Find a free filename, appending -2, -3, etc. if needed.
-	path := filepath.Join(skillsDir, slug+".md")
-	if _, err := os.Stat(path); err == nil {
-		for i := 2; ; i++ {
-			candidate := filepath.Join(skillsDir, fmt.Sprintf("%s-%d.md", slug, i))
-			if _, err := os.Stat(candidate); os.IsNotExist(err) {
-				path = candidate
-				break
-			}
-		}
-	}
-
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-		return "", fmt.Errorf("writing skill file: %w", err)
-	}
-	return path, nil
 }
 
 // openInEditor launches $EDITOR (or vi) for the given file path, suspending the TUI.
@@ -425,14 +359,10 @@ func (m *Model) renderSkillsModal() string {
 
 		// Tools.
 		if len(sk.Tools) > 0 {
-			var toolNames []string
-			_ = json.Unmarshal(sk.Tools, &toolNames)
-			if len(toolNames) > 0 {
-				rightLines = append(rightLines, "")
-				rightLines = append(rightLines, fmt.Sprintf("Tools (%d)", len(toolNames)))
-				for _, t := range toolNames {
-					rightLines = append(rightLines, "  · "+truncateStr(t, rightInnerW-4))
-				}
+			rightLines = append(rightLines, "")
+			rightLines = append(rightLines, fmt.Sprintf("Tools (%d)", len(sk.Tools)))
+			for _, t := range sk.Tools {
+				rightLines = append(rightLines, "  · "+truncateStr(t, rightInnerW-4))
 			}
 		}
 
@@ -489,7 +419,7 @@ func (m *Model) renderSkillsModal() string {
 		dHint = DimStyle.Render(dHint)
 		eHint = DimStyle.Render(eHint)
 	}
-	if m.llmClient == nil || m.skillsModal.generating {
+	if m.skillsModal.generating {
 		gHint = DimStyle.Render(gHint)
 	}
 	footer := lipgloss.JoinHorizontal(lipgloss.Left,

@@ -8,9 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jefflinse/toasters/internal/db"
 	"github.com/jefflinse/toasters/internal/provider"
-	"github.com/jefflinse/toasters/internal/tui"
+	"github.com/jefflinse/toasters/internal/service"
 )
 
 // mockProvider implements provider.Provider for testing awareness functions.
@@ -38,9 +37,9 @@ func (m *mockProvider) Models(_ context.Context) ([]provider.ModelInfo, error) {
 func (m *mockProvider) Name() string { return "mock" }
 
 // helper to build a TeamView with the given name, coordinator, and workers.
-func makeTeamView(name string, coordinator *db.Agent, workers []*db.Agent) tui.TeamView {
-	return tui.TeamView{
-		Team:        &db.Team{Name: name},
+func makeTeamView(name string, coordinator *service.Agent, workers []service.Agent) service.TeamView {
+	return service.TeamView{
+		Team:        service.Team{Name: name},
 		Coordinator: coordinator,
 		Workers:     workers,
 	}
@@ -50,9 +49,8 @@ func TestSummarizeTeam_WithCoordinator(t *testing.T) {
 	t.Parallel()
 
 	mp := &mockProvider{response: "Use this team when you need frontend work."}
-	team := makeTeamView("frontend", &db.Agent{
-		SystemPrompt: "You are a frontend specialist.",
-	}, nil)
+	coord := service.Agent{SystemPrompt: "You are a frontend specialist."}
+	team := makeTeamView("frontend", &coord, nil)
 
 	got := summarizeTeam(context.Background(), mp, team)
 	if got != "Use this team when you need frontend work." {
@@ -66,9 +64,8 @@ func TestSummarizeTeam_WithCoordinatorWhitespacePrompt(t *testing.T) {
 	// A coordinator with a whitespace-only system prompt should fall through
 	// to the worker-names branch.
 	mp := &mockProvider{response: "Use this team when you need backend work."}
-	team := makeTeamView("backend", &db.Agent{
-		SystemPrompt: "   \n\t  ",
-	}, []*db.Agent{
+	coord := service.Agent{SystemPrompt: "   \n\t  "}
+	team := makeTeamView("backend", &coord, []service.Agent{
 		{Name: "api-dev"},
 		{Name: "db-dev"},
 	})
@@ -83,7 +80,7 @@ func TestSummarizeTeam_NoCoordinator(t *testing.T) {
 	t.Parallel()
 
 	mp := &mockProvider{response: "Use this team when you need infrastructure work."}
-	team := makeTeamView("infra", nil, []*db.Agent{
+	team := makeTeamView("infra", nil, []service.Agent{
 		{Name: "terraform-agent"},
 		{Name: "docker-agent"},
 	})
@@ -98,9 +95,8 @@ func TestSummarizeTeam_LLMError(t *testing.T) {
 	t.Parallel()
 
 	mp := &mockProvider{err: errors.New("connection refused")}
-	team := makeTeamView("broken", &db.Agent{
-		SystemPrompt: "You handle broken things.",
-	}, nil)
+	coord := service.Agent{SystemPrompt: "You handle broken things."}
+	team := makeTeamView("broken", &coord, nil)
 
 	got := summarizeTeam(context.Background(), mp, team)
 	want := "Use this team when you need help from the broken team."
@@ -113,7 +109,7 @@ func TestSummarizeTeam_LLMErrorNoCoordinator(t *testing.T) {
 	t.Parallel()
 
 	mp := &mockProvider{err: errors.New("timeout")}
-	team := makeTeamView("qa", nil, []*db.Agent{
+	team := makeTeamView("qa", nil, []service.Agent{
 		{Name: "test-runner"},
 	})
 
@@ -128,9 +124,8 @@ func TestSummarizeTeam_ResponseTrimmed(t *testing.T) {
 	t.Parallel()
 
 	mp := &mockProvider{response: "  Use this team for testing.  \n"}
-	team := makeTeamView("test", &db.Agent{
-		SystemPrompt: "You run tests.",
-	}, nil)
+	coord := service.Agent{SystemPrompt: "You run tests."}
+	team := makeTeamView("test", &coord, nil)
 
 	got := summarizeTeam(context.Background(), mp, team)
 	if got != "Use this team for testing." {
@@ -152,7 +147,7 @@ func TestGenerateTeamAwareness_EmptySlice(t *testing.T) {
 	t.Parallel()
 
 	mp := &mockProvider{response: "should not be called"}
-	got := generateTeamAwareness(context.Background(), mp, []tui.TeamView{}, t.TempDir())
+	got := generateTeamAwareness(context.Background(), mp, []service.TeamView{}, t.TempDir())
 	if got != "" {
 		t.Errorf("generateTeamAwareness(empty slice) = %q, want empty string", got)
 	}
@@ -162,8 +157,9 @@ func TestGenerateTeamAwareness_OneTeam(t *testing.T) {
 	t.Parallel()
 
 	mp := &mockProvider{response: "Use this team when you need frontend work."}
-	teams := []tui.TeamView{
-		makeTeamView("frontend", &db.Agent{SystemPrompt: "Frontend specialist."}, nil),
+	coord := service.Agent{SystemPrompt: "Frontend specialist."}
+	teams := []service.TeamView{
+		makeTeamView("frontend", &coord, nil),
 	}
 	configDir := t.TempDir()
 
@@ -197,10 +193,12 @@ func TestGenerateTeamAwareness_MultipleTeams(t *testing.T) {
 	t.Parallel()
 
 	mp := &mockProvider{response: "Use this team for general work."}
-	teams := []tui.TeamView{
-		makeTeamView("frontend", &db.Agent{SystemPrompt: "Frontend."}, nil),
-		makeTeamView("backend", &db.Agent{SystemPrompt: "Backend."}, nil),
-		makeTeamView("devops", nil, []*db.Agent{{Name: "deployer"}}),
+	coord1 := service.Agent{SystemPrompt: "Frontend."}
+	coord2 := service.Agent{SystemPrompt: "Backend."}
+	teams := []service.TeamView{
+		makeTeamView("frontend", &coord1, nil),
+		makeTeamView("backend", &coord2, nil),
+		makeTeamView("devops", nil, []service.Agent{{Name: "deployer"}}),
 	}
 	configDir := t.TempDir()
 
@@ -223,8 +221,9 @@ func TestGenerateTeamAwareness_WritesFile(t *testing.T) {
 	t.Parallel()
 
 	mp := &mockProvider{response: "Use this team for testing."}
-	teams := []tui.TeamView{
-		makeTeamView("test-team", &db.Agent{SystemPrompt: "Tester."}, nil),
+	coord := service.Agent{SystemPrompt: "Tester."}
+	teams := []service.TeamView{
+		makeTeamView("test-team", &coord, nil),
 	}
 	configDir := t.TempDir()
 
@@ -244,8 +243,9 @@ func TestGenerateTeamAwareness_InvalidConfigDir(t *testing.T) {
 	t.Parallel()
 
 	mp := &mockProvider{response: "Use this team for work."}
-	teams := []tui.TeamView{
-		makeTeamView("team-a", &db.Agent{SystemPrompt: "Agent."}, nil),
+	coord := service.Agent{SystemPrompt: "Agent."}
+	teams := []service.TeamView{
+		makeTeamView("team-a", &coord, nil),
 	}
 
 	// Use a non-existent directory — file write should fail gracefully.
@@ -262,8 +262,8 @@ func TestGenerateTeamAwareness_LLMErrorFallback(t *testing.T) {
 	t.Parallel()
 
 	mp := &mockProvider{err: errors.New("LLM unavailable")}
-	teams := []tui.TeamView{
-		makeTeamView("broken-team", nil, []*db.Agent{{Name: "worker-1"}}),
+	teams := []service.TeamView{
+		makeTeamView("broken-team", nil, []service.Agent{{Name: "worker-1"}}),
 	}
 	configDir := t.TempDir()
 

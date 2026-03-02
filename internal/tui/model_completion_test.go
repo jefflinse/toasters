@@ -5,6 +5,8 @@ import (
 
 	"charm.land/bubbles/v2/textarea"
 	"charm.land/bubbles/v2/viewport"
+
+	"github.com/jefflinse/toasters/internal/service"
 )
 
 // newMinimalModel returns a Model with only the fields needed to exercise
@@ -19,7 +21,6 @@ func newMinimalModel(t *testing.T) Model {
 	vp := viewport.New()
 
 	return Model{
-		llmClient:    nil,
 		chatViewport: vp,
 		input:        ta,
 		chat: chatState{
@@ -29,7 +30,7 @@ func newMinimalModel(t *testing.T) Model {
 			expandedReasoning: make(map[int]bool),
 			collapsedTools:    make(map[int]bool),
 		},
-		blockers:        make(map[string]*Blocker),
+		blockers:        make(map[string]*service.Blocker),
 		runtimeSessions: make(map[string]*runtimeSlot),
 	}
 }
@@ -111,11 +112,11 @@ func TestOperatorTextMsg_AccumulatesResponse(t *testing.T) {
 	}
 }
 
-// TestSendMessage_NilOperator verifies that sendMessage returns nil when
-// the operator is not set.
-func TestSendMessage_NilOperator(t *testing.T) {
+// TestSendMessage_NilSvc verifies that sendMessage returns nil when
+// the service is not set.
+func TestSendMessage_NilSvc(t *testing.T) {
 	m := newMinimalModel(t)
-	m.operator = nil
+	m.svc = nil
 	m.input.SetValue("hello")
 
 	cmd := m.sendMessage()

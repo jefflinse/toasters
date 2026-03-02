@@ -1,21 +1,21 @@
 package tui
 
 import (
-	"encoding/json"
 	"testing"
 
-	"github.com/jefflinse/toasters/internal/db"
+	"github.com/jefflinse/toasters/internal/service"
 )
 
 // --- filterAgentsForTeam tests ---
 
 func TestFilterAgentsForTeam_ExcludesCoordinatorAndWorkers(t *testing.T) {
 	t.Parallel()
-	team := TeamView{
-		Coordinator: &db.Agent{Name: "alpha"},
-		Workers:     []*db.Agent{{Name: "beta"}},
+	coord := service.Agent{Name: "alpha"}
+	team := service.TeamView{
+		Coordinator: &coord,
+		Workers:     []service.Agent{{Name: "beta"}},
 	}
-	available := []*db.Agent{
+	available := []service.Agent{
 		{Name: "alpha"},
 		{Name: "beta"},
 		{Name: "charlie"},
@@ -33,11 +33,11 @@ func TestFilterAgentsForTeam_ExcludesCoordinatorAndWorkers(t *testing.T) {
 
 func TestFilterAgentsForTeam_NoAgentsInTeam(t *testing.T) {
 	t.Parallel()
-	team := TeamView{
+	team := service.TeamView{
 		Coordinator: nil,
 		Workers:     nil,
 	}
-	available := []*db.Agent{
+	available := []service.Agent{
 		{Name: "alpha"},
 		{Name: "beta"},
 	}
@@ -51,11 +51,12 @@ func TestFilterAgentsForTeam_NoAgentsInTeam(t *testing.T) {
 
 func TestFilterAgentsForTeam_AllAgentsAlreadyInTeam(t *testing.T) {
 	t.Parallel()
-	team := TeamView{
-		Coordinator: &db.Agent{Name: "alpha"},
-		Workers:     []*db.Agent{{Name: "beta"}},
+	coord := service.Agent{Name: "alpha"}
+	team := service.TeamView{
+		Coordinator: &coord,
+		Workers:     []service.Agent{{Name: "beta"}},
 	}
-	available := []*db.Agent{
+	available := []service.Agent{
 		{Name: "alpha"},
 		{Name: "beta"},
 	}
@@ -69,9 +70,10 @@ func TestFilterAgentsForTeam_AllAgentsAlreadyInTeam(t *testing.T) {
 
 func TestFilterAgentsForTeam_EmptyAvailable(t *testing.T) {
 	t.Parallel()
-	team := TeamView{
-		Coordinator: &db.Agent{Name: "alpha"},
-		Workers:     []*db.Agent{{Name: "beta"}},
+	coord := service.Agent{Name: "alpha"}
+	team := service.TeamView{
+		Coordinator: &coord,
+		Workers:     []service.Agent{{Name: "beta"}},
 	}
 
 	got := filterAgentsForTeam(team, nil)
@@ -83,11 +85,12 @@ func TestFilterAgentsForTeam_EmptyAvailable(t *testing.T) {
 
 func TestFilterAgentsForTeam_OnlyCoordinator(t *testing.T) {
 	t.Parallel()
-	team := TeamView{
-		Coordinator: &db.Agent{Name: "alpha"},
+	coord := service.Agent{Name: "alpha"}
+	team := service.TeamView{
+		Coordinator: &coord,
 		Workers:     nil,
 	}
-	available := []*db.Agent{
+	available := []service.Agent{
 		{Name: "alpha"},
 		{Name: "beta"},
 		{Name: "charlie"},
@@ -106,11 +109,11 @@ func TestFilterAgentsForTeam_OnlyCoordinator(t *testing.T) {
 
 func TestFilterAgentsForTeam_OnlyWorkers(t *testing.T) {
 	t.Parallel()
-	team := TeamView{
+	team := service.TeamView{
 		Coordinator: nil,
-		Workers:     []*db.Agent{{Name: "alpha"}, {Name: "beta"}},
+		Workers:     []service.Agent{{Name: "alpha"}, {Name: "beta"}},
 	}
-	available := []*db.Agent{
+	available := []service.Agent{
 		{Name: "alpha"},
 		{Name: "beta"},
 		{Name: "charlie"},
@@ -129,11 +132,12 @@ func TestFilterAgentsForTeam_OnlyWorkers(t *testing.T) {
 func TestFilterAgentsForTeam_CaseSensitive(t *testing.T) {
 	t.Parallel()
 	// "Alpha" (capital A) is in the team; "alpha" (lowercase) is a different name.
-	team := TeamView{
-		Coordinator: &db.Agent{Name: "Alpha"},
+	coord := service.Agent{Name: "Alpha"}
+	team := service.TeamView{
+		Coordinator: &coord,
 		Workers:     nil,
 	}
-	available := []*db.Agent{
+	available := []service.Agent{
 		{Name: "Alpha"},
 		{Name: "alpha"}, // different case — should NOT be filtered out
 	}
@@ -150,10 +154,11 @@ func TestFilterAgentsForTeam_CaseSensitive(t *testing.T) {
 
 func TestFilterAgentsForTeam_PreservesOrder(t *testing.T) {
 	t.Parallel()
-	team := TeamView{
-		Coordinator: &db.Agent{Name: "b"},
+	coord := service.Agent{Name: "b"}
+	team := service.TeamView{
+		Coordinator: &coord,
 	}
-	available := []*db.Agent{
+	available := []service.Agent{
 		{Name: "a"},
 		{Name: "b"}, // filtered out
 		{Name: "c"},
@@ -177,9 +182,8 @@ func TestFilterAgentsForTeam_PreservesOrder(t *testing.T) {
 
 func TestFilterSkillsForAgent_ExcludesExistingSkills(t *testing.T) {
 	t.Parallel()
-	skillsJSON, _ := json.Marshal([]string{"skill-x"})
-	a := &db.Agent{Skills: skillsJSON}
-	available := []*db.Skill{
+	a := service.Agent{Skills: []string{"skill-x"}}
+	available := []service.Skill{
 		{Name: "skill-x"},
 		{Name: "skill-y"},
 	}
@@ -196,8 +200,8 @@ func TestFilterSkillsForAgent_ExcludesExistingSkills(t *testing.T) {
 
 func TestFilterSkillsForAgent_NoSkillsOnAgent(t *testing.T) {
 	t.Parallel()
-	a := &db.Agent{Skills: nil}
-	available := []*db.Skill{
+	a := service.Agent{Skills: nil}
+	available := []service.Skill{
 		{Name: "skill-x"},
 		{Name: "skill-y"},
 	}
@@ -209,11 +213,10 @@ func TestFilterSkillsForAgent_NoSkillsOnAgent(t *testing.T) {
 	}
 }
 
-func TestFilterSkillsForAgent_EmptySkillsJSON(t *testing.T) {
+func TestFilterSkillsForAgent_EmptySkills(t *testing.T) {
 	t.Parallel()
-	// Explicit empty JSON array — treated as no skills.
-	a := &db.Agent{Skills: json.RawMessage(`[]`)}
-	available := []*db.Skill{
+	a := service.Agent{Skills: []string{}}
+	available := []service.Skill{
 		{Name: "skill-x"},
 		{Name: "skill-y"},
 	}
@@ -227,9 +230,8 @@ func TestFilterSkillsForAgent_EmptySkillsJSON(t *testing.T) {
 
 func TestFilterSkillsForAgent_AllSkillsAlreadyAssigned(t *testing.T) {
 	t.Parallel()
-	skillsJSON, _ := json.Marshal([]string{"skill-x", "skill-y"})
-	a := &db.Agent{Skills: skillsJSON}
-	available := []*db.Skill{
+	a := service.Agent{Skills: []string{"skill-x", "skill-y"}}
+	available := []service.Skill{
 		{Name: "skill-x"},
 		{Name: "skill-y"},
 	}
@@ -243,8 +245,7 @@ func TestFilterSkillsForAgent_AllSkillsAlreadyAssigned(t *testing.T) {
 
 func TestFilterSkillsForAgent_EmptyAvailable(t *testing.T) {
 	t.Parallel()
-	skillsJSON, _ := json.Marshal([]string{"skill-x"})
-	a := &db.Agent{Skills: skillsJSON}
+	a := service.Agent{Skills: []string{"skill-x"}}
 
 	got := filterSkillsForAgent(a, nil)
 
@@ -253,43 +254,11 @@ func TestFilterSkillsForAgent_EmptyAvailable(t *testing.T) {
 	}
 }
 
-func TestFilterSkillsForAgent_MalformedSkillsJSON(t *testing.T) {
-	t.Parallel()
-	// Malformed JSON — should be treated as no skills (all available returned).
-	a := &db.Agent{Skills: json.RawMessage(`not valid json`)}
-	available := []*db.Skill{
-		{Name: "skill-x"},
-		{Name: "skill-y"},
-	}
-
-	got := filterSkillsForAgent(a, available)
-
-	if len(got) != 2 {
-		t.Fatalf("got %d skills, want 2 (malformed JSON treated as empty)", len(got))
-	}
-}
-
-func TestFilterSkillsForAgent_NullSkillsJSON(t *testing.T) {
-	t.Parallel()
-	// JSON null — treated as no skills.
-	a := &db.Agent{Skills: json.RawMessage(`null`)}
-	available := []*db.Skill{
-		{Name: "skill-x"},
-	}
-
-	got := filterSkillsForAgent(a, available)
-
-	if len(got) != 1 {
-		t.Fatalf("got %d skills, want 1 (null JSON treated as empty)", len(got))
-	}
-}
-
 func TestFilterSkillsForAgent_CaseSensitive(t *testing.T) {
 	t.Parallel()
 	// "Skill-X" (capital S) is on the agent; "skill-x" (lowercase) is different.
-	skillsJSON, _ := json.Marshal([]string{"Skill-X"})
-	a := &db.Agent{Skills: skillsJSON}
-	available := []*db.Skill{
+	a := service.Agent{Skills: []string{"Skill-X"}}
+	available := []service.Skill{
 		{Name: "Skill-X"},
 		{Name: "skill-x"}, // different case — should NOT be filtered out
 	}
@@ -306,9 +275,8 @@ func TestFilterSkillsForAgent_CaseSensitive(t *testing.T) {
 
 func TestFilterSkillsForAgent_PreservesOrder(t *testing.T) {
 	t.Parallel()
-	skillsJSON, _ := json.Marshal([]string{"b"})
-	a := &db.Agent{Skills: skillsJSON}
-	available := []*db.Skill{
+	a := service.Agent{Skills: []string{"b"}}
+	available := []service.Skill{
 		{Name: "a"},
 		{Name: "b"}, // filtered out
 		{Name: "c"},
@@ -330,9 +298,8 @@ func TestFilterSkillsForAgent_PreservesOrder(t *testing.T) {
 
 func TestFilterSkillsForAgent_MultipleExistingSkills(t *testing.T) {
 	t.Parallel()
-	skillsJSON, _ := json.Marshal([]string{"skill-a", "skill-c", "skill-e"})
-	a := &db.Agent{Skills: skillsJSON}
-	available := []*db.Skill{
+	a := service.Agent{Skills: []string{"skill-a", "skill-c", "skill-e"}}
+	available := []service.Skill{
 		{Name: "skill-a"},
 		{Name: "skill-b"},
 		{Name: "skill-c"},

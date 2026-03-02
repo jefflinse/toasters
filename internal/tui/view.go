@@ -1127,9 +1127,9 @@ func (m *Model) updateViewportContent() {
 		}
 	}
 
-	// Render activity feed entries from SQLite only when no operator is wired
+	// Render activity feed entries from SQLite only when no service is wired
 	// (operator events are already rendered via OperatorEventMsg as chat entries).
-	if len(m.progress.feedEntries) > 0 && m.operator == nil {
+	if len(m.progress.feedEntries) > 0 && m.svc == nil {
 		for _, entry := range m.progress.feedEntries {
 			line := formatFeedEntry(entry)
 			if line != "" {

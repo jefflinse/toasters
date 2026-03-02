@@ -3,11 +3,8 @@ package tui
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
-	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -15,26 +12,23 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
-	"github.com/jefflinse/toasters/internal/agentfmt"
-	"github.com/jefflinse/toasters/internal/config"
-	"github.com/jefflinse/toasters/internal/db"
-	"github.com/jefflinse/toasters/internal/loader"
+	"github.com/jefflinse/toasters/internal/service"
 )
 
 // agentsModalState holds all state for the /agents modal overlay.
 type agentsModalState struct {
 	show          bool
-	agents        []*db.Agent // local copy for the modal
-	agentIdx      int         // selected agent in left panel
-	focus         int         // 0=left panel, 1=right panel
-	nameInput     string      // text being typed for new agent name
-	inputMode     bool        // true when typing a new agent name
-	confirmDelete bool        // true when delete confirmation is showing
+	agents        []service.Agent // local copy for the modal
+	agentIdx      int             // selected agent in left panel
+	focus         int             // 0=left panel, 1=right panel
+	nameInput     string          // text being typed for new agent name
+	inputMode     bool            // true when typing a new agent name
+	confirmDelete bool            // true when delete confirmation is showing
 
 	// Skill picker sub-modal state.
-	pickerMode   bool        // true when the skill picker overlay is active
-	pickerSkills []*db.Skill // skills available to add (filtered: not already on agent)
-	pickerIdx    int         // currently highlighted picker item
+	pickerMode   bool            // true when the skill picker overlay is active
+	pickerSkills []service.Skill // skills available to add (filtered: not already on agent)
+	pickerIdx    int             // currently highlighted picker item
 
 	// LLM generation state.
 	generateMode  bool   // true when user is typing a generation prompt
@@ -89,7 +83,7 @@ func (m *Model) updateAgentsModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				m.agentsModal.generateMode = false
 				prompt := m.agentsModal.generateInput
 				m.agentsModal.generateInput = ""
-				return m, generateAgentCmd(m.llmClient, prompt)
+				return m, m.generateAgentAsync(prompt)
 			}
 		case "backspace":
 			if len(m.agentsModal.generateInput) > 0 {
@@ -114,8 +108,11 @@ func (m *Model) updateAgentsModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			name := strings.TrimSpace(m.agentsModal.nameInput)
 			valid := name != "" && !strings.ContainsAny(name, "/\\.\n\r:")
 			if valid {
-				if err := createAgentFile(name); err != nil {
-					slog.Error("failed to create agent file", "name", name, "error", err)
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				_, err := m.svc.Definitions().CreateAgent(ctx, name)
+				cancel()
+				if err != nil {
+					slog.Error("failed to create agent", "name", name, "error", err)
 				} else {
 					m.reloadAgentsForModal()
 					for i, a := range m.agentsModal.agents {
@@ -178,9 +175,6 @@ func (m *Model) updateAgentsModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	case "ctrl+g":
 		if !m.agentsModal.inputMode && !m.agentsModal.generating && !m.agentsModal.pickerMode {
-			if m.llmClient == nil {
-				return m, m.addToast("⚠ No LLM provider configured", toastWarning)
-			}
 			m.agentsModal.generateMode = true
 			m.agentsModal.generateInput = ""
 		}
@@ -207,8 +201,13 @@ func (m *Model) updateAgentsModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if m.agentsModal.confirmDelete {
 			if len(m.agentsModal.agents) > 0 && m.agentsModal.agentIdx < len(m.agentsModal.agents) {
 				a := m.agentsModal.agents[m.agentsModal.agentIdx]
-				if a.SourcePath != "" && a.Source == "user" && a.TeamID == "" {
-					_ = os.Remove(a.SourcePath)
+				if a.Source == "user" && a.TeamID == "" {
+					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+					err := m.svc.Definitions().DeleteAgent(ctx, a.ID)
+					cancel()
+					if err != nil {
+						slog.Error("failed to delete agent", "id", a.ID, "error", err)
+					}
 				}
 			}
 			m.reloadAgentsForModal()
@@ -232,20 +231,29 @@ func (m *Model) updateAgentsModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// filterSkillsForAgent returns skills from available that are not already
-// assigned to the agent. The agent's Skills field is a JSON array of skill
-// names; malformed or absent JSON is treated as an empty list (all skills
-// are returned). Comparison is by skill name (case-sensitive).
-func filterSkillsForAgent(a *db.Agent, available []*db.Skill) []*db.Skill {
-	var existing []string
-	if len(a.Skills) > 0 {
-		_ = json.Unmarshal(a.Skills, &existing)
+// generateAgentAsync calls the service to generate an agent asynchronously.
+// The service pushes an operation.completed event when done; the event consumer
+// handles it and sets generating = false.
+func (m *Model) generateAgentAsync(prompt string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		_, err := m.svc.Definitions().GenerateAgent(ctx, prompt)
+		if err != nil {
+			return agentGeneratedMsg{err: err}
+		}
+		return nil
 	}
-	existingSet := make(map[string]bool, len(existing))
-	for _, s := range existing {
+}
+
+// filterSkillsForAgent returns skills from available that are not already
+// assigned to the agent. Comparison is by skill name (case-sensitive).
+func filterSkillsForAgent(a service.Agent, available []service.Skill) []service.Skill {
+	existingSet := make(map[string]bool, len(a.Skills))
+	for _, s := range a.Skills {
 		existingSet[s] = true
 	}
-	var result []*db.Skill
+	var result []service.Skill
 	for _, sk := range available {
 		if !existingSet[sk.Name] {
 			result = append(result, sk)
@@ -254,16 +262,13 @@ func filterSkillsForAgent(a *db.Agent, available []*db.Skill) []*db.Skill {
 	return result
 }
 
-// openSkillPicker loads all skills from the DB, filters out those already on the
+// openSkillPicker loads all skills from the service, filters out those already on the
 // agent, and either shows a toast (if none available) or activates picker mode.
-func (m *Model) openSkillPicker(a *db.Agent) tea.Cmd {
-	if m.store == nil {
-		return nil
-	}
+func (m *Model) openSkillPicker(a service.Agent) tea.Cmd {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	allSkills, err := m.store.ListSkills(ctx)
+	allSkills, err := m.svc.Definitions().ListSkills(ctx)
 	if err != nil {
 		slog.Error("failed to list skills for picker", "error", err)
 		return nil
@@ -280,46 +285,34 @@ func (m *Model) openSkillPicker(a *db.Agent) tea.Cmd {
 	return nil
 }
 
-// addSkillToAgent appends the given skill to the agent's .md file and reloads.
+// addSkillToAgent appends the given skill to the agent via the service and reloads.
 // Returns a tea.Cmd (toast) on success or failure, or nil if nothing to do.
-func (m *Model) addSkillToAgent(a *db.Agent, skill *db.Skill) tea.Cmd {
-	if a.SourcePath == "" {
-		return m.addToast("Cannot add skill: agent source file unknown", toastWarning)
-	}
+func (m *Model) addSkillToAgent(a service.Agent, skill service.Skill) tea.Cmd {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 
-	def, err := agentfmt.ParseAgent(a.SourcePath)
-	if err != nil {
-		slog.Error("failed to parse agent file for skill addition", "path", a.SourcePath, "error", err)
+	if err := m.svc.Definitions().AddSkillToAgent(ctx, a.ID, skill.Name); err != nil {
+		slog.Error("failed to add skill to agent", "agent", a.Name, "skill", skill.Name, "error", err)
 		return m.addToast("Cannot add skill: "+err.Error(), toastWarning)
-	}
-
-	def.Skills = append(def.Skills, skill.Name)
-
-	if err := writeAgentFile(a.SourcePath, def); err != nil {
-		slog.Error("failed to write agent file after skill addition", "path", a.SourcePath, "error", err)
-		return m.addToast("Failed to save: "+err.Error(), toastWarning)
 	}
 
 	m.reloadAgentsForModal()
 	return m.addToast("Added skill '"+skill.Name+"' to agent", toastSuccess)
 }
 
-// reloadAgentsForModal refreshes m.agentsModal.agents from the DB, ordered as:
+// reloadAgentsForModal refreshes m.agentsModal.agents from the service, ordered as:
 //  1. Shared (non-team) agents, alphabetically by name
 //  2. Team-local agents, alphabetically by "team/agent"
 //  3. System agents, alphabetically by name
 func (m *Model) reloadAgentsForModal() {
-	if m.store == nil {
-		return
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	agents, err := m.store.ListAgents(ctx)
+	agents, err := m.svc.Definitions().ListAgents(ctx)
 	if err != nil {
 		slog.Error("failed to list agents for modal", "error", err)
 		return
 	}
-	var shared, teamLocal, system []*db.Agent
+	var shared, teamLocal, system []service.Agent
 	for _, a := range agents {
 		switch {
 		case a.Source == "system":
@@ -330,97 +323,14 @@ func (m *Model) reloadAgentsForModal() {
 			shared = append(shared, a)
 		}
 	}
-	// Each group arrives pre-sorted by name from the DB (ORDER BY name).
+	// Each group arrives pre-sorted by name from the service (ORDER BY name).
 	// Team-local needs sorting by the composite "team/agent" key.
-	slices.SortFunc(teamLocal, func(a, b *db.Agent) int {
+	slices.SortFunc(teamLocal, func(a, b service.Agent) int {
 		ka := a.TeamID + "/" + a.Name
 		kb := b.TeamID + "/" + b.Name
 		return strings.Compare(ka, kb)
 	})
 	m.agentsModal.agents = append(append(shared, teamLocal...), system...)
-}
-
-// createAgentFile writes a template .md file for a new shared agent.
-func createAgentFile(name string) error {
-	cfgDir, err := config.Dir()
-	if err != nil {
-		return fmt.Errorf("getting config dir: %w", err)
-	}
-	agentsDir := filepath.Join(cfgDir, "user", "agents")
-	if err := os.MkdirAll(agentsDir, 0o755); err != nil {
-		return fmt.Errorf("creating agents dir: %w", err)
-	}
-
-	// Sanitize name for filename using Slugify for consistent, safe filenames.
-	filename := loader.Slugify(name) + ".md"
-	if filename == ".md" {
-		return fmt.Errorf("invalid agent name: produces empty filename")
-	}
-	path := filepath.Join(agentsDir, filename)
-
-	if _, err := os.Stat(path); err == nil {
-		return fmt.Errorf("agent file %q already exists", filename)
-	}
-
-	template := fmt.Sprintf(`---
-name: %s
-description: A brief description of what this agent does
-mode: worker
-skills: []
----
-
-Your agent system prompt goes here.
-`, name)
-
-	return os.WriteFile(path, []byte(template), 0o644)
-}
-
-// writeGeneratedAgentFile writes LLM-generated agent content to the user agents
-// directory. It derives the filename from the agent name in the content, and
-// appends -2, -3, etc. if the file already exists. Returns the written path and
-// the agent name extracted from the content.
-func writeGeneratedAgentFile(content string) (string, string, error) {
-	cfgDir, err := config.Dir()
-	if err != nil {
-		return "", "", fmt.Errorf("getting config dir: %w", err)
-	}
-	agentsDir := filepath.Join(cfgDir, "user", "agents")
-	if err := os.MkdirAll(agentsDir, 0o755); err != nil {
-		return "", "", fmt.Errorf("creating agents dir: %w", err)
-	}
-
-	// Parse the content to extract the agent name for the filename.
-	slug := "generated-agent"
-	agentName := ""
-	if parsed, err := agentfmt.ParseBytes([]byte(content), agentfmt.DefAgent); err == nil {
-		if agentDef, ok := parsed.(*agentfmt.AgentDef); ok && agentDef.Name != "" {
-			agentName = agentDef.Name
-			s := loader.Slugify(agentDef.Name)
-			if s != "" {
-				slug = s
-			}
-		}
-	}
-	if agentName == "" {
-		agentName = slug
-	}
-
-	// Find a free filename, appending -2, -3, etc. if needed.
-	path := filepath.Join(agentsDir, slug+".md")
-	if _, err := os.Stat(path); err == nil {
-		for i := 2; ; i++ {
-			candidate := filepath.Join(agentsDir, fmt.Sprintf("%s-%d.md", slug, i))
-			if _, err := os.Stat(candidate); os.IsNotExist(err) {
-				path = candidate
-				break
-			}
-		}
-	}
-
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-		return "", "", fmt.Errorf("writing agent file: %w", err)
-	}
-	return path, agentName, nil
 }
 
 // renderAgentsModal renders the full-screen agents management modal.
@@ -625,32 +535,24 @@ func (m *Model) renderAgentsModal() string {
 
 		// Skills.
 		if len(a.Skills) > 0 {
-			var skillNames []string
-			_ = json.Unmarshal(a.Skills, &skillNames)
-			if len(skillNames) > 0 {
-				rightLines = append(rightLines, "")
-				rightLines = append(rightLines, fmt.Sprintf("Skills (%d)", len(skillNames)))
-				for _, s := range skillNames {
-					rightLines = append(rightLines, "  · "+truncateStr(s, rightInnerW-4))
-				}
+			rightLines = append(rightLines, "")
+			rightLines = append(rightLines, fmt.Sprintf("Skills (%d)", len(a.Skills)))
+			for _, s := range a.Skills {
+				rightLines = append(rightLines, "  · "+truncateStr(s, rightInnerW-4))
 			}
 		}
 
 		// Tools.
 		if len(a.Tools) > 0 {
-			var toolNames []string
-			_ = json.Unmarshal(a.Tools, &toolNames)
-			if len(toolNames) > 0 {
-				rightLines = append(rightLines, "")
-				rightLines = append(rightLines, fmt.Sprintf("Tools (%d)", len(toolNames)))
-				maxTools := 8
-				for i, t := range toolNames {
-					if i >= maxTools {
-						rightLines = append(rightLines, DimStyle.Render(fmt.Sprintf("  ... and %d more", len(toolNames)-maxTools)))
-						break
-					}
-					rightLines = append(rightLines, "  · "+truncateStr(t, rightInnerW-4))
+			rightLines = append(rightLines, "")
+			rightLines = append(rightLines, fmt.Sprintf("Tools (%d)", len(a.Tools)))
+			maxTools := 8
+			for i, t := range a.Tools {
+				if i >= maxTools {
+					rightLines = append(rightLines, DimStyle.Render(fmt.Sprintf("  ... and %d more", len(a.Tools)-maxTools)))
+					break
 				}
+				rightLines = append(rightLines, "  · "+truncateStr(t, rightInnerW-4))
 			}
 		}
 
@@ -698,7 +600,7 @@ func (m *Model) renderAgentsModal() string {
 	if !canAddSkill {
 		aHint = DimStyle.Render(aHint)
 	}
-	if m.llmClient == nil || m.agentsModal.generating {
+	if m.agentsModal.generating {
 		gHint = DimStyle.Render(gHint)
 	}
 	var footer string

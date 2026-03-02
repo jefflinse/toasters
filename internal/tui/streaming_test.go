@@ -5,35 +5,112 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/jefflinse/toasters/internal/provider"
+	"github.com/jefflinse/toasters/internal/service"
 )
 
-// mockProvider implements provider.Provider for testing fetchModels.
-type mockProvider struct {
-	models []provider.ModelInfo
+// mockSystemService implements service.SystemService for testing fetchModels.
+type mockSystemService struct {
+	models []service.ModelInfo
 	err    error
 }
 
-func (m *mockProvider) ChatStream(_ context.Context, _ provider.ChatRequest) (<-chan provider.StreamEvent, error) {
-	ch := make(chan provider.StreamEvent)
-	close(ch)
-	return ch, nil
+func (m *mockSystemService) Health(_ context.Context) (service.HealthStatus, error) {
+	return service.HealthStatus{}, nil
 }
-
-func (m *mockProvider) Models(_ context.Context) ([]provider.ModelInfo, error) {
+func (m *mockSystemService) ListModels(_ context.Context) ([]service.ModelInfo, error) {
 	return m.models, m.err
 }
-
-func (m *mockProvider) Name() string {
-	return "mock"
+func (m *mockSystemService) ListMCPServers(_ context.Context) ([]service.MCPServerStatus, error) {
+	return nil, nil
 }
+func (m *mockSystemService) ConfigDir(_ context.Context) (string, error)   { return "", nil }
+func (m *mockSystemService) Slugify(_ context.Context, name string) string { return name }
+
+// mockDefinitionService implements service.DefinitionService with no-op methods.
+// Tests can override individual fields (e.g. listTeams) to inject behaviour.
+type mockDefinitionService struct {
+	listTeams func(ctx context.Context) ([]service.TeamView, error)
+}
+
+func (m *mockDefinitionService) ListSkills(_ context.Context) ([]service.Skill, error) {
+	return nil, nil
+}
+func (m *mockDefinitionService) GetSkill(_ context.Context, _ string) (service.Skill, error) {
+	return service.Skill{}, nil
+}
+func (m *mockDefinitionService) CreateSkill(_ context.Context, _ string) (service.Skill, error) {
+	return service.Skill{}, nil
+}
+func (m *mockDefinitionService) DeleteSkill(_ context.Context, _ string) error { return nil }
+func (m *mockDefinitionService) GenerateSkill(_ context.Context, _ string) (string, error) {
+	return "", nil
+}
+func (m *mockDefinitionService) ListAgents(_ context.Context) ([]service.Agent, error) {
+	return nil, nil
+}
+func (m *mockDefinitionService) GetAgent(_ context.Context, _ string) (service.Agent, error) {
+	return service.Agent{}, nil
+}
+func (m *mockDefinitionService) CreateAgent(_ context.Context, _ string) (service.Agent, error) {
+	return service.Agent{}, nil
+}
+func (m *mockDefinitionService) DeleteAgent(_ context.Context, _ string) error { return nil }
+func (m *mockDefinitionService) AddSkillToAgent(_ context.Context, _, _ string) error {
+	return nil
+}
+func (m *mockDefinitionService) GenerateAgent(_ context.Context, _ string) (string, error) {
+	return "", nil
+}
+func (m *mockDefinitionService) ListTeams(ctx context.Context) ([]service.TeamView, error) {
+	if m.listTeams != nil {
+		return m.listTeams(ctx)
+	}
+	return nil, nil
+}
+func (m *mockDefinitionService) GetTeam(_ context.Context, _ string) (service.TeamView, error) {
+	return service.TeamView{}, nil
+}
+func (m *mockDefinitionService) CreateTeam(_ context.Context, _ string) (service.TeamView, error) {
+	return service.TeamView{}, nil
+}
+func (m *mockDefinitionService) DeleteTeam(_ context.Context, _ string) error { return nil }
+func (m *mockDefinitionService) AddAgentToTeam(_ context.Context, _, _ string) error {
+	return nil
+}
+func (m *mockDefinitionService) SetCoordinator(_ context.Context, _, _ string) error { return nil }
+func (m *mockDefinitionService) PromoteTeam(_ context.Context, _ string) (string, error) {
+	return "", nil
+}
+func (m *mockDefinitionService) GenerateTeam(_ context.Context, _ string) (string, error) {
+	return "", nil
+}
+func (m *mockDefinitionService) DetectCoordinator(_ context.Context, _ string) (string, error) {
+	return "", nil
+}
+
+// mockService implements service.Service for testing.
+type mockService struct {
+	system      service.SystemService
+	definitions service.DefinitionService
+}
+
+func (m *mockService) Operator() service.OperatorService { return nil }
+func (m *mockService) Definitions() service.DefinitionService {
+	if m.definitions != nil {
+		return m.definitions
+	}
+	return &mockDefinitionService{}
+}
+func (m *mockService) Jobs() service.JobService         { return nil }
+func (m *mockService) Sessions() service.SessionService { return nil }
+func (m *mockService) Events() service.EventService     { return nil }
+func (m *mockService) System() service.SystemService    { return m.system }
 
 func TestFetchModels_ReturnsNonNilCmd(t *testing.T) {
 	t.Parallel()
 
-	m := Model{
-		llmClient: &mockProvider{},
-	}
+	m := newMinimalModel(t)
+	m.svc = &mockService{system: &mockSystemService{}}
 
 	cmd := m.fetchModels()
 	if cmd == nil {
@@ -44,13 +121,12 @@ func TestFetchModels_ReturnsNonNilCmd(t *testing.T) {
 func TestFetchModels_SuccessReturnsModelsMsg(t *testing.T) {
 	t.Parallel()
 
-	models := []provider.ModelInfo{
+	models := []service.ModelInfo{
 		{ID: "model-1", State: "loaded", MaxContextLength: 8192},
 		{ID: "model-2", State: "not-loaded", MaxContextLength: 4096},
 	}
-	m := Model{
-		llmClient: &mockProvider{models: models},
-	}
+	m := newMinimalModel(t)
+	m.svc = &mockService{system: &mockSystemService{models: models}}
 
 	cmd := m.fetchModels()
 	msg := cmd()
@@ -77,9 +153,8 @@ func TestFetchModels_ErrorReturnsModelsMsg(t *testing.T) {
 	t.Parallel()
 
 	testErr := errors.New("connection refused")
-	m := Model{
-		llmClient: &mockProvider{err: testErr},
-	}
+	m := newMinimalModel(t)
+	m.svc = &mockService{system: &mockSystemService{err: testErr}}
 
 	cmd := m.fetchModels()
 	msg := cmd()
@@ -99,9 +174,8 @@ func TestFetchModels_ErrorReturnsModelsMsg(t *testing.T) {
 func TestFetchModels_EmptyModelsReturnsEmptySlice(t *testing.T) {
 	t.Parallel()
 
-	m := Model{
-		llmClient: &mockProvider{models: []provider.ModelInfo{}},
-	}
+	m := newMinimalModel(t)
+	m.svc = &mockService{system: &mockSystemService{models: []service.ModelInfo{}}}
 
 	cmd := m.fetchModels()
 	msg := cmd()

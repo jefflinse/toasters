@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jefflinse/toasters/internal/db"
+	"github.com/jefflinse/toasters/internal/service"
 )
 
 // --------------------------------------------------------------------------
@@ -1108,16 +1108,16 @@ func TestRenderLeftPanel_TeamNesting(t *testing.T) {
 
 		// Set up a job with one task that has a TeamID.
 		jobID := "job-team-test"
-		m.jobs = []*db.Job{
-			{ID: jobID, Title: "Test Job", Status: db.JobStatusActive},
+		m.jobs = []service.Job{
+			{ID: jobID, Title: "Test Job", Status: service.JobStatusActive},
 		}
-		m.progress.tasks = map[string][]*db.Task{
+		m.progress.tasks = map[string][]service.Task{
 			jobID: {
 				{
 					ID:     "task-1",
 					JobID:  jobID,
 					Title:  "Build the thing",
-					Status: db.TaskStatusInProgress,
+					Status: service.TaskStatusInProgress,
 					TeamID: "backend-team",
 				},
 			},
@@ -1138,16 +1138,16 @@ func TestRenderLeftPanel_TeamNesting(t *testing.T) {
 		m.height = 40
 
 		jobID := "job-no-team"
-		m.jobs = []*db.Job{
-			{ID: jobID, Title: "No Team Job", Status: db.JobStatusActive},
+		m.jobs = []service.Job{
+			{ID: jobID, Title: "No Team Job", Status: service.JobStatusActive},
 		}
-		m.progress.tasks = map[string][]*db.Task{
+		m.progress.tasks = map[string][]service.Task{
 			jobID: {
 				{
 					ID:     "task-2",
 					JobID:  jobID,
 					Title:  "Do the work",
-					Status: db.TaskStatusPending,
+					Status: service.TaskStatusPending,
 					TeamID: "", // no team assigned
 				},
 			},
@@ -1181,23 +1181,23 @@ func TestRenderLeftPanel_TeamNesting(t *testing.T) {
 		m.height = 40
 
 		jobID := "job-mixed"
-		m.jobs = []*db.Job{
-			{ID: jobID, Title: "Mixed Job", Status: db.JobStatusActive},
+		m.jobs = []service.Job{
+			{ID: jobID, Title: "Mixed Job", Status: service.JobStatusActive},
 		}
-		m.progress.tasks = map[string][]*db.Task{
+		m.progress.tasks = map[string][]service.Task{
 			jobID: {
 				{
 					ID:     "task-with-team",
 					JobID:  jobID,
 					Title:  "Assigned task",
-					Status: db.TaskStatusInProgress,
+					Status: service.TaskStatusInProgress,
 					TeamID: "frontend-team",
 				},
 				{
 					ID:     "task-without-team",
 					JobID:  jobID,
 					Title:  "Unassigned task",
-					Status: db.TaskStatusPending,
+					Status: service.TaskStatusPending,
 					TeamID: "",
 				},
 			},

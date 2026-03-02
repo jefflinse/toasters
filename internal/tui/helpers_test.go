@@ -5,8 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jefflinse/toasters/internal/db"
-	"github.com/jefflinse/toasters/internal/provider"
+	"github.com/jefflinse/toasters/internal/service"
 )
 
 // --------------------------------------------------------------------------
@@ -1011,8 +1010,8 @@ func TestRenderScrollbar(t *testing.T) {
 func TestDisplayJobs(t *testing.T) {
 	t.Parallel()
 
-	makeJob := func(id string, status db.JobStatus, updatedAt time.Time) *db.Job {
-		return &db.Job{
+	makeJob := func(id string, status service.JobStatus, updatedAt time.Time) service.Job {
+		return service.Job{
 			ID:        id,
 			Title:     id,
 			Status:    status,
@@ -1032,10 +1031,10 @@ func TestDisplayJobs(t *testing.T) {
 	t.Run("active jobs come first", func(t *testing.T) {
 		t.Parallel()
 		m := Model{
-			jobs: []*db.Job{
-				makeJob("done-1", db.JobStatusCompleted, time.Now()),
-				makeJob("active-1", db.JobStatusActive, time.Time{}),
-				makeJob("paused-1", db.JobStatusPaused, time.Time{}),
+			jobs: []service.Job{
+				makeJob("done-1", service.JobStatusCompleted, time.Now()),
+				makeJob("active-1", service.JobStatusActive, time.Time{}),
+				makeJob("paused-1", service.JobStatusPaused, time.Time{}),
 			},
 		}
 		result := m.displayJobs()
@@ -1058,10 +1057,10 @@ func TestDisplayJobs(t *testing.T) {
 		staleTime := time.Now().Add(-48 * time.Hour)
 		recentTime := time.Now().Add(-1 * time.Hour)
 		m := Model{
-			jobs: []*db.Job{
-				makeJob("stale", db.JobStatusCompleted, staleTime),
-				makeJob("recent", db.JobStatusCompleted, recentTime),
-				makeJob("active", db.JobStatusActive, time.Time{}),
+			jobs: []service.Job{
+				makeJob("stale", service.JobStatusCompleted, staleTime),
+				makeJob("recent", service.JobStatusCompleted, recentTime),
+				makeJob("active", service.JobStatusActive, time.Time{}),
 			},
 		}
 		result := m.displayJobs()
@@ -1078,8 +1077,8 @@ func TestDisplayJobs(t *testing.T) {
 	t.Run("done job without updated timestamp is shown", func(t *testing.T) {
 		t.Parallel()
 		m := Model{
-			jobs: []*db.Job{
-				makeJob("done-no-ts", db.JobStatusCompleted, time.Time{}),
+			jobs: []service.Job{
+				makeJob("done-no-ts", service.JobStatusCompleted, time.Time{}),
 			},
 		}
 		result := m.displayJobs()
@@ -1095,9 +1094,9 @@ func TestHasBlocker(t *testing.T) {
 	t.Run("no blockers map entry", func(t *testing.T) {
 		t.Parallel()
 		m := Model{
-			blockers: make(map[string]*Blocker),
+			blockers: make(map[string]*service.Blocker),
 		}
-		j := &db.Job{ID: "job-1"}
+		j := service.Job{ID: "job-1"}
 		if m.hasBlocker(j) {
 			t.Error("expected no blocker for job without entry")
 		}
@@ -1106,11 +1105,11 @@ func TestHasBlocker(t *testing.T) {
 	t.Run("nil blocker entry", func(t *testing.T) {
 		t.Parallel()
 		m := Model{
-			blockers: map[string]*Blocker{
+			blockers: map[string]*service.Blocker{
 				"job-1": nil,
 			},
 		}
-		j := &db.Job{ID: "job-1"}
+		j := service.Job{ID: "job-1"}
 		if m.hasBlocker(j) {
 			t.Error("expected no blocker for nil entry")
 		}
@@ -1119,11 +1118,11 @@ func TestHasBlocker(t *testing.T) {
 	t.Run("answered blocker", func(t *testing.T) {
 		t.Parallel()
 		m := Model{
-			blockers: map[string]*Blocker{
+			blockers: map[string]*service.Blocker{
 				"job-1": {Answered: true},
 			},
 		}
-		j := &db.Job{ID: "job-1"}
+		j := service.Job{ID: "job-1"}
 		if m.hasBlocker(j) {
 			t.Error("expected no blocker for answered blocker")
 		}
@@ -1132,11 +1131,11 @@ func TestHasBlocker(t *testing.T) {
 	t.Run("unanswered blocker", func(t *testing.T) {
 		t.Parallel()
 		m := Model{
-			blockers: map[string]*Blocker{
+			blockers: map[string]*service.Blocker{
 				"job-1": {Answered: false},
 			},
 		}
-		j := &db.Job{ID: "job-1"}
+		j := service.Job{ID: "job-1"}
 		if !m.hasBlocker(j) {
 			t.Error("expected blocker for unanswered blocker")
 		}
@@ -1149,7 +1148,7 @@ func TestJobByID(t *testing.T) {
 	t.Run("found", func(t *testing.T) {
 		t.Parallel()
 		m := Model{
-			jobs: []*db.Job{
+			jobs: []service.Job{
 				{ID: "job-1", Title: "First"},
 				{ID: "job-2", Title: "Second"},
 			},
@@ -1166,7 +1165,7 @@ func TestJobByID(t *testing.T) {
 	t.Run("not found", func(t *testing.T) {
 		t.Parallel()
 		m := Model{
-			jobs: []*db.Job{
+			jobs: []service.Job{
 				{ID: "job-1", Title: "First"},
 			},
 		}
@@ -1207,48 +1206,48 @@ func TestHasConversation(t *testing.T) {
 		{
 			name: "system-only entries returns false",
 			entries: []ChatEntry{
-				{Message: provider.Message{Role: "system", Content: "You are a helpful assistant."}},
+				{Message: service.ChatMessage{Role: "system", Content: "You are a helpful assistant."}},
 			},
 			want: false,
 		},
 		{
 			name: "assistant-only entries returns false",
 			entries: []ChatEntry{
-				{Message: provider.Message{Role: "assistant", Content: "Hello! How can I help?"}},
+				{Message: service.ChatMessage{Role: "assistant", Content: "Hello! How can I help?"}},
 			},
 			want: false,
 		},
 		{
 			name: "system and assistant entries returns false",
 			entries: []ChatEntry{
-				{Message: provider.Message{Role: "system", Content: "You are a helpful assistant."}},
-				{Message: provider.Message{Role: "assistant", Content: "Hello!"}},
+				{Message: service.ChatMessage{Role: "system", Content: "You are a helpful assistant."}},
+				{Message: service.ChatMessage{Role: "assistant", Content: "Hello!"}},
 			},
 			want: false,
 		},
 		{
 			name: "single user message returns true",
 			entries: []ChatEntry{
-				{Message: provider.Message{Role: "user", Content: "Hi there"}},
+				{Message: service.ChatMessage{Role: "user", Content: "Hi there"}},
 			},
 			want: true,
 		},
 		{
 			name: "user message among other roles returns true",
 			entries: []ChatEntry{
-				{Message: provider.Message{Role: "system", Content: "You are a helpful assistant."}},
-				{Message: provider.Message{Role: "assistant", Content: "Hello!"}},
-				{Message: provider.Message{Role: "user", Content: "What is Go?"}},
-				{Message: provider.Message{Role: "assistant", Content: "Go is a programming language."}},
+				{Message: service.ChatMessage{Role: "system", Content: "You are a helpful assistant."}},
+				{Message: service.ChatMessage{Role: "assistant", Content: "Hello!"}},
+				{Message: service.ChatMessage{Role: "user", Content: "What is Go?"}},
+				{Message: service.ChatMessage{Role: "assistant", Content: "Go is a programming language."}},
 			},
 			want: true,
 		},
 		{
 			name: "tool role entries without user returns false",
 			entries: []ChatEntry{
-				{Message: provider.Message{Role: "system", Content: "system prompt"}},
-				{Message: provider.Message{Role: "assistant", Content: "calling tool"}},
-				{Message: provider.Message{Role: "tool", Content: "tool result"}},
+				{Message: service.ChatMessage{Role: "system", Content: "system prompt"}},
+				{Message: service.ChatMessage{Role: "assistant", Content: "calling tool"}},
+				{Message: service.ChatMessage{Role: "tool", Content: "tool result"}},
 			},
 			want: false,
 		},
@@ -1287,7 +1286,7 @@ func TestMessagesFromEntries(t *testing.T) {
 		m := newMinimalModel(t)
 		m.chat.entries = []ChatEntry{
 			{
-				Message:   provider.Message{Role: "user", Content: "hello"},
+				Message:   service.ChatMessage{Role: "user", Content: "hello"},
 				Timestamp: time.Now(),
 			},
 		}
@@ -1308,9 +1307,9 @@ func TestMessagesFromEntries(t *testing.T) {
 		t.Parallel()
 		m := newMinimalModel(t)
 		m.chat.entries = []ChatEntry{
-			{Message: provider.Message{Role: "system", Content: "system prompt"}},
-			{Message: provider.Message{Role: "user", Content: "question"}},
-			{Message: provider.Message{Role: "assistant", Content: "answer"}},
+			{Message: service.ChatMessage{Role: "system", Content: "system prompt"}},
+			{Message: service.ChatMessage{Role: "user", Content: "question"}},
+			{Message: service.ChatMessage{Role: "assistant", Content: "answer"}},
 		}
 
 		msgs := m.messagesFromEntries()
@@ -1318,7 +1317,7 @@ func TestMessagesFromEntries(t *testing.T) {
 			t.Fatalf("expected 3 messages, got %d", len(msgs))
 		}
 
-		expectedRoles := []string{"system", "user", "assistant"}
+		expectedRoles := []service.MessageRole{"system", "user", "assistant"}
 		expectedContents := []string{"system prompt", "question", "answer"}
 		for i, msg := range msgs {
 			if msg.Role != expectedRoles[i] {
@@ -1335,7 +1334,7 @@ func TestMessagesFromEntries(t *testing.T) {
 		m := newMinimalModel(t)
 		m.chat.entries = []ChatEntry{
 			{
-				Message:    provider.Message{Role: "assistant", Content: "response"},
+				Message:    service.ChatMessage{Role: "assistant", Content: "response"},
 				Timestamp:  time.Now(),
 				Reasoning:  "I thought about it",
 				ClaudeMeta: "operator · model-name",
@@ -1359,7 +1358,7 @@ func TestMessagesFromEntries(t *testing.T) {
 		t.Parallel()
 		m := newMinimalModel(t)
 		m.chat.entries = []ChatEntry{
-			{Message: provider.Message{Role: "tool", Content: "result", ToolCallID: "call_123"}},
+			{Message: service.ChatMessage{Role: "tool", Content: "result", ToolCallID: "call_123"}},
 		}
 
 		msgs := m.messagesFromEntries()
@@ -1383,25 +1382,25 @@ func TestIsToolCallIndicatorIdx(t *testing.T) {
 	}{
 		{
 			name:    "negative index returns false",
-			entries: []ChatEntry{{Message: provider.Message{Role: "assistant"}, ClaudeMeta: "tool-call-indicator"}},
+			entries: []ChatEntry{{Message: service.ChatMessage{Role: "assistant"}, ClaudeMeta: "tool-call-indicator"}},
 			idx:     -1,
 			want:    false,
 		},
 		{
 			name:    "index out of bounds returns false",
-			entries: []ChatEntry{{Message: provider.Message{Role: "assistant"}, ClaudeMeta: "tool-call-indicator"}},
+			entries: []ChatEntry{{Message: service.ChatMessage{Role: "assistant"}, ClaudeMeta: "tool-call-indicator"}},
 			idx:     5,
 			want:    false,
 		},
 		{
 			name:    "valid index with tool-call-indicator returns true",
-			entries: []ChatEntry{{Message: provider.Message{Role: "assistant"}, ClaudeMeta: "tool-call-indicator"}},
+			entries: []ChatEntry{{Message: service.ChatMessage{Role: "assistant"}, ClaudeMeta: "tool-call-indicator"}},
 			idx:     0,
 			want:    true,
 		},
 		{
 			name:    "valid index without tool-call-indicator returns false",
-			entries: []ChatEntry{{Message: provider.Message{Role: "assistant"}, ClaudeMeta: "operator"}},
+			entries: []ChatEntry{{Message: service.ChatMessage{Role: "assistant"}, ClaudeMeta: "operator"}},
 			idx:     0,
 			want:    false,
 		},

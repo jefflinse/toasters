@@ -9,13 +9,13 @@ import (
 	"strings"
 
 	"github.com/jefflinse/toasters/internal/provider"
-	"github.com/jefflinse/toasters/internal/tui"
+	"github.com/jefflinse/toasters/internal/service"
 )
 
 // generateTeamAwareness builds ~/.config/toasters/team-awareness.md
 // with one-sentence dispatch summaries for each team.
 // Returns the file content, or "" on error.
-func generateTeamAwareness(ctx context.Context, client provider.Provider, teams []tui.TeamView, configDir string) string {
+func generateTeamAwareness(ctx context.Context, client provider.Provider, teams []service.TeamView, configDir string) string {
 	if len(teams) == 0 {
 		return ""
 	}
@@ -42,7 +42,7 @@ func generateTeamAwareness(ctx context.Context, client provider.Provider, teams 
 
 // summarizeTeam asks the LLM for a one-sentence "Use this team when..."
 // summary suitable for operator dispatch decisions.
-func summarizeTeam(ctx context.Context, client provider.Provider, team tui.TeamView) string {
+func summarizeTeam(ctx context.Context, client provider.Provider, team service.TeamView) string {
 	var prompt string
 	if team.Coordinator != nil && strings.TrimSpace(team.Coordinator.SystemPrompt) != "" {
 		prompt = fmt.Sprintf(

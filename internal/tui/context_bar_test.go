@@ -31,19 +31,17 @@ func TestOperatorDoneMsg_CompletionTokensAccumulated(t *testing.T) {
 
 	m := newMinimalModel(t)
 
-	// Turn 1: 100 completion tokens estimated during streaming.
-	m.stats.CompletionTokensLive = 100
+	// Turn 1: 100 completion tokens reported by the operator.
 	m.stream.streaming = true
-	result1, _ := m.Update(OperatorDoneMsg{})
+	result1, _ := m.Update(OperatorDoneMsg{TokensOut: 100})
 	model1 := result1.(*Model)
 	if model1.stats.CompletionTokens != 100 {
 		t.Errorf("after turn 1: CompletionTokens = %d, want 100", model1.stats.CompletionTokens)
 	}
 
 	// Turn 2: 150 more completion tokens.
-	model1.stats.CompletionTokensLive = 150
 	model1.stream.streaming = true
-	result2, _ := model1.Update(OperatorDoneMsg{})
+	result2, _ := model1.Update(OperatorDoneMsg{TokensOut: 150})
 	model2 := result2.(*Model)
 
 	// CompletionTokens should be cumulative: 100 + 150 = 250.

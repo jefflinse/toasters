@@ -12,30 +12,27 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
-	"github.com/jefflinse/toasters/internal/db"
+	"github.com/jefflinse/toasters/internal/service"
 )
 
 // jobsModalState holds all state for the /jobs modal overlay.
 type jobsModalState struct {
 	show              bool
-	jobs              []*db.Job
+	jobs              []service.Job
 	jobIdx            int
-	tasks             map[string][]*db.Task
-	progress          map[string][]*db.ProgressReport
+	tasks             map[string][]service.Task
+	progress          map[string][]service.ProgressReport
 	focus             int // 0=jobs list, 1=tasks list, 2=agent detail
 	taskIdx           int
 	confirmCancel     bool
 	agentScrollOffset int // TODO: implement scrolling in the agent detail panel (v2)
 }
 
-// loadJobsForModal loads all jobs from the store into the jobs modal state.
+// loadJobsForModal loads all jobs from the service into the jobs modal state.
 func (m *Model) loadJobsForModal() {
-	if m.store == nil {
-		return
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	jobs, err := m.store.ListAllJobs(ctx)
+	jobs, err := m.svc.Jobs().ListAll(ctx)
 	if err != nil {
 		slog.Warn("failed to load jobs for modal", "error", err)
 		return
@@ -45,14 +42,11 @@ func (m *Model) loadJobsForModal() {
 
 // loadJobDetail loads tasks and recent progress for the currently selected job.
 func (m *Model) loadJobDetail() {
-	if m.store == nil {
-		return
-	}
 	if m.jobsModal.tasks == nil {
-		m.jobsModal.tasks = make(map[string][]*db.Task)
+		m.jobsModal.tasks = make(map[string][]service.Task)
 	}
 	if m.jobsModal.progress == nil {
-		m.jobsModal.progress = make(map[string][]*db.ProgressReport)
+		m.jobsModal.progress = make(map[string][]service.ProgressReport)
 	}
 	if len(m.jobsModal.jobs) == 0 || m.jobsModal.jobIdx >= len(m.jobsModal.jobs) {
 		return
@@ -63,19 +57,13 @@ func (m *Model) loadJobDetail() {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	tasks, err := m.store.ListTasksForJob(ctx, jobID)
+	detail, err := m.svc.Jobs().Get(ctx, jobID)
 	if err != nil {
-		slog.Warn("failed to load tasks for job modal", "job", jobID, "error", err)
-	} else {
-		m.jobsModal.tasks[jobID] = tasks
+		slog.Warn("failed to load job detail for modal", "job", jobID, "error", err)
+		return
 	}
-
-	progress, err := m.store.GetRecentProgress(ctx, jobID, 5)
-	if err != nil {
-		slog.Warn("failed to load progress for job modal", "job", jobID, "error", err)
-	} else {
-		m.jobsModal.progress[jobID] = progress
-	}
+	m.jobsModal.tasks[jobID] = detail.Tasks
+	m.jobsModal.progress[jobID] = detail.Progress
 }
 
 // updateJobsModal handles all key presses when the jobs modal is open.
@@ -137,8 +125,8 @@ func (m *Model) updateJobsModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "ctrl+x":
 		if m.jobsModal.focus == 0 && len(m.jobsModal.jobs) > 0 && m.jobsModal.jobIdx < len(m.jobsModal.jobs) {
 			job := m.jobsModal.jobs[m.jobsModal.jobIdx]
-			if job.Status == db.JobStatusActive || job.Status == db.JobStatusPending ||
-				job.Status == db.JobStatusSettingUp || job.Status == db.JobStatusDecomposing {
+			if job.Status == service.JobStatusActive || job.Status == service.JobStatusPending ||
+				job.Status == service.JobStatusSettingUp || job.Status == service.JobStatusDecomposing {
 				m.jobsModal.confirmCancel = true
 			}
 		}
@@ -147,7 +135,7 @@ func (m *Model) updateJobsModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if m.jobsModal.confirmCancel && len(m.jobsModal.jobs) > 0 && m.jobsModal.jobIdx < len(m.jobsModal.jobs) {
 			job := m.jobsModal.jobs[m.jobsModal.jobIdx]
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-			err := m.store.UpdateJobStatus(ctx, job.ID, db.JobStatusCancelled)
+			err := m.svc.Jobs().Cancel(ctx, job.ID)
 			cancel()
 			if err != nil {
 				slog.Warn("failed to cancel job", "job", job.ID, "error", err)
@@ -253,17 +241,17 @@ func (m *Model) renderJobsModal() string {
 		for i, j := range displayedJobs {
 			var icon string
 			switch j.Status {
-			case db.JobStatusActive:
+			case service.JobStatusActive:
 				icon = "▶"
-			case db.JobStatusPaused:
+			case service.JobStatusPaused:
 				icon = "⏸"
-			case db.JobStatusCompleted:
+			case service.JobStatusCompleted:
 				icon = "✓"
-			case db.JobStatusFailed:
+			case service.JobStatusFailed:
 				icon = "✗"
-			case db.JobStatusSettingUp:
+			case service.JobStatusSettingUp:
 				icon = "⚙"
-			case db.JobStatusDecomposing:
+			case service.JobStatusDecomposing:
 				icon = "◈"
 			default:
 				icon = "·"
@@ -296,10 +284,11 @@ func (m *Model) renderJobsModal() string {
 	// --- Middle panel: task list for selected job ---
 	var midLines []string
 
-	var selectedJob *db.Job
-	var selectedJobTasks []*db.Task
+	var selectedJob *service.Job
+	var selectedJobTasks []service.Task
 	if len(displayedJobs) > 0 && jobIdx < len(displayedJobs) {
-		selectedJob = displayedJobs[jobIdx]
+		j := displayedJobs[jobIdx]
+		selectedJob = &j
 		selectedJobTasks = m.jobsModal.tasks[selectedJob.ID]
 	}
 
@@ -312,17 +301,17 @@ func (m *Model) renderJobsModal() string {
 		// Status line with color coding.
 		var statusStr string
 		switch selectedJob.Status {
-		case db.JobStatusActive:
+		case service.JobStatusActive:
 			statusStr = lipgloss.NewStyle().Foreground(lipgloss.Color("10")).Bold(true).Render(string(selectedJob.Status))
-		case db.JobStatusCompleted:
+		case service.JobStatusCompleted:
 			statusStr = lipgloss.NewStyle().Foreground(lipgloss.Color("10")).Render(string(selectedJob.Status))
-		case db.JobStatusFailed:
+		case service.JobStatusFailed:
 			statusStr = lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Bold(true).Render(string(selectedJob.Status))
-		case db.JobStatusPaused:
+		case service.JobStatusPaused:
 			statusStr = lipgloss.NewStyle().Foreground(lipgloss.Color("11")).Render(string(selectedJob.Status))
-		case db.JobStatusSettingUp:
+		case service.JobStatusSettingUp:
 			statusStr = lipgloss.NewStyle().Foreground(lipgloss.Color("178")).Render(string(selectedJob.Status))
-		case db.JobStatusDecomposing:
+		case service.JobStatusDecomposing:
 			statusStr = lipgloss.NewStyle().Foreground(lipgloss.Color("38")).Render(string(selectedJob.Status))
 		default:
 			statusStr = DimStyle.Render(string(selectedJob.Status))
@@ -395,7 +384,7 @@ func (m *Model) renderJobsModal() string {
 		var rightLines []string
 
 		// Resolve selected task.
-		var selectedTask *db.Task
+		var selectedTask *service.Task
 		if len(selectedJobTasks) > 0 {
 			taskIdx := m.jobsModal.taskIdx
 			if taskIdx >= len(selectedJobTasks) {
@@ -404,7 +393,8 @@ func (m *Model) renderJobsModal() string {
 			if taskIdx < 0 {
 				taskIdx = 0
 			}
-			selectedTask = selectedJobTasks[taskIdx]
+			t := selectedJobTasks[taskIdx]
+			selectedTask = &t
 		}
 
 		// Panel title.
@@ -427,11 +417,11 @@ func (m *Model) renderJobsModal() string {
 				// Show context-appropriate placeholder.
 				var placeholder string
 				switch selectedTask.Status {
-				case db.TaskStatusPending:
+				case service.TaskStatusPending:
 					placeholder = "No agents assigned"
-				case db.TaskStatusInProgress:
+				case service.TaskStatusInProgress:
 					placeholder = "Waiting for agents..."
-				case db.TaskStatusCompleted:
+				case service.TaskStatusCompleted:
 					placeholder = "Task completed"
 				default:
 					placeholder = "No agents assigned"
@@ -506,8 +496,8 @@ func (m *Model) renderJobsModal() string {
 	// Footer with key hints.
 	cancelHint := "[Ctrl+X] Cancel Job"
 	canCancel := selectedJob != nil &&
-		(selectedJob.Status == db.JobStatusActive || selectedJob.Status == db.JobStatusPending ||
-			selectedJob.Status == db.JobStatusSettingUp || selectedJob.Status == db.JobStatusDecomposing)
+		(selectedJob.Status == service.JobStatusActive || selectedJob.Status == service.JobStatusPending ||
+			selectedJob.Status == service.JobStatusSettingUp || selectedJob.Status == service.JobStatusDecomposing)
 	if !canCancel {
 		cancelHint = DimStyle.Render(cancelHint)
 	}
