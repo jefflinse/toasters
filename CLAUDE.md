@@ -70,19 +70,27 @@ internal/
   runtime/                  # In-process agent runtime (sessions, core tools, spawn)
                             #   composite_tools.go: CompositeTools wrapper combining CoreTools + MCP tools
                             #   Shutdown: WaitGroup-based with 10s timeout (no busy-wait)
+  server/                  # HTTP server exposing service.Service over REST + SSE
+                            #   server.go: Server type, lifecycle (Start/Shutdown), route registration (36 endpoints)
+                            #   middleware.go: 5 middleware (recovery, request ID, logging, CORS, content-type)
+                            #   handlers.go: 36 REST endpoint handlers with input validation
+                            #   sse.go: SSE event stream with 15s heartbeat, connection limit (10), per-conn seq numbers
+                            #   types.go: wire types with json:"snake_case" tags, eventPayloadToWire converter
+                            #   helpers.go: writeJSON, handleServiceError, decodeBody (1 MiB MaxBytesReader), pagination
+                            #   Uses Go 1.22+ net/http.ServeMux with METHOD /path patterns
   service/                  # Use-case-level service interface (client/server split boundary)
                             #   service.go: composed Service interface + 6 sub-interfaces (Operator, Definitions,
                             #               Jobs, Sessions, Events, System)
                             #   types.go: all service-level DTOs — zero imports from internal packages
                             #   events.go: unified event stream (19 event types, Event envelope, EventService)
+                            #   errors.go: error sanitization (path stripping), SanitizeErrorMessage (exported)
                             #   LocalService (Step 1.2): in-process impl delegating to db/operator/runtime/mcp
                             #   RemoteClient (Phase 2): HTTP+SSE impl for connecting to standalone server
   sse/                      # Shared SSE parsing (reader, Anthropic event types, OpenAI chunk types)
   tooldef/                  # Shared ToolDef and MCPCaller types (used by runtime, progress, mcp)
   tui/                      # Bubble Tea TUI (model, views, grid, modals, streaming, activity feed, CRUD)
                             #   All interaction flows through the operator event loop (no legacy direct-LLM path)
-                            #   team_view.go: TeamView type bundles db.Team + coordinator + workers from store
-                            #   progress_poll.go: SQLite polling loop for real-time progress display
+                            #   event_consumer.go: SSE event consumer replacing SQLite polling loop
                             #   skills_modal.go: Skills browse/CRUD modal (create, edit, delete skills)
                             #   agents_modal.go: Agents browse/CRUD modal (create, edit, delete agents)
                             #   teams_modal.go: Teams browse modal with auto-team promotion (Ctrl+P)
@@ -256,14 +264,14 @@ Full details: `PRE_PHASE_4_WAVE_2.md`
 
 ## Current Work: Client/Server Architecture Split
 
-**Status:** Phase 1 complete ✅; Phase 2 pre-work complete ✅; Phase 2 API design complete ✅; Phase 2 server implementation in progress
+**Status:** Phase 1 complete ✅; Phase 2 in progress (Step 2.2 server complete ✅, Step 2.3 remote client next)
 **Tracking document:** [`CLIENT_SERVER_SPLIT.md`](CLIENT_SERVER_SPLIT.md)
 **API specification:** [`API_SPEC.md`](API_SPEC.md)
 
 Splitting the monolithic TUI into a client/server architecture. The orchestration engine (operator, runtime, store, MCP, loader, compose, providers) becomes a long-running server; the TUI becomes a thin client. REST + SSE protocol. 4 phases:
 
 1. **Phase 1: Service Extraction** ✅ — Extract business logic from TUI into `internal/service` package with composed `Service` interface. Rewire TUI to use it. No networking yet.
-2. **Phase 2: Server** (in progress) — HTTP server with SSE event streaming. `RemoteClient` as drop-in for `LocalService`. Pre-work and API design complete; server implementation next.
+2. **Phase 2: Server** (in progress) — HTTP server with SSE event streaming. `RemoteClient` as drop-in for `LocalService`. Pre-work, API design, and server implementation complete; remote client next.
 3. **Phase 3: Mode Wiring** (1–2 days) — `toasters serve` (headless), `toasters --server <addr>` (remote TUI), CLI subcommands.
 4. **Phase 4: Hardening** (2–3 days) — Token auth, connection resilience, security audit.
 
@@ -309,3 +317,16 @@ Key changes:
 ### Phase 2 API Design ✅
 
 **Status: Complete (2026-03-02)** — `API_SPEC.md` (1,813 lines) covers 36 endpoints (35 REST + 1 SSE), 19 SSE event types, standardized error format, pagination, async operation pattern, reconnect protocol.
+
+### Phase 2 Server Implementation (Step 2.2) ✅
+
+**Status: Complete (2026-03-02)** — `internal/server/` package (6 files, ~2,260 lines). Reviewed by code-reviewer, security-auditor, concurrency-reviewer; 9 blocking findings found and fixed; 11 suggestions deferred (S21-S31).
+
+Key components:
+- `server.go` — `Server` type with `New(svc, opts...)`, `Start(addr)`, `Shutdown(ctx)` lifecycle; Go 1.22+ `ServeMux` route registration
+- `middleware.go` — 5 middleware: recovery, request ID (validated), logging, CORS, content-type
+- `handlers.go` — 36 handler methods with centralized `handleServiceError` (generic 500s, sanitized non-500s)
+- `sse.go` — SSE event stream with 15s heartbeat, connection limit (10), per-connection sequence numbers
+- `types.go` — wire types with `json:"snake_case"` tags; `eventPayloadToWire` converter for all 19 event types
+- `helpers.go` — `decodeBody` (1 MiB `MaxBytesReader`), pagination, error mapping, `SanitizeErrorMessage`
+- Security: `MaxBytesReader`, SSE connection cap, `WriteTimeout` (30s, disabled for SSE), request ID validation, generic 500 messages

@@ -40,7 +40,7 @@ This document specifies the HTTP REST + SSE API for the Toasters server. It maps
 | Character encoding | UTF-8 |
 | Date format | RFC 3339 (`2026-03-02T12:00:00Z`) |
 | ID format | Opaque strings (typically UUID v4 or slugified names) |
-| HTTP method routing | Go 1.25 `net/http.ServeMux` with `METHOD /path` patterns |
+| HTTP method routing | Go 1.22+ `net/http.ServeMux` with `METHOD /path` patterns |
 | Path parameters | `{name}` syntax (Go 1.22+ `http.Request.PathValue()`) |
 
 ### Naming Conventions
@@ -1747,7 +1747,7 @@ When a client reconnects (SSE connection dropped, client restarted, etc.), it mu
 
 ---
 
-## Appendix C: Go 1.25 ServeMux Route Registration
+## Appendix C: Go 1.22+ ServeMux Route Registration
 
 ```go
 mux := http.NewServeMux()

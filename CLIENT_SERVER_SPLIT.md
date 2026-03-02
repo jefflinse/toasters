@@ -1,7 +1,7 @@
 # Client/Server Architecture Split
 
 **Created:** 2026-02-28
-**Status:** Phase 1 complete ✅; Phase 2 pre-work complete ✅ (14 suggestions addressed, 2 blocking review fixes); Phase 2 API design complete ✅ (`API_SPEC.md`); Phase 2 server implementation in progress
+**Status:** Phase 1 complete ✅; Phase 2 pre-work complete ✅; Phase 2 API design complete ✅; Phase 2 server implementation complete ✅ (Step 2.2); Step 2.3 (Remote Client) next
 **Effort Estimate:** 10–17 days across 4 phases
 
 ---
