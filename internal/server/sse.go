@@ -10,10 +10,22 @@ import (
 	"github.com/jefflinse/toasters/internal/service"
 )
 
+// maxSSEConns is the maximum number of concurrent SSE connections.
+// Generous for a single-user tool; prevents goroutine/FD exhaustion.
+const maxSSEConns = 10
+
 // events handles the SSE event stream endpoint (GET /api/v1/events).
 // It subscribes to the service event stream and fans out events to the
 // HTTP response in SSE format.
 func (s *Server) events(w http.ResponseWriter, r *http.Request) {
+	if s.sseConns.Add(1) > maxSSEConns {
+		s.sseConns.Add(-1)
+		writeError(w, http.StatusTooManyRequests, "too_many_requests",
+			"too many SSE connections")
+		return
+	}
+	defer s.sseConns.Add(-1)
+
 	// Use ResponseController to access Flush through middleware wrappers.
 	// This traverses Unwrap() chains to find the underlying http.Flusher.
 	rc := http.NewResponseController(w)
@@ -30,6 +42,11 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Accel-Buffering", "no") // disable nginx buffering
 	w.WriteHeader(http.StatusOK)
 	_ = rc.Flush()
+
+	// Disable write deadline for this long-lived SSE connection.
+	// The server's WriteTimeout applies to regular endpoints; SSE connections
+	// are kept alive by heartbeats and cleaned up on client disconnect.
+	_ = rc.SetWriteDeadline(time.Time{})
 
 	// Subscribe to the service event stream. The subscription is cancelled
 	// when the client disconnects (r.Context() is cancelled).
@@ -65,10 +82,11 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 
 		case <-heartbeat.C:
 			seq++
+			now := time.Now()
 			hbEvent := service.Event{
 				Type:      service.EventTypeHeartbeat,
-				Timestamp: time.Now(),
-				Payload:   service.HeartbeatPayload{ServerTime: time.Now()},
+				Timestamp: now,
+				Payload:   service.HeartbeatPayload{ServerTime: now},
 			}
 			if err := writeSSEEvent(w, rc, seq, hbEvent); err != nil {
 				slog.Debug("SSE heartbeat write error", "error", err, "request_id", reqID)

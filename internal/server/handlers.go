@@ -8,11 +8,14 @@ import (
 	"github.com/jefflinse/toasters/internal/service"
 )
 
-// maxMessageChars is the maximum allowed message length (characters).
-const maxMessageChars = 100_000
+// maxMessageBytes is the maximum allowed message length in bytes.
+// Strictly below the service layer's 102400 byte limit to ensure
+// the server always rejects before the service does.
+const maxMessageBytes = 100_000
 
-// maxPromptChars is the maximum allowed generation prompt length (characters).
-const maxPromptChars = 10_000
+// maxPromptBytes is the maximum allowed generation prompt length in bytes.
+// Strictly below the service layer's 51200 byte limit.
+const maxPromptBytes = 10_000
 
 // validJobStatuses is the set of valid job status filter values.
 var validJobStatuses = map[string]bool{
@@ -35,16 +38,15 @@ func (s *Server) sendMessage(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "bad_request", "message is required")
 		return
 	}
-	if len(req.Message) > maxMessageChars {
+	if len(req.Message) > maxMessageBytes {
 		writeError(w, http.StatusBadRequest, "bad_request",
-			fmt.Sprintf("message too long: %d characters exceeds maximum %d", len(req.Message), maxMessageChars))
+			fmt.Sprintf("message too long: %d bytes exceeds maximum %d", len(req.Message), maxMessageBytes))
 		return
 	}
 
 	turnID, err := s.svc.Operator().SendMessage(r.Context(), req.Message)
 	if err != nil {
-		status, code := mapServiceError(err)
-		writeError(w, status, code, sanitizePath(err.Error()))
+		handleServiceError(w, r, err)
 		return
 	}
 
@@ -69,8 +71,7 @@ func (s *Server) respondToPrompt(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.svc.Operator().RespondToPrompt(r.Context(), requestID, req.Response); err != nil {
-		status, code := mapServiceError(err)
-		writeError(w, status, code, sanitizePath(err.Error()))
+		handleServiceError(w, r, err)
 		return
 	}
 
@@ -81,8 +82,7 @@ func (s *Server) respondToPrompt(w http.ResponseWriter, r *http.Request) {
 func (s *Server) operatorStatus(w http.ResponseWriter, r *http.Request) {
 	st, err := s.svc.Operator().Status(r.Context())
 	if err != nil {
-		status, code := mapServiceError(err)
-		writeError(w, status, code, sanitizePath(err.Error()))
+		handleServiceError(w, r, err)
 		return
 	}
 
@@ -97,8 +97,7 @@ func (s *Server) operatorStatus(w http.ResponseWriter, r *http.Request) {
 func (s *Server) operatorHistory(w http.ResponseWriter, r *http.Request) {
 	entries, err := s.svc.Operator().History(r.Context())
 	if err != nil {
-		status, code := mapServiceError(err)
-		writeError(w, status, code, sanitizePath(err.Error()))
+		handleServiceError(w, r, err)
 		return
 	}
 
@@ -139,8 +138,7 @@ func (s *Server) respondToBlocker(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.svc.Operator().RespondToBlocker(r.Context(), jobID, taskID, req.Answers); err != nil {
-		status, code := mapServiceError(err)
-		writeError(w, status, code, sanitizePath(err.Error()))
+		handleServiceError(w, r, err)
 		return
 	}
 
@@ -161,8 +159,7 @@ func (s *Server) listSkills(w http.ResponseWriter, r *http.Request) {
 
 	skills, err := s.svc.Definitions().ListSkills(r.Context())
 	if err != nil {
-		status, code := mapServiceError(err)
-		writeError(w, status, code, sanitizePath(err.Error()))
+		handleServiceError(w, r, err)
 		return
 	}
 
@@ -180,8 +177,7 @@ func (s *Server) getSkill(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	sk, err := s.svc.Definitions().GetSkill(r.Context(), id)
 	if err != nil {
-		status, code := mapServiceError(err)
-		writeError(w, status, code, sanitizePath(err.Error()))
+		handleServiceError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, skillToWire(sk))
@@ -200,8 +196,7 @@ func (s *Server) createSkill(w http.ResponseWriter, r *http.Request) {
 
 	sk, err := s.svc.Definitions().CreateSkill(r.Context(), req.Name)
 	if err != nil {
-		status, code := mapServiceError(err)
-		writeError(w, status, code, sanitizePath(err.Error()))
+		handleServiceError(w, r, err)
 		return
 	}
 
@@ -213,8 +208,7 @@ func (s *Server) createSkill(w http.ResponseWriter, r *http.Request) {
 func (s *Server) deleteSkill(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if err := s.svc.Definitions().DeleteSkill(r.Context(), id); err != nil {
-		status, code := mapServiceError(err)
-		writeError(w, status, code, sanitizePath(err.Error()))
+		handleServiceError(w, r, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -230,19 +224,16 @@ func (s *Server) generateSkill(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "bad_request", "prompt is required")
 		return
 	}
-	if len(req.Prompt) > maxPromptChars {
+	if len(req.Prompt) > maxPromptBytes {
 		writeError(w, http.StatusBadRequest, "bad_request",
-			fmt.Sprintf("prompt too long: %d characters exceeds maximum %d", len(req.Prompt), maxPromptChars))
+			fmt.Sprintf("prompt too long: %d bytes exceeds maximum %d", len(req.Prompt), maxPromptBytes))
 		return
 	}
 
 	opID, err := s.svc.Definitions().GenerateSkill(r.Context(), req.Prompt)
 	if err != nil {
-		status, code := mapServiceError(err)
-		if code == "too_many_requests" {
-			w.Header().Set("Retry-After", "5")
-		}
-		writeError(w, status, code, sanitizePath(err.Error()))
+		setRetryAfterIfRateLimited(w, err)
+		handleServiceError(w, r, err)
 		return
 	}
 
@@ -263,8 +254,7 @@ func (s *Server) listAgents(w http.ResponseWriter, r *http.Request) {
 
 	agents, err := s.svc.Definitions().ListAgents(r.Context())
 	if err != nil {
-		status, code := mapServiceError(err)
-		writeError(w, status, code, sanitizePath(err.Error()))
+		handleServiceError(w, r, err)
 		return
 	}
 
@@ -282,8 +272,7 @@ func (s *Server) getAgent(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	a, err := s.svc.Definitions().GetAgent(r.Context(), id)
 	if err != nil {
-		status, code := mapServiceError(err)
-		writeError(w, status, code, sanitizePath(err.Error()))
+		handleServiceError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, agentToWire(a))
@@ -302,8 +291,7 @@ func (s *Server) createAgent(w http.ResponseWriter, r *http.Request) {
 
 	a, err := s.svc.Definitions().CreateAgent(r.Context(), req.Name)
 	if err != nil {
-		status, code := mapServiceError(err)
-		writeError(w, status, code, sanitizePath(err.Error()))
+		handleServiceError(w, r, err)
 		return
 	}
 
@@ -315,8 +303,7 @@ func (s *Server) createAgent(w http.ResponseWriter, r *http.Request) {
 func (s *Server) deleteAgent(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if err := s.svc.Definitions().DeleteAgent(r.Context(), id); err != nil {
-		status, code := mapServiceError(err)
-		writeError(w, status, code, sanitizePath(err.Error()))
+		handleServiceError(w, r, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -336,8 +323,7 @@ func (s *Server) addSkillToAgent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.svc.Definitions().AddSkillToAgent(r.Context(), id, req.SkillName); err != nil {
-		status, code := mapServiceError(err)
-		writeError(w, status, code, sanitizePath(err.Error()))
+		handleServiceError(w, r, err)
 		return
 	}
 
@@ -354,19 +340,16 @@ func (s *Server) generateAgent(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "bad_request", "prompt is required")
 		return
 	}
-	if len(req.Prompt) > maxPromptChars {
+	if len(req.Prompt) > maxPromptBytes {
 		writeError(w, http.StatusBadRequest, "bad_request",
-			fmt.Sprintf("prompt too long: %d characters exceeds maximum %d", len(req.Prompt), maxPromptChars))
+			fmt.Sprintf("prompt too long: %d bytes exceeds maximum %d", len(req.Prompt), maxPromptBytes))
 		return
 	}
 
 	opID, err := s.svc.Definitions().GenerateAgent(r.Context(), req.Prompt)
 	if err != nil {
-		status, code := mapServiceError(err)
-		if code == "too_many_requests" {
-			w.Header().Set("Retry-After", "5")
-		}
-		writeError(w, status, code, sanitizePath(err.Error()))
+		setRetryAfterIfRateLimited(w, err)
+		handleServiceError(w, r, err)
 		return
 	}
 
@@ -387,8 +370,7 @@ func (s *Server) listTeams(w http.ResponseWriter, r *http.Request) {
 
 	teams, err := s.svc.Definitions().ListTeams(r.Context())
 	if err != nil {
-		status, code := mapServiceError(err)
-		writeError(w, status, code, sanitizePath(err.Error()))
+		handleServiceError(w, r, err)
 		return
 	}
 
@@ -406,8 +388,7 @@ func (s *Server) getTeam(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	tv, err := s.svc.Definitions().GetTeam(r.Context(), id)
 	if err != nil {
-		status, code := mapServiceError(err)
-		writeError(w, status, code, sanitizePath(err.Error()))
+		handleServiceError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, teamViewToWire(tv))
@@ -426,8 +407,7 @@ func (s *Server) createTeam(w http.ResponseWriter, r *http.Request) {
 
 	tv, err := s.svc.Definitions().CreateTeam(r.Context(), req.Name)
 	if err != nil {
-		status, code := mapServiceError(err)
-		writeError(w, status, code, sanitizePath(err.Error()))
+		handleServiceError(w, r, err)
 		return
 	}
 
@@ -439,8 +419,7 @@ func (s *Server) createTeam(w http.ResponseWriter, r *http.Request) {
 func (s *Server) deleteTeam(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if err := s.svc.Definitions().DeleteTeam(r.Context(), id); err != nil {
-		status, code := mapServiceError(err)
-		writeError(w, status, code, sanitizePath(err.Error()))
+		handleServiceError(w, r, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -460,8 +439,7 @@ func (s *Server) addAgentToTeam(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.svc.Definitions().AddAgentToTeam(r.Context(), id, req.AgentID); err != nil {
-		status, code := mapServiceError(err)
-		writeError(w, status, code, sanitizePath(err.Error()))
+		handleServiceError(w, r, err)
 		return
 	}
 
@@ -482,8 +460,7 @@ func (s *Server) setCoordinator(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.svc.Definitions().SetCoordinator(r.Context(), id, req.AgentName); err != nil {
-		status, code := mapServiceError(err)
-		writeError(w, status, code, sanitizePath(err.Error()))
+		handleServiceError(w, r, err)
 		return
 	}
 
@@ -496,11 +473,8 @@ func (s *Server) promoteTeam(w http.ResponseWriter, r *http.Request) {
 
 	opID, err := s.svc.Definitions().PromoteTeam(r.Context(), id)
 	if err != nil {
-		status, code := mapServiceError(err)
-		if code == "too_many_requests" {
-			w.Header().Set("Retry-After", "5")
-		}
-		writeError(w, status, code, sanitizePath(err.Error()))
+		setRetryAfterIfRateLimited(w, err)
+		handleServiceError(w, r, err)
 		return
 	}
 
@@ -517,19 +491,16 @@ func (s *Server) generateTeam(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "bad_request", "prompt is required")
 		return
 	}
-	if len(req.Prompt) > maxPromptChars {
+	if len(req.Prompt) > maxPromptBytes {
 		writeError(w, http.StatusBadRequest, "bad_request",
-			fmt.Sprintf("prompt too long: %d characters exceeds maximum %d", len(req.Prompt), maxPromptChars))
+			fmt.Sprintf("prompt too long: %d bytes exceeds maximum %d", len(req.Prompt), maxPromptBytes))
 		return
 	}
 
 	opID, err := s.svc.Definitions().GenerateTeam(r.Context(), req.Prompt)
 	if err != nil {
-		status, code := mapServiceError(err)
-		if code == "too_many_requests" {
-			w.Header().Set("Retry-After", "5")
-		}
-		writeError(w, status, code, sanitizePath(err.Error()))
+		setRetryAfterIfRateLimited(w, err)
+		handleServiceError(w, r, err)
 		return
 	}
 
@@ -542,11 +513,8 @@ func (s *Server) detectCoordinator(w http.ResponseWriter, r *http.Request) {
 
 	opID, err := s.svc.Definitions().DetectCoordinator(r.Context(), id)
 	if err != nil {
-		status, code := mapServiceError(err)
-		if code == "too_many_requests" {
-			w.Header().Set("Retry-After", "5")
-		}
-		writeError(w, status, code, sanitizePath(err.Error()))
+		setRetryAfterIfRateLimited(w, err)
+		handleServiceError(w, r, err)
 		return
 	}
 
@@ -565,8 +533,7 @@ func (s *Server) listJobs(w http.ResponseWriter, r *http.Request) {
 	if q.Get("all") == "true" {
 		jobs, err := s.svc.Jobs().ListAll(r.Context())
 		if err != nil {
-			status, code := mapServiceError(err)
-			writeError(w, status, code, sanitizePath(err.Error()))
+			handleServiceError(w, r, err)
 			return
 		}
 		wireJobs := make([]wireJob, 0, len(jobs))
@@ -604,8 +571,7 @@ func (s *Server) listJobs(w http.ResponseWriter, r *http.Request) {
 
 	jobs, err := s.svc.Jobs().List(r.Context(), filter)
 	if err != nil {
-		status, code := mapServiceError(err)
-		writeError(w, status, code, sanitizePath(err.Error()))
+		handleServiceError(w, r, err)
 		return
 	}
 
@@ -625,8 +591,7 @@ func (s *Server) getJob(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	jd, err := s.svc.Jobs().Get(r.Context(), id)
 	if err != nil {
-		status, code := mapServiceError(err)
-		writeError(w, status, code, sanitizePath(err.Error()))
+		handleServiceError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, jobDetailToWire(jd))
@@ -636,8 +601,7 @@ func (s *Server) getJob(w http.ResponseWriter, r *http.Request) {
 func (s *Server) cancelJob(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if err := s.svc.Jobs().Cancel(r.Context(), id); err != nil {
-		status, code := mapServiceError(err)
-		writeError(w, status, code, sanitizePath(err.Error()))
+		handleServiceError(w, r, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -657,8 +621,7 @@ func (s *Server) listSessions(w http.ResponseWriter, r *http.Request) {
 
 	snaps, err := s.svc.Sessions().List(r.Context())
 	if err != nil {
-		status, code := mapServiceError(err)
-		writeError(w, status, code, sanitizePath(err.Error()))
+		handleServiceError(w, r, err)
 		return
 	}
 
@@ -676,8 +639,7 @@ func (s *Server) getSession(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	sd, err := s.svc.Sessions().Get(r.Context(), id)
 	if err != nil {
-		status, code := mapServiceError(err)
-		writeError(w, status, code, sanitizePath(err.Error()))
+		handleServiceError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, sessionDetailToWire(sd))
@@ -687,8 +649,7 @@ func (s *Server) getSession(w http.ResponseWriter, r *http.Request) {
 func (s *Server) cancelSession(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if err := s.svc.Sessions().Cancel(r.Context(), id); err != nil {
-		status, code := mapServiceError(err)
-		writeError(w, status, code, sanitizePath(err.Error()))
+		handleServiceError(w, r, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -702,8 +663,7 @@ func (s *Server) cancelSession(w http.ResponseWriter, r *http.Request) {
 func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 	h, err := s.svc.System().Health(r.Context())
 	if err != nil {
-		status, code := mapServiceError(err)
-		writeError(w, status, code, sanitizePath(err.Error()))
+		handleServiceError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, HealthResponse{
@@ -717,8 +677,7 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 func (s *Server) listModels(w http.ResponseWriter, r *http.Request) {
 	models, err := s.svc.System().ListModels(r.Context())
 	if err != nil {
-		status, code := mapServiceError(err)
-		writeError(w, status, code, sanitizePath(err.Error()))
+		handleServiceError(w, r, err)
 		return
 	}
 
@@ -734,8 +693,7 @@ func (s *Server) listModels(w http.ResponseWriter, r *http.Request) {
 func (s *Server) listMCPServers(w http.ResponseWriter, r *http.Request) {
 	servers, err := s.svc.System().ListMCPServers(r.Context())
 	if err != nil {
-		status, code := mapServiceError(err)
-		writeError(w, status, code, sanitizePath(err.Error()))
+		handleServiceError(w, r, err)
 		return
 	}
 
@@ -751,8 +709,7 @@ func (s *Server) listMCPServers(w http.ResponseWriter, r *http.Request) {
 func (s *Server) getProgress(w http.ResponseWriter, r *http.Request) {
 	ps, err := s.svc.System().GetProgressState(r.Context())
 	if err != nil {
-		status, code := mapServiceError(err)
-		writeError(w, status, code, sanitizePath(err.Error()))
+		handleServiceError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, progressStateToWire(ps))

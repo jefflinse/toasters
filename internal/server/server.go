@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"sync/atomic"
 	"time"
 
 	"github.com/jefflinse/toasters/internal/service"
@@ -20,6 +21,7 @@ type Server struct {
 	httpSrv   *http.Server
 	logger    *slog.Logger
 	startTime time.Time
+	sseConns  atomic.Int32 // current SSE connection count
 }
 
 // Option configures a Server.
@@ -64,6 +66,7 @@ func (s *Server) Start(addr string) error {
 		Addr:              addr,
 		Handler:           middleware(mux),
 		ReadHeaderTimeout: 10 * time.Second,
+		WriteTimeout:      30 * time.Second,
 		IdleTimeout:       120 * time.Second,
 	}
 

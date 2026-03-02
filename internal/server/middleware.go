@@ -47,11 +47,12 @@ func recoveryMiddleware(next http.Handler) http.Handler {
 }
 
 // requestIDMiddleware generates a UUID v4 X-Request-ID header and propagates
-// it to the request context.
+// it to the request context. Client-supplied IDs are validated: only
+// alphanumeric, hyphens, underscores, and dots are allowed, max 64 chars.
 func requestIDMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		id := r.Header.Get("X-Request-ID")
-		if id == "" {
+		if !isValidRequestID(id) {
 			u, err := uuid.NewV4()
 			if err == nil {
 				id = u.String()
@@ -61,6 +62,21 @@ func requestIDMiddleware(next http.Handler) http.Handler {
 		ctx := context.WithValue(r.Context(), requestIDKey, id)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+// isValidRequestID checks that a request ID is non-empty, at most 64 chars,
+// and contains only safe characters (alphanumeric, hyphens, underscores, dots).
+func isValidRequestID(s string) bool {
+	if s == "" || len(s) > 64 {
+		return false
+	}
+	for _, c := range s {
+		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+			(c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.') {
+			return false
+		}
+	}
+	return true
 }
 
 // statusRecorder wraps http.ResponseWriter to capture the status code.
@@ -130,7 +146,7 @@ func contentTypeMiddleware(next http.Handler) http.Handler {
 			}
 			ct := r.Header.Get("Content-Type")
 			if ct == "" || !strings.HasPrefix(ct, "application/json") {
-				writeError(w, http.StatusUnsupportedMediaType, "bad_request",
+				writeError(w, http.StatusBadRequest, "bad_request",
 					"Content-Type must be application/json")
 				return
 			}

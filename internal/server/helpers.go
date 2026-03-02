@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
-	"regexp"
 	"strconv"
 	"strings"
 
@@ -18,12 +18,12 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.WriteHeader(status)
 	if err := json.NewEncoder(w).Encode(v); err != nil {
 		// Best-effort: headers already sent, nothing we can do.
-		_ = err
 	}
 }
 
 // writeError writes a standard error envelope to w. The caller is responsible
-// for sanitizing the message (e.g. via sanitizePath) before passing it here.
+// for sanitizing the message (e.g. via service.SanitizeErrorMessage) before
+// passing it here.
 func writeError(w http.ResponseWriter, status int, code, message string) {
 	writeJSON(w, status, ErrorResponse{
 		Error: ErrorDetail{
@@ -40,12 +40,42 @@ func decodeBody(w http.ResponseWriter, r *http.Request, v any) bool {
 		writeError(w, http.StatusBadRequest, "bad_request", "request body is required")
 		return false
 	}
+	// Limit request body to 1 MiB to prevent memory exhaustion.
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	dec := json.NewDecoder(r.Body)
 	if err := dec.Decode(v); err != nil {
-		writeError(w, http.StatusBadRequest, "bad_request", fmt.Sprintf("invalid JSON: %s", err.Error()))
+		writeError(w, http.StatusBadRequest, "bad_request", "invalid JSON in request body")
 		return false
 	}
 	return true
+}
+
+// handleServiceError maps a service error to an HTTP response. For internal
+// errors (500), it logs the real error and returns a generic message to the
+// client. For all other errors, it sanitizes the message and returns it.
+func handleServiceError(w http.ResponseWriter, r *http.Request, err error) {
+	status, code := mapServiceError(err)
+	if status == http.StatusInternalServerError {
+		slog.Error("internal service error",
+			"error", err.Error(),
+			"method", r.Method,
+			"path", r.URL.Path,
+			"request_id", requestIDFromContext(r.Context()),
+		)
+		writeError(w, status, code, "internal server error")
+		return
+	}
+	writeError(w, status, code, service.SanitizeErrorMessage(err.Error()))
+}
+
+// setRetryAfterIfRateLimited sets the Retry-After header if the error maps
+// to a rate-limited response. Must be called before handleServiceError since
+// headers must be set before the response is written.
+func setRetryAfterIfRateLimited(w http.ResponseWriter, err error) {
+	_, code := mapServiceError(err)
+	if code == "too_many_requests" {
+		w.Header().Set("Retry-After", "5")
+	}
 }
 
 // parsePagination extracts limit and offset from query parameters with
@@ -158,12 +188,4 @@ func mapServiceError(err error) (status int, code string) {
 	default:
 		return http.StatusInternalServerError, "internal_error"
 	}
-}
-
-// pathPattern matches absolute filesystem paths that should be sanitized.
-var pathPattern = regexp.MustCompile(`/(?:Users|home|tmp|var|etc|opt|usr|private)[/][^\s"':;,)]+`)
-
-// sanitizePath replaces filesystem paths in a string with "[path]".
-func sanitizePath(s string) string {
-	return pathPattern.ReplaceAllString(s, "[path]")
 }

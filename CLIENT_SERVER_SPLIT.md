@@ -604,31 +604,31 @@ Addressed 14 of the 23 Phase 1 review suggestions to harden the service layer be
 
 ### Step 2.2: Implement the Server
 
-- [ ] **Status:** Implementation complete; review findings being addressed
+- [x] **Status:** Complete (2026-03-02) — implementation + review + all 9 blocking findings fixed
 - **Agent:** builder
 - **Description:** Implement `internal/server.Server` wrapping `service.Service` over HTTP with SSE. Use Go stdlib `net/http` (Go 1.22+ method routing). Support multiple concurrent SSE clients via fan-out broadcast. Embeddable: `server.New(svc, opts...) *Server` with `Start(addr string) error` and `Shutdown(ctx context.Context) error`. Server must `Flush()` after every SSE event write.
 - **Blocking concern B4:** Implement `GET /api/v1/sessions/:id` returning full session detail for reconnection hydration.
 - **Implementation:** 6 files in `internal/server/` — `server.go` (lifecycle + routes), `middleware.go` (5 middleware), `handlers.go` (36 handlers), `sse.go` (SSE + heartbeat), `types.go` (wire types), `helpers.go` (utilities)
-- **Review:** Reviewed by code-reviewer, security-auditor, concurrency-reviewer (2026-03-02). 9 blocking findings, 11 suggestions deferred.
-- **Blocking findings:**
-  - B1: No `MaxBytesReader` — unbounded request body allocation (HIGH)
-  - B2: No SSE connection limit — goroutine/FD exhaustion (HIGH)
-  - B3: Duplicate divergent `pathPattern` regex between server and service packages
-  - B4: Internal 500 errors leak raw error messages to clients
-  - B5: `X-Request-ID` header injection — client value echoed without validation
-  - B6: Wrong error code (`bad_request`) for 415 Content-Type status
-  - B7: Message/prompt length limits inconsistent (chars vs bytes, different values)
-  - B8: Heartbeat SSE event has zero-value `Timestamp`
-  - B9: No `WriteTimeout` — slow-read clients hold connections indefinitely
+- **Review:** Reviewed by code-reviewer, security-auditor, concurrency-reviewer (2026-03-02). 9 blocking findings found and fixed; 11 suggestions deferred (S21-S31).
+- **Blocking findings (all fixed):**
+  - B1: ✅ Added `MaxBytesReader` (1 MiB) in `decodeBody`
+  - B2: ✅ Added SSE connection limit (10) via `atomic.Int32` counter
+  - B3: ✅ Removed duplicate regex; exported `SanitizeErrorMessage` in service package
+  - B4: ✅ `handleServiceError` returns generic message for 500s, logs real error
+  - B5: ✅ `isValidRequestID` validates client-supplied IDs (alnum/hyphens/underscores/dots, max 64)
+  - B6: ✅ Content-Type rejection changed from 415 to 400
+  - B7: ✅ Renamed to `maxMessageBytes`/`maxPromptBytes`, byte-based, strictly below service limits
+  - B8: ✅ Single `time.Now()` for heartbeat `Timestamp` and `ServerTime`
+  - B9: ✅ `WriteTimeout: 30s` on server; `SetWriteDeadline(time.Time{})` for SSE
 - **Acceptance criteria:**
   - [x] All REST endpoints implemented
   - [x] SSE event stream delivers all service events to all connected clients
-  - [ ] SSE events include sequence numbers for ordering
-  - [ ] 15-second heartbeat on SSE stream
-  - [ ] Server starts, serves, and shuts down cleanly
-  - [ ] Multiple clients can connect simultaneously
-  - [ ] Health endpoint returns server status
-  - [ ] `Flush()` after every SSE write
+  - [x] SSE events include sequence numbers for ordering
+  - [x] 15-second heartbeat on SSE stream
+  - [x] Server starts, serves, and shuts down cleanly
+  - [x] Multiple clients can connect simultaneously (SSE capped at 10)
+  - [x] Health endpoint returns server status
+  - [x] `Flush()` after every SSE write
 
 ### Step 2.3: Implement the Remote Client
 

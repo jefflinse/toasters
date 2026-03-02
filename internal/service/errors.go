@@ -30,6 +30,13 @@ func sanitizeErrorString(err error) string {
 	return sanitizeError(err).Error()
 }
 
+// SanitizeErrorMessage replaces filesystem paths in a string with "[path]".
+// Used by the HTTP server layer to sanitize error messages before sending
+// them to clients.
+func SanitizeErrorMessage(s string) string {
+	return pathPattern.ReplaceAllString(s, "[path]")
+}
+
 // sanitizeError replaces filesystem paths in the error message with "[path]".
 // It returns nil for nil errors. The returned error preserves the original
 // error chain for errors.Is/errors.As via Unwrap().
