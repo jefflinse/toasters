@@ -25,6 +25,11 @@ const (
 	// EventTypeOperatorPrompt is sent when the operator calls ask_user and needs
 	// a response from the human. Payload: OperatorPromptPayload.
 	// The client must call Operator().RespondToPrompt() to unblock the operator.
+	//
+	// TODO(Phase 2): This event type is defined but never emitted by
+	// LocalService. The prompt flow must be fully wired before Phase 2:
+	// operator ask_user → LocalService emits this event → event consumer
+	// enters prompt mode → user answers → RespondToPrompt sends answer.
 	EventTypeOperatorPrompt EventType = "operator.prompt"
 
 	// EventTypeTaskAssigned is sent when the operator assigns a task to a team.

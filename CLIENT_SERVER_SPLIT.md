@@ -1,7 +1,7 @@
 # Client/Server Architecture Split
 
 **Created:** 2026-02-28
-**Status:** Phase 1 complete ✅ — all steps done, review checkpoint passed; Phase 2 not started
+**Status:** Phase 1 complete ✅ — all steps done, comprehensive review passed (8 blocking issues fixed, 23 suggestions documented); Phase 2 not started
 **Effort Estimate:** 10–17 days across 4 phases
 
 ---
@@ -427,6 +427,83 @@ The progress polling goroutine and 15s heartbeat goroutine start lazily on the f
 
 - [x] **Gate:** ✋ Code review of TUI decoupling — verify no residual direct dependencies
 - **Outcome:** Passed (2026-03-01) — app runs correctly; no residual banned imports in TUI
+
+### Phase 1 Comprehensive Review (2026-03-01)
+
+**Reviewers:** code-reviewer, test-writer, concurrency-reviewer, security-auditor, api-designer  
+**Scope:** 9 commits, ~14,700 lines of diff, 38 files changed (+8,286 / -3,779)  
+**Tests:** All 18 packages pass with `-race -count=1`
+
+#### Blocking Issues (fixed)
+
+| # | File | Issue | Fix |
+|---|------|-------|-----|
+| **B1** | `cmd/root.go` | First LocalService leaked — `_ = svc.Shutdown` takes method reference but never calls it; double service + double operator creation is fragile | Added `SetOperator()` method to `LocalService`; eliminated double-creation entirely |
+| **B2** | `cmd/root.go:283,333` | Token counts always zero in `OperatorDoneMsg` — `OnTurnDone` callbacks hardcode `0, 0, 0` | Documented as known gap — `operator.Config.OnTurnDone` signature needs token count parameters (requires operator changes) |
+| **B3** | `local.go:1664-1665` | `GetJob` wraps all store errors as `ErrNotFound` — DB failures misreported as "not found" | Check for `db.ErrNotFound` specifically; pass through other errors unwrapped |
+| **B4** | `skills_modal.go:158` | Direct `os.Remove` bypasses service layer security checks (path traversal, system skill rejection) | Replaced with `svc.Definitions().DeleteSkill(ctx, sk.ID)` |
+| **B5** | `local.go:516-523, 768-776, 1047` | YAML frontmatter injection — user-supplied name interpolated raw into YAML via `fmt.Sprintf` | Sanitize names: strip newlines, carriage returns, and leading YAML special characters |
+| **B6** | `event_consumer.go:26` | Post-shutdown `prog.Send()` potential panic — consumer holds direct `*tea.Program` reference | Changed to accept `*atomic.Pointer[tea.Program]` and nil-check before sending |
+| **B7** | `cmd/root.go:160-224` + `event_consumer.go:69-131` | Duplicate session event delivery path — direct callbacks AND event consumer handle same events | Removed dead session event handlers from `event_consumer.go`; documented direct callback as canonical path |
+| **B8** | `service.go` + `events.go` | `RespondToPrompt` and `EventTypeOperatorPrompt` defined but completely unwired | Documented as Phase 2 TODO — prompt flow needs full wiring when HTTP layer is added |
+
+#### Suggestions (for Phase 2 pre-work)
+
+| # | Source | Issue | Priority |
+|---|--------|-------|----------|
+| S1 | Security | No input validation on `SendMessage` — unbounded message string | High (before Phase 2) |
+| S2 | Security | No input validation on Generate prompts — unbounded | High (before Phase 2) |
+| S3 | Security | `SourcePath` fields expose absolute filesystem paths in DTOs | High (before Phase 2) |
+| S4 | Security | Error messages leak internal paths | High (before Phase 2) |
+| S5 | Security | No rate limiting on async operations — unbounded goroutines | High (before Phase 2) |
+| S6 | Security | `writeGeneratedTeamFiles` missing path traversal check | Medium |
+| S7 | Security | `copyFile` has no size limit | Medium |
+| S8 | API Design | `ProgressState` full snapshot every 500ms won't scale over HTTP — switch to deltas | High (before Phase 2) |
+| S9 | API Design | `SystemService.Slugify` and `ConfigDir` are client-side concerns | Medium |
+| S10 | API Design | `JobService.ListAll` redundant with `List(ctx, nil)` | Low |
+| S11 | API Design | `SessionSnapshot.Status` and `SessionDonePayload.Status` are `string` not `SessionStatus` | Low |
+| S12 | API Design | `BlockerReportedPayload` too thin vs. `Blocker` type | Medium |
+| S13 | API Design | No `History()` method for conversation reconnect hydration | High (before Phase 2) |
+| S14 | API Design | No `RespondToBlocker()` method for submitting blocker answers | Medium |
+| S15 | API Design | `OperationResult.Error` conflates success and failure fields | Low |
+| S16 | Concurrency | Subscriber cleanup goroutine not bounded by service context | Medium |
+| S17 | Concurrency | Two mutexes (`mu`, `turnMu`) with no documented lock ordering | Low |
+| S18 | Concurrency | `buildProgressState` uses `context.Background()` instead of service context | Low |
+| S19 | Code Review | Duplicate `stripCodeFences` in service and TUI | Low |
+| S20 | Code Review | Duplicate `cachedHomeDir`/`cachedHomeDirOnce` in teams_modal and local.go | Low |
+| S21 | Code Review | Variable shadowing of receiver `s` in `writeGeneratedSkillFile` | Low |
+| S22 | Code Review | Unbounded dedup loop in `writeGenerated*File` | Low |
+| S23 | Code Review | `SendMessage` error silently swallowed in `streaming.go` | Medium |
+
+#### Phase 2 Readiness Checklist
+
+Before exposing this service over HTTP, these items must be addressed:
+
+| Priority | Item | Findings |
+|----------|------|----------|
+| Critical | YAML injection fix | B5 (fixed) |
+| Critical | Prompt flow wiring | B8 (documented) |
+| High | Input validation on all string params | S1, S2 |
+| High | Path/info leakage in errors | S3, S4 |
+| High | Rate limiting on async ops | S5 |
+| High | Delta-based progress events | S8 |
+| High | Authorization model design | Security review |
+| High | Conversation history endpoint | S13 |
+| Medium | Event gap notification for slow consumers | Security review |
+| Medium | Blocker answer submission endpoint | S14 |
+| Medium | `Slugify`/`ConfigDir` client-side extraction | S9 |
+
+#### Positive Observations
+
+- Clean interface decomposition — 6 sub-interfaces well-scoped and following Go conventions
+- Zero internal imports in `types.go` — DTO layer completely decoupled
+- Event envelope design — sequence numbers, correlation IDs, typed payloads ready for SSE
+- `event_consumer.go` — clean, exhaustive translation layer
+- Non-blocking broadcast — `select/default` drop-on-overflow is correct pattern
+- Path traversal defense on deletes — `EvalSymlinks` + `HasPrefix` with separator suffix
+- System definition protection — system skills/agents/teams immutable through service layer
+- LLM output validation — generated content parsed through `agentfmt.ParseBytes` before writing
+- Graceful nil handling — service handles nil Store/Runtime/Operator/Provider with clear errors
 
 ---
 

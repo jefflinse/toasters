@@ -280,6 +280,12 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 			},
 			OnTurnDone: func() {
 				batcher.Flush()
+				// TODO(Phase 2): Token counts are hardcoded to 0 because
+				// operator.Config.OnTurnDone does not receive token usage
+				// from the LLM response. The operator needs to be updated
+				// to pass actual tokensIn/tokensOut/reasoningTokens here.
+				// Until then, sidebar stats (prompt ctx, tokens out,
+				// reasoning, speed) will not update from real data.
 				svc.BroadcastOperatorDone(cfg.Operator.Model, 0, 0, 0)
 			},
 		})
@@ -288,56 +294,11 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 		}
 	}
 
-	// Wire the operator into the service after creation.
+	// Wire the operator into the service after creation. The operator's
+	// callbacks already close over svc, so we just need to inject the
+	// operator reference into the service to complete the circular wiring.
 	if op != nil {
-		svc2 := service.NewLocal(service.LocalConfig{
-			Store:         store,
-			Runtime:       rt,
-			Operator:      op,
-			MCPManager:    mcpManager,
-			Provider:      client,
-			Composer:      composer,
-			Loader:        ldr,
-			ConfigDir:     configDir,
-			WorkspaceDir:  workspaceDir,
-			TeamsDir:      teamsDir,
-			OperatorModel: cfg.Operator.Model,
-			StartTime:     time.Now(),
-		})
-		_ = svc.Shutdown // discard the first service
-		svc = svc2
-		defer svc.Shutdown()
-
-		// Re-wire operator callbacks to the new service.
-		textFlush := func(text string) {
-			svc.BroadcastOperatorText(text, "")
-		}
-		batcher := newTextBatcher(16*time.Millisecond, textFlush)
-		op2, opErr := operator.New(operator.Config{
-			Runtime:      rt,
-			Provider:     client,
-			Model:        cfg.Operator.Model,
-			WorkDir:      workspaceDir,
-			Store:        store,
-			Composer:     composer,
-			Spawner:      rt,
-			SystemPrompt: operatorPrompt,
-			OnText: func(text string) {
-				batcher.Add(text)
-			},
-			OnEvent: func(event operator.Event) {
-				svc.BroadcastOperatorEvent(event)
-			},
-			OnTurnDone: func() {
-				batcher.Flush()
-				svc.BroadcastOperatorDone(cfg.Operator.Model, 0, 0, 0)
-			},
-		})
-		if opErr != nil {
-			slog.Warn("failed to re-create operator with service", "error", opErr)
-		} else {
-			op = op2
-		}
+		svc.SetOperator(op)
 	}
 
 	m := tui.NewModel(tui.ModelConfig{
@@ -358,7 +319,7 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 	// Start the service event consumer — translates service events to TUI messages.
 	consumerCtx, consumerCancel := context.WithCancel(context.Background())
 	defer consumerCancel()
-	go tui.ConsumeServiceEvents(consumerCtx, svc, prog)
+	go tui.ConsumeServiceEvents(consumerCtx, svc, &p)
 
 	// Generate team awareness and send the operator greeting in the background.
 	go func() {

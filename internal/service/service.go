@@ -64,6 +64,13 @@ type OperatorService interface {
 	//
 	// This unblocks the operator event loop, which will continue processing
 	// after receiving the response.
+	//
+	// TODO(Phase 2): This method and EventTypeOperatorPrompt are defined but
+	// not yet wired end-to-end. The TUI currently handles prompts via the
+	// regular SendMessage path. For Phase 2, the full flow must be wired:
+	// LocalService emits EventTypeOperatorPrompt → event consumer enters
+	// prompt mode → user answers → RespondToPrompt sends the answer back.
+	// Without this, remote clients cannot participate in interactive prompts.
 	RespondToPrompt(ctx context.Context, requestID string, response string) error
 
 	// Status returns the current state of the operator (idle, streaming,

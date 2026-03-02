@@ -5,6 +5,7 @@ package tui
 import (
 	"context"
 	"log/slog"
+	"sync/atomic"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -17,13 +18,15 @@ import (
 //
 // Call this in a goroutine after creating the tea.Program:
 //
-//	go tui.ConsumeServiceEvents(ctx, svc, prog)
-func ConsumeServiceEvents(ctx context.Context, svc service.Service, prog *tea.Program) {
+//	go tui.ConsumeServiceEvents(ctx, svc, &p)
+func ConsumeServiceEvents(ctx context.Context, svc service.Service, prog *atomic.Pointer[tea.Program]) {
 	ch := svc.Events().Subscribe(ctx)
 	for ev := range ch {
 		msg := translateEvent(ev)
 		if msg != nil {
-			prog.Send(msg)
+			if p := prog.Load(); p != nil {
+				p.Send(msg)
+			}
 		}
 	}
 }
@@ -66,69 +69,16 @@ func translateEvent(ev service.Event) tea.Msg {
 			FeedEntries:     p.State.FeedEntries,
 		}
 
-	case service.EventTypeSessionStarted:
-		p, ok := ev.Payload.(service.SessionStartedPayload)
-		if !ok {
-			return nil
-		}
-		return RuntimeSessionStartedMsg{
-			SessionID:      ev.SessionID,
-			AgentName:      p.AgentName,
-			TeamName:       p.TeamName,
-			Task:           p.Task,
-			JobID:          p.JobID,
-			TaskID:         p.TaskID,
-			SystemPrompt:   p.SystemPrompt,
-			InitialMessage: p.InitialMessage,
-		}
-
-	case service.EventTypeSessionText:
-		p, ok := ev.Payload.(service.SessionTextPayload)
-		if !ok {
-			return nil
-		}
-		return RuntimeSessionEventMsg{
-			SessionID: ev.SessionID,
-			EventType: "text",
-			Text:      p.Text,
-		}
-
-	case service.EventTypeSessionToolCall:
-		p, ok := ev.Payload.(service.SessionToolCallPayload)
-		if !ok {
-			return nil
-		}
-		return RuntimeSessionEventMsg{
-			SessionID: ev.SessionID,
-			EventType: "tool_call",
-			ToolName:  p.ToolCall.Name,
-		}
-
-	case service.EventTypeSessionToolResult:
-		p, ok := ev.Payload.(service.SessionToolResultPayload)
-		if !ok {
-			return nil
-		}
-		return RuntimeSessionEventMsg{
-			SessionID:  ev.SessionID,
-			EventType:  "tool_result",
-			ToolOutput: p.Result.Result,
-			IsError:    p.Result.Error != "",
-		}
-
-	case service.EventTypeSessionDone:
-		p, ok := ev.Payload.(service.SessionDonePayload)
-		if !ok {
-			return RuntimeSessionDoneMsg{SessionID: ev.SessionID}
-		}
-		return RuntimeSessionDoneMsg{
-			SessionID: ev.SessionID,
-			AgentName: p.AgentName,
-			JobID:     p.JobID,
-			TaskID:    p.TaskID,
-			FinalText: p.FinalText,
-			Status:    p.Status,
-		}
+	case service.EventTypeSessionStarted,
+		service.EventTypeSessionText,
+		service.EventTypeSessionToolCall,
+		service.EventTypeSessionToolResult,
+		service.EventTypeSessionDone:
+		// Session events are delivered via the direct rt.OnSessionStarted callback
+		// in cmd/root.go, not through the service event stream. When Phase 2 moves
+		// session event broadcasting into LocalService, these handlers should be
+		// re-enabled and the direct callback removed.
+		return nil
 
 	case service.EventTypeDefinitionsReloaded:
 		return DefinitionsReloadedMsg{}

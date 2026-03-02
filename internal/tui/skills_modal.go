@@ -154,8 +154,11 @@ func (m *Model) updateSkillsModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if m.skillsModal.confirmDelete {
 			if len(m.skillsModal.skills) > 0 && m.skillsModal.skillIdx < len(m.skillsModal.skills) {
 				sk := m.skillsModal.skills[m.skillsModal.skillIdx]
-				if sk.SourcePath != "" && sk.Source != "system" {
-					_ = os.Remove(sk.SourcePath)
+				if sk.Source != "system" {
+					ctx := context.Background()
+					if err := m.svc.Definitions().DeleteSkill(ctx, sk.ID); err != nil {
+						slog.Error("failed to delete skill", "id", sk.ID, "error", err)
+					}
 				}
 			}
 			m.reloadSkillsForModal()

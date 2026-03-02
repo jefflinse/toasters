@@ -78,6 +78,16 @@ type localJobService struct{ svc *LocalService }
 // conflicting with JobService methods of the same name (List, Get, Cancel).
 type localSessionService struct{ svc *LocalService }
 
+// sanitizeName strips characters that could cause YAML injection when
+// interpolated into frontmatter templates. Newlines, carriage returns, and
+// null bytes are removed entirely.
+func sanitizeName(name string) string {
+	name = strings.ReplaceAll(name, "\n", "")
+	name = strings.ReplaceAll(name, "\r", "")
+	name = strings.ReplaceAll(name, "\x00", "")
+	return name
+}
+
 // NewLocal creates a new LocalService from the given config.
 func NewLocal(cfg LocalConfig) *LocalService {
 	if cfg.StartTime.IsZero() {
@@ -94,6 +104,13 @@ func NewLocal(cfg LocalConfig) *LocalService {
 
 // Shutdown cancels the service lifetime context, stopping background goroutines.
 func (s *LocalService) Shutdown() { s.cancel() }
+
+// SetOperator sets the operator on the service after construction. This is
+// needed because the operator's callbacks reference the service, creating a
+// circular dependency that prevents passing the operator at construction time.
+func (s *LocalService) SetOperator(op *operator.Operator) {
+	s.cfg.Operator = op
+}
 
 // ---------------------------------------------------------------------------
 // Sub-interface accessors
@@ -498,6 +515,7 @@ func (s *LocalService) GetSkill(ctx context.Context, id string) (Skill, error) {
 // CreateSkill writes a template .md file to the user skills directory and
 // triggers a definition reload. Returns the created skill.
 func (s *LocalService) CreateSkill(ctx context.Context, name string) (Skill, error) {
+	name = sanitizeName(name)
 	skillsDir := filepath.Join(s.cfg.ConfigDir, "user", "skills")
 	if err := os.MkdirAll(skillsDir, 0o755); err != nil {
 		return Skill{}, fmt.Errorf("creating skills dir: %w", err)
@@ -750,6 +768,7 @@ func (s *LocalService) GetAgent(ctx context.Context, id string) (Agent, error) {
 // CreateAgent writes a template .md file to the user agents directory and
 // triggers a reload. Returns the created agent.
 func (s *LocalService) CreateAgent(ctx context.Context, name string) (Agent, error) {
+	name = sanitizeName(name)
 	agentsDir := filepath.Join(s.cfg.ConfigDir, "user", "agents")
 	if err := os.MkdirAll(agentsDir, 0o755); err != nil {
 		return Agent{}, fmt.Errorf("creating agents dir: %w", err)
@@ -1025,6 +1044,7 @@ func (s *LocalService) GetTeam(ctx context.Context, id string) (TeamView, error)
 
 // CreateTeam creates a new team directory and triggers a reload.
 func (s *LocalService) CreateTeam(ctx context.Context, name string) (TeamView, error) {
+	name = sanitizeName(name)
 	slug := loader.Slugify(name)
 	if slug == "" {
 		return TeamView{}, fmt.Errorf("invalid team name %q: produces empty slug", name)
@@ -1662,7 +1682,10 @@ func (s *localJobService) Get(ctx context.Context, id string) (JobDetail, error)
 	}
 	dbJob, err := s.svc.cfg.Store.GetJob(ctx, id)
 	if err != nil {
-		return JobDetail{}, fmt.Errorf("getting job %s: %w", id, ErrNotFound)
+		if errors.Is(err, db.ErrNotFound) {
+			return JobDetail{}, fmt.Errorf("getting job %s: %w", id, ErrNotFound)
+		}
+		return JobDetail{}, fmt.Errorf("getting job %s: %w", id, err)
 	}
 
 	dbTasks, err := s.svc.cfg.Store.ListTasksForJob(ctx, id)
@@ -1699,7 +1722,10 @@ func (s *localJobService) Cancel(ctx context.Context, id string) error {
 	}
 	dbJob, err := s.svc.cfg.Store.GetJob(ctx, id)
 	if err != nil {
-		return fmt.Errorf("getting job %s: %w", id, ErrNotFound)
+		if errors.Is(err, db.ErrNotFound) {
+			return fmt.Errorf("getting job %s: %w", id, ErrNotFound)
+		}
+		return fmt.Errorf("getting job %s: %w", id, err)
 	}
 
 	switch dbJob.Status {

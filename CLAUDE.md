@@ -256,27 +256,37 @@ Full details: `PRE_PHASE_4_WAVE_2.md`
 
 ## Current Work: Client/Server Architecture Split
 
-**Status:** Phase 1 in progress — Steps 1.1 and 1.2 complete, Step 1.3 in progress
+**Status:** Phase 1 complete ✅ — all steps done, comprehensive review passed, 8 blocking issues fixed; Phase 2 not started
 **Tracking document:** [`CLIENT_SERVER_SPLIT.md`](CLIENT_SERVER_SPLIT.md)
 
 Splitting the monolithic TUI into a client/server architecture. The orchestration engine (operator, runtime, store, MCP, loader, compose, providers) becomes a long-running server; the TUI becomes a thin client. REST + SSE protocol. 4 phases:
 
-1. **Phase 1: Service Extraction** (5–8 days) — Extract business logic from TUI into `internal/service` package with composed `Service` interface. Rewire TUI to use it. No networking yet.
+1. **Phase 1: Service Extraction** ✅ — Extract business logic from TUI into `internal/service` package with composed `Service` interface. Rewire TUI to use it. No networking yet.
 2. **Phase 2: Server** (3–5 days) — HTTP server with SSE event streaming. `RemoteClient` as drop-in for `LocalService`.
 3. **Phase 3: Mode Wiring** (1–2 days) — `toasters serve` (headless), `toasters --server <addr>` (remote TUI), CLI subcommands.
 4. **Phase 4: Hardening** (2–3 days) — Token auth, connection resilience, security audit.
 
 Plan reviewed by tui-engineer and api-designer. All blocking concerns documented in the tracking doc.
 
-### Phase 1 Progress
+### Phase 1 Summary
 
 **Step 1.1: Service Interface** ✅ — `internal/service/` created with three files:
 - `service.go` — composed `Service` interface with 6 sub-interfaces: `OperatorService`, `DefinitionService`, `JobService`, `SessionService`, `EventService`, `SystemService`
 - `types.go` — all service-level DTO types; zero imports from internal packages
 - `events.go` — unified event stream: 19 event types, `Event` envelope with sequence numbers + correlation IDs, `EventService.Subscribe(ctx)`
 
-**Step 1.2: Implement LocalService** ✅ — `internal/service/local.go` created; full `Service` interface satisfied; reviewed by concurrency-reviewer, security-auditor, and code-reviewer; all blocking findings fixed
-**Step 1.3: Rewire TUI** ✅ — complete; all TUI files rewired to use `service.Service`; zero banned imports; `progressPollCmd` replaced by `event_consumer.go`; `team_view.go` and `progress_poll.go` deleted; `cmd/root.go` rewritten
-**Step 1.4: Service Tests** ✅ — complete; 67 test functions in `internal/service/local_test.go`; all pass race-clean
+**Step 1.2: Implement LocalService** ✅ — `internal/service/local.go` created; full `Service` interface satisfied
+**Step 1.3: Rewire TUI** ✅ — all TUI files rewired to use `service.Service`; zero banned imports; `progressPollCmd` replaced by `event_consumer.go`; `team_view.go` and `progress_poll.go` deleted; `cmd/root.go` rewritten
+**Step 1.4: Service Tests** ✅ — 67 test functions in `internal/service/local_test.go`; all pass race-clean
 
-**Phase 1 Review Checkpoint** ✅ — passed (2026-03-01); app verified running correctly; no residual banned imports in TUI
+**Phase 1 Comprehensive Review** ✅ — passed (2026-03-01); reviewed by code-reviewer, test-writer, concurrency-reviewer, security-auditor, api-designer; 8 blocking issues found and fixed:
+- B1: First LocalService leaked — added `SetOperator()` to eliminate double-creation
+- B2: Token counts always zero — documented as known gap (requires operator changes)
+- B3: `GetJob`/`Cancel` wrapping all errors as `ErrNotFound` — fixed to check `db.ErrNotFound` specifically
+- B4: Skills modal `os.Remove` bypassing service layer — replaced with `DeleteSkill()`
+- B5: YAML frontmatter injection in Create methods — names sanitized (newlines stripped)
+- B6: Post-shutdown `prog.Send()` panic — event consumer now uses `atomic.Pointer`
+- B7: Duplicate session event delivery path — removed dead consumer code
+- B8: `RespondToPrompt`/`EventTypeOperatorPrompt` unwired — documented as Phase 2 TODO
+
+23 suggestions documented for Phase 2 pre-work. Full findings in `CLIENT_SERVER_SPLIT.md`.
