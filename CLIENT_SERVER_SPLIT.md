@@ -734,46 +734,280 @@ Addressed 14 of the 23 Phase 1 review suggestions to harden the service layer be
 
 **Goal:** Security, reliability, and operational polish for server mode.
 
-**Estimated Effort:** 2–3 days
+**Estimated Effort:** 3.5–4 days
+
+**Dependencies:**
+
+```
+Step 4.1: Authentication ──────────┐
+                                    ├──→ Step 4.3: Security Audit + Deferred Fixes
+Step 4.2: Connection Resilience ───┘
+```
+
+Steps 4.1 and 4.2 are independent and can be built in parallel. Step 4.3 depends on both being complete (audit must cover the implemented features).
 
 ### Step 4.1: Add Authentication
 
 - [ ] **Status:** Not started
-- **Agent:** security-auditor + builder
-- **Description:** Token-based auth. Auto-generate token on first `toasters serve`, write to `~/.config/toasters/server.token` (0600). TUI/CLI client auto-discovers token. Server validates on every request including SSE. `--no-auth` for development.
+- **Agent:** builder → security-auditor + code-reviewer
+- **Estimated Effort:** ~1.5 days
+- **Description:** Token-based auth. Auto-generate bearer token on first `toasters serve`, write to `~/.config/toasters/server.token` (0600). TUI/CLI client auto-discovers token from same file. Server validates on every request including SSE. `--no-auth` flag disables auth for development. Health endpoint exempt.
+
+**Sub-steps:**
+
+**4.1.1: Token Management Package**
+- **Create:** `internal/auth/token.go`, `internal/auth/token_test.go`
+- `EnsureToken(configDir) (string, error)` — load existing or generate + persist new token
+- `LoadToken(configDir) (string, error)` — read token, return `("", nil)` if file missing
+- Token: 32 random bytes via `crypto/rand`, hex-encoded (64 chars)
+- File: `configDir/server.token` with `0600` permissions
+- Warn via `slog.Warn` if permissions too open (same pattern as `internal/config/config.go`)
+- **Tests:** Generation produces 64 hex chars, file permissions are 0600, EnsureToken idempotent, LoadToken returns empty when missing
+
+**4.1.2: Server Auth Middleware**
+- **Modify:** `internal/server/middleware.go`
+- Add `authMiddleware(token string) func(http.Handler) http.Handler`
+- Extract token from `Authorization: Bearer <token>` header
+- Use `crypto/subtle.ConstantTimeCompare` for comparison (prevent timing attacks)
+- Return 401 with standard error envelope: `{"error":{"code":"unauthorized","message":"invalid or missing bearer token"}}`
+- Exempt `/api/v1/health` for liveness probes
+- If token is empty string (`--no-auth` mode), skip all validation
+
+**4.1.3: Wire Auth Into Server**
+- **Modify:** `internal/server/server.go`
+- Add `WithToken(token string) Option` to functional options
+- Store token on `Server` struct
+- Insert `authMiddleware` into middleware chain after `requestIDMiddleware`, before `loggingMiddleware`:
+  ```go
+  middleware := chain(
+      recoveryMiddleware,
+      requestIDMiddleware,
+      authMiddleware(s.token),  // NEW — skips if token == ""
+      loggingMiddleware,
+      corsMiddleware,
+      contentTypeMiddleware,
+  )
+  ```
+- Rationale: After recovery (catch panics) and requestID (so 401s include request ID), before logging (so unauthorized attempts are logged)
+
+**4.1.4: Client Auth Support**
+- **Modify:** `internal/client/client.go`, `internal/client/http.go`, `internal/client/events.go`
+- Add `token` field to `RemoteClient`
+- Add `WithToken(token string) Option`
+- Set `Authorization: Bearer <token>` on all HTTP requests in `doWithBody` and `get`/`delete` helpers
+- Set auth header on SSE request in `readSSE` (events.go ~line 110)
+- Resolves deferred **S11** (auth headers in HTTP requests)
+
+**4.1.5: CLI Wiring**
+- **Modify:** `cmd/root.go` (or Phase 3 serve command file)
+- `toasters serve`: Call `auth.EnsureToken(configDir)`, pass to `server.New(svc, server.WithToken(token))`, print token file path to stderr. If `--no-auth` flag set, skip token and pass empty string.
+- `toasters --server <addr>`: Call `auth.LoadToken(configDir)`, pass to `client.New(addr, client.WithToken(token))`
+
+**4.1.6: Tests**
+- Auth middleware: 401 on missing auth, 401 on wrong token, 200 on correct token, health exempt, SSE with auth
+- Integration: full round-trip with auth enabled and disabled
+
 - **Acceptance criteria:**
   - [ ] Server rejects unauthenticated requests with 401
-  - [ ] Token auto-generated on first run
-  - [ ] TUI/CLI client auto-discovers token
-  - [ ] `--no-auth` flag disables auth
+  - [ ] Token auto-generated on first `toasters serve`, stored at `~/.config/toasters/server.token` (0600)
+  - [ ] TUI/CLI client auto-discovers token from same file
+  - [ ] `--no-auth` flag disables auth entirely
   - [ ] SSE connection also authenticated
+  - [ ] Health endpoint works without auth
 
 ### Step 4.2: Connection Resilience
 
 - [ ] **Status:** Not started
-- **Agent:** builder
-- **Description:** Auto-reconnection with exponential backoff (cap at 30s), full state fetch on reconnect (REST endpoints → re-subscribe SSE), graceful degradation when server unreachable (TUI shows "disconnected" status in sidebar), queued messages sent after reconnection.
-- **Acceptance criteria:**
-  - [ ] TUI reconnects automatically after server restart
-  - [ ] On reconnect, full state is fetched via REST before re-subscribing to SSE
-  - [ ] TUI shows connection status (connected/reconnecting/disconnected)
-  - [ ] Queued messages sent after reconnection
-  - [ ] Exponential backoff caps at 30 seconds
+- **Agent:** builder → code-reviewer + concurrency-reviewer
+- **Estimated Effort:** ~1 day
+- **Description:** Wire connection status events from `RemoteClient` into the TUI. Show user-friendly disconnect/reconnect indicators. Return clear error on send while disconnected (no message queuing). Leverages existing reconnection infrastructure in `internal/client/events.go` (exponential backoff 1s→30s, 10% jitter, synthetic `progress.update` on reconnect).
 
-### Step 4.3: Security Audit
+**What already exists:**
+- Auto-reconnection with exponential backoff 1s→30s, 10% jitter (`internal/client/events.go`)
+- `connected` atomic bool on `RemoteClient` (`internal/client/client.go`)
+- Synthetic `progress.update` on reconnect — full state fetch via REST
+- TUI sidebar renders connected/disconnected based on `m.stats.Connected` (`internal/tui/panels.go` lines 386-389)
+
+**Sub-steps:**
+
+**4.2.1: Connection Status Events**
+- **Modify:** `internal/service/events.go`
+- Add two client-only event types: `EventTypeConnectionLost` (`"connection.lost"`), `EventTypeConnectionRestored` (`"connection.restored"`)
+- Add payload types: `ConnectionLostPayload{ Error string }`, `ConnectionRestoredPayload{}`
+
+**4.2.2: Emit Connection Events from Client**
+- **Modify:** `internal/client/events.go`
+- Emit `connection.lost` when `connected` transitions to `false` (on read error/disconnect)
+- Emit `connection.restored` when `connected` transitions to `true` (on successful reconnect)
+- Events go through the same subscriber channel as server events
+
+**4.2.3: TUI Connection Status Handling**
+- **Modify:** `internal/tui/event_consumer.go`, `internal/tui/messages.go`, `internal/tui/model.go`
+- Add `ConnectionLostMsg` and `ConnectionRestoredMsg` TUI messages
+- Event consumer translates `connection.lost` → `ConnectionLostMsg`, `connection.restored` → `ConnectionRestoredMsg`
+- Model handler: set `m.stats.Connected` accordingly (sidebar updates automatically)
+- Show toast/feed notification on disconnect ("Server connection lost, reconnecting...") and reconnect ("Server connection restored")
+
+**4.2.4: Disconnect Error Handling**
+- When `RemoteClient.SendMessage` fails with `ErrConnectionFailed` (already returned by `http.go`), the TUI should show a user-friendly error rather than a generic failure
+- No message queuing — user sees disconnected status and retries naturally after reconnect
+
+**4.2.5: Wire Types for Connection Events**
+- **Modify:** `internal/server/types.go`, `internal/client/types.go`
+- Add wire type support for new event types for consistency in the types infrastructure
+
+- **Acceptance criteria:**
+  - [ ] TUI sidebar shows "disconnected" (red) when server drops
+  - [ ] TUI sidebar shows "connected" (green) when reconnected
+  - [ ] Notification on disconnect and reconnect
+  - [ ] Sending message while disconnected shows user-friendly error
+  - [ ] Existing reconnect behavior (backoff, synthetic progress.update) unchanged
+
+### Step 4.3: Security Audit + Deferred Fixes
 
 - [ ] **Status:** Not started
+- **Agent:** builder (fixes) → security-auditor + concurrency-reviewer + code-reviewer
+- **Estimated Effort:** ~1.5 days
+- **Depends on:** Steps 4.1 and 4.2 complete
+- **Description:** Fix all deferred security suggestions from Phase 2 reviews, then perform a comprehensive security audit of the complete client/server surface including the new auth layer.
+
+**Fixes:**
+
+**4.3.1: CORS Restriction (S25)**
+- **Modify:** `internal/server/middleware.go`
+- Replace `Access-Control-Allow-Origin: *` with localhost-only allowlist
+- Allow: `http://localhost`, `https://localhost`, `http://127.0.0.1`, `https://127.0.0.1`, `http://[::1]`, `https://[::1]` (with port variants)
+- If Origin present and not in allowlist, omit CORS headers (browser will block)
+- If no Origin header (same-origin or non-browser), allow through
+
+**4.3.2: Security Response Headers (S26)**
+- **Modify:** `internal/server/middleware.go`
+- Add `securityHeadersMiddleware` to the chain (after CORS, before content-type)
+- `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Cache-Control: no-store`
+
+**4.3.3: sanitizeName YAML-Special Chars (Sec-S2)**
+- **Modify:** `internal/service/local.go` (line 106)
+- Expand `sanitizeName` to strip YAML-special characters: `:`, `#`, `"`, `'`, `{`, `}`, `[`, `]`, `|`, `>`
+- Use `strings.NewReplacer` for clarity
+
+**4.3.4: Async Goroutine Panic Recovery (Sec-S3)**
+- **Modify:** `internal/service/local.go`
+- Add `safeGo(operationID, kind string, fn func())` helper with `recover()`, stack trace logging (`runtime/debug.Stack()`), and `operation.failed` event broadcast
+- Replace all 5 async `go func()` calls (lines ~727, ~1035, ~1386, ~1471, ~1700) and subscriber cleanup goroutine (line ~189)
+
+**4.3.5: Input Size Limits (S24, Sec-S4, Sec-S5)**
+- **Modify:** `internal/service/local.go` — `RespondToPrompt`: limit response to 50KB; `RespondToBlocker`: limit each answer to 50KB, max 50 answers
+- **Modify:** `internal/server/handlers.go` — server-side validation on `respondToPrompt` and `respondToBlocker` (byte-based limits, strictly below service limits per existing pattern)
+
+**4.3.6: Use rand/v2 (S2)**
+- **Modify:** `internal/client/events.go` — replace `math/rand` with `math/rand/v2`
+
+**4.3.7: Server Addr() Fix (S29)**
+- **Modify:** `internal/server/server.go` — store `net.Listener` on Server struct, return `s.listener.Addr().String()` from `Addr()` for `:0` (random port) support
+
+**4.3.8: Server httpSrv Race (S30)**
+- **Modify:** `internal/server/server.go` — add `sync.Mutex` to guard `Start`, `Shutdown`, and `Addr` lifecycle methods
+
+**4.3.9: SSE Event Size Limit (S8)**
+- **Modify:** `internal/client/events.go` — if `len(ev.Data) > 10 MiB`, log warning and skip event
+
+**4.3.10: baseURL Validation (S12)**
+- **Modify:** `internal/client/client.go` — validate `baseURL` has scheme and host; reject at first request if invalid
+
+**4.3.11: Full Security Audit**
 - **Agent:** security-auditor
-- **Description:** Audit server for SSRF, path traversal, rate limiting, input validation. Verify existing SSRF protections (`internal/httputil`) apply to server-initiated requests.
+- Audit checklist: (1) `crypto/rand` for token, (2) 0600 token file, (3) constant-time comparison, (4) auth covers all endpoints except health, (5) SSE auth before stream, (6) CORS restricted, (7) security headers on all responses, (8) no SSRF vectors, (9) no path traversal, (10) all input limits enforced at server + service layers, (11) async panic recovery, (12) no Go type names in errors
+
+**Items skipped (with rationale):**
+
+| Item | Reason |
+|------|--------|
+| S1 (400 mapping) | Low impact, cosmetic |
+| S9 (Error sanitization in reconnect) | Errors are logged, not exposed to API |
+| S10 (TLS enforcement) | Design constraint: no TLS at server level (reverse proxy) |
+| S13 (Test coverage: multi-client, reconnect) | Valuable but non-blocking |
+| S5 (Multi-subscriber connected tracking) | Single-user tool, low priority |
+
+**Items already resolved:**
+
+| Item | Status |
+|------|--------|
+| S27 (JSON type name leak) | Already returns generic "invalid JSON" message in `decodeBody` |
+| S7 (Backoff reset) | Already resets delay on successful reconnect in `events.go` |
+
 - **Acceptance criteria:**
-  - [ ] No SSRF vectors in API
-  - [ ] No path traversal in file operations
-  - [ ] All inputs validated and bounded
-  - [ ] Findings documented and fixed
+  - [ ] All deferred items addressed or explicitly skipped with rationale
+  - [ ] Security audit passes with 0 blocking findings
+  - [ ] All existing tests pass
+  - [ ] 0 lint findings (`golangci-lint run`)
+  - [ ] No data races (`go test -race ./...`)
 
 ### Phase 4 Review Checkpoint
 
 - [ ] **Gate:** ✋ Full security audit review
+
+### Verification
+
+After all steps complete:
+
+```bash
+# Build
+go build ./...
+
+# Full test suite with race detector
+go test -race ./...
+
+# Lint
+golangci-lint run
+
+# Manual verification: auth
+toasters serve &
+curl http://localhost:8080/api/v1/health          # 200 (no auth)
+curl http://localhost:8080/api/v1/operator/status  # 401
+TOKEN=$(cat ~/.config/toasters/server.token)
+curl -H "Authorization: Bearer $TOKEN" http://localhost:8080/api/v1/operator/status  # 200
+
+# Manual verification: no-auth mode
+toasters serve --no-auth &
+curl http://localhost:8080/api/v1/operator/status  # 200 (no auth)
+
+# Manual verification: connection resilience
+toasters serve &
+toasters --server localhost:8080   # TUI shows "connected"
+# Kill server → TUI shows "disconnected"
+toasters serve &                   # TUI shows "connected" again
+```
+
+### Risks
+
+| Risk | Likelihood | Impact | Mitigation |
+|------|-----------|--------|------------|
+| Auth middleware ordering allows bypass | Low | High | Unit tests verify 401 for every non-health endpoint |
+| Token auto-discovery fails across machines | Low | Medium | By design — remote access requires manual token copy |
+| CORS restriction breaks legitimate use cases | Low | Medium | Start with localhost-only; add `--cors-origin` if needed |
+| Panic recovery masks bugs | Low | Low | Recovery logs full stack trace; surfaced as operation.failed |
+
+### Files Modified
+
+**New files:**
+- `internal/auth/token.go` — token generation, persistence, loading
+- `internal/auth/token_test.go` — token package tests
+
+**Modified files:**
+- `internal/server/middleware.go` — auth middleware, CORS restriction, security headers
+- `internal/server/server.go` — WithToken option, Addr() fix, httpSrv race fix
+- `internal/server/handlers.go` — respondToPrompt/respondToBlocker input validation
+- `internal/server/types.go` — connection event wire types
+- `internal/client/client.go` — WithToken option, baseURL validation
+- `internal/client/http.go` — auth header injection
+- `internal/client/events.go` — SSE auth header, connection events, rand/v2, event size limit
+- `internal/client/types.go` — connection event wire types
+- `internal/service/events.go` — connection.lost/restored event types + payloads
+- `internal/service/local.go` — sanitizeName hardening, input limits, safeGo panic recovery
+- `internal/tui/event_consumer.go` — connection event handling
+- `internal/tui/messages.go` — ConnectionLostMsg, ConnectionRestoredMsg
+- `internal/tui/model.go` — connection status update handlers
+- `cmd/root.go` (or serve command file) — token generation/loading wiring
 
 ---
 
@@ -810,7 +1044,7 @@ Phase 3: Mode Wiring (depends on Phase 2)
     → 3.2 CLI Subcommands (send, jobs, teams, status)
 
 Phase 4: Hardening (depends on Phase 3)
-  4.1 Authentication
-  4.2 Connection Resilience
-  4.3 Security Audit
+  4.1 Authentication ──────────┐
+  4.2 Connection Resilience ───┤
+                               └──→ 4.3 Security Audit + Deferred Fixes
 ```
