@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -48,9 +49,24 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 	// are kept alive by heartbeats and cleaned up on client disconnect.
 	_ = rc.SetWriteDeadline(time.Time{})
 
+	// Create a cancellable context for this SSE connection.
+	ctx, cancel := context.WithCancel(r.Context())
+
+	// Register this connection for cleanup during shutdown.
+	conn := &sseConn{cancel: cancel}
+	s.sseConnTracker.mu.Lock()
+	s.sseConnTracker.conns[conn] = struct{}{}
+	s.sseConnTracker.mu.Unlock()
+
+	defer func() {
+		cancel()
+		s.sseConnTracker.mu.Lock()
+		delete(s.sseConnTracker.conns, conn)
+		s.sseConnTracker.mu.Unlock()
+	}()
+
 	// Subscribe to the service event stream. The subscription is cancelled
-	// when the client disconnects (r.Context() is cancelled).
-	ctx := r.Context()
+	// when the client disconnects (ctx is cancelled).
 	ch := s.svc.Events().Subscribe(ctx)
 
 	// Per-connection sequence counter.

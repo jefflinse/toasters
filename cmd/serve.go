@@ -299,6 +299,10 @@ func runServe(cmd *cobra.Command, args []string) error {
 	<-sigChan
 	if shuttingDown.CompareAndSwap(false, true) {
 		fmt.Fprintf(os.Stderr, "\nShutting down...\n")
+
+		// Force-close all SSE connections first to unblock writes.
+		srv.CloseAllSSEConnections()
+
 		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer shutdownCancel()
 

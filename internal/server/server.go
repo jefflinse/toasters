@@ -16,9 +16,14 @@ import (
 	"github.com/jefflinse/toasters/internal/service"
 )
 
+// sseConn represents an active SSE connection for tracking purposes.
+type sseConn struct {
+	cancel context.CancelFunc
+}
+
 // Server wraps a service.Service and exposes it over HTTP.
 type Server struct {
-	mu        sync.Mutex   // guards httpSrv and listener
+	mu        sync.Mutex // guards httpSrv and listener
 	svc       service.Service
 	httpSrv   *http.Server
 	listener  net.Listener
@@ -26,6 +31,12 @@ type Server struct {
 	startTime time.Time
 	sseConns  atomic.Int32 // current SSE connection count
 	token     string       // bearer token; empty means auth disabled
+
+	// sseConnTracker tracks active SSE connections for graceful shutdown.
+	sseConnTracker struct {
+		mu    sync.Mutex
+		conns map[*sseConn]struct{}
+	}
 }
 
 // Option configures a Server.
@@ -54,6 +65,7 @@ func New(svc service.Service, opts ...Option) *Server {
 		logger:    slog.Default(),
 		startTime: time.Now(),
 	}
+	s.sseConnTracker.conns = make(map[*sseConn]struct{})
 	for _, opt := range opts {
 		opt(s)
 	}
@@ -114,6 +126,18 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	}
 	s.logger.Info("server shutting down")
 	return s.httpSrv.Shutdown(ctx)
+}
+
+// CloseAllSSEConnections force-closes all active SSE connections by cancelling
+// their contexts. This should be called before Shutdown to ensure blocked SSE
+// writes can complete quickly.
+func (s *Server) CloseAllSSEConnections() {
+	s.sseConnTracker.mu.Lock()
+	defer s.sseConnTracker.mu.Unlock()
+
+	for conn := range s.sseConnTracker.conns {
+		conn.cancel()
+	}
 }
 
 // Addr returns the address the server is listening on, or empty string if

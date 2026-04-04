@@ -6,6 +6,7 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestReader_AnthropicStyleEvents(t *testing.T) {
@@ -237,6 +238,160 @@ func TestReader_ContextCancellation(t *testing.T) {
 	_, ok = r.Next(ctx)
 	if ok {
 		t.Error("expected false after context cancellation")
+	}
+}
+
+// TestReaderContextCancellation_WhileBlocked verifies that the SSE reader
+// respects context cancellation immediately even when blocked waiting for data.
+//
+// This test would hang indefinitely with a blocking scanner.Scan() implementation
+// because the scanner would block forever on the pipe that never receives data.
+// The context-aware implementation (using a goroutine with select on ctx.Done())
+// allows Next() to return immediately when the context is cancelled.
+//
+// To verify this test would fail without the fix:
+// 1. Replace the goroutine-based Next() with a simple scanner.Scan() call
+// 2. Run this test - it will timeout after 1 second
+func TestReaderContextCancellation_WhileBlocked(t *testing.T) {
+	t.Parallel()
+
+	// Use a pipe to simulate a slow/stuck connection.
+	// The write end is never written to, so reads will block.
+	pr, pw := io.Pipe()
+	defer func() { _ = pw.Close() }()
+	defer func() { _ = pr.Close() }()
+
+	r := NewReader(pr)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Start a goroutine to cancel the context after a short delay.
+	// If the reader is properly context-aware, Next() should return
+	// immediately when the context is cancelled.
+	cancelDelay := 50 * time.Millisecond
+	go func() {
+		time.Sleep(cancelDelay)
+		cancel()
+	}()
+
+	// Call Next() - this should block until context is cancelled.
+	start := time.Now()
+	_, ok := r.Next(ctx)
+	elapsed := time.Since(start)
+
+	// Next() should return false because the context was cancelled.
+	if ok {
+		t.Error("expected Next() to return false after context cancellation")
+	}
+
+	// Verify that Next() returned promptly (within 100ms of context cancellation).
+	// Without the context-aware implementation, this would block indefinitely.
+	maxAllowedTime := cancelDelay + 100*time.Millisecond
+	if elapsed > maxAllowedTime {
+		t.Errorf("Next() took %v to return after context cancellation, expected < %v",
+			elapsed, maxAllowedTime)
+	}
+
+	t.Logf("Next() returned in %v after context cancellation", elapsed-cancelDelay)
+}
+
+// blockingReader is an io.Reader that blocks until closed.
+type blockingReader struct {
+	ch chan struct{}
+}
+
+func newBlockingReader() *blockingReader {
+	return &blockingReader{ch: make(chan struct{})}
+}
+
+func (r *blockingReader) Read(p []byte) (n int, err error) {
+	<-r.ch
+	return 0, io.EOF
+}
+
+func (r *blockingReader) Close() {
+	close(r.ch)
+}
+
+// TestReaderContextCancellation_ImmediateReturn verifies that Next() returns
+// immediately when the context is already cancelled before Next() is called.
+func TestReaderContextCancellation_ImmediateReturn(t *testing.T) {
+	t.Parallel()
+
+	// Create a reader with a blocking source.
+	br := newBlockingReader()
+	defer br.Close()
+
+	r := NewReader(br)
+
+	// Create an already-cancelled context.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	// Next() should return immediately without blocking.
+	start := time.Now()
+	_, ok := r.Next(ctx)
+	elapsed := time.Since(start)
+
+	if ok {
+		t.Error("expected Next() to return false for cancelled context")
+	}
+
+	// Should return within 10ms (being generous).
+	if elapsed > 10*time.Millisecond {
+		t.Errorf("Next() took %v for already-cancelled context, expected < 10ms", elapsed)
+	}
+}
+
+// TestReaderContextCancellation_DuringMultipleReads verifies that context
+// cancellation works correctly across multiple read attempts.
+func TestReaderContextCancellation_DuringMultipleReads(t *testing.T) {
+	t.Parallel()
+
+	// Create a reader with some initial data followed by a blocking section.
+	pr, pw := io.Pipe()
+	defer func() { _ = pr.Close() }()
+
+	// Write initial data, then block.
+	go func() {
+		defer func() { _ = pw.Close() }()
+		// Write one complete event.
+		_, _ = pw.Write([]byte("event: test\ndata: hello\n\n"))
+		// Keep the pipe open to simulate a slow connection.
+		time.Sleep(2 * time.Second)
+	}()
+
+	r := NewReader(pr)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Read the first event successfully.
+	ev, ok := r.Next(ctx)
+	if !ok {
+		t.Fatal("expected first event")
+	}
+	if ev.Data != "hello" {
+		t.Errorf("event data = %q, want hello", ev.Data)
+	}
+
+	// Now cancel the context while waiting for the next event.
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+	}()
+
+	// Next() should return promptly due to context cancellation.
+	start := time.Now()
+	_, ok = r.Next(ctx)
+	elapsed := time.Since(start)
+
+	if ok {
+		t.Error("expected Next() to return false after context cancellation")
+	}
+
+	// Should return within 150ms (50ms delay + 100ms tolerance).
+	if elapsed > 150*time.Millisecond {
+		t.Errorf("Next() took %v after context cancellation, expected < 150ms", elapsed)
 	}
 }
 

@@ -41,46 +41,71 @@ func NewReader(r io.Reader) *Reader {
 
 // Next reads the next SSE event from the stream. It returns the event and true
 // if an event was read, or a zero Event and false if the stream ended.
-// The caller should check ctx.Err() between calls if cancellation is needed.
+// The ctx parameter is used for cancellation.
 //
-// Next blocks until a complete event (data line) is available or the stream ends.
+// Next blocks until a complete event (data line) is available, the stream ends,
+// or ctx is cancelled.
 func (r *Reader) Next(ctx context.Context) (Event, bool) {
-	for r.scanner.Scan() {
+	for {
+		// Check context before attempting to read
 		if ctx.Err() != nil {
 			return Event{}, false
 		}
 
-		line := r.scanner.Text()
-
-		// Blank line = end of SSE event block.
-		if line == "" {
-			r.eventType = ""
-			continue
+		// Use a goroutine to make scanner.Scan() cancellable
+		type scanResult struct {
+			ok   bool
+			line string
 		}
 
-		// Capture the event type.
-		if strings.HasPrefix(line, "event: ") {
-			r.eventType = strings.TrimPrefix(line, "event: ")
-			continue
-		}
+		resultCh := make(chan scanResult, 1)
+		go func() {
+			if r.scanner.Scan() {
+				resultCh <- scanResult{ok: true, line: r.scanner.Text()}
+			} else {
+				resultCh <- scanResult{ok: false}
+			}
+		}()
 
-		// We only process data lines.
-		// Handle both "data: " (with space) and "data:" (without space).
-		if !strings.HasPrefix(line, "data:") {
-			continue
-		}
+		// Wait for either the scan to complete or context cancellation
+		select {
+		case <-ctx.Done():
+			return Event{}, false
+		case result := <-resultCh:
+			if !result.ok {
+				return Event{}, false
+			}
 
-		data := strings.TrimPrefix(line, "data:")
-		data = strings.TrimSpace(data)
+			line := result.line
 
-		ev := Event{
-			Type: r.eventType,
-			Data: data,
+			// Blank line = end of SSE event block.
+			if line == "" {
+				r.eventType = ""
+				continue
+			}
+
+			// Capture the event type.
+			if strings.HasPrefix(line, "event: ") {
+				r.eventType = strings.TrimPrefix(line, "event: ")
+				continue
+			}
+
+			// We only process data lines.
+			// Handle both "data: " (with space) and "data:" (without space).
+			if !strings.HasPrefix(line, "data:") {
+				continue
+			}
+
+			data := strings.TrimPrefix(line, "data:")
+			data = strings.TrimSpace(data)
+
+			ev := Event{
+				Type: r.eventType,
+				Data: data,
+			}
+			return ev, true
 		}
-		return ev, true
 	}
-
-	return Event{}, false
 }
 
 // Err returns the first non-EOF error encountered by the underlying scanner.
