@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -17,11 +18,14 @@ import (
 
 // Server wraps a service.Service and exposes it over HTTP.
 type Server struct {
+	mu        sync.Mutex   // guards httpSrv and listener
 	svc       service.Service
 	httpSrv   *http.Server
+	listener  net.Listener
 	logger    *slog.Logger
 	startTime time.Time
 	sseConns  atomic.Int32 // current SSE connection count
+	token     string       // bearer token; empty means auth disabled
 }
 
 // Option configures a Server.
@@ -31,6 +35,15 @@ type Option func(*Server)
 func WithLogger(logger *slog.Logger) Option {
 	return func(s *Server) {
 		s.logger = logger
+	}
+}
+
+// WithToken sets the bearer token for the server. When non-empty, all requests
+// except GET /api/v1/health must supply a matching Authorization: Bearer header.
+// Pass an empty string (or omit this option) to disable authentication.
+func WithToken(token string) Option {
+	return func(s *Server) {
+		s.token = token
 	}
 }
 
@@ -50,15 +63,20 @@ func New(svc service.Service, opts ...Option) *Server {
 // Start begins listening on the given address. It launches the HTTP server
 // in a background goroutine and returns immediately. Use Shutdown to stop.
 func (s *Server) Start(addr string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	mux := http.NewServeMux()
 	s.registerRoutes(mux)
 
-	// Build middleware stack: Recovery → Request ID → Logging → CORS → Content-Type.
+	// Build middleware stack: Recovery → Request ID → Auth → Logging → CORS → Security Headers → Content-Type.
 	middleware := chain(
 		recoveryMiddleware,
 		requestIDMiddleware,
+		authMiddleware(s.token),
 		loggingMiddleware,
 		corsMiddleware,
+		securityHeadersMiddleware,
 		contentTypeMiddleware,
 	)
 
@@ -74,6 +92,7 @@ func (s *Server) Start(addr string) error {
 	if err != nil {
 		return fmt.Errorf("listening on %s: %w", addr, err)
 	}
+	s.listener = ln
 
 	s.logger.Info("server starting", "addr", ln.Addr().String())
 
@@ -88,6 +107,8 @@ func (s *Server) Start(addr string) error {
 
 // Shutdown gracefully shuts down the HTTP server.
 func (s *Server) Shutdown(ctx context.Context) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.httpSrv == nil {
 		return nil
 	}
@@ -96,12 +117,14 @@ func (s *Server) Shutdown(ctx context.Context) error {
 }
 
 // Addr returns the address the server is listening on, or empty string if
-// not started.
+// not started. For servers bound on :0, this returns the actual resolved port.
 func (s *Server) Addr() string {
-	if s.httpSrv == nil {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.listener == nil {
 		return ""
 	}
-	return s.httpSrv.Addr
+	return s.listener.Addr().String()
 }
 
 // registerRoutes registers all API routes on the given mux.

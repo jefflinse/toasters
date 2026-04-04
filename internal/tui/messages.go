@@ -233,6 +233,14 @@ type MCPStatusMsg struct {
 // DefinitionsReloadedMsg is sent when definition files change and are reloaded.
 type DefinitionsReloadedMsg struct{}
 
+// ConnectionLostMsg is sent when the SSE connection to the server drops.
+type ConnectionLostMsg struct {
+	Error string
+}
+
+// ConnectionRestoredMsg is sent when the SSE connection is re-established.
+type ConnectionRestoredMsg struct{}
+
 // OperatorTextMsg carries streamed text from the operator LLM.
 type OperatorTextMsg struct {
 	Text string

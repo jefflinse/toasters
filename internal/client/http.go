@@ -23,6 +23,9 @@ var (
 	// ErrConnectionFailed indicates the client could not reach the server.
 	ErrConnectionFailed = errors.New("connection failed")
 
+	// ErrUnauthorized indicates a 401 Unauthorized response.
+	ErrUnauthorized = errors.New("unauthorized")
+
 	// ErrConflict indicates a 409 Conflict response.
 	ErrConflict = errors.New("conflict")
 
@@ -48,6 +51,15 @@ var (
 type httpTransport struct {
 	client  *http.Client
 	baseURL string
+	token   string
+}
+
+// setAuth injects the Authorization: Bearer header onto req when a token is
+// configured. It is a no-op when token is empty.
+func (t *httpTransport) setAuth(req *http.Request) {
+	if t.token != "" {
+		req.Header.Set("Authorization", "Bearer "+t.token)
+	}
 }
 
 // get sends a GET request to the given path.
@@ -57,6 +69,7 @@ func (t *httpTransport) get(ctx context.Context, path string) (*http.Response, e
 		return nil, fmt.Errorf("creating GET request: %w", err)
 	}
 	req.Header.Set("Accept", "application/json")
+	t.setAuth(req)
 	resp, err := t.client.Do(req)
 	if err != nil {
 		if connErr := asConnectionError(err); connErr != nil {
@@ -84,6 +97,7 @@ func (t *httpTransport) delete(ctx context.Context, path string) (*http.Response
 		return nil, fmt.Errorf("creating DELETE request: %w", err)
 	}
 	req.Header.Set("Accept", "application/json")
+	t.setAuth(req)
 	resp, err := t.client.Do(req)
 	if err != nil {
 		if connErr := asConnectionError(err); connErr != nil {
@@ -113,6 +127,7 @@ func (t *httpTransport) doWithBody(ctx context.Context, method, path string, bod
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
+	t.setAuth(req)
 
 	resp, err := t.client.Do(req)
 	if err != nil {
@@ -186,6 +201,8 @@ func extractErrorMessage(resp *http.Response) string {
 // wrapping the server's error message for context.
 func mapStatusToError(status int, msg string) error {
 	switch status {
+	case http.StatusUnauthorized:
+		return fmt.Errorf("%w: %s", ErrUnauthorized, msg)
 	case http.StatusNotFound:
 		return fmt.Errorf("%w: %s", service.ErrNotFound, msg)
 	case http.StatusConflict:

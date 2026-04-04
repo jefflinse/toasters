@@ -1356,6 +1356,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		slog.Info("definitions reloaded from file watcher")
 		return m, nil
 
+	case ConnectionLostMsg:
+		m.stats.Connected = false
+		return m, m.addToast("Server connection lost, reconnecting...", toastWarning)
+
+	case ConnectionRestoredMsg:
+		m.stats.Connected = true
+		return m, m.addToast("Server connection restored", toastSuccess)
+
 	case OperatorTextMsg:
 		slog.Debug("operator text", "len", len(msg.Text))
 		// Accumulate streamed text into currentResponse.

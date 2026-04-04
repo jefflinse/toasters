@@ -99,6 +99,17 @@ const (
 	// EventTypeHeartbeat is a keepalive event sent every 15 seconds to prevent
 	// SSE connections from timing out. Payload: HeartbeatPayload.
 	EventTypeHeartbeat EventType = "heartbeat"
+
+	// EventTypeConnectionLost is a client-only event emitted when the SSE
+	// connection to the server drops. Not sent by the server — synthesized
+	// by RemoteClient. Payload: ConnectionLostPayload.
+	EventTypeConnectionLost EventType = "connection.lost"
+
+	// EventTypeConnectionRestored is a client-only event emitted when the SSE
+	// connection is successfully re-established after a disconnect.
+	// Not sent by the server — synthesized by RemoteClient.
+	// Payload: ConnectionRestoredPayload.
+	EventTypeConnectionRestored EventType = "connection.restored"
 )
 
 // ---------------------------------------------------------------------------
@@ -314,6 +325,17 @@ type HeartbeatPayload struct {
 	// ServerTime is the server's current time, useful for clock-skew detection.
 	ServerTime time.Time
 }
+
+// ConnectionLostPayload is the payload for EventTypeConnectionLost events.
+// Client-only — synthesized by RemoteClient when the SSE connection drops.
+type ConnectionLostPayload struct {
+	// Error is the human-readable reason the connection was lost.
+	Error string
+}
+
+// ConnectionRestoredPayload is the payload for EventTypeConnectionRestored events.
+// Client-only — synthesized by RemoteClient when the SSE connection is re-established.
+type ConnectionRestoredPayload struct{}
 
 // ---------------------------------------------------------------------------
 // EventService interface

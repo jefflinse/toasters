@@ -106,6 +106,16 @@ func translateEvent(ev service.Event) tea.Msg {
 		// These are forwarded as OperatorEventMsg for feed display.
 		return OperatorEventMsg{Event: ev}
 
+	case service.EventTypeConnectionLost:
+		p, ok := ev.Payload.(service.ConnectionLostPayload)
+		if !ok {
+			return nil
+		}
+		return ConnectionLostMsg{Error: p.Error}
+
+	case service.EventTypeConnectionRestored:
+		return ConnectionRestoredMsg{}
+
 	case service.EventTypeHeartbeat:
 		// Heartbeats are not forwarded to the TUI.
 		return nil

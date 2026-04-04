@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -396,7 +397,10 @@ func setupTestServer(t *testing.T, svc service.Service) *client.RemoteClient {
 		_ = srv.Shutdown(ctx)
 	})
 
-	rc := client.New(fmt.Sprintf("http://%s", addr))
+	rc, err := client.New(fmt.Sprintf("http://%s", addr))
+	if err != nil {
+		t.Fatalf("creating client: %v", err)
+	}
 	t.Cleanup(func() { rc.Close() })
 
 	return rc
@@ -1097,4 +1101,74 @@ func keysOf[K comparable, V any](m map[K]V) []K {
 		keys = append(keys, k)
 	}
 	return keys
+}
+
+// ---------------------------------------------------------------------------
+// URL validation tests
+// ---------------------------------------------------------------------------
+
+func TestNew_ValidURLs(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		baseURL string
+	}{
+		{"http localhost with port", "http://localhost:8080"},
+		{"https example.com", "https://example.com"},
+		{"http IP with port", "http://192.168.1.1:3000"},
+		{"https subdomain", "https://api.example.com"},
+		{"http localhost no port", "http://localhost"},
+		{"https domain with port", "https://example.com:443"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			rc, err := client.New(tt.baseURL)
+			if err != nil {
+				t.Fatalf("New(%q) returned error: %v", tt.baseURL, err)
+			}
+			if rc == nil {
+				t.Fatal("New returned nil client")
+			}
+			rc.Close()
+		})
+	}
+}
+
+func TestNew_InvalidURLs(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		baseURL   string
+		wantInErr string // substring expected in error message
+	}{
+		{"empty string", "", "scheme must be http or https"},
+		{"no scheme", "localhost:8080", "scheme must be http or https"},
+		{"no host with port only", ":8080", "missing protocol scheme"},
+		{"no host http", "http://", "missing host"},
+		{"no host https", "https://", "missing host"},
+		{"invalid scheme ftp", "ftp://example.com", "scheme must be http or https"},
+		{"invalid scheme ws", "ws://localhost:8080", "scheme must be http or https"},
+		{"invalid scheme wss", "wss://localhost:8080", "scheme must be http or https"},
+		{"scheme only", "http:", "missing host"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			rc, err := client.New(tt.baseURL)
+			if err == nil {
+				if rc != nil {
+					rc.Close()
+				}
+				t.Fatalf("New(%q) expected error, got nil", tt.baseURL)
+			}
+			if !strings.Contains(err.Error(), tt.wantInErr) {
+				t.Errorf("New(%q) error = %q, want error containing %q", tt.baseURL, err.Error(), tt.wantInErr)
+			}
+		})
+	}
 }

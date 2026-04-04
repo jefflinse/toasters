@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
@@ -33,9 +34,11 @@ var _ Service = (*LocalService)(nil)
 
 // Size limits for input validation.
 const (
-	maxMessageLen = 102400           // 100KB — maximum user message size
-	maxPromptLen  = 51200            // 50KB — maximum generation prompt size
-	maxCopySize   = 50 * 1024 * 1024 // 50MB — maximum file copy size
+	maxMessageLen     = 102400           // 100KB — maximum user message size
+	maxPromptLen      = 51200            // 50KB — maximum generation prompt size
+	maxResponseLen    = 51200            // 50KB — maximum prompt/blocker response size
+	maxBlockerAnswers = 50               // maximum number of blocker answers
+	maxCopySize       = 50 * 1024 * 1024 // 50MB — maximum file copy size
 )
 
 // maxConcurrentOps bounds the number of concurrent async operations (generate,
@@ -100,14 +103,28 @@ type localJobService struct{ svc *LocalService }
 // conflicting with JobService methods of the same name (List, Get, Cancel).
 type localSessionService struct{ svc *LocalService }
 
+// nameReplacer strips characters that could cause YAML injection when
+// interpolated into frontmatter templates.
+var nameReplacer = strings.NewReplacer(
+	"\n", "",
+	"\r", "",
+	"\x00", "",
+	":", "",
+	"#", "",
+	"\"", "",
+	"'", "",
+	"{", "",
+	"}", "",
+	"[", "",
+	"]", "",
+	"|", "",
+	">", "",
+)
+
 // sanitizeName strips characters that could cause YAML injection when
-// interpolated into frontmatter templates. Newlines, carriage returns, and
-// null bytes are removed entirely.
+// interpolated into frontmatter templates.
 func sanitizeName(name string) string {
-	name = strings.ReplaceAll(name, "\n", "")
-	name = strings.ReplaceAll(name, "\r", "")
-	name = strings.ReplaceAll(name, "\x00", "")
-	return name
+	return nameReplacer.Replace(name)
 }
 
 // NewLocal creates a new LocalService from the given config.
@@ -142,6 +159,33 @@ func (s *LocalService) tryAcquireAsync() bool {
 // releaseAsync releases a slot after an async operation completes.
 func (s *LocalService) releaseAsync() {
 	<-s.asyncSem
+}
+
+// safeGo launches fn in a goroutine with panic recovery. If fn panics,
+// the stack trace is logged and an operation.failed event is broadcast.
+func (s *LocalService) safeGo(operationID, kind string, fn func()) {
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				stack := debug.Stack()
+				slog.Error("panic in async operation",
+					"operation_id", operationID,
+					"kind", kind,
+					"panic", fmt.Sprintf("%v", r),
+					"stack", string(stack),
+				)
+				s.broadcast(Event{
+					Type:        EventTypeOperationFailed,
+					OperationID: operationID,
+					Payload: OperationFailedPayload{
+						Kind:  kind,
+						Error: "internal error: unexpected panic",
+					},
+				})
+			}
+		}()
+		fn()
+	}()
 }
 
 // SetOperator sets the operator on the service after construction. This is
@@ -187,6 +231,11 @@ func (s *LocalService) subscribe(ctx context.Context) <-chan Event {
 	// Remove subscriber when either the subscriber's context or the service
 	// context is cancelled, whichever comes first.
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				slog.Error("panic in subscriber cleanup", "panic", fmt.Sprintf("%v", r))
+			}
+		}()
 		select {
 		case <-ctx.Done():
 		case <-s.ctx.Done():
@@ -514,6 +563,10 @@ func (s *LocalService) SendMessage(ctx context.Context, message string) (string,
 
 // RespondToPrompt sends the user's answer to an active ask_user prompt.
 func (s *LocalService) RespondToPrompt(ctx context.Context, requestID string, response string) error {
+	// Validate size before checking operator configuration.
+	if len(response) > maxResponseLen {
+		return fmt.Errorf("response too large: %d bytes exceeds maximum %d", len(response), maxResponseLen)
+	}
 	if s.cfg.Operator == nil {
 		return fmt.Errorf("operator not configured")
 	}
@@ -564,6 +617,18 @@ func (s *LocalService) History(_ context.Context) ([]ChatEntry, error) {
 
 // RespondToBlocker submits the user's answers to a blocker reported by an agent.
 func (s *LocalService) RespondToBlocker(ctx context.Context, jobID, taskID string, answers []string) error {
+	// Validate number of answers before checking operator configuration.
+	if len(answers) > maxBlockerAnswers {
+		return fmt.Errorf("too many answers: %d exceeds maximum %d", len(answers), maxBlockerAnswers)
+	}
+
+	// Validate each answer size before checking operator configuration.
+	for i, answer := range answers {
+		if len(answer) > maxResponseLen {
+			return fmt.Errorf("answer %d too large: %d bytes exceeds maximum %d", i, len(answer), maxResponseLen)
+		}
+	}
+
 	if s.cfg.Operator == nil {
 		return fmt.Errorf("operator not configured")
 	}
@@ -724,7 +789,7 @@ func (s *LocalService) GenerateSkill(ctx context.Context, prompt string) (string
 		return "", fmt.Errorf("too many concurrent operations (max %d)", maxConcurrentOps)
 	}
 
-	go func() {
+	s.safeGo(operationID, "generate_skill", func() {
 		defer s.releaseAsync()
 
 		genCtx, genCancel := context.WithTimeout(s.ctx, 30*time.Second)
@@ -782,7 +847,7 @@ func (s *LocalService) GenerateSkill(ctx context.Context, prompt string) (string
 				},
 			},
 		})
-	}()
+	})
 
 	return operationID, nil
 }
@@ -1032,7 +1097,7 @@ func (s *LocalService) GenerateAgent(ctx context.Context, prompt string) (string
 		return "", fmt.Errorf("too many concurrent operations (max %d)", maxConcurrentOps)
 	}
 
-	go func() {
+	s.safeGo(operationID, "generate_agent", func() {
 		defer s.releaseAsync()
 
 		genCtx, genCancel := context.WithTimeout(s.ctx, 30*time.Second)
@@ -1089,7 +1154,7 @@ func (s *LocalService) GenerateAgent(ctx context.Context, prompt string) (string
 				},
 			},
 		})
-	}()
+	})
 
 	return operationID, nil
 }
@@ -1383,7 +1448,7 @@ func (s *LocalService) PromoteTeam(ctx context.Context, teamID string) (string, 
 		return "", fmt.Errorf("too many concurrent operations (max %d)", maxConcurrentOps)
 	}
 
-	go func() {
+	s.safeGo(operationID, "promote_team", func() {
 		defer s.releaseAsync()
 
 		var promoteErr error
@@ -1429,7 +1494,7 @@ func (s *LocalService) PromoteTeam(ctx context.Context, teamID string) (string, 
 				},
 			},
 		})
-	}()
+	})
 
 	return operationID, nil
 }
@@ -1468,7 +1533,7 @@ func (s *LocalService) GenerateTeam(ctx context.Context, prompt string) (string,
 		return "", fmt.Errorf("too many concurrent operations (max %d)", maxConcurrentOps)
 	}
 
-	go func() {
+	s.safeGo(operationID, "generate_team", func() {
 		defer s.releaseAsync()
 
 		genCtx, genCancel := context.WithTimeout(s.ctx, 30*time.Second)
@@ -1526,7 +1591,7 @@ func (s *LocalService) GenerateTeam(ctx context.Context, prompt string) (string,
 				},
 			},
 		})
-	}()
+	})
 
 	return operationID, nil
 }
@@ -1697,7 +1762,7 @@ func (s *LocalService) DetectCoordinator(ctx context.Context, teamID string) (st
 		return "", fmt.Errorf("too many concurrent operations (max %d)", maxConcurrentOps)
 	}
 
-	go func() {
+	s.safeGo(operationID, "detect_coordinator", func() {
 		defer s.releaseAsync()
 
 		if len(workers) == 0 {
@@ -1782,7 +1847,7 @@ func (s *LocalService) DetectCoordinator(ctx context.Context, teamID string) (st
 				},
 			},
 		})
-	}()
+	})
 
 	return operationID, nil
 }

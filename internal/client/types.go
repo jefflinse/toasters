@@ -413,6 +413,12 @@ type wireHeartbeatPayload struct {
 	ServerTime time.Time `json:"server_time"`
 }
 
+type wireConnectionLostPayload struct {
+	Error string `json:"error"`
+}
+
+type wireConnectionRestoredPayload struct{}
+
 // ---------------------------------------------------------------------------
 // Wire → service converter functions
 // ---------------------------------------------------------------------------
@@ -968,6 +974,18 @@ func parseSSEPayload(eventType string, raw json.RawMessage) (any, error) {
 		return service.HeartbeatPayload{
 			ServerTime: w.ServerTime,
 		}, nil
+
+	case service.EventTypeConnectionLost:
+		var w wireConnectionLostPayload
+		if err := json.Unmarshal(raw, &w); err != nil {
+			return nil, fmt.Errorf("decoding connection.lost payload: %w", err)
+		}
+		return service.ConnectionLostPayload{
+			Error: w.Error,
+		}, nil
+
+	case service.EventTypeConnectionRestored:
+		return service.ConnectionRestoredPayload{}, nil
 
 	default:
 		// Unknown event type — forward-compatible, ignore payload.

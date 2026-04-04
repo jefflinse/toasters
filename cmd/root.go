@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -13,7 +14,9 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/jefflinse/toasters/defaults"
+	"github.com/jefflinse/toasters/internal/auth"
 	"github.com/jefflinse/toasters/internal/bootstrap"
+	"github.com/jefflinse/toasters/internal/client"
 	"github.com/jefflinse/toasters/internal/compose"
 	"github.com/jefflinse/toasters/internal/config"
 	"github.com/jefflinse/toasters/internal/db"
@@ -26,6 +29,8 @@ import (
 	"github.com/jefflinse/toasters/internal/tui"
 )
 
+var serverAddr string
+
 var rootCmd = &cobra.Command{
 	Use:   "toasters",
 	Short: "A TUI orchestrator for agentic coding work",
@@ -34,6 +39,7 @@ var rootCmd = &cobra.Command{
 
 func init() {
 	rootCmd.Flags().String("operator-endpoint", "", "LM Studio endpoint URL (overrides config)")
+	rootCmd.Flags().StringVar(&serverAddr, "server", "", "connect to remote server at address (e.g., localhost:8080)")
 }
 
 // Execute runs the root command.
@@ -145,12 +151,12 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 		rt.SetMCPCaller(truncatingCaller, mcp.ToRuntimeToolDefs(mcpManager.Tools()))
 	}
 
-	var client provider.Provider
+	var llmProvider provider.Provider
 	switch cfg.Operator.Provider {
 	case "anthropic":
-		client = provider.NewAnthropic("anthropic", "", provider.WithAnthropicModel(cfg.Operator.Model))
+		llmProvider = provider.NewAnthropic("anthropic", "", provider.WithAnthropicModel(cfg.Operator.Model))
 	default:
-		client = provider.NewOpenAI("operator", cfg.Operator.Endpoint, "", cfg.Operator.Model)
+		llmProvider = provider.NewOpenAI("operator", cfg.Operator.Endpoint, "", cfg.Operator.Model)
 	}
 
 	// p holds the Bubble Tea program pointer; set before operator starts so
@@ -238,12 +244,45 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 		}
 	}
 
-	// Create the LocalService — the single service boundary between TUI and engine.
-	svc := service.NewLocal(service.LocalConfig{
+	// Determine which service implementation to use.
+	var svc service.Service
+
+	if serverAddr != "" {
+		// Client mode - connect to remote server.
+		// Skip all local component initialization; just connect and run TUI.
+		token, _ := auth.LoadToken(configDir)
+		rc, err := client.New("http://"+serverAddr, client.WithToken(token))
+		if err != nil {
+			return fmt.Errorf("creating client: %w", err)
+		}
+		defer rc.Close()
+		svc = rc
+
+		m := tui.NewModel(tui.ModelConfig{
+			Service:   svc,
+			ConfigDir: configDir,
+		})
+
+		prog := tea.NewProgram(&m)
+		var p atomic.Pointer[tea.Program]
+		p.Store(prog)
+
+		// Start the service event consumer.
+		consumerCtx, consumerCancel := context.WithCancel(context.Background())
+		defer consumerCancel()
+		go tui.ConsumeServiceEvents(consumerCtx, svc, &p)
+
+		_, err = prog.Run()
+		p.Store(nil)
+		return err
+	}
+
+	// Embedded mode - use LocalService with all local components.
+	localSvc := service.NewLocal(service.LocalConfig{
 		Store:         store,
 		Runtime:       rt,
 		MCPManager:    mcpManager,
-		Provider:      client,
+		Provider:      llmProvider,
 		Composer:      composer,
 		Loader:        ldr,
 		ConfigDir:     configDir,
@@ -252,20 +291,21 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 		OperatorModel: cfg.Operator.Model,
 		StartTime:     time.Now(),
 	})
-	defer svc.Shutdown()
+	svc = localSvc
+	defer localSvc.Shutdown()
 
 	// Create and start the operator event loop.
 	var op *operator.Operator
 	if store != nil {
 		textFlush := func(text string) {
-			svc.BroadcastOperatorText(text, "")
+			localSvc.BroadcastOperatorText(text, "")
 		}
 		batcher := newTextBatcher(16*time.Millisecond, textFlush)
 
 		var opErr error
 		op, opErr = operator.New(operator.Config{
 			Runtime:      rt,
-			Provider:     client,
+			Provider:     llmProvider,
 			Model:        cfg.Operator.Model,
 			WorkDir:      workspaceDir,
 			Store:        store,
@@ -276,7 +316,7 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 				batcher.Add(text)
 			},
 			OnEvent: func(event operator.Event) {
-				svc.BroadcastOperatorEvent(event)
+				localSvc.BroadcastOperatorEvent(event)
 			},
 			OnTurnDone: func() {
 				batcher.Flush()
@@ -286,7 +326,7 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 				// to pass actual tokensIn/tokensOut/reasoningTokens here.
 				// Until then, sidebar stats (prompt ctx, tokens out,
 				// reasoning, speed) will not update from real data.
-				svc.BroadcastOperatorDone(cfg.Operator.Model, 0, 0, 0)
+				localSvc.BroadcastOperatorDone(cfg.Operator.Model, 0, 0, 0)
 			},
 		})
 		if opErr != nil {
@@ -295,10 +335,10 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 	}
 
 	// Wire the operator into the service after creation. The operator's
-	// callbacks already close over svc, so we just need to inject the
+	// callbacks already close over localSvc, so we just need to inject the
 	// operator reference into the service to complete the circular wiring.
 	if op != nil {
-		svc.SetOperator(op)
+		localSvc.SetOperator(op)
 	}
 
 	m := tui.NewModel(tui.ModelConfig{
@@ -328,7 +368,7 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 
 		// Fetch initial teams from the service for awareness generation.
 		initialTeams, _ := svc.Definitions().ListTeams(ctx)
-		awareness := generateTeamAwareness(ctx, client, initialTeams, configDir)
+		awareness := generateTeamAwareness(ctx, llmProvider, initialTeams, configDir)
 
 		if op != nil {
 			if prog := p.Load(); prog != nil {
@@ -359,11 +399,11 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 	// Watch for definition file changes and reload.
 	if ldr != nil {
 		defWatcher, defWatchErr := loader.NewWatcher(ldr, func() {
-			svc.BroadcastDefinitionsReloaded()
+			localSvc.BroadcastDefinitionsReloaded()
 			// Rebuild team views and send TeamsReloadedMsg.
 			ctx := context.Background()
 			newTeams, _ := svc.Definitions().ListTeams(ctx)
-			newAwareness := generateTeamAwareness(ctx, client, newTeams, configDir)
+			newAwareness := generateTeamAwareness(ctx, llmProvider, newTeams, configDir)
 			if prog := p.Load(); prog != nil {
 				prog.Send(tui.TeamsReloadedMsg{Teams: newTeams, Awareness: newAwareness})
 			}

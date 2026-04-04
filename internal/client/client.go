@@ -24,6 +24,9 @@ type RemoteClient struct {
 	ctx     context.Context
 	cancel  context.CancelFunc
 
+	// token is the bearer token for authentication. If empty, no auth header is sent.
+	token string
+
 	// connected tracks whether the SSE event stream is currently connected.
 	// Set to true when the SSE connection is established, false when it drops.
 	connected atomic.Bool
@@ -48,10 +51,31 @@ func WithHTTPClient(c *http.Client) Option {
 	}
 }
 
+// WithToken sets the bearer token for authentication. All HTTP requests
+// and SSE connections will include an Authorization: Bearer header.
+func WithToken(token string) Option {
+	return func(rc *RemoteClient) {
+		rc.token = token
+	}
+}
+
 // New creates a new RemoteClient connected to the given base URL.
-// The base URL should include the scheme and host (e.g. "http://localhost:8080").
+// The base URL must include the scheme (http or https) and host
+// (e.g. "http://localhost:8080", "https://example.com").
 // Call Close when the client is no longer needed.
-func New(baseURL string, opts ...Option) *RemoteClient {
+func New(baseURL string, opts ...Option) (*RemoteClient, error) {
+	// Validate the baseURL has a scheme and host.
+	u, err := url.Parse(baseURL)
+	if err != nil {
+		return nil, fmt.Errorf("invalid base URL: %w", err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return nil, fmt.Errorf("invalid base URL: scheme must be http or https, got %q", u.Scheme)
+	}
+	if u.Host == "" {
+		return nil, fmt.Errorf("invalid base URL: missing host")
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 
 	rc := &RemoteClient{
@@ -68,6 +92,9 @@ func New(baseURL string, opts ...Option) *RemoteClient {
 		opt(rc)
 	}
 
+	// Propagate token to transport after all options have been applied.
+	rc.http.token = rc.token
+
 	rc.operator = &remoteOperatorService{c: rc}
 	rc.definitions = &remoteDefinitionService{c: rc}
 	rc.jobs = &remoteJobService{c: rc}
@@ -75,7 +102,7 @@ func New(baseURL string, opts ...Option) *RemoteClient {
 	rc.events = &remoteEventService{c: rc}
 	rc.system = &remoteSystemService{c: rc}
 
-	return rc
+	return rc, nil
 }
 
 // Close cancels the client's context, terminating any in-flight SSE

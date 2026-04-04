@@ -828,6 +828,12 @@ type wireHeartbeatPayload struct {
 	ServerTime time.Time `json:"server_time"`
 }
 
+type wireConnectionLostPayload struct {
+	Error string `json:"error"`
+}
+
+type wireConnectionRestoredPayload struct{}
+
 // eventPayloadToWire converts a service event payload to its wire representation.
 func eventPayloadToWire(ev service.Event) any {
 	switch p := ev.Payload.(type) {
@@ -910,6 +916,10 @@ func eventPayloadToWire(ev service.Event) any {
 		return wireOperationFailedPayload{Kind: p.Kind, Error: p.Error}
 	case service.HeartbeatPayload:
 		return wireHeartbeatPayload{ServerTime: p.ServerTime}
+	case service.ConnectionLostPayload:
+		return wireConnectionLostPayload{Error: p.Error}
+	case service.ConnectionRestoredPayload:
+		return wireConnectionRestoredPayload{}
 	default:
 		return ev.Payload
 	}

@@ -2,9 +2,11 @@ package server
 
 import (
 	"context"
+	"crypto/subtle"
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"runtime/debug"
 	"strings"
 	"time"
@@ -64,6 +66,32 @@ func requestIDMiddleware(next http.Handler) http.Handler {
 	})
 }
 
+// authMiddleware enforces Bearer token authentication on all routes except
+// /api/v1/health. If token is empty, all requests pass through (auth disabled).
+// Uses constant-time comparison to prevent timing attacks.
+func authMiddleware(token string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Auth disabled — pass through unconditionally.
+			if token == "" {
+				next.ServeHTTP(w, r)
+				return
+			}
+			// Health endpoint is exempt to support liveness probes.
+			if r.URL.Path == "/api/v1/health" {
+				next.ServeHTTP(w, r)
+				return
+			}
+			got := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+			if subtle.ConstantTimeCompare([]byte(got), []byte(token)) != 1 {
+				writeError(w, http.StatusUnauthorized, "unauthorized", "invalid or missing bearer token")
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
 // isValidRequestID checks that a request ID is non-empty, at most 64 chars,
 // and contains only safe characters (alphanumeric, hyphens, underscores, dots).
 func isValidRequestID(s string) bool {
@@ -114,19 +142,45 @@ func loggingMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// corsMiddleware allows * origin with standard headers and methods.
+// corsMiddleware restricts cross-origin requests to localhost origins only.
+// Non-browser requests (curl, same-origin) have no Origin header and pass
+// through unconditionally. Browser requests from non-localhost origins will
+// have no CORS headers, causing the browser to block the response.
 func corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Request-ID, Authorization")
-		w.Header().Set("Access-Control-Expose-Headers", "X-Request-ID, Location")
-
+		origin := r.Header.Get("Origin")
+		if origin != "" && isAllowedOrigin(origin) {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Request-ID, Authorization")
+			w.Header().Set("Access-Control-Expose-Headers", "X-Request-ID, Location")
+		}
+		// If no Origin or not allowed, omit CORS headers (browser will block).
+		// Non-browser requests (same-origin, curl) have no Origin and pass through.
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
+		next.ServeHTTP(w, r)
+	})
+}
 
+// isAllowedOrigin reports whether the given origin URL is from localhost.
+func isAllowedOrigin(origin string) bool {
+	u, err := url.Parse(origin)
+	if err != nil {
+		return false
+	}
+	host := u.Hostname()
+	return host == "localhost" || host == "127.0.0.1" || host == "::1" || host == "[::1]"
+}
+
+// securityHeadersMiddleware adds defensive security headers to all responses.
+func securityHeadersMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("Cache-Control", "no-store")
 		next.ServeHTTP(w, r)
 	})
 }
