@@ -369,6 +369,13 @@ func (s *LocalService) buildProgressState() ProgressState {
 		}
 	}
 
+	// MCP servers.
+	if s.cfg.MCPManager != nil {
+		for _, ss := range s.cfg.MCPManager.Servers() {
+			state.MCPServers = append(state.MCPServers, mcpServerStatusToService(ss))
+		}
+	}
+
 	return state
 }
 

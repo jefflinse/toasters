@@ -2,7 +2,6 @@
 package tui
 
 import (
-	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -320,43 +319,41 @@ func (m Model) renderSidebar(sbWidth int) string {
 	mcpSB.WriteString("\n")
 
 	hasMCP := false
-	if m.svc != nil {
-		servers, err := m.svc.System().ListMCPServers(context.Background())
-		if err == nil && len(servers) > 0 {
-			hasMCP = true
-			var totalTools int
-			for _, s := range servers {
-				var icon string
-				var style lipgloss.Style
-				switch s.State {
-				case service.MCPServerStateConnected:
-					icon = "✓"
-					style = ConnectedStyle
-				case service.MCPServerStateFailed:
-					icon = "✗"
-					style = ErrorStyle
-				default:
-					icon = "○"
-					style = DimStyle
-				}
-				totalTools += s.ToolCount
+	servers := m.progress.mcpServers
+	if len(servers) > 0 {
+		hasMCP = true
+		var totalTools int
+		for _, s := range servers {
+			var icon string
+			var style lipgloss.Style
+			switch s.State {
+			case service.MCPServerStateConnected:
+				icon = "✓"
+				style = ConnectedStyle
+			case service.MCPServerStateFailed:
+				icon = "✗"
+				style = ErrorStyle
+			default:
+				icon = "○"
+				style = DimStyle
+			}
+			totalTools += s.ToolCount
 
-				label := s.Name
-				toolInfo := fmt.Sprintf("(%d tools)", s.ToolCount)
-				if s.State == service.MCPServerStateFailed {
-					toolInfo = "(failed)"
-				}
-
-				line := style.Render(icon) + " " + truncateStr(label, contentWidth-len(icon)-len(toolInfo)-3) + " " + DimStyle.Render(toolInfo)
-				mcpSB.WriteString(line)
-				mcpSB.WriteString("\n")
+			label := s.Name
+			toolInfo := fmt.Sprintf("(%d tools)", s.ToolCount)
+			if s.State == service.MCPServerStateFailed {
+				toolInfo = "(failed)"
 			}
 
-			// Summary line
-			summary := fmt.Sprintf("%d servers, %d tools", len(servers), totalTools)
-			mcpSB.WriteString(DimStyle.Render(summary))
+			line := style.Render(icon) + " " + truncateStr(label, contentWidth-len(icon)-len(toolInfo)-3) + " " + DimStyle.Render(toolInfo)
+			mcpSB.WriteString(line)
 			mcpSB.WriteString("\n")
 		}
+
+		// Summary line
+		summary := fmt.Sprintf("%d servers, %d tools", len(servers), totalTools)
+		mcpSB.WriteString(DimStyle.Render(summary))
+		mcpSB.WriteString("\n")
 	}
 	if !hasMCP {
 		mcpSB.WriteString(DimStyle.Italic(true).Render("no MCP servers"))

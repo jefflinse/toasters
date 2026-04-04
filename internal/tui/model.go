@@ -112,6 +112,7 @@ type progressState struct {
 	activeSessions   []service.AgentSession
 	runtimeSnapshots []service.SessionSnapshot // live snapshots with real token counts
 	feedEntries      []service.FeedEntry       // recent activity feed entries
+	mcpServers       []service.MCPServerStatus // MCP server connection status
 }
 
 // chatState holds all state related to the chat conversation history and
@@ -1454,6 +1455,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.progress.activeSessions = msg.Sessions
 		m.progress.runtimeSnapshots = msg.RuntimeSessions
 		m.progress.feedEntries = msg.FeedEntries
+		m.progress.mcpServers = msg.MCPServers
 		// Keep m.jobs in sync so the Jobs panel (which reads m.jobs via
 		// displayJobs) reflects the latest polled state.
 		m.jobs = msg.Jobs

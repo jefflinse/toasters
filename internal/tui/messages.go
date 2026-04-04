@@ -95,6 +95,7 @@ type progressPollMsg struct {
 	Sessions        []service.AgentSession
 	RuntimeSessions []service.SessionSnapshot // live snapshots with real token counts
 	FeedEntries     []service.FeedEntry       // recent activity feed entries
+	MCPServers      []service.MCPServerStatus // MCP server connection status
 }
 
 // progressPollTickMsg is an internal tick that triggers the next poll.

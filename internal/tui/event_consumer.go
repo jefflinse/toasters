@@ -67,6 +67,7 @@ func translateEvent(ev service.Event) tea.Msg {
 			Sessions:        p.State.ActiveSessions,
 			RuntimeSessions: p.State.LiveSnapshots,
 			FeedEntries:     p.State.FeedEntries,
+			MCPServers:      p.State.MCPServers,
 		}
 
 	case service.EventTypeSessionStarted,

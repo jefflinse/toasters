@@ -466,6 +466,9 @@ type ProgressState struct {
 
 	// FeedEntries is the most recent activity feed entries (newest first).
 	FeedEntries []FeedEntry
+
+	// MCPServers is the current MCP server connection status.
+	MCPServers []MCPServerStatus
 }
 
 // ---------------------------------------------------------------------------
