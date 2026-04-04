@@ -274,3 +274,38 @@ func TestGenerateTeamAwareness_LLMErrorFallback(t *testing.T) {
 		t.Errorf("output should contain fallback sentence %q, got:\n%s", want, got)
 	}
 }
+
+func TestGenerateTeamAwareness_NilProviderFallback(t *testing.T) {
+	t.Parallel()
+
+	teams := []service.TeamView{
+		makeTeamView("frontend", nil, []service.Agent{{Name: "react-dev"}}),
+		makeTeamView("backend", &service.Agent{SystemPrompt: "API specialist"}, nil),
+	}
+	configDir := t.TempDir()
+
+	// This is the critical code path - nil provider with actual teams
+	got := generateTeamAwareness(context.Background(), nil, teams, configDir)
+
+	if !strings.Contains(got, "# Teams") {
+		t.Error("output should contain '# Teams' header")
+	}
+	if !strings.Contains(got, "## frontend") {
+		t.Error("output should contain '## frontend' header")
+	}
+	if !strings.Contains(got, "## backend") {
+		t.Error("output should contain '## backend' header")
+	}
+	if !strings.Contains(got, "Use this team when you need help from the frontend team.") {
+		t.Error("output should contain fallback text for frontend")
+	}
+	if !strings.Contains(got, "Use this team when you need help from the backend team.") {
+		t.Error("output should contain fallback text for backend")
+	}
+
+	// Verify file was written
+	outPath := filepath.Join(configDir, "team-awareness.md")
+	if _, err := os.Stat(outPath); os.IsNotExist(err) {
+		t.Error("team-awareness.md should have been written")
+	}
+}

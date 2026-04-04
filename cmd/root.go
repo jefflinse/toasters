@@ -272,6 +272,9 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 		defer consumerCancel()
 		go tui.ConsumeServiceEvents(consumerCtx, svc, &p)
 
+		// Send AppReadyMsg after connection is established to exit loading state.
+		sendClientModeAppReady(svc, &p, configDir, serverAddr)
+
 		_, err = prog.Run()
 		p.Store(nil)
 		return err
@@ -423,4 +426,31 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 	_, err = prog.Run()
 	p.Store(nil) // Prevent post-shutdown sends
 	return err
+}
+
+// sendClientModeAppReady sends the AppReadyMsg after client mode connection is established.
+// This is critical for transitioning the TUI from loading to ready state.
+// Without this, the TUI hangs indefinitely on the loading screen.
+func sendClientModeAppReady(svc service.Service, p *atomic.Pointer[tea.Program], configDir, serverAddr string) {
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		initialTeams, err := svc.Definitions().ListTeams(ctx)
+		if err != nil {
+			slog.Warn("client mode: failed to list teams for awareness", "error", err)
+		}
+		awareness := generateTeamAwareness(ctx, nil, initialTeams, configDir)
+
+		// Wait for SSE connection to stabilize
+		time.Sleep(200 * time.Millisecond)
+		slog.Debug("client mode: sending AppReadyMsg", "server", serverAddr)
+
+		if prog := p.Load(); prog != nil {
+			prog.Send(tui.AppReadyMsg{
+				Awareness: awareness,
+				Greeting:  "Connected to " + serverAddr,
+			})
+		}
+	}()
 }

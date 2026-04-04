@@ -20,6 +20,25 @@ func generateTeamAwareness(ctx context.Context, client provider.Provider, teams 
 		return ""
 	}
 
+	// Use fallback if no LLM provider is available.
+	// This occurs in client mode where the LLM runs server-side.
+	if client == nil {
+		var sb strings.Builder
+		sb.WriteString("# Teams\n\n")
+		for _, team := range teams {
+			fmt.Fprintf(&sb, "## %s\n\n", team.Name())
+			fmt.Fprintf(&sb, "%s\n\n", teamFallbackText(team.Name()))
+		}
+		content := strings.TrimRight(sb.String(), "\n") + "\n"
+
+		// Write to disk
+		outPath := filepath.Join(configDir, "team-awareness.md")
+		if err := os.WriteFile(outPath, []byte(content), 0644); err != nil {
+			slog.Warn("failed to write team-awareness.md", "error", err)
+		}
+		return content
+	}
+
 	var sb strings.Builder
 	sb.WriteString("# Teams\n\n")
 
@@ -77,8 +96,13 @@ Write exactly one sentence starting with "Use this team when" that describes wha
 	resp, err := provider.ChatCompletion(ctx, client, msgs)
 	if err != nil {
 		slog.Warn("team awareness inference failed", "team", team.Name(), "error", err)
-		// Fallback: generic sentence
-		return fmt.Sprintf("Use this team when you need help from the %s team.", team.Name())
+		return teamFallbackText(team.Name())
 	}
 	return strings.TrimSpace(resp)
+}
+
+// teamFallbackText returns a generic fallback description for a team
+// when LLM summarization is unavailable or fails.
+func teamFallbackText(teamName string) string {
+	return fmt.Sprintf("Use this team when you need help from the %s team.", teamName)
 }
