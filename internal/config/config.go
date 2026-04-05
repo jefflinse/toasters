@@ -43,15 +43,18 @@ type MCPConfig struct {
 
 // AgentsConfig holds default provider/model settings for agents.
 type AgentsConfig struct {
-	DefaultProvider string `mapstructure:"default_provider"`
-	DefaultModel    string `mapstructure:"default_model"`
+	Defaults AgentDefaultsConfig `mapstructure:"defaults"`
+}
+
+// AgentDefaultsConfig holds the default provider and model for agents.
+type AgentDefaultsConfig struct {
+	Provider string `mapstructure:"provider"`
+	Model    string `mapstructure:"model"`
 }
 
 // OperatorConfig holds configuration for the operator LLM backend.
 type OperatorConfig struct {
-	Provider string `mapstructure:"provider"` // "local" (default) or "anthropic"
-	Endpoint string `mapstructure:"endpoint"`
-	APIKey   string `mapstructure:"api_key"`
+	Provider string `mapstructure:"provider"` // provider ID from the providers list (default: "lm-studio")
 	Model    string `mapstructure:"model"`
 	TeamsDir string `mapstructure:"teams_dir"`
 }
@@ -70,13 +73,11 @@ func Load() (*Config, error) {
 
 	viper.SetDefault("workspace_dir", filepath.Join(home, "toasters"))
 	viper.SetDefault("database_path", "")
-	viper.SetDefault("operator.provider", "local")
-	viper.SetDefault("operator.endpoint", "http://localhost:1234")
-	viper.SetDefault("operator.api_key", "")
+	viper.SetDefault("operator.provider", "lm-studio")
 	viper.SetDefault("operator.model", "")
 	viper.SetDefault("operator.teams_dir", filepath.Join(home, ".config", "toasters", "user", "teams"))
-	viper.SetDefault("agents.default_provider", "")
-	viper.SetDefault("agents.default_model", "")
+	viper.SetDefault("agents.defaults.provider", "")
+	viper.SetDefault("agents.defaults.model", "")
 
 	if err := viper.ReadInConfig(); err != nil {
 		var notFound viper.ConfigFileNotFoundError
@@ -104,15 +105,9 @@ func isPlaintextKey(key string) bool {
 	return key != "" && !strings.Contains(key, "${")
 }
 
-// warnPlaintextAPIKeys checks all configured providers and the operator config
-// for plaintext API keys and emits slog warnings recommending env var syntax.
+// warnPlaintextAPIKeys checks all configured providers for plaintext API keys
+// and emits slog warnings recommending env var syntax.
 func warnPlaintextAPIKeys(cfg *Config) {
-	if isPlaintextKey(cfg.Operator.APIKey) {
-		slog.Warn("plaintext API key in config",
-			"provider", "operator",
-			"recommendation", "use ${ENV_VAR} syntax instead",
-		)
-	}
 	for _, p := range cfg.Providers {
 		if isPlaintextKey(p.APIKey) {
 			slog.Warn("plaintext API key in config",
@@ -167,11 +162,9 @@ func expandMCPEnvVars(cfg *Config) {
 	}
 }
 
-// expandAPIKeys expands ${VAR} references in operator and provider API keys
-// and endpoints using os.Getenv.
+// expandAPIKeys expands ${VAR} references in provider API keys and endpoints
+// using os.Getenv.
 func expandAPIKeys(cfg *Config) {
-	cfg.Operator.APIKey = os.Expand(cfg.Operator.APIKey, os.Getenv)
-	cfg.Operator.Endpoint = os.Expand(cfg.Operator.Endpoint, os.Getenv)
 	for i := range cfg.Providers {
 		cfg.Providers[i].APIKey = os.Expand(cfg.Providers[i].APIKey, os.Getenv)
 		cfg.Providers[i].Endpoint = os.Expand(cfg.Providers[i].Endpoint, os.Getenv)
@@ -241,6 +234,5 @@ func DatabasePath(cfg *Config, workspaceDir string) (string, error) {
 }
 
 // BindFlags binds relevant cobra pflags to their Viper configuration keys.
-func BindFlags(cmd *cobra.Command) {
-	viper.BindPFlag("operator.endpoint", cmd.Flags().Lookup("operator-endpoint")) //nolint:errcheck
+func BindFlags(_ *cobra.Command) {
 }

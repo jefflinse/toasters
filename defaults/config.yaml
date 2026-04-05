@@ -1,16 +1,23 @@
 providers:
-  - name: anthropic
+  # local provider
+  - id: lm-studio
+    name: LM Studio
+    type: local
+    endpoint: http://localhost:1234
+  # remote providers
+  - id: anthropic
+    name: Anthropic
     type: anthropic
     api_key: ${ANTHROPIC_API_KEY}
 
 operator:
-  provider: anthropic
-  api_key: ${ANTHROPIC_API_KEY}
-  model: claude-haiku-4-5
+  provider: lm-studio
+  model:
 
 agents:
-  default_provider: anthropic
-  default_model: claude-sonnet-4-6
+  defaults:
+    provider:
+    model:
 
 mcp:
   servers:

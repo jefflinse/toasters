@@ -172,14 +172,8 @@ func TestLoad_MissingConfigFile_AppliesDefaults(t *testing.T) {
 	if cfg.WorkspaceDir != wantWorkspace {
 		t.Errorf("WorkspaceDir: got %q, want %q", cfg.WorkspaceDir, wantWorkspace)
 	}
-	if cfg.Operator.Provider != "local" {
-		t.Errorf("Operator.Provider: got %q, want %q", cfg.Operator.Provider, "local")
-	}
-	if cfg.Operator.Endpoint != "http://localhost:1234" {
-		t.Errorf("Operator.Endpoint: got %q, want %q", cfg.Operator.Endpoint, "http://localhost:1234")
-	}
-	if cfg.Operator.APIKey != "" {
-		t.Errorf("Operator.APIKey: got %q, want %q", cfg.Operator.APIKey, "")
+	if cfg.Operator.Provider != "lm-studio" {
+		t.Errorf("Operator.Provider: got %q, want %q", cfg.Operator.Provider, "lm-studio")
 	}
 	if cfg.Operator.Model != "" {
 		t.Errorf("Operator.Model: got %q, want %q", cfg.Operator.Model, "")
@@ -227,8 +221,6 @@ func TestLoad_WithConfigFile_OverridesDefaults(t *testing.T) {
 workspace_dir: /custom/workspace
 operator:
   provider: anthropic
-  endpoint: http://example.com:9999
-  api_key: sk-test-key
   model: gpt-custom
   teams_dir: /custom/teams
 `)
@@ -243,12 +235,6 @@ operator:
 	}
 	if cfg.Operator.Provider != "anthropic" {
 		t.Errorf("Operator.Provider: got %q, want %q", cfg.Operator.Provider, "anthropic")
-	}
-	if cfg.Operator.Endpoint != "http://example.com:9999" {
-		t.Errorf("Operator.Endpoint: got %q, want %q", cfg.Operator.Endpoint, "http://example.com:9999")
-	}
-	if cfg.Operator.APIKey != "sk-test-key" {
-		t.Errorf("Operator.APIKey: got %q, want %q", cfg.Operator.APIKey, "sk-test-key")
 	}
 	if cfg.Operator.Model != "gpt-custom" {
 		t.Errorf("Operator.Model: got %q, want %q", cfg.Operator.Model, "gpt-custom")
@@ -286,11 +272,8 @@ operator:
 	}
 
 	// Default values should still be applied.
-	if cfg.Operator.Provider != "local" {
-		t.Errorf("Operator.Provider: got %q, want %q (default)", cfg.Operator.Provider, "local")
-	}
-	if cfg.Operator.Endpoint != "http://localhost:1234" {
-		t.Errorf("Operator.Endpoint: got %q, want %q (default)", cfg.Operator.Endpoint, "http://localhost:1234")
+	if cfg.Operator.Provider != "lm-studio" {
+		t.Errorf("Operator.Provider: got %q, want %q (default)", cfg.Operator.Provider, "lm-studio")
 	}
 	wantWorkspace := filepath.Join(tmpHome, "toasters")
 	if cfg.WorkspaceDir != wantWorkspace {
@@ -311,7 +294,7 @@ func TestLoad_MalformedYAML_ReturnsError(t *testing.T) {
 
 	writeConfigYAML(t, configDir, `
 operator:
-  endpoint: [invalid yaml
+  model: [invalid yaml
   this is not valid
 `)
 
@@ -340,11 +323,8 @@ func TestLoad_EmptyConfigFile_AppliesDefaults(t *testing.T) {
 	}
 
 	// All defaults should be applied.
-	if cfg.Operator.Provider != "local" {
-		t.Errorf("Operator.Provider: got %q, want %q", cfg.Operator.Provider, "local")
-	}
-	if cfg.Operator.Endpoint != "http://localhost:1234" {
-		t.Errorf("Operator.Endpoint: got %q, want %q", cfg.Operator.Endpoint, "http://localhost:1234")
+	if cfg.Operator.Provider != "lm-studio" {
+		t.Errorf("Operator.Provider: got %q, want %q", cfg.Operator.Provider, "lm-studio")
 	}
 }
 
@@ -587,45 +567,6 @@ func TestIsPlaintextKey_MixedEnvVarSyntax_ReturnsFalse(t *testing.T) {
 
 // --- warnPlaintextAPIKeys tests ---
 
-func TestWarnPlaintextAPIKeys_PlaintextOperatorKey_Warns(t *testing.T) {
-	var buf bytes.Buffer
-	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	old := slog.Default()
-	slog.SetDefault(logger)
-	defer slog.SetDefault(old)
-
-	cfg := &Config{
-		Operator: OperatorConfig{APIKey: "sk-plaintext-key"},
-	}
-	warnPlaintextAPIKeys(cfg)
-
-	output := buf.String()
-	if !strings.Contains(output, "plaintext API key in config") {
-		t.Errorf("expected warning about plaintext API key, got: %s", output)
-	}
-	if !strings.Contains(output, "provider=operator") {
-		t.Errorf("expected provider=operator in warning, got: %s", output)
-	}
-}
-
-func TestWarnPlaintextAPIKeys_EnvVarOperatorKey_NoWarning(t *testing.T) {
-	var buf bytes.Buffer
-	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	old := slog.Default()
-	slog.SetDefault(logger)
-	defer slog.SetDefault(old)
-
-	cfg := &Config{
-		Operator: OperatorConfig{APIKey: "${ANTHROPIC_API_KEY}"},
-	}
-	warnPlaintextAPIKeys(cfg)
-
-	output := buf.String()
-	if strings.Contains(output, "plaintext API key") {
-		t.Errorf("expected no warning for env var syntax, got: %s", output)
-	}
-}
-
 func TestWarnPlaintextAPIKeys_PlaintextProviderKey_Warns(t *testing.T) {
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
@@ -657,7 +598,6 @@ func TestWarnPlaintextAPIKeys_EmptyKeys_NoWarning(t *testing.T) {
 	defer slog.SetDefault(old)
 
 	cfg := &Config{
-		Operator:  OperatorConfig{APIKey: ""},
 		Providers: []provider.ProviderConfig{{Name: "p1", APIKey: ""}},
 	}
 	warnPlaintextAPIKeys(cfg)
@@ -693,33 +633,6 @@ func TestWarnPlaintextAPIKeys_MultipleProviders_WarnsOnlyPlaintext(t *testing.T)
 }
 
 // --- expandAPIKeys tests ---
-
-func TestLoad_OperatorAPIKey_EnvVarExpansion(t *testing.T) {
-	resetViper(t)
-
-	tmpHome := t.TempDir()
-	t.Setenv("HOME", tmpHome)
-	t.Setenv("TEST_OP_KEY", "expanded-op-key")
-
-	configDir := filepath.Join(tmpHome, ".config", "toasters")
-	if err := os.MkdirAll(configDir, 0755); err != nil {
-		t.Fatalf("creating config dir: %v", err)
-	}
-
-	writeConfigYAML(t, configDir, `
-operator:
-  api_key: ${TEST_OP_KEY}
-`)
-
-	cfg, err := Load()
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if cfg.Operator.APIKey != "expanded-op-key" {
-		t.Errorf("Operator.APIKey: got %q, want %q", cfg.Operator.APIKey, "expanded-op-key")
-	}
-}
 
 func TestLoad_ProviderAPIKey_EnvVarExpansion(t *testing.T) {
 	resetViper(t)
@@ -785,34 +698,7 @@ providers:
 	}
 }
 
-func TestLoad_OperatorEndpoint_EnvVarExpansion(t *testing.T) {
-	resetViper(t)
-
-	tmpHome := t.TempDir()
-	t.Setenv("HOME", tmpHome)
-	t.Setenv("TEST_OP_ENDPOINT", "https://op.custom.com")
-
-	configDir := filepath.Join(tmpHome, ".config", "toasters")
-	if err := os.MkdirAll(configDir, 0755); err != nil {
-		t.Fatalf("creating config dir: %v", err)
-	}
-
-	writeConfigYAML(t, configDir, `
-operator:
-  endpoint: ${TEST_OP_ENDPOINT}
-`)
-
-	cfg, err := Load()
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if cfg.Operator.Endpoint != "https://op.custom.com" {
-		t.Errorf("Operator.Endpoint: got %q, want %q", cfg.Operator.Endpoint, "https://op.custom.com")
-	}
-}
-
-func TestLoad_APIKeyEnvVarExpansion_Unset(t *testing.T) {
+func TestLoad_ProviderAPIKeyEnvVarExpansion_Unset(t *testing.T) {
 	resetViper(t)
 
 	tmpHome := t.TempDir()
@@ -827,8 +713,11 @@ func TestLoad_APIKeyEnvVarExpansion_Unset(t *testing.T) {
 	}
 
 	writeConfigYAML(t, configDir, `
-operator:
-  api_key: ${NONEXISTENT_VAR_99999_ZZZZZ}
+providers:
+  - name: test-provider
+    type: openai
+    endpoint: http://localhost:1234
+    api_key: ${NONEXISTENT_VAR_99999_ZZZZZ}
 `)
 
 	cfg, err := Load()
@@ -836,12 +725,15 @@ operator:
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if cfg.Operator.APIKey != "" {
-		t.Errorf("Operator.APIKey: got %q, want empty string for unset env var", cfg.Operator.APIKey)
+	if len(cfg.Providers) != 1 {
+		t.Fatalf("Providers: got %d, want 1", len(cfg.Providers))
+	}
+	if cfg.Providers[0].APIKey != "" {
+		t.Errorf("Providers[0].APIKey: got %q, want empty string for unset env var", cfg.Providers[0].APIKey)
 	}
 }
 
-func TestLoad_APIKeyWarnBeforeExpansion(t *testing.T) {
+func TestLoad_ProviderAPIKeyWarnBeforeExpansion(t *testing.T) {
 	resetViper(t)
 
 	tmpHome := t.TempDir()
@@ -861,8 +753,11 @@ func TestLoad_APIKeyWarnBeforeExpansion(t *testing.T) {
 	}
 
 	writeConfigYAML(t, configDir, `
-operator:
-  api_key: ${SOME_VAR}
+providers:
+  - name: test-provider
+    type: openai
+    endpoint: http://localhost:1234
+    api_key: ${SOME_VAR}
 `)
 
 	cfg, err := Load()
@@ -871,8 +766,11 @@ operator:
 	}
 
 	// The env var syntax should have been expanded.
-	if cfg.Operator.APIKey != "actual-key-value" {
-		t.Errorf("Operator.APIKey: got %q, want %q", cfg.Operator.APIKey, "actual-key-value")
+	if len(cfg.Providers) != 1 {
+		t.Fatalf("Providers: got %d, want 1", len(cfg.Providers))
+	}
+	if cfg.Providers[0].APIKey != "actual-key-value" {
+		t.Errorf("Providers[0].APIKey: got %q, want %q", cfg.Providers[0].APIKey, "actual-key-value")
 	}
 
 	// The key used ${VAR} syntax, so warnPlaintextAPIKeys should NOT have

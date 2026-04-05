@@ -692,3 +692,259 @@ func TestMigrateDatabase_NoOldDB_Noop(t *testing.T) {
 		t.Fatalf("migrateDatabase() error: %v", err)
 	}
 }
+
+// --- providerIDMigration tests ---
+
+// writeConfigYAML writes a config.yaml file into dir with the given content.
+func writeConfigYAML(t *testing.T, dir, content string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(content), 0644); err != nil {
+		t.Fatalf("writing config.yaml: %v", err)
+	}
+}
+
+func TestProviderIDMigration_AddsIDToProviders(t *testing.T) {
+	configDir := t.TempDir()
+
+	writeConfigYAML(t, configDir, `
+providers:
+  - name: LM Studio
+    type: local
+    model: my-model
+  - name: Anthropic
+    type: anthropic
+    api_key: sk-test
+`)
+
+	if err := providerIDMigration(configDir); err != nil {
+		t.Fatalf("providerIDMigration() error: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(configDir, "config.yaml"))
+	if err != nil {
+		t.Fatalf("reading config.yaml: %v", err)
+	}
+
+	content := string(data)
+	if !strings.Contains(content, "id: lm-studio") {
+		t.Errorf("expected id 'lm-studio' in config, got:\n%s", content)
+	}
+	if !strings.Contains(content, "id: anthropic") {
+		t.Errorf("expected id 'anthropic' in config, got:\n%s", content)
+	}
+}
+
+func TestProviderIDMigration_RemovesOperatorEndpointAndAPIKey(t *testing.T) {
+	configDir := t.TempDir()
+
+	writeConfigYAML(t, configDir, `
+operator:
+  provider: local
+  endpoint: http://localhost:9999
+  api_key: sk-secret
+  model: test-model
+`)
+
+	if err := providerIDMigration(configDir); err != nil {
+		t.Fatalf("providerIDMigration() error: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(configDir, "config.yaml"))
+	if err != nil {
+		t.Fatalf("reading config.yaml: %v", err)
+	}
+
+	content := string(data)
+	if strings.Contains(content, "endpoint:") {
+		t.Errorf("expected 'endpoint' to be removed from operator, got:\n%s", content)
+	}
+	if strings.Contains(content, "api_key:") {
+		t.Errorf("expected 'api_key' to be removed from operator, got:\n%s", content)
+	}
+	// model and provider should still be present.
+	if !strings.Contains(content, "provider:") {
+		t.Errorf("expected 'provider' to remain in operator, got:\n%s", content)
+	}
+	if !strings.Contains(content, "model:") {
+		t.Errorf("expected 'model' to remain in operator, got:\n%s", content)
+	}
+}
+
+func TestProviderIDMigration_MovesAgentsDefaults(t *testing.T) {
+	configDir := t.TempDir()
+
+	writeConfigYAML(t, configDir, `
+agents:
+  default_provider: lm-studio
+  default_model: gpt-4
+`)
+
+	if err := providerIDMigration(configDir); err != nil {
+		t.Fatalf("providerIDMigration() error: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(configDir, "config.yaml"))
+	if err != nil {
+		t.Fatalf("reading config.yaml: %v", err)
+	}
+
+	content := string(data)
+	if strings.Contains(content, "default_provider:") {
+		t.Errorf("expected 'default_provider' to be removed, got:\n%s", content)
+	}
+	if strings.Contains(content, "default_model:") {
+		t.Errorf("expected 'default_model' to be removed, got:\n%s", content)
+	}
+	if !strings.Contains(content, "defaults:") {
+		t.Errorf("expected 'defaults' key in agents, got:\n%s", content)
+	}
+	if !strings.Contains(content, "provider: lm-studio") {
+		t.Errorf("expected 'provider: lm-studio' in defaults, got:\n%s", content)
+	}
+	if !strings.Contains(content, "model: gpt-4") {
+		t.Errorf("expected 'model: gpt-4' in defaults, got:\n%s", content)
+	}
+}
+
+func TestProviderIDMigration_UpdatesOperatorProviderRef(t *testing.T) {
+	configDir := t.TempDir()
+
+	writeConfigYAML(t, configDir, `
+providers:
+  - name: Local
+    type: local
+operator:
+  provider: Local
+`)
+
+	if err := providerIDMigration(configDir); err != nil {
+		t.Fatalf("providerIDMigration() error: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(configDir, "config.yaml"))
+	if err != nil {
+		t.Fatalf("reading config.yaml: %v", err)
+	}
+
+	content := string(data)
+	if !strings.Contains(content, "provider: local") {
+		t.Errorf("expected operator provider to be updated to slugified ID 'local', got:\n%s", content)
+	}
+}
+
+func TestProviderIDMigration_Idempotent(t *testing.T) {
+	configDir := t.TempDir()
+
+	writeConfigYAML(t, configDir, `
+providers:
+  - name: LM Studio
+    type: local
+operator:
+  provider: LM Studio
+  endpoint: http://localhost:1234
+agents:
+  default_provider: LM Studio
+  default_model: test-model
+`)
+
+	// First migration.
+	if err := providerIDMigration(configDir); err != nil {
+		t.Fatalf("first providerIDMigration() error: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(configDir, "config.yaml"))
+	if err != nil {
+		t.Fatalf("reading config.yaml after first migration: %v", err)
+	}
+	firstResult := string(data)
+
+	// Second migration should be a no-op — file content should not change.
+	if err := providerIDMigration(configDir); err != nil {
+		t.Fatalf("second providerIDMigration() error: %v", err)
+	}
+
+	data2, err := os.ReadFile(filepath.Join(configDir, "config.yaml"))
+	if err != nil {
+		t.Fatalf("reading config.yaml after second migration: %v", err)
+	}
+	secondResult := string(data2)
+
+	if firstResult != secondResult {
+		t.Errorf("second migration changed the file:\nfirst:\n%s\nsecond:\n%s", firstResult, secondResult)
+	}
+}
+
+func TestProviderIDMigration_SkipsNewFormat(t *testing.T) {
+	configDir := t.TempDir()
+
+	// Config already in new format — has id fields, no operator endpoint/api_key,
+	// nested agents.defaults.
+	writeConfigYAML(t, configDir, `
+providers:
+  - id: lm-studio
+    name: LM Studio
+    type: local
+operator:
+  provider: lm-studio
+  model: test-model
+agents:
+  defaults:
+    provider: lm-studio
+    model: test-model
+`)
+
+	// Read original content to compare after migration.
+	original, err := os.ReadFile(filepath.Join(configDir, "config.yaml"))
+	if err != nil {
+		t.Fatalf("reading original config: %v", err)
+	}
+
+	if err := providerIDMigration(configDir); err != nil {
+		t.Fatalf("providerIDMigration() error: %v", err)
+	}
+
+	after, err := os.ReadFile(filepath.Join(configDir, "config.yaml"))
+	if err != nil {
+		t.Fatalf("reading config after migration: %v", err)
+	}
+
+	if string(original) != string(after) {
+		t.Errorf("new-format config should not be modified:\noriginal:\n%s\nafter:\n%s", string(original), string(after))
+	}
+
+	// No backup should have been created.
+	backupPath := filepath.Join(configDir, "config.yaml.pre-provider-id-migration")
+	if fileExists(backupPath) {
+		t.Error("backup file should not exist when migration is skipped")
+	}
+}
+
+func TestProviderIDMigration_CreatesBackup(t *testing.T) {
+	configDir := t.TempDir()
+
+	originalContent := `providers:
+  - name: LM Studio
+    type: local
+operator:
+  endpoint: http://localhost:1234
+`
+	writeConfigYAML(t, configDir, originalContent)
+
+	if err := providerIDMigration(configDir); err != nil {
+		t.Fatalf("providerIDMigration() error: %v", err)
+	}
+
+	backupPath := filepath.Join(configDir, "config.yaml.pre-provider-id-migration")
+	if !fileExists(backupPath) {
+		t.Fatal("expected backup file to be created")
+	}
+
+	backupData, err := os.ReadFile(backupPath)
+	if err != nil {
+		t.Fatalf("reading backup file: %v", err)
+	}
+
+	if string(backupData) != originalContent {
+		t.Errorf("backup file content mismatch:\ngot:\n%s\nwant:\n%s", string(backupData), originalContent)
+	}
+}

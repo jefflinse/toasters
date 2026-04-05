@@ -122,7 +122,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 	// Create composer for runtime agent composition.
 	var composer *compose.Composer
 	if store != nil {
-		composer = compose.New(store, cfg.Agents.DefaultProvider, cfg.Agents.DefaultModel)
+		composer = compose.New(store, cfg.Agents.Defaults.Provider, cfg.Agents.Defaults.Model)
 	}
 
 	// Create provider registry and register configured providers.
@@ -130,10 +130,10 @@ func runServe(cmd *cobra.Command, args []string) error {
 	for _, pc := range cfg.Providers {
 		p, provErr := provider.NewFromConfig(pc)
 		if provErr != nil {
-			slog.Warn("failed to create provider", "provider", pc.Name, "error", provErr)
+			slog.Warn("failed to create provider", "id", pc.ID, "name", pc.Name, "error", provErr)
 			continue
 		}
-		registry.Register(pc.Name, p)
+		registry.Register(pc.Key(), p)
 	}
 
 	// Create the runtime for agent session management.
@@ -155,12 +155,9 @@ func runServe(cmd *cobra.Command, args []string) error {
 		rt.SetMCPCaller(truncatingCaller, mcp.ToRuntimeToolDefs(mcpManager.Tools()))
 	}
 
-	var client provider.Provider
-	switch cfg.Operator.Provider {
-	case "anthropic":
-		client = provider.NewAnthropic("anthropic", cfg.Operator.APIKey, provider.WithAnthropicModel(cfg.Operator.Model))
-	default:
-		client = provider.NewOpenAI("operator", cfg.Operator.Endpoint, "", cfg.Operator.Model)
+	client, err := resolveOperatorProvider(cfg, registry)
+	if err != nil {
+		return err
 	}
 
 	// notifySessionStarted wires a runtime session into the service event stream.

@@ -2,15 +2,15 @@ package provider
 
 import (
 	"fmt"
-	"os"
 	"slices"
 	"sync"
 )
 
 // ProviderConfig defines configuration for a single provider.
 type ProviderConfig struct {
+	ID       string `yaml:"id" mapstructure:"id"`
 	Name     string `yaml:"name" mapstructure:"name"`
-	Type     string `yaml:"type" mapstructure:"type"` // "openai" or "anthropic"
+	Type     string `yaml:"type" mapstructure:"type"` // "openai", "local", or "anthropic"
 	Endpoint string `yaml:"endpoint" mapstructure:"endpoint"`
 	APIKey   string `yaml:"api_key" mapstructure:"api_key"`
 	Model    string `yaml:"model" mapstructure:"model"`
@@ -57,26 +57,47 @@ func (r *Registry) List() []string {
 	return names
 }
 
+// Key returns the registry key for this provider config: ID if set, else Name.
+func (c ProviderConfig) Key() string {
+	if c.ID != "" {
+		return c.ID
+	}
+	return c.Name
+}
+
 // NewFromConfig creates a Provider from configuration.
-// Supports ${ENV_VAR} expansion in the APIKey field.
+// API key expansion (${ENV_VAR}) is handled by config.Load(), not here.
 func NewFromConfig(cfg ProviderConfig) (Provider, error) {
-	apiKey := os.Expand(cfg.APIKey, os.Getenv)
+	// API key already expanded by config.Load().
+	apiKey := cfg.APIKey
 
 	switch cfg.Type {
 	case "openai":
 		if cfg.Endpoint == "" {
-			return nil, fmt.Errorf("openai provider %q requires an endpoint", cfg.Name)
+			return nil, fmt.Errorf("openai provider %q requires an endpoint", cfg.Key())
 		}
 		return NewOpenAI(cfg.Name, cfg.Endpoint, apiKey, cfg.Model), nil
+
+	// "local" is sugar for an OpenAI-compatible local server (e.g. LM Studio, Ollama).
+	// It defaults to http://localhost:1234 and never uses an API key.
+	case "local":
+		endpoint := cfg.Endpoint
+		if endpoint == "" {
+			endpoint = "http://localhost:1234"
+		}
+		return NewOpenAI(cfg.Name, endpoint, "", cfg.Model), nil
 
 	case "anthropic":
 		opts := []AnthropicOption{}
 		if cfg.Endpoint != "" {
 			opts = append(opts, WithAnthropicBaseURL(cfg.Endpoint))
 		}
+		if cfg.Model != "" {
+			opts = append(opts, WithAnthropicModel(cfg.Model))
+		}
 		return NewAnthropic(cfg.Name, apiKey, opts...), nil
 
 	default:
-		return nil, fmt.Errorf("unknown provider type %q for provider %q", cfg.Type, cfg.Name)
+		return nil, fmt.Errorf("unknown provider type %q for provider %q", cfg.Type, cfg.Key())
 	}
 }
