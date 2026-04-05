@@ -154,6 +154,7 @@ func autoTeamDetection(configDir string) error {
 	}{
 		{"auto-claude", filepath.Join(home, ".claude", "agents")},
 		{"auto-opencode", filepath.Join(home, ".config", "opencode", "agents")},
+		{"auto-opencode-home", filepath.Join(home, ".opencode", "agents")},
 	}
 
 	teamsDir := filepath.Join(configDir, "user", "teams")

@@ -77,6 +77,7 @@ func isReadOnlyTeam(tv service.TeamView) bool {
 	readOnlyDirs := []string{
 		filepath.Join(home, ".config", "opencode", "agents"),
 		filepath.Join(home, ".claude", "agents"),
+		filepath.Join(home, ".opencode", "agents"),
 	}
 	for _, d := range readOnlyDirs {
 		if tv.Dir() == d {

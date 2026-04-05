@@ -953,6 +953,11 @@ func TestIsServiceReadOnlyTeam(t *testing.T) {
 			want: true,
 		},
 		{
+			name: "opencode home agents dir",
+			dir:  filepath.Join(home, ".opencode", "agents"),
+			want: true,
+		},
+		{
 			name: "user teams dir",
 			dir:  filepath.Join(home, ".config", "toasters", "user", "teams", "my-team"),
 			want: false,

@@ -227,6 +227,11 @@ func TestRun_AutoTeamDetection(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	opencodeHomeAgents := filepath.Join(mockHome, ".opencode", "agents")
+	if err := os.MkdirAll(opencodeHomeAgents, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
 	// Override HOME for the test by calling the internal function directly
 	// with pre-constructed auto-team entries.
 	teamsDir := filepath.Join(configDir, "user", "teams")
@@ -240,6 +245,9 @@ func TestRun_AutoTeamDetection(t *testing.T) {
 	}
 	if err := createAutoTeam(teamsDir, "auto-opencode", opencodeAgents); err != nil {
 		t.Fatalf("createAutoTeam(auto-opencode): %v", err)
+	}
+	if err := createAutoTeam(teamsDir, "auto-opencode-home", opencodeHomeAgents); err != nil {
+		t.Fatalf("createAutoTeam(auto-opencode-home): %v", err)
 	}
 
 	// Verify auto-claude.
@@ -285,6 +293,33 @@ func TestRun_AutoTeamDetection(t *testing.T) {
 	}
 	if linkTarget != opencodeAgents {
 		t.Errorf("symlink target = %q, want %q", linkTarget, opencodeAgents)
+	}
+
+	// Verify auto-opencode-home.
+	autoOpencodeHomeDir := filepath.Join(teamsDir, "auto-opencode-home")
+	assertDirExists(t, autoOpencodeHomeDir)
+	assertFileExists(t, filepath.Join(autoOpencodeHomeDir, ".auto-team"))
+	linkTarget, err = os.Readlink(filepath.Join(autoOpencodeHomeDir, "agents"))
+	if err != nil {
+		t.Fatalf("reading symlink: %v", err)
+	}
+	if linkTarget != opencodeHomeAgents {
+		t.Errorf("symlink target = %q, want %q", linkTarget, opencodeHomeAgents)
+	}
+
+	// Verify auto-opencode and auto-opencode-home coexist as separate teams.
+	assertDirExists(t, autoOpencodeDir)
+	assertDirExists(t, autoOpencodeHomeDir)
+	autoOpencodeLink, err := os.Readlink(filepath.Join(autoOpencodeDir, "agents"))
+	if err != nil {
+		t.Fatalf("reading auto-opencode symlink: %v", err)
+	}
+	autoOpencodeHomeLink, err := os.Readlink(filepath.Join(autoOpencodeHomeDir, "agents"))
+	if err != nil {
+		t.Fatalf("reading auto-opencode-home symlink: %v", err)
+	}
+	if autoOpencodeLink == autoOpencodeHomeLink {
+		t.Errorf("auto-opencode and auto-opencode-home should point to different source dirs, both = %q", autoOpencodeLink)
 	}
 
 	// Verify idempotency: calling again should not fail.
