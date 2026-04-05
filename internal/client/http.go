@@ -49,9 +49,10 @@ var (
 // httpTransport is the low-level HTTP transport used by RemoteClient.
 // It constructs requests, sets standard headers, and returns raw responses.
 type httpTransport struct {
-	client  *http.Client
-	baseURL string
-	token   string
+	client    *http.Client // for REST calls (30s timeout)
+	sseClient *http.Client // for SSE connections (no timeout)
+	baseURL   string
+	token     string
 }
 
 // setAuth injects the Authorization: Bearer header onto req when a token is

@@ -160,7 +160,7 @@ func (s *remoteEventService) readSSE(ctx context.Context, ch chan<- service.Even
 		req.Header.Set("Authorization", "Bearer "+s.c.token)
 	}
 
-	resp, err := s.c.http.client.Do(req)
+	resp, err := s.c.http.sseClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("connecting to SSE: %w", err)
 	}

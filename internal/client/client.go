@@ -80,8 +80,9 @@ func New(baseURL string, opts ...Option) (*RemoteClient, error) {
 
 	rc := &RemoteClient{
 		http: &httpTransport{
-			client:  &http.Client{Timeout: 30 * time.Second},
-			baseURL: baseURL,
+			client:    &http.Client{Timeout: 30 * time.Second},
+			sseClient: &http.Client{},
+			baseURL:   baseURL,
 		},
 		baseURL: baseURL,
 		ctx:     ctx,
