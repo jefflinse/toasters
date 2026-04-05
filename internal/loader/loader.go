@@ -311,6 +311,9 @@ func (l *Loader) loadUserTeams(teamsDir string, sharedAgents, systemAgents map[s
 		team := convertTeam(td, teamID, source, teamPath, isAuto)
 		teams = append(teams, team)
 
+		// Track where this team's agents start in the slice.
+		teamAgentStart := len(teamAgents)
+
 		// Resolve lead agent.
 		if td.Lead != "" {
 			leadID, ok := resolveAgent(td.Lead, localAgentIndex, sharedAgents, systemAgents)
@@ -340,6 +343,27 @@ func (l *Loader) loadUserTeams(teamsDir string, sharedAgents, systemAgents map[s
 				})
 			} else {
 				slog.Warn("team agent not found, skipping", "team", teamID, "agent", name)
+			}
+		}
+
+		// For auto-teams, include ALL local agents — team.md supplements, not restricts.
+		if isAuto {
+			added := make(map[string]bool)
+			for i := teamAgentStart; i < len(teamAgents); i++ {
+				added[teamAgents[i].AgentID] = true
+			}
+			for _, a := range localAgents {
+				if !added[a.ID] {
+					role := agentRole(a.Mode)
+					teamAgents = append(teamAgents, &db.TeamAgent{
+						TeamID:  teamID,
+						AgentID: a.ID,
+						Role:    role,
+					})
+					if role == "lead" && team.LeadAgent == "" {
+						team.LeadAgent = a.ID
+					}
+				}
 			}
 		}
 	}

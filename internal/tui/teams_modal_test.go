@@ -9,8 +9,6 @@ package tui
 
 import (
 	"errors"
-	"os"
-	"path/filepath"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
@@ -22,20 +20,11 @@ import (
 // Helpers
 // ---------------------------------------------------------------------------
 
-// makeAutoTeam creates a temporary directory that looks like an auto-team
-// (contains a .auto-team marker file) and returns a service.TeamView pointing
-// at that directory.
+// makeAutoTeam returns a service.TeamView that represents an auto-detected team.
 func makeAutoTeam(t *testing.T, name string) service.TeamView {
 	t.Helper()
-	dir := t.TempDir()
-
-	// Write the .auto-team marker so isAutoTeam() returns true.
-	if err := os.WriteFile(filepath.Join(dir, ".auto-team"), []byte{}, 0o644); err != nil {
-		t.Fatalf("writing .auto-team marker: %v", err)
-	}
-
 	return service.TeamView{
-		Team: service.Team{Name: name, SourcePath: dir, IsAuto: true},
+		Team: service.Team{Name: name, SourcePath: t.TempDir(), IsAuto: true},
 	}
 }
 
@@ -229,43 +218,5 @@ func TestTeamPromotedMsg_Success_ClearsPromotingFlag(t *testing.T) {
 
 	if got.teamsModal.promoting {
 		t.Error("teamsModal.promoting should be false after successful teamPromotedMsg")
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Test: isAutoTeam / isReadOnlyTeam helpers
-// ---------------------------------------------------------------------------
-
-func TestIsAutoTeam_WithMarker(t *testing.T) {
-	t.Parallel()
-
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, ".auto-team"), []byte{}, 0o644); err != nil {
-		t.Fatalf("writing .auto-team: %v", err)
-	}
-
-	team := service.TeamView{Team: service.Team{Name: "auto", SourcePath: dir}}
-	if !isAutoTeam(team) {
-		t.Error("isAutoTeam should return true when .auto-team marker is present")
-	}
-}
-
-func TestIsAutoTeam_WithoutMarker(t *testing.T) {
-	t.Parallel()
-
-	dir := t.TempDir()
-	team := service.TeamView{Team: service.Team{Name: "regular", SourcePath: dir}}
-	if isAutoTeam(team) {
-		t.Error("isAutoTeam should return false when .auto-team marker is absent")
-	}
-}
-
-func TestIsReadOnlyTeam_UnknownDir(t *testing.T) {
-	t.Parallel()
-
-	dir := t.TempDir()
-	team := service.TeamView{Team: service.Team{Name: "unknown", SourcePath: dir}}
-	if isReadOnlyTeam(team) {
-		t.Error("isReadOnlyTeam should return false for an arbitrary directory")
 	}
 }

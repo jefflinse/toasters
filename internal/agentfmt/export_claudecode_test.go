@@ -16,6 +16,7 @@ func TestExportClaudeCode_AllMappableFields(t *testing.T) {
 	def := &agentfmt.AgentDef{
 		Name:            "code-builder",
 		Description:     "Builds production code",
+		Mode:            "primary",
 		Model:           "claude-sonnet-4-20250514",
 		Provider:        "anthropic",
 		MaxTurns:        15,
@@ -43,6 +44,7 @@ func TestExportClaudeCode_AllMappableFields(t *testing.T) {
 
 	assertMapString(t, out, "name", "code-builder")
 	assertMapString(t, out, "description", "Builds production code")
+	assertMapString(t, out, "mode", "primary")
 	assertMapString(t, out, "model", "claude-sonnet-4-20250514")
 	assertMapInt(t, out, "maxTurns", 15)
 	assertMapFloat64(t, out, "temperature", 0.7)
@@ -99,7 +101,6 @@ func TestExportClaudeCode_LossyFieldsGenerateWarnings(t *testing.T) {
 	_, _, warnings := agentfmt.ExportClaudeCode(def)
 
 	wantFields := map[string]bool{
-		"mode":          false,
 		"skills":        false,
 		"permissions":   false,
 		"hidden":        false,
@@ -143,7 +144,7 @@ func TestExportClaudeCode_LossyFieldsNotInOutput(t *testing.T) {
 		t.Fatalf("unmarshaling exported YAML: %v", err)
 	}
 
-	droppedKeys := []string{"mode", "skills", "permissions", "hidden", "disabled", "model_options", "modelOptions"}
+	droppedKeys := []string{"skills", "permissions", "hidden", "disabled", "model_options", "modelOptions"}
 	for _, key := range droppedKeys {
 		if _, ok := out[key]; ok {
 			t.Errorf("lossy field %q should not be in output", key)
@@ -293,6 +294,7 @@ func TestExportClaudeCode_RoundTrip(t *testing.T) {
 	fmYAML := `
 name: roundtrip-cc
 description: Round-trip test
+mode: primary
 model: sonnet
 maxTurns: 10
 tools:
@@ -321,6 +323,7 @@ color: blue
 
 	assertMapString(t, out, "name", "roundtrip-cc")
 	assertMapString(t, out, "description", "Round-trip test")
+	assertMapString(t, out, "mode", "primary")
 	// Model alias was expanded on import.
 	assertMapString(t, out, "model", "claude-sonnet-4-20250514")
 	assertMapInt(t, out, "maxTurns", 10)

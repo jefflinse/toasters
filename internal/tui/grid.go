@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"image/color"
 	"net/url"
-	"path/filepath"
+	"path"
 	"strconv"
 	"strings"
 	"time"
@@ -514,11 +514,11 @@ func activityLabel(toolName string, args json.RawMessage) string {
 
 	switch toolName {
 	case "write_file":
-		return "write: " + filepath.Base(str("path"))
+		return "write: " + path.Base(str("path"))
 	case "edit_file":
-		return "edit: " + filepath.Base(str("path"))
+		return "edit: " + path.Base(str("path"))
 	case "read_file":
-		return "read: " + filepath.Base(str("path"))
+		return "read: " + path.Base(str("path"))
 	case "shell":
 		return "shell: " + trunc(str("command"), 28)
 	case "spawn_agent":

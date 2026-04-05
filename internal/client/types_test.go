@@ -466,6 +466,115 @@ func TestWireTeamViewToService_NilCoordinator(t *testing.T) {
 	}
 }
 
+func TestWireTeamViewToService_ReadOnlyAndSystemFlags(t *testing.T) {
+	t.Parallel()
+
+	// Test with both flags true.
+	w := wireTeamView{
+		Team: wireTeam{
+			ID:        "team-ro",
+			Name:      "claude-code",
+			Source:    "auto",
+			IsAuto:    true,
+			CreatedAt: testTime,
+			UpdatedAt: testTime,
+		},
+		Coordinator: nil,
+		Workers:     []wireAgent{},
+		IsReadOnly:  true,
+		IsSystem:    false,
+	}
+
+	data, err := json.Marshal(w)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	var decoded wireTeamView
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	got := wireTeamViewToService(decoded)
+
+	if !got.IsReadOnly {
+		t.Error("IsReadOnly = false, want true")
+	}
+	if got.IsSystem {
+		t.Error("IsSystem = true, want false")
+	}
+
+	// Test with both flags false.
+	w2 := wireTeamView{
+		Team: wireTeam{
+			ID:        "team-user",
+			Name:      "my-team",
+			Source:    "user",
+			IsAuto:    false,
+			CreatedAt: testTime,
+			UpdatedAt: testTime,
+		},
+		Coordinator: nil,
+		Workers:     []wireAgent{},
+		IsReadOnly:  false,
+		IsSystem:    false,
+	}
+
+	data2, err := json.Marshal(w2)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	var decoded2 wireTeamView
+	if err := json.Unmarshal(data2, &decoded2); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	got2 := wireTeamViewToService(decoded2)
+
+	if got2.IsReadOnly {
+		t.Error("IsReadOnly = true, want false")
+	}
+	if got2.IsSystem {
+		t.Error("IsSystem = true, want false")
+	}
+
+	// Test with IsSystem true.
+	w3 := wireTeamView{
+		Team: wireTeam{
+			ID:        "team-sys",
+			Name:      "system-team",
+			Source:    "system",
+			IsAuto:    false,
+			CreatedAt: testTime,
+			UpdatedAt: testTime,
+		},
+		Coordinator: nil,
+		Workers:     []wireAgent{},
+		IsReadOnly:  false,
+		IsSystem:    true,
+	}
+
+	data3, err := json.Marshal(w3)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	var decoded3 wireTeamView
+	if err := json.Unmarshal(data3, &decoded3); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	got3 := wireTeamViewToService(decoded3)
+
+	if got3.IsReadOnly {
+		t.Error("IsReadOnly = true, want false")
+	}
+	if !got3.IsSystem {
+		t.Error("IsSystem = false, want true")
+	}
+}
+
 func TestWireSessionSnapshotToService(t *testing.T) {
 	t.Parallel()
 

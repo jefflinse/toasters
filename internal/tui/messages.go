@@ -261,7 +261,7 @@ type OperatorEventMsg struct {
 	Event service.Event
 }
 
-// editorFinishedMsg is sent when an external $EDITOR process completes.
-type editorFinishedMsg struct {
-	err error
+// EditorFinishedMsg is sent when an external $EDITOR process completes.
+type EditorFinishedMsg struct {
+	Err error
 }

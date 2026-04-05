@@ -5,8 +5,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"os"
-	"os/exec"
 	"strings"
 	"time"
 
@@ -173,8 +171,8 @@ func (m *Model) updateSkillsModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "e":
 		if m.skillsModal.focus == 0 && len(m.skillsModal.skills) > 0 && m.skillsModal.skillIdx < len(m.skillsModal.skills) {
 			sk := m.skillsModal.skills[m.skillsModal.skillIdx]
-			if sk.SourcePath != "" && sk.Source != "system" {
-				return m, openInEditor(sk.SourcePath)
+			if sk.SourcePath != "" && sk.Source != "system" && m.openInEditor != nil {
+				return m, m.openInEditor(sk.SourcePath)
 			}
 		}
 	}
@@ -209,18 +207,6 @@ func (m *Model) reloadSkillsForModal() {
 		return
 	}
 	m.skillsModal.skills = skills
-}
-
-// openInEditor launches $EDITOR (or vi) for the given file path, suspending the TUI.
-func openInEditor(path string) tea.Cmd {
-	editor := os.Getenv("EDITOR")
-	if editor == "" {
-		editor = "vi"
-	}
-	c := exec.Command(editor, path)
-	return tea.ExecProcess(c, func(err error) tea.Msg {
-		return editorFinishedMsg{err: err}
-	})
 }
 
 // renderSkillsModal renders the full-screen skills management modal.

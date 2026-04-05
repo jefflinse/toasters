@@ -320,6 +320,10 @@ type SystemService interface {
 	// enabling clients to hydrate their state on connect/reconnect.
 	// For real-time updates, clients should subscribe to the SSE event stream.
 	GetProgressState(ctx context.Context) (ProgressState, error)
+
+	// GetLogs returns the contents of the application log file.
+	// Returns ("", nil) if the log file does not exist.
+	GetLogs(ctx context.Context) (string, error)
 }
 
 // ---------------------------------------------------------------------------

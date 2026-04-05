@@ -2089,6 +2089,19 @@ func (s *LocalService) GetProgressState(_ context.Context) (ProgressState, error
 	return s.buildProgressState(), nil
 }
 
+// GetLogs returns the contents of the application log file.
+func (s *LocalService) GetLogs(_ context.Context) (string, error) {
+	logPath := filepath.Join(s.cfg.ConfigDir, "toasters.log")
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", fmt.Errorf("reading log file: %w", err)
+	}
+	return string(data), nil
+}
+
 // ---------------------------------------------------------------------------
 // Type mapping helpers
 // ---------------------------------------------------------------------------
@@ -2314,6 +2327,12 @@ func (s *LocalService) buildTeamViews(ctx context.Context) ([]TeamView, error) {
 			continue
 		}
 		tv := TeamView{Team: dbTeamToService(team)}
+		tv.IsReadOnly = isServiceReadOnlyTeam(tv)
+		// Defense-in-depth: IsSystem is always false here since system teams
+		// (Source == "system") are filtered above. The computation is kept as
+		// a safety net in case ListTeams is ever called without the filter, or
+		// if a non-"system" source team is placed under the system directory.
+		tv.IsSystem = isServiceSystemTeam(tv, s.cfg.ConfigDir)
 
 		teamAgents, err := s.cfg.Store.ListTeamAgents(ctx, team.ID)
 		if err != nil {

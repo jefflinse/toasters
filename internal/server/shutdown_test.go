@@ -408,3 +408,7 @@ func (m *shutdownTestSystem) GetProgressState(ctx context.Context) (service.Prog
 	}
 	return service.ProgressState{}, nil
 }
+
+func (m *shutdownTestSystem) GetLogs(_ context.Context) (string, error) {
+	return "", nil
+}

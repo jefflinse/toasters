@@ -512,6 +512,115 @@ You work in the auto team.
 	}
 }
 
+func TestLoad_AutoTeamWithTeamMD_LeadOnly(t *testing.T) {
+	// Regression test: auto-team with team.md that specifies only a lead
+	// (no agents: list) should still include ALL local agents from the directory.
+	store := openTestStore(t)
+	configDir := t.TempDir()
+	ctx := context.Background()
+
+	autoTeamDir := filepath.Join(configDir, "user", "teams", "auto-claude")
+	touchFile(t, filepath.Join(autoTeamDir, ".auto-team"))
+
+	autoTeamMD := `---
+name: Auto Claude Team
+description: An auto-discovered team with explicit lead
+lead: Orchestrator
+---
+Auto team culture.
+`
+	orchestratorMD := `---
+name: Orchestrator
+description: Lead of auto team
+mode: lead
+model: claude-sonnet-4-20250514
+---
+You lead the auto team.
+`
+	worker1MD := `---
+name: Coder
+description: First worker
+mode: worker
+model: claude-sonnet-4-20250514
+---
+You write code.
+`
+	worker2MD := `---
+name: Reviewer
+description: Second worker
+mode: worker
+model: claude-sonnet-4-20250514
+---
+You review code.
+`
+	writeFile(t, filepath.Join(autoTeamDir, "team.md"), autoTeamMD)
+	writeFile(t, filepath.Join(autoTeamDir, "agents", "orchestrator.md"), orchestratorMD)
+	writeFile(t, filepath.Join(autoTeamDir, "agents", "coder.md"), worker1MD)
+	writeFile(t, filepath.Join(autoTeamDir, "agents", "reviewer.md"), worker2MD)
+
+	l := New(store, configDir)
+	if err := l.Load(ctx); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	teams, err := store.ListTeams(ctx)
+	if err != nil {
+		t.Fatalf("ListTeams: %v", err)
+	}
+	if len(teams) != 1 {
+		t.Fatalf("expected 1 team, got %d", len(teams))
+	}
+	if !teams[0].IsAuto {
+		t.Error("team should be auto")
+	}
+	if teams[0].LeadAgent != "auto-claude/orchestrator" {
+		t.Errorf("team lead = %q, want %q", teams[0].LeadAgent, "auto-claude/orchestrator")
+	}
+	if teams[0].Culture != "Auto team culture." {
+		t.Errorf("team culture = %q, want %q", teams[0].Culture, "Auto team culture.")
+	}
+
+	// The key assertion: all 3 agents should be team members, even though
+	// team.md only listed the lead.
+	teamAgents, err := store.ListTeamAgents(ctx, "auto-claude")
+	if err != nil {
+		t.Fatalf("ListTeamAgents: %v", err)
+	}
+	if len(teamAgents) != 3 {
+		t.Fatalf("expected 3 team agents (lead + 2 workers), got %d", len(teamAgents))
+	}
+
+	taByAgent := make(map[string]*db.TeamAgent)
+	for _, ta := range teamAgents {
+		taByAgent[ta.AgentID] = ta
+	}
+
+	if ta, ok := taByAgent["auto-claude/orchestrator"]; !ok {
+		t.Error("orchestrator not in team agents")
+	} else if ta.Role != "lead" {
+		t.Errorf("orchestrator role = %q, want %q", ta.Role, "lead")
+	}
+	if ta, ok := taByAgent["auto-claude/coder"]; !ok {
+		t.Error("coder not in team agents")
+	} else if ta.Role != "worker" {
+		t.Errorf("coder role = %q, want %q", ta.Role, "worker")
+	}
+	if ta, ok := taByAgent["auto-claude/reviewer"]; !ok {
+		t.Error("reviewer not in team agents")
+	} else if ta.Role != "worker" {
+		t.Errorf("reviewer role = %q, want %q", ta.Role, "worker")
+	}
+
+	// Also verify all 3 agents exist in the store.
+	agents, err := store.ListAgents(ctx)
+	if err != nil {
+		t.Fatalf("ListAgents: %v", err)
+	}
+	if len(agents) != 3 {
+		t.Errorf("expected 3 agents, got %d", len(agents))
+	}
+}
+
 func TestLoad_AgentResolution(t *testing.T) {
 	store := openTestStore(t)
 	configDir := t.TempDir()

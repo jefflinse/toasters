@@ -5,8 +5,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -61,48 +59,6 @@ func (m *Model) promoteAutoTeamCmd(tv service.TeamView) tea.Cmd {
 		// a teamPromotedMsg so the modal can update immediately.
 		return teamPromotedMsg{teamName: tv.Name()}
 	}
-}
-
-// ---------------------------------------------------------------------------
-// Team classification helpers (local equivalents of service-internal helpers)
-// ---------------------------------------------------------------------------
-
-// isReadOnlyTeam returns true if the team's directory is one of the well-known
-// auto-detected read-only directories (e.g. ~/.claude/agents).
-func isReadOnlyTeam(tv service.TeamView) bool {
-	home := service.GetHomeDir()
-	if home == "" {
-		return false
-	}
-	readOnlyDirs := []string{
-		filepath.Join(home, ".config", "opencode", "agents"),
-		filepath.Join(home, ".claude", "agents"),
-		filepath.Join(home, ".opencode", "agents"),
-	}
-	for _, d := range readOnlyDirs {
-		if tv.Dir() == d {
-			return true
-		}
-	}
-	return false
-}
-
-// isSystemTeam returns true if the team's directory is under the system directory.
-func isSystemTeam(tv service.TeamView, configDir string) bool {
-	systemDir := filepath.Join(configDir, "system")
-	return strings.HasPrefix(tv.Dir(), systemDir+string(filepath.Separator))
-}
-
-// isAutoTeam returns true if the team is auto-detected.
-func isAutoTeam(tv service.TeamView) bool {
-	if isReadOnlyTeam(tv) {
-		return true
-	}
-	if tv.IsAuto() {
-		return true
-	}
-	_, err := os.Stat(filepath.Join(tv.Dir(), ".auto-team"))
-	return err == nil
 }
 
 // updateTeamsModal handles all key presses when the teams modal is open.
@@ -292,7 +248,7 @@ func (m *Model) updateTeamsModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "ctrl+d":
 		if m.teamsModal.focus == 0 && !m.teamsModal.confirmDelete {
 			if len(m.teamsModal.teams) > 0 && m.teamsModal.teamIdx < len(m.teamsModal.teams) {
-				if !isReadOnlyTeam(m.teamsModal.teams[m.teamsModal.teamIdx]) {
+				if !m.teamsModal.teams[m.teamsModal.teamIdx].IsReadOnly {
 					m.teamsModal.confirmDelete = true
 				}
 			}
@@ -322,7 +278,7 @@ func (m *Model) updateTeamsModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "ctrl+k":
 		if m.teamsModal.focus == 1 && len(m.teamsModal.teams) > 0 && m.teamsModal.teamIdx < len(m.teamsModal.teams) {
 			tv := m.teamsModal.teams[m.teamsModal.teamIdx]
-			if !isReadOnlyTeam(tv) {
+			if !tv.IsReadOnly {
 				// Build the ordered agent list: coordinator first, then workers.
 				var agentList []service.Agent
 				if tv.Coordinator != nil {
@@ -348,7 +304,7 @@ func (m *Model) updateTeamsModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "ctrl+p":
 		if m.teamsModal.focus == 0 && len(m.teamsModal.teams) > 0 && m.teamsModal.teamIdx < len(m.teamsModal.teams) {
 			tv := m.teamsModal.teams[m.teamsModal.teamIdx]
-			if isAutoTeam(tv) && !isSystemTeam(tv, m.configDir) && !m.teamsModal.promoting {
+			if tv.IsAuto() && !tv.IsSystem && !tv.IsReadOnly && !m.teamsModal.promoting {
 				m.teamsModal.promoting = true
 				modalCmds = append(modalCmds, m.promoteAutoTeamCmd(tv))
 			}
@@ -358,7 +314,7 @@ func (m *Model) updateTeamsModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		// Open the add-agent picker when a non-system, non-read-only team is selected.
 		if !m.teamsModal.inputMode && len(m.teamsModal.teams) > 0 && m.teamsModal.teamIdx < len(m.teamsModal.teams) {
 			tv := m.teamsModal.teams[m.teamsModal.teamIdx]
-			if !isReadOnlyTeam(tv) && !isSystemTeam(tv, m.configDir) {
+			if !tv.IsReadOnly && !tv.IsSystem {
 				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 				allAgents, err := m.svc.Definitions().ListAgents(ctx)
 				cancel()
@@ -444,7 +400,7 @@ func (m *Model) reloadTeamsForModal() {
 // maybeAutoDetectCoordinator fires a service DetectCoordinator call for the team
 // if the team has no coordinator, is not read-only, and hasn't been attempted yet.
 func (m *Model) maybeAutoDetectCoordinator(tv service.TeamView) tea.Cmd {
-	if isReadOnlyTeam(tv) {
+	if tv.IsReadOnly {
 		return nil
 	}
 	if tv.Coordinator != nil {
@@ -539,17 +495,17 @@ func (m *Model) renderTeamsModal() string {
 		name := truncateStr(t.Name(), leftInnerW-4)
 		line := fmt.Sprintf(" %s %s", icon, name)
 		// Append badges for system, auto, and read-only teams.
-		if isSystemTeam(t, m.configDir) {
+		if t.IsSystem {
 			line += " ⚙"
-		} else if isAutoTeam(t) {
+		} else if t.IsAuto() {
 			line += " ↻"
 		}
-		if isReadOnlyTeam(t) {
+		if t.IsReadOnly {
 			line += " 🔒"
 		}
 		if i == m.teamsModal.teamIdx {
 			line = ModalSelectedStyle.Width(leftInnerW).Render(line)
-		} else if isReadOnlyTeam(t) {
+		} else if t.IsReadOnly {
 			line = ModalReadOnlyStyle.Render(line)
 		}
 		leftLines = append(leftLines, line)
@@ -650,9 +606,9 @@ func (m *Model) renderTeamsModal() string {
 
 		// Header with badges.
 		headerText := truncateStr(tv.Name(), rightInnerW-12)
-		if isSystemTeam(tv, m.configDir) {
+		if tv.IsSystem {
 			headerText += " " + DimStyle.Render("⚙ system")
-		} else if isAutoTeam(tv) {
+		} else if tv.IsAuto() {
 			headerText += " " + DimStyle.Render("↻ auto")
 		}
 		rightLines = append(rightLines, HeaderStyle.Render(headerText))
@@ -664,7 +620,7 @@ func (m *Model) renderTeamsModal() string {
 		}
 
 		// Promote hint for auto-teams.
-		if isAutoTeam(tv) && !isSystemTeam(tv, m.configDir) {
+		if tv.IsAuto() && !tv.IsSystem {
 			rightLines = append(rightLines, DimStyle.Render("⇧ Ctrl+P to promote to managed team"))
 		}
 
@@ -792,9 +748,9 @@ func (m *Model) renderTeamsModal() string {
 	panels := lipgloss.JoinHorizontal(lipgloss.Top, leftPanel, " ", rightPanel)
 
 	// Footer with key hints — dim read-only-gated keys when team is read-only.
-	readOnly := len(teams) > 0 && m.teamsModal.teamIdx < len(teams) && isReadOnlyTeam(teams[m.teamsModal.teamIdx])
-	autoTeam := len(teams) > 0 && m.teamsModal.teamIdx < len(teams) && isAutoTeam(teams[m.teamsModal.teamIdx]) && !isSystemTeam(teams[m.teamsModal.teamIdx], m.configDir)
-	systemTeam := len(teams) > 0 && m.teamsModal.teamIdx < len(teams) && isSystemTeam(teams[m.teamsModal.teamIdx], m.configDir)
+	readOnly := len(teams) > 0 && m.teamsModal.teamIdx < len(teams) && teams[m.teamsModal.teamIdx].IsReadOnly
+	autoTeam := len(teams) > 0 && m.teamsModal.teamIdx < len(teams) && teams[m.teamsModal.teamIdx].IsAuto() && !teams[m.teamsModal.teamIdx].IsSystem
+	systemTeam := len(teams) > 0 && m.teamsModal.teamIdx < len(teams) && teams[m.teamsModal.teamIdx].IsSystem
 	noTeamSelected := len(teams) == 0
 	nHint := "[Ctrl+N] New"
 	dHint := "[Ctrl+D] Delete"

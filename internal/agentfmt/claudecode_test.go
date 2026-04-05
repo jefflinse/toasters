@@ -13,6 +13,7 @@ func TestImportClaudeCode_AllFields(t *testing.T) {
 	fmYAML := `
 name: code-builder
 description: Builds production code
+mode: primary
 model: sonnet
 maxTurns: 15
 temperature: 0.7
@@ -49,6 +50,9 @@ color: blue
 	}
 	if def.Description != "Builds production code" {
 		t.Errorf("Description = %q, want %q", def.Description, "Builds production code")
+	}
+	if def.Mode != "primary" {
+		t.Errorf("Mode = %q, want %q", def.Mode, "primary")
 	}
 	// "sonnet" should expand to full model ID.
 	if def.Model != "claude-sonnet-4-20250514" {

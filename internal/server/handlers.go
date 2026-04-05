@@ -736,3 +736,13 @@ func (s *Server) getProgress(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, progressStateToWire(ps))
 }
+
+// getLogs handles GET /api/v1/logs.
+func (s *Server) getLogs(w http.ResponseWriter, r *http.Request) {
+	content, err := s.svc.System().GetLogs(r.Context())
+	if err != nil {
+		handleServiceError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, logsResponse{Content: content})
+}

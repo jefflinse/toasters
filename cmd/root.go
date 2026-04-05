@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sync/atomic"
 	"time"
@@ -259,8 +260,7 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 		svc = rc
 
 		m := tui.NewModel(tui.ModelConfig{
-			Service:   svc,
-			ConfigDir: configDir,
+			Service: svc,
 		})
 
 		prog := tea.NewProgram(&m)
@@ -345,8 +345,8 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 	}
 
 	m := tui.NewModel(tui.ModelConfig{
-		Service:   svc,
-		ConfigDir: configDir,
+		Service:      svc,
+		OpenInEditor: openInEditor,
 	})
 
 	prog := tea.NewProgram(&m)
@@ -372,6 +372,10 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 		// Fetch initial teams from the service for awareness generation.
 		initialTeams, _ := svc.Definitions().ListTeams(ctx)
 		awareness := generateTeamAwareness(ctx, llmProvider, initialTeams, configDir)
+
+		if prog := p.Load(); prog != nil {
+			prog.Send(tui.TeamsReloadedMsg{Teams: initialTeams, Awareness: awareness})
+		}
 
 		if op != nil {
 			if prog := p.Load(); prog != nil {
@@ -428,6 +432,18 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 	return err
 }
 
+// openInEditor launches $EDITOR (or vi) for the given file path, suspending the TUI.
+func openInEditor(path string) tea.Cmd {
+	editor := os.Getenv("EDITOR")
+	if editor == "" {
+		editor = "vi"
+	}
+	c := exec.Command(editor, path)
+	return tea.ExecProcess(c, func(err error) tea.Msg {
+		return tui.EditorFinishedMsg{Err: err}
+	})
+}
+
 // sendClientModeAppReady sends the AppReadyMsg after client mode connection is established.
 // This is critical for transitioning the TUI from loading to ready state.
 // Without this, the TUI hangs indefinitely on the loading screen.
@@ -447,6 +463,7 @@ func sendClientModeAppReady(svc service.Service, p *atomic.Pointer[tea.Program],
 		slog.Debug("client mode: sending AppReadyMsg", "server", serverAddr)
 
 		if prog := p.Load(); prog != nil {
+			prog.Send(tui.TeamsReloadedMsg{Teams: initialTeams, Awareness: awareness})
 			prog.Send(tui.AppReadyMsg{
 				Awareness: awareness,
 				Greeting:  "Connected to " + serverAddr,

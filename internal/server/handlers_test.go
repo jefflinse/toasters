@@ -185,6 +185,9 @@ func (m *mockSystemService) ListMCPServers(_ context.Context) ([]service.MCPServ
 func (m *mockSystemService) GetProgressState(_ context.Context) (service.ProgressState, error) {
 	return service.ProgressState{}, nil
 }
+func (m *mockSystemService) GetLogs(_ context.Context) (string, error) {
+	return "", nil
+}
 
 // ---------------------------------------------------------------------------
 // Handler tests

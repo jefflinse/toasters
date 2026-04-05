@@ -1,23 +1,23 @@
-// Log view: fullscreen tail of ~/.config/toasters/toasters.log.
+// Log view: fullscreen tail of the application log.
 // Toggle with ctrl+\; dismiss with ctrl+\ or esc.
 // Scrollable via viewport (mouse wheel + keyboard); copy-paste via terminal selection.
 package tui
 
 import (
-	"os"
-	"path/filepath"
+	"context"
 	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+
+	"github.com/jefflinse/toasters/internal/service"
 )
 
 // logViewState holds all state for the fullscreen log tail view.
 type logViewState struct {
 	show     bool
 	viewport logViewport // thin wrapper so we can size it independently
-	logPath  string      // absolute path to toasters.log
 	atBottom bool        // true when viewport is scrolled to the bottom (auto-tail)
 }
 
@@ -33,7 +33,7 @@ type logViewport struct {
 	viewWidth int      // width of the view area (used for pre-wrapping)
 }
 
-// logTailTickMsg fires every 500ms while the log view is open to re-read the file.
+// logTailTickMsg fires every 500ms while the log view is open to refresh the content.
 type logTailTickMsg struct{}
 
 // scheduleLogTail returns a command that fires logTailTickMsg after 500ms.
@@ -43,22 +43,21 @@ func scheduleLogTail() tea.Cmd {
 	})
 }
 
-// logReadCmd reads the log file and returns a logContentMsg.
+// logContentMsg carries log lines fetched from the service.
 type logContentMsg struct {
 	lines []string
 }
 
-// readLogCmd reads the log file at path and returns its lines as a logContentMsg.
-func readLogCmd(path string) tea.Cmd {
+// readLogCmd fetches log content via the service and returns its lines as a logContentMsg.
+func readLogCmd(svc service.Service) tea.Cmd {
 	return func() tea.Msg {
-		data, err := os.ReadFile(path)
+		data, err := svc.System().GetLogs(context.Background())
 		if err != nil {
-			// File may not exist yet — return empty.
+			// Service unavailable — return empty.
 			return logContentMsg{lines: nil}
 		}
-		raw := string(data)
 		// Split on newlines; drop trailing empty line from final newline.
-		lines := strings.Split(raw, "\n")
+		lines := strings.Split(data, "\n")
 		if len(lines) > 0 && lines[len(lines)-1] == "" {
 			lines = lines[:len(lines)-1]
 		}
@@ -66,25 +65,13 @@ func readLogCmd(path string) tea.Cmd {
 	}
 }
 
-// logFilePath returns the absolute path to the toasters log file,
-// derived from the model's cached configDir.
-func (m *Model) logFilePath() string {
-	if m.configDir == "" {
-		return ""
-	}
-	return filepath.Join(m.configDir, "toasters.log")
-}
-
 // openLogView opens the log view, reads the current log content, and starts the tail poll.
 func (m *Model) openLogView() tea.Cmd {
-	if m.logView.logPath == "" {
-		m.logView.logPath = m.logFilePath()
-	}
 	m.logView.show = true
 	m.logView.atBottom = true
 	m.resizeLogView()
 	return tea.Batch(
-		readLogCmd(m.logView.logPath),
+		readLogCmd(m.svc),
 		scheduleLogTail(),
 	)
 }
@@ -186,7 +173,7 @@ func (m *Model) updateLogView(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// handleLogTailTick re-reads the log file and reschedules the next tick.
+// handleLogTailTick refreshes the log content and reschedules the next tick.
 // Only fires when the log view is open.
 func (m *Model) handleLogTailTick() (tea.Model, tea.Cmd) {
 	if !m.logView.show {
@@ -194,13 +181,13 @@ func (m *Model) handleLogTailTick() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	return m, tea.Batch(
-		readLogCmd(m.logView.logPath),
+		readLogCmd(m.svc),
 		scheduleLogTail(),
 	)
 }
 
 // applyLogContent updates the viewport lines and optionally auto-tails.
-// Raw file lines are word-wrapped to wrapWidth so the scroll arithmetic
+// Lines are word-wrapped to wrapWidth so the scroll arithmetic
 // (which is line-count-based) stays correct and no content is lost.
 func (m *Model) applyLogContent(lines []string) {
 	wrapWidth := m.logView.viewport.viewWidth
@@ -276,13 +263,13 @@ func (m *Model) renderLogView() string {
 	)
 
 	// Title bar.
-	title := HeaderStyle.Render("logs") + DimStyle.Render("  "+m.logView.logPath)
+	title := HeaderStyle.Render("logs")
 	titleBar := lipgloss.NewStyle().Width(m.width).Render(title)
 
 	// Content area: slice the visible window of lines.
 	var visibleLines []string
 	if len(vp.lines) == 0 {
-		visibleLines = []string{DimStyle.Render("(log file is empty or does not exist yet)")}
+		visibleLines = []string{DimStyle.Render("(no log content available)")}
 	} else {
 		end := vp.scrollTop + contentH
 		if end > len(vp.lines) {

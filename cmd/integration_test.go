@@ -354,3 +354,6 @@ func (m *mockSystemService) ListMCPServers(ctx context.Context) ([]service.MCPSe
 func (m *mockSystemService) GetProgressState(ctx context.Context) (service.ProgressState, error) {
 	return service.ProgressState{}, nil
 }
+func (m *mockSystemService) GetLogs(_ context.Context) (string, error) {
+	return "", nil
+}

@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -30,8 +31,8 @@ const (
 
 // ModelConfig holds all dependencies and configuration needed to create a Model.
 type ModelConfig struct {
-	Service   service.Service
-	ConfigDir string // path to the toasters configuration directory
+	Service      service.Service
+	OpenInEditor func(path string) tea.Cmd // nil in client mode (remote server can't open local editor)
 }
 
 // streamingState holds all state related to the active operator stream.
@@ -132,7 +133,7 @@ type Model struct {
 	height int
 
 	svc            service.Service
-	configDir      string
+	openInEditor   func(path string) tea.Cmd
 	chatViewport   viewport.Model
 	input          textarea.Model
 	stats          SessionStats
@@ -275,7 +276,7 @@ func NewModel(cfg ModelConfig) Model {
 
 	m := Model{
 		svc:          cfg.Service,
-		configDir:    cfg.ConfigDir,
+		openInEditor: cfg.OpenInEditor,
 		chatViewport: vp,
 		input:        ta,
 		stats: SessionStats{
@@ -313,8 +314,6 @@ func (m *Model) Init() tea.Cmd {
 		loadingTick(), // drive the loading screen animation
 		spinnerTick(), // drive braille spinner animations
 	}
-
-	// configDir is set from ModelConfig during NewModel; no service call needed.
 
 	return tea.Batch(cmds...)
 }
@@ -943,7 +942,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else if len(m.teams) == 0 {
 			m.selectedTeam = 0
 		}
-		m.awareness = msg.Awareness
+		if msg.Awareness != "" {
+			m.awareness = msg.Awareness
+		}
 		// The operator's system prompt is composed from operator.md at startup and
 		// does not change when teams reload. The operator discovers teams at runtime
 		// via the query_teams tool.
@@ -997,7 +998,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.reloadTeamsForModal()
 			// Select the newly promoted team (it is no longer an auto-team after promotion).
 			for i, t := range m.teamsModal.teams {
-				if t.Name() == msg.teamName && !isAutoTeam(t) {
+				if t.Name() == msg.teamName && !t.IsAuto() {
 					m.teamsModal.teamIdx = i
 					break
 				}
@@ -1296,12 +1297,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, toastCmds...)
 		return m, tea.Batch(cmds...)
 
-	case editorFinishedMsg:
+	case EditorFinishedMsg:
 		// Editor closed — reload modal data. The fsnotify watcher will also
 		// trigger a DB reload, but we refresh the modal's local copy immediately
 		// so the user sees the change without waiting for the poll.
-		if msg.err != nil {
-			slog.Error("editor exited with error", "error", msg.err)
+		if msg.Err != nil {
+			slog.Error("editor exited with error", "error", msg.Err)
 		}
 		if m.skillsModal.show {
 			m.reloadSkillsForModal()
@@ -1355,7 +1356,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case DefinitionsReloadedMsg:
 		slog.Info("definitions reloaded from file watcher")
-		return m, nil
+		return m, reloadTeamsCmd(m.svc)
 
 	case ConnectionLostMsg:
 		m.stats.Connected = false
@@ -1542,5 +1543,19 @@ func formatServiceEvent(ev service.Event) string {
 	default:
 		slog.Debug("unhandled service event type in feed", "type", ev.Type)
 		return ""
+	}
+}
+
+// reloadTeamsCmd returns a tea.Cmd that fetches the current team list from the
+// service and delivers it as a TeamsReloadedMsg. Used by the
+// DefinitionsReloadedMsg handler to keep m.teams in sync after file changes.
+func reloadTeamsCmd(svc service.Service) tea.Cmd {
+	return func() tea.Msg {
+		teams, err := svc.Definitions().ListTeams(context.Background())
+		if err != nil {
+			slog.Warn("failed to reload teams after definitions change", "error", err)
+			return nil
+		}
+		return TeamsReloadedMsg{Teams: teams}
 	}
 }

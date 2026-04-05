@@ -680,3 +680,15 @@ func (s *remoteSystemService) GetProgressState(ctx context.Context) (service.Pro
 	}
 	return wireProgressStateToService(w), nil
 }
+
+func (s *remoteSystemService) GetLogs(ctx context.Context) (string, error) {
+	resp, err := s.c.http.get(ctx, "/api/v1/logs")
+	if err != nil {
+		return "", fmt.Errorf("get logs: %w", err)
+	}
+	w, err := decodeResponse[logsResponse](resp)
+	if err != nil {
+		return "", fmt.Errorf("get logs: %w", err)
+	}
+	return w.Content, nil
+}

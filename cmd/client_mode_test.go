@@ -68,8 +68,7 @@ func TestClientModeInitializationRegression(t *testing.T) {
 
 	// Create TUI model - this is what happens in client mode
 	m := tui.NewModel(tui.ModelConfig{
-		Service:   rc,
-		ConfigDir: tmpDir,
+		Service: rc,
 	})
 
 	prog := tea.NewProgram(&m)
@@ -144,8 +143,7 @@ func TestClientModeDoesNotHang(t *testing.T) {
 	defer rc.Close()
 
 	m := tui.NewModel(tui.ModelConfig{
-		Service:   rc,
-		ConfigDir: tmpDir,
+		Service: rc,
 	})
 
 	prog := tea.NewProgram(&m)
@@ -217,8 +215,7 @@ func TestSendClientModeAppReady_Function(t *testing.T) {
 	appReadySent := make(chan struct{}, 1)
 
 	m := tui.NewModel(tui.ModelConfig{
-		Service:   rc,
-		ConfigDir: tmpDir,
+		Service: rc,
 	})
 
 	prog := tea.NewProgram(&m)

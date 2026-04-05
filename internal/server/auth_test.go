@@ -251,6 +251,7 @@ func TestAuth_AllProtectedEndpoints_RequireAuth(t *testing.T) {
 		{"list models", http.MethodGet, "/api/v1/models"},
 		{"list mcp servers", http.MethodGet, "/api/v1/mcp/servers"},
 		{"get progress", http.MethodGet, "/api/v1/progress"},
+		{"get logs", http.MethodGet, "/api/v1/logs"},
 		{"operator history", http.MethodGet, "/api/v1/operator/history"},
 	}
 

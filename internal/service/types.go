@@ -315,6 +315,8 @@ type TeamView struct {
 	Team        Team
 	Coordinator *Agent  // nil if no lead agent is set or found
 	Workers     []Agent // all non-coordinator agents
+	IsReadOnly  bool    // true if the team is read-only (e.g. Claude Code auto-discovered teams)
+	IsSystem    bool    // true if the team is a system team (lives under the system config directory)
 }
 
 // Name returns the team name.

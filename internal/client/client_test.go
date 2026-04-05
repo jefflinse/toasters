@@ -75,6 +75,7 @@ type mockService struct {
 	listModelsFn       func(ctx context.Context) ([]service.ModelInfo, error)
 	listMCPServersFn   func(ctx context.Context) ([]service.MCPServerStatus, error)
 	getProgressStateFn func(ctx context.Context) (service.ProgressState, error)
+	getLogsFn          func(ctx context.Context) (string, error)
 }
 
 func (m *mockService) Operator() service.OperatorService      { return &mockOperator{m} }
@@ -367,6 +368,13 @@ func (sys *mockSystem) GetProgressState(ctx context.Context) (service.ProgressSt
 		return sys.s.getProgressStateFn(ctx)
 	}
 	return service.ProgressState{}, nil
+}
+
+func (sys *mockSystem) GetLogs(ctx context.Context) (string, error) {
+	if sys.s.getLogsFn != nil {
+		return sys.s.getLogsFn(ctx)
+	}
+	return "", nil
 }
 
 // ---------------------------------------------------------------------------
@@ -952,6 +960,69 @@ func TestSystem_GetProgressState(t *testing.T) {
 
 	if len(ps.FeedEntries) != 1 || ps.FeedEntries[0].EntryType != service.FeedEntryTypeTaskStarted {
 		t.Errorf("feed_entries = %v, want [{EntryType: task_started}]", ps.FeedEntries)
+	}
+}
+
+func TestSystem_GetLogs(t *testing.T) {
+	t.Parallel()
+
+	mock := &mockService{
+		getLogsFn: func(_ context.Context) (string, error) {
+			return "line 1: something happened\nline 2: another thing\n", nil
+		},
+	}
+
+	rc := setupTestServer(t, mock)
+	ctx := context.Background()
+
+	content, err := rc.System().GetLogs(ctx)
+	if err != nil {
+		t.Fatalf("GetLogs: %v", err)
+	}
+	if content != "line 1: something happened\nline 2: another thing\n" {
+		t.Errorf("GetLogs() = %q, want %q", content, "line 1: something happened\nline 2: another thing\n")
+	}
+}
+
+func TestSystem_GetLogs_Empty(t *testing.T) {
+	t.Parallel()
+
+	mock := &mockService{
+		getLogsFn: func(_ context.Context) (string, error) {
+			return "", nil
+		},
+	}
+
+	rc := setupTestServer(t, mock)
+	ctx := context.Background()
+
+	content, err := rc.System().GetLogs(ctx)
+	if err != nil {
+		t.Fatalf("GetLogs: %v", err)
+	}
+	if content != "" {
+		t.Errorf("GetLogs() = %q, want empty string", content)
+	}
+}
+
+func TestSystem_GetLogs_Error(t *testing.T) {
+	t.Parallel()
+
+	mock := &mockService{
+		getLogsFn: func(_ context.Context) (string, error) {
+			return "", fmt.Errorf("log file unreadable")
+		},
+	}
+
+	rc := setupTestServer(t, mock)
+	ctx := context.Background()
+
+	_, err := rc.System().GetLogs(ctx)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "log file unreadable") && !strings.Contains(err.Error(), "get logs") {
+		t.Errorf("error = %v, want error containing 'log file unreadable' or 'get logs'", err)
 	}
 }
 

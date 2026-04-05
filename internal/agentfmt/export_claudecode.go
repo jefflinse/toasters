@@ -37,6 +37,7 @@ func ExportClaudeCode(def *AgentDef) (string, string, []Warning) {
 	}
 
 	// Behavior.
+	setIfNonEmpty(out, "mode", def.Mode)
 	if def.MaxTurns != 0 {
 		out["maxTurns"] = def.MaxTurns
 	}
@@ -79,12 +80,6 @@ func ExportClaudeCode(def *AgentDef) (string, string, []Warning) {
 	setIfNonEmpty(out, "color", def.Color)
 
 	// Lossy fields — emit warnings for non-zero values.
-	if def.Mode != "" {
-		warnings = append(warnings, Warning{
-			Field:  "mode",
-			Reason: "not supported by Claude Code format",
-		})
-	}
 	if len(def.Skills) > 0 {
 		warnings = append(warnings, Warning{
 			Field:  "skills",

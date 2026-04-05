@@ -116,6 +116,8 @@ type wireTeamView struct {
 	Team        wireTeam    `json:"team"`
 	Coordinator *wireAgent  `json:"coordinator"`
 	Workers     []wireAgent `json:"workers"`
+	IsReadOnly  bool        `json:"is_readonly"`
+	IsSystem    bool        `json:"is_system"`
 }
 
 type wireSessionSnapshot struct {
@@ -270,6 +272,10 @@ type operatorStatusResponse struct {
 	State         string `json:"state"`
 	CurrentTurnID string `json:"current_turn_id"`
 	ModelName     string `json:"model_name"`
+}
+
+type logsResponse struct {
+	Content string `json:"content"`
 }
 
 // ---------------------------------------------------------------------------
@@ -540,8 +546,10 @@ func wireTeamToService(w wireTeam) service.Team {
 
 func wireTeamViewToService(w wireTeamView) service.TeamView {
 	tv := service.TeamView{
-		Team:    wireTeamToService(w.Team),
-		Workers: make([]service.Agent, 0, len(w.Workers)),
+		Team:       wireTeamToService(w.Team),
+		Workers:    make([]service.Agent, 0, len(w.Workers)),
+		IsReadOnly: w.IsReadOnly,
+		IsSystem:   w.IsSystem,
 	}
 	if w.Coordinator != nil {
 		a := wireAgentToService(*w.Coordinator)

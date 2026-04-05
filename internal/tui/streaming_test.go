@@ -26,6 +26,9 @@ func (m *mockSystemService) ListMCPServers(_ context.Context) ([]service.MCPServ
 func (m *mockSystemService) GetProgressState(_ context.Context) (service.ProgressState, error) {
 	return service.ProgressState{}, nil
 }
+func (m *mockSystemService) GetLogs(_ context.Context) (string, error) {
+	return "", nil
+}
 
 // mockDefinitionService implements service.DefinitionService with no-op methods.
 // Tests can override individual fields (e.g. listTeams) to inject behaviour.

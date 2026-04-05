@@ -43,6 +43,7 @@ func ImportClaudeCode(fmYAML string, body string, defaultName string) (*AgentDef
 	def.Model, def.Provider = resolveClaudeModel(model)
 
 	// Behavior.
+	def.Mode = mapString(raw, "mode")
 	def.MaxTurns = mapInt(raw, "maxTurns")
 	def.Temperature = mapFloat64Ptr(raw, "temperature")
 	def.TopP = mapFloat64Ptr(raw, "topP")

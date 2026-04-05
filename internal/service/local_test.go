@@ -2112,3 +2112,63 @@ func TestRespondToPrompt_NilOperator(t *testing.T) {
 		t.Errorf("error = %q, want 'operator not configured'", err.Error())
 	}
 }
+
+// ---------------------------------------------------------------------------
+// GetLogs tests
+// ---------------------------------------------------------------------------
+
+func TestGetLogs_ReturnsFileContent(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	logContent := "line 1: something happened\nline 2: another thing\n"
+	if err := os.WriteFile(filepath.Join(dir, "toasters.log"), []byte(logContent), 0o644); err != nil {
+		t.Fatalf("writing log file: %v", err)
+	}
+
+	svc := NewLocal(LocalConfig{ConfigDir: dir})
+
+	got, err := svc.GetLogs(context.Background())
+	if err != nil {
+		t.Fatalf("GetLogs() error = %v", err)
+	}
+	if got != logContent {
+		t.Errorf("GetLogs() = %q, want %q", got, logContent)
+	}
+}
+
+func TestGetLogs_NoLogFile_ReturnsEmptyString(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	// No toasters.log file created.
+
+	svc := NewLocal(LocalConfig{ConfigDir: dir})
+
+	got, err := svc.GetLogs(context.Background())
+	if err != nil {
+		t.Fatalf("GetLogs() error = %v", err)
+	}
+	if got != "" {
+		t.Errorf("GetLogs() = %q, want empty string when log file does not exist", got)
+	}
+}
+
+func TestGetLogs_EmptyLogFile(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "toasters.log"), []byte(""), 0o644); err != nil {
+		t.Fatalf("writing log file: %v", err)
+	}
+
+	svc := NewLocal(LocalConfig{ConfigDir: dir})
+
+	got, err := svc.GetLogs(context.Background())
+	if err != nil {
+		t.Fatalf("GetLogs() error = %v", err)
+	}
+	if got != "" {
+		t.Errorf("GetLogs() = %q, want empty string for empty log file", got)
+	}
+}

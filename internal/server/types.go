@@ -134,6 +134,15 @@ type HealthResponse struct {
 }
 
 // ---------------------------------------------------------------------------
+// Logs response
+// ---------------------------------------------------------------------------
+
+// logsResponse is the body for GET /api/v1/logs.
+type logsResponse struct {
+	Content string `json:"content"`
+}
+
+// ---------------------------------------------------------------------------
 // Operator status response
 // ---------------------------------------------------------------------------
 
@@ -390,6 +399,8 @@ type wireTeamView struct {
 	Team        wireTeam    `json:"team"`
 	Coordinator *wireAgent  `json:"coordinator"`
 	Workers     []wireAgent `json:"workers"`
+	IsReadOnly  bool        `json:"is_readonly"`
+	IsSystem    bool        `json:"is_system"`
 }
 
 func teamViewToWire(tv service.TeamView) wireTeamView {
@@ -406,6 +417,8 @@ func teamViewToWire(tv service.TeamView) wireTeamView {
 		Team:        teamToWire(tv.Team),
 		Coordinator: coord,
 		Workers:     workers,
+		IsReadOnly:  tv.IsReadOnly,
+		IsSystem:    tv.IsSystem,
 	}
 }
 

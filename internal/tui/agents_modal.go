@@ -223,8 +223,8 @@ func (m *Model) updateAgentsModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if m.agentsModal.focus == 0 && len(m.agentsModal.agents) > 0 && m.agentsModal.agentIdx < len(m.agentsModal.agents) {
 			a := m.agentsModal.agents[m.agentsModal.agentIdx]
 			// Only allow editing user agents with a source path.
-			if a.SourcePath != "" && a.Source != "system" {
-				return m, openInEditor(a.SourcePath)
+			if a.SourcePath != "" && a.Source != "system" && m.openInEditor != nil {
+				return m, m.openInEditor(a.SourcePath)
 			}
 		}
 	}
