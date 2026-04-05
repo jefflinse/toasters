@@ -1,9 +1,11 @@
 providers:
   - name: anthropic
     type: anthropic
+    api_key: ${ANTHROPIC_API_KEY}
 
 operator:
   provider: anthropic
+  api_key: ${ANTHROPIC_API_KEY}
   model: claude-haiku-4-5
 
 agents:

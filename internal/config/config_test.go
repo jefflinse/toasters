@@ -692,6 +692,197 @@ func TestWarnPlaintextAPIKeys_MultipleProviders_WarnsOnlyPlaintext(t *testing.T)
 	}
 }
 
+// --- expandAPIKeys tests ---
+
+func TestLoad_OperatorAPIKey_EnvVarExpansion(t *testing.T) {
+	resetViper(t)
+
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+	t.Setenv("TEST_OP_KEY", "expanded-op-key")
+
+	configDir := filepath.Join(tmpHome, ".config", "toasters")
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		t.Fatalf("creating config dir: %v", err)
+	}
+
+	writeConfigYAML(t, configDir, `
+operator:
+  api_key: ${TEST_OP_KEY}
+`)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if cfg.Operator.APIKey != "expanded-op-key" {
+		t.Errorf("Operator.APIKey: got %q, want %q", cfg.Operator.APIKey, "expanded-op-key")
+	}
+}
+
+func TestLoad_ProviderAPIKey_EnvVarExpansion(t *testing.T) {
+	resetViper(t)
+
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+	t.Setenv("TEST_PROV_KEY", "expanded-prov-key")
+
+	configDir := filepath.Join(tmpHome, ".config", "toasters")
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		t.Fatalf("creating config dir: %v", err)
+	}
+
+	writeConfigYAML(t, configDir, `
+providers:
+  - name: test-provider
+    type: openai
+    api_key: ${TEST_PROV_KEY}
+`)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(cfg.Providers) != 1 {
+		t.Fatalf("Providers: got %d, want 1", len(cfg.Providers))
+	}
+	if cfg.Providers[0].APIKey != "expanded-prov-key" {
+		t.Errorf("Providers[0].APIKey: got %q, want %q", cfg.Providers[0].APIKey, "expanded-prov-key")
+	}
+}
+
+func TestLoad_ProviderEndpoint_EnvVarExpansion(t *testing.T) {
+	resetViper(t)
+
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+	t.Setenv("TEST_ENDPOINT", "https://custom.api.com")
+
+	configDir := filepath.Join(tmpHome, ".config", "toasters")
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		t.Fatalf("creating config dir: %v", err)
+	}
+
+	writeConfigYAML(t, configDir, `
+providers:
+  - name: test-provider
+    type: openai
+    endpoint: ${TEST_ENDPOINT}
+`)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(cfg.Providers) != 1 {
+		t.Fatalf("Providers: got %d, want 1", len(cfg.Providers))
+	}
+	if cfg.Providers[0].Endpoint != "https://custom.api.com" {
+		t.Errorf("Providers[0].Endpoint: got %q, want %q", cfg.Providers[0].Endpoint, "https://custom.api.com")
+	}
+}
+
+func TestLoad_OperatorEndpoint_EnvVarExpansion(t *testing.T) {
+	resetViper(t)
+
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+	t.Setenv("TEST_OP_ENDPOINT", "https://op.custom.com")
+
+	configDir := filepath.Join(tmpHome, ".config", "toasters")
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		t.Fatalf("creating config dir: %v", err)
+	}
+
+	writeConfigYAML(t, configDir, `
+operator:
+  endpoint: ${TEST_OP_ENDPOINT}
+`)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if cfg.Operator.Endpoint != "https://op.custom.com" {
+		t.Errorf("Operator.Endpoint: got %q, want %q", cfg.Operator.Endpoint, "https://op.custom.com")
+	}
+}
+
+func TestLoad_APIKeyEnvVarExpansion_Unset(t *testing.T) {
+	resetViper(t)
+
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+
+	// Do NOT set NONEXISTENT_VAR_99999_ZZZZZ anywhere.
+	// os.Expand with os.Getenv returns "" for unset variables.
+
+	configDir := filepath.Join(tmpHome, ".config", "toasters")
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		t.Fatalf("creating config dir: %v", err)
+	}
+
+	writeConfigYAML(t, configDir, `
+operator:
+  api_key: ${NONEXISTENT_VAR_99999_ZZZZZ}
+`)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if cfg.Operator.APIKey != "" {
+		t.Errorf("Operator.APIKey: got %q, want empty string for unset env var", cfg.Operator.APIKey)
+	}
+}
+
+func TestLoad_APIKeyWarnBeforeExpansion(t *testing.T) {
+	resetViper(t)
+
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+	t.Setenv("SOME_VAR", "actual-key-value")
+
+	// Capture slog output.
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	old := slog.Default()
+	slog.SetDefault(logger)
+	defer slog.SetDefault(old)
+
+	configDir := filepath.Join(tmpHome, ".config", "toasters")
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		t.Fatalf("creating config dir: %v", err)
+	}
+
+	writeConfigYAML(t, configDir, `
+operator:
+  api_key: ${SOME_VAR}
+`)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// The env var syntax should have been expanded.
+	if cfg.Operator.APIKey != "actual-key-value" {
+		t.Errorf("Operator.APIKey: got %q, want %q", cfg.Operator.APIKey, "actual-key-value")
+	}
+
+	// The key used ${VAR} syntax, so warnPlaintextAPIKeys should NOT have
+	// emitted a warning (it runs BEFORE expandAPIKeys).
+	output := buf.String()
+	if strings.Contains(output, "plaintext API key") {
+		t.Errorf("expected no plaintext warning for ${VAR} syntax, got: %s", output)
+	}
+}
+
 // --- ensureConfigFilePermissions tests ---
 
 func TestEnsureConfigFilePermissions_TooOpen_RestrictsTo0600(t *testing.T) {

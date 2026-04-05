@@ -155,7 +155,7 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 	var llmProvider provider.Provider
 	switch cfg.Operator.Provider {
 	case "anthropic":
-		llmProvider = provider.NewAnthropic("anthropic", "", provider.WithAnthropicModel(cfg.Operator.Model))
+		llmProvider = provider.NewAnthropic("anthropic", cfg.Operator.APIKey, provider.WithAnthropicModel(cfg.Operator.Model))
 	default:
 		llmProvider = provider.NewOpenAI("operator", cfg.Operator.Endpoint, "", cfg.Operator.Model)
 	}

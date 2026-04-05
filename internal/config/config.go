@@ -90,8 +90,9 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 
-	expandMCPEnvVars(&cfg)
 	warnPlaintextAPIKeys(&cfg)
+	expandMCPEnvVars(&cfg)
+	expandAPIKeys(&cfg)
 	ensureConfigFilePermissions()
 
 	return &cfg, nil
@@ -163,6 +164,17 @@ func expandMCPEnvVars(cfg *Config) {
 		for k, v := range s.Headers {
 			s.Headers[k] = os.Expand(v, os.Getenv)
 		}
+	}
+}
+
+// expandAPIKeys expands ${VAR} references in operator and provider API keys
+// and endpoints using os.Getenv.
+func expandAPIKeys(cfg *Config) {
+	cfg.Operator.APIKey = os.Expand(cfg.Operator.APIKey, os.Getenv)
+	cfg.Operator.Endpoint = os.Expand(cfg.Operator.Endpoint, os.Getenv)
+	for i := range cfg.Providers {
+		cfg.Providers[i].APIKey = os.Expand(cfg.Providers[i].APIKey, os.Getenv)
+		cfg.Providers[i].Endpoint = os.Expand(cfg.Providers[i].Endpoint, os.Getenv)
 	}
 }
 

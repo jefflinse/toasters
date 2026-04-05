@@ -12,7 +12,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jefflinse/toasters/internal/anthropic"
 	"github.com/jefflinse/toasters/internal/sse"
 )
 
@@ -87,8 +86,8 @@ func WithAnthropicAuthFunc(fn func() (*authHeaders, error)) AnthropicOption {
 
 // NewAnthropic creates a new Anthropic provider.
 // If apiKey is non-empty, requests use the x-api-key header.
-// If apiKey is empty, requests fall back to macOS Keychain OAuth credentials
-// (piggybacking on Claude Code's stored tokens).
+// If apiKey is empty and no authFunc is provided via WithAnthropicAuthFunc,
+// requests will fail with a clear error at request time.
 func NewAnthropic(name, apiKey string, opts ...AnthropicOption) *AnthropicProvider {
 	p := &AnthropicProvider{
 		name:       name,
@@ -112,17 +111,7 @@ func NewAnthropic(name, apiKey string, opts ...AnthropicOption) *AnthropicProvid
 			}
 		} else {
 			p.authFunc = func() (*authHeaders, error) {
-				token, err := anthropic.ReadKeychainAccessToken()
-				if err != nil {
-					return nil, fmt.Errorf("keychain auth: %w", err)
-				}
-				return &authHeaders{
-					header: "Authorization",
-					value:  "Bearer " + token,
-					extra: map[string]string{
-						"anthropic-beta": "oauth-2025-04-20",
-					},
-				}, nil
+				return nil, fmt.Errorf("anthropic provider %q requires an API key — set api_key in config or the ANTHROPIC_API_KEY environment variable", p.name)
 			}
 		}
 	}

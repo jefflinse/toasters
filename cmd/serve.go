@@ -158,7 +158,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 	var client provider.Provider
 	switch cfg.Operator.Provider {
 	case "anthropic":
-		client = provider.NewAnthropic("anthropic", "", provider.WithAnthropicModel(cfg.Operator.Model))
+		client = provider.NewAnthropic("anthropic", cfg.Operator.APIKey, provider.WithAnthropicModel(cfg.Operator.Model))
 	default:
 		client = provider.NewOpenAI("operator", cfg.Operator.Endpoint, "", cfg.Operator.Model)
 	}

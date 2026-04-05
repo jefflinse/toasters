@@ -684,7 +684,7 @@ func TestAnthropic_Models(t *testing.T) {
 	}
 }
 
-func TestAnthropic_ChatStream_KeychainFallback_BearerToken(t *testing.T) {
+func TestAnthropic_ChatStream_CustomAuthFunc_BearerToken(t *testing.T) {
 	t.Parallel()
 
 	var capturedAuthHeader string
@@ -699,7 +699,7 @@ func TestAnthropic_ChatStream_KeychainFallback_BearerToken(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	// Empty apiKey → should use the injected authFunc (simulating Keychain fallback).
+	// Empty apiKey → should use the injected authFunc (custom auth override).
 	p := NewAnthropic("test", "",
 		WithAnthropicBaseURL(srv.URL),
 		WithAnthropicAuthFunc(func() (*authHeaders, error) {
@@ -733,7 +733,7 @@ func TestAnthropic_ChatStream_KeychainFallback_BearerToken(t *testing.T) {
 	}
 }
 
-func TestAnthropic_ChatStream_APIKeyOverridesKeychain(t *testing.T) {
+func TestAnthropic_ChatStream_APIKeySetsHeader(t *testing.T) {
 	t.Parallel()
 
 	var capturedAuthHeader string
@@ -746,7 +746,7 @@ func TestAnthropic_ChatStream_APIKeyOverridesKeychain(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	// Non-empty apiKey → should use x-api-key, not Bearer.
+	// Non-empty apiKey → should use x-api-key header.
 	p := NewAnthropic("test", "sk-ant-explicit-key", WithAnthropicBaseURL(srv.URL))
 
 	ch, err := p.ChatStream(context.Background(), ChatRequest{
@@ -771,7 +771,7 @@ func TestAnthropic_ChatStream_AuthFuncError(t *testing.T) {
 
 	p := NewAnthropic("test", "",
 		WithAnthropicAuthFunc(func() (*authHeaders, error) {
-			return nil, fmt.Errorf("keychain unavailable")
+			return nil, fmt.Errorf("auth unavailable")
 		}),
 	)
 
@@ -782,8 +782,27 @@ func TestAnthropic_ChatStream_AuthFuncError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error from ChatStream when authFunc fails")
 	}
-	if !strings.Contains(err.Error(), "keychain unavailable") {
-		t.Errorf("error = %v, want to contain 'keychain unavailable'", err)
+	if !strings.Contains(err.Error(), "auth unavailable") {
+		t.Errorf("error = %v, want to contain 'auth unavailable'", err)
+	}
+	if !strings.Contains(err.Error(), "resolving credentials") {
+		t.Errorf("error = %v, want to contain 'resolving credentials'", err)
+	}
+}
+
+func TestAnthropic_ChatStream_EmptyAPIKey_NoAuthFunc_ReturnsErrorOnRequest(t *testing.T) {
+	t.Parallel()
+
+	p := NewAnthropic("test", "")
+	_, err := p.ChatStream(context.Background(), ChatRequest{
+		Model:    "test",
+		Messages: []Message{{Role: "user", Content: "test"}},
+	})
+	if err == nil {
+		t.Fatal("expected error when no API key is provided")
+	}
+	if !strings.Contains(err.Error(), "requires an API key") {
+		t.Errorf("error = %v, want to contain 'requires an API key'", err)
 	}
 	if !strings.Contains(err.Error(), "resolving credentials") {
 		t.Errorf("error = %v, want to contain 'resolving credentials'", err)
