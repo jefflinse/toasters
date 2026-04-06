@@ -19,6 +19,33 @@ func toolNames(defs []ToolDef) []string {
 // store. All methods succeed with zero-value results.
 type noopStore struct{}
 
+// captureProgressStore records progress/artifact writes for assertions.
+type captureProgressStore struct {
+	noopStore
+	lastProgress *db.ProgressReport
+	lastArtifact *db.Artifact
+}
+
+func (s *captureProgressStore) ReportProgress(_ context.Context, report *db.ProgressReport) error {
+	if report == nil {
+		s.lastProgress = nil
+		return nil
+	}
+	copy := *report
+	s.lastProgress = &copy
+	return nil
+}
+
+func (s *captureProgressStore) LogArtifact(_ context.Context, artifact *db.Artifact) error {
+	if artifact == nil {
+		s.lastArtifact = nil
+		return nil
+	}
+	copy := *artifact
+	s.lastArtifact = &copy
+	return nil
+}
+
 func (s *noopStore) CreateJob(_ context.Context, _ *db.Job) error                  { return nil }
 func (s *noopStore) GetJob(_ context.Context, _ string) (*db.Job, error)           { return nil, nil }
 func (s *noopStore) ListJobs(_ context.Context, _ db.JobFilter) ([]*db.Job, error) { return nil, nil }

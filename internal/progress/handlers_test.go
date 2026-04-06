@@ -216,6 +216,23 @@ func TestReportTaskProgress_EmptyOptionalFields(t *testing.T) {
 	}
 }
 
+func TestReportTaskProgress_MissingJobID(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store := &mockStore{}
+
+	_, err := ReportTaskProgress(ctx, store, ReportTaskProgressParams{
+		Status:  "in_progress",
+		Message: "working",
+	})
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "job_id is required") {
+		t.Errorf("error should mention missing job_id, got: %v", err)
+	}
+}
+
 // --- ReportBlocker tests ---
 
 func TestReportBlocker_Success(t *testing.T) {
@@ -326,6 +343,23 @@ func TestReportBlocker_StoreError(t *testing.T) {
 	}
 	if !errors.Is(err, storeErr) {
 		t.Errorf("expected wrapped storeErr, got: %v", err)
+	}
+}
+
+func TestReportBlocker_MissingJobID(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store := &mockStore{}
+
+	_, err := ReportBlocker(ctx, store, ReportBlockerParams{
+		Description: "blocked",
+		Severity:    "low",
+	})
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "job_id is required") {
+		t.Errorf("error should mention missing job_id, got: %v", err)
 	}
 }
 
@@ -571,6 +605,22 @@ func TestRequestReview_ProgressReportError(t *testing.T) {
 	}
 	if !errors.Is(err, storeErr) {
 		t.Errorf("expected wrapped storeErr, got: %v", err)
+	}
+}
+
+func TestRequestReview_MissingJobID(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store := &mockStore{}
+
+	_, err := RequestReview(ctx, store, RequestReviewParams{
+		ArtifactPath: "/some/path",
+	})
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "job_id is required") {
+		t.Errorf("error should mention missing job_id, got: %v", err)
 	}
 }
 
@@ -881,5 +931,22 @@ func TestLogArtifact_MultipleArtifacts(t *testing.T) {
 	}
 	if len(artifacts) != 3 {
 		t.Errorf("expected 3 artifacts, got %d", len(artifacts))
+	}
+}
+
+func TestLogArtifact_MissingJobID(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store := &mockStore{}
+
+	_, err := LogArtifact(ctx, store, LogArtifactParams{
+		Type: "code",
+		Path: "/some/path",
+	})
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "job_id is required") {
+		t.Errorf("error should mention missing job_id, got: %v", err)
 	}
 }

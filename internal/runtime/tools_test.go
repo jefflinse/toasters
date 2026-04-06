@@ -1122,6 +1122,99 @@ func TestProgressToolWithStore(t *testing.T) {
 	assertContains(t, result, "progress reported")
 }
 
+func TestProgressToolsFillSessionJobAndTaskIDs(t *testing.T) {
+	dir := t.TempDir()
+	store := &captureProgressStore{}
+	ct := NewCoreTools(dir,
+		WithStore(store),
+		WithSessionContext("sess-1", "agent-ctx", "job-ctx", "task-ctx"),
+	)
+
+	t.Run("report_task_progress fills missing ids from session", func(t *testing.T) {
+		store.lastProgress = nil
+		_, err := ct.Execute(context.Background(), "report_task_progress", mustJSON(t, map[string]any{
+			"status":  "in_progress",
+			"message": "working",
+		}))
+		assertNoError(t, err)
+		if store.lastProgress == nil {
+			t.Fatal("expected progress write")
+		}
+		assertEqual(t, "job-ctx", store.lastProgress.JobID)
+		assertEqual(t, "task-ctx", store.lastProgress.TaskID)
+		assertEqual(t, "agent-ctx", store.lastProgress.AgentID)
+	})
+
+	t.Run("report_blocker fills missing ids from session", func(t *testing.T) {
+		store.lastProgress = nil
+		_, err := ct.Execute(context.Background(), "report_blocker", mustJSON(t, map[string]any{
+			"description": "blocked",
+			"severity":    "medium",
+		}))
+		assertNoError(t, err)
+		if store.lastProgress == nil {
+			t.Fatal("expected progress write")
+		}
+		assertEqual(t, "job-ctx", store.lastProgress.JobID)
+		assertEqual(t, "task-ctx", store.lastProgress.TaskID)
+		assertEqual(t, "agent-ctx", store.lastProgress.AgentID)
+	})
+
+	t.Run("request_review fills missing ids from session", func(t *testing.T) {
+		store.lastProgress = nil
+		store.lastArtifact = nil
+		_, err := ct.Execute(context.Background(), "request_review", mustJSON(t, map[string]any{
+			"artifact_path": "/tmp/review.txt",
+			"notes":         "please review",
+		}))
+		assertNoError(t, err)
+		if store.lastArtifact == nil {
+			t.Fatal("expected artifact write")
+		}
+		if store.lastProgress == nil {
+			t.Fatal("expected progress write")
+		}
+		assertEqual(t, "job-ctx", store.lastArtifact.JobID)
+		assertEqual(t, "task-ctx", store.lastArtifact.TaskID)
+		assertEqual(t, "job-ctx", store.lastProgress.JobID)
+		assertEqual(t, "task-ctx", store.lastProgress.TaskID)
+		assertEqual(t, "agent-ctx", store.lastProgress.AgentID)
+	})
+
+	t.Run("log_artifact fills missing ids from session", func(t *testing.T) {
+		store.lastArtifact = nil
+		_, err := ct.Execute(context.Background(), "log_artifact", mustJSON(t, map[string]any{
+			"type":    "code",
+			"path":    "/tmp/file.go",
+			"summary": "artifact",
+		}))
+		assertNoError(t, err)
+		if store.lastArtifact == nil {
+			t.Fatal("expected artifact write")
+		}
+		assertEqual(t, "job-ctx", store.lastArtifact.JobID)
+		assertEqual(t, "task-ctx", store.lastArtifact.TaskID)
+	})
+
+	t.Run("explicit ids are preserved", func(t *testing.T) {
+		store.lastProgress = nil
+		_, err := ct.Execute(context.Background(), "report_task_progress", mustJSON(t, map[string]any{
+			"job_id":   "job-explicit",
+			"task_id":  "task-explicit",
+			"agent_id": "agent-explicit",
+			"status":   "in_progress",
+			"message":  "working",
+		}))
+		assertNoError(t, err)
+		if store.lastProgress == nil {
+			t.Fatal("expected progress write")
+		}
+		assertEqual(t, "job-explicit", store.lastProgress.JobID)
+		assertEqual(t, "task-explicit", store.lastProgress.TaskID)
+		assertEqual(t, "agent-explicit", store.lastProgress.AgentID)
+	})
+}
+
 // TestProgressToolDefinitionsIncluded verifies that progress tool definitions
 // are always included in Definitions() (store is required, no nil guard).
 func TestProgressToolDefinitionsIncluded(t *testing.T) {

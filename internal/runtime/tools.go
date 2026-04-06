@@ -150,6 +150,12 @@ func (ct *CoreTools) Execute(ctx context.Context, name string, args json.RawMess
 		if err := json.Unmarshal(args, &params); err != nil {
 			return "", fmt.Errorf("parsing report_task_progress args: %w", err)
 		}
+		if params.JobID == "" {
+			params.JobID = ct.jobID
+		}
+		if params.TaskID == "" {
+			params.TaskID = ct.taskID
+		}
 		if params.AgentID == "" {
 			params.AgentID = ct.agentID
 		}
@@ -158,6 +164,12 @@ func (ct *CoreTools) Execute(ctx context.Context, name string, args json.RawMess
 		var params progress.ReportBlockerParams
 		if err := json.Unmarshal(args, &params); err != nil {
 			return "", fmt.Errorf("parsing report_blocker args: %w", err)
+		}
+		if params.JobID == "" {
+			params.JobID = ct.jobID
+		}
+		if params.TaskID == "" {
+			params.TaskID = ct.taskID
 		}
 		if params.AgentID == "" {
 			params.AgentID = ct.agentID
@@ -174,6 +186,12 @@ func (ct *CoreTools) Execute(ctx context.Context, name string, args json.RawMess
 		if err := json.Unmarshal(args, &params); err != nil {
 			return "", fmt.Errorf("parsing request_review args: %w", err)
 		}
+		if params.JobID == "" {
+			params.JobID = ct.jobID
+		}
+		if params.TaskID == "" {
+			params.TaskID = ct.taskID
+		}
 		if params.AgentID == "" {
 			params.AgentID = ct.agentID
 		}
@@ -188,6 +206,12 @@ func (ct *CoreTools) Execute(ctx context.Context, name string, args json.RawMess
 		var params progress.LogArtifactParams
 		if err := json.Unmarshal(args, &params); err != nil {
 			return "", fmt.Errorf("parsing log_artifact args: %w", err)
+		}
+		if params.JobID == "" {
+			params.JobID = ct.jobID
+		}
+		if params.TaskID == "" {
+			params.TaskID = ct.taskID
 		}
 		return progress.LogArtifact(ctx, ct.store, params)
 	default:

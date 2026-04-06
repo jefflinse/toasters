@@ -68,6 +68,9 @@ var validProgressStatuses = map[string]bool{
 
 // ReportTaskProgress records a progress update for a job or task.
 func ReportTaskProgress(ctx context.Context, store db.Store, params ReportTaskProgressParams) (string, error) {
+	if params.JobID == "" {
+		return "", fmt.Errorf("job_id is required")
+	}
 	if !validProgressStatuses[params.Status] {
 		return "", fmt.Errorf("invalid status %q: must be one of in_progress, completed, failed, blocked", params.Status)
 	}
@@ -89,6 +92,9 @@ var validSeverities = map[string]bool{"low": true, "medium": true, "high": true}
 
 // ReportBlocker records a blocker that prevents an agent from proceeding.
 func ReportBlocker(ctx context.Context, store db.Store, params ReportBlockerParams) (string, error) {
+	if params.JobID == "" {
+		return "", fmt.Errorf("job_id is required")
+	}
 	if !validSeverities[params.Severity] {
 		return "", fmt.Errorf("invalid severity %q: must be one of low, medium, high", params.Severity)
 	}
@@ -128,6 +134,9 @@ func UpdateTaskStatus(ctx context.Context, store db.Store, params UpdateTaskStat
 
 // RequestReview logs a review request artifact and reports progress.
 func RequestReview(ctx context.Context, store db.Store, params RequestReviewParams) (string, error) {
+	if params.JobID == "" {
+		return "", fmt.Errorf("job_id is required")
+	}
 	artifact := &db.Artifact{
 		JobID:   params.JobID,
 		TaskID:  params.TaskID,
@@ -209,6 +218,9 @@ var validArtifactTypes = map[string]bool{
 
 // LogArtifact records an artifact produced during a job.
 func LogArtifact(ctx context.Context, store db.Store, params LogArtifactParams) (string, error) {
+	if params.JobID == "" {
+		return "", fmt.Errorf("job_id is required")
+	}
 	if !validArtifactTypes[params.Type] {
 		return "", fmt.Errorf("invalid artifact type %q: must be one of code, report, investigation, test_results, other", params.Type)
 	}
