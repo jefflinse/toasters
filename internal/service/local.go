@@ -267,7 +267,20 @@ func (s *LocalService) broadcast(ev Event) {
 	}
 }
 
-// progressPollLoop polls SQLite every 500ms and broadcasts EventTypeProgressUpdate.
+// progressPollLoop periodically broadcasts a full progress snapshot to keep
+// the panel views in sync with SQLite.
+//
+// As of Phase 4, the chat/feed area is driven by dedicated push events
+// (job.created, task.created, task.assigned, task.started, task.completed,
+// etc.) so the user sees real-time activity even between poll ticks. The
+// poll continues to drive the Jobs / Tasks / Feed panels because they read
+// from a snapshot rather than a stream.
+//
+// TODO(future): replace this loop entirely with broadcasts on every state
+// change site (DB-side updates, MCP status changes, feed inserts) and delete
+// the EventTypeProgressUpdate event type. The current 500ms cadence is fine
+// for a single-user local tool, but it creates 2 SSE messages per second per
+// connected client even when nothing is happening.
 func (s *LocalService) progressPollLoop() {
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
@@ -520,6 +533,50 @@ func (s *LocalService) BroadcastDefinitionsReloaded() {
 	s.broadcast(Event{
 		Type:    EventTypeDefinitionsReloaded,
 		Payload: nil,
+	})
+}
+
+// BroadcastJobCreated broadcasts a job.created event. Implements
+// operator.SystemEventBroadcaster — called by SystemTools.createJob after the
+// new job is persisted.
+func (s *LocalService) BroadcastJobCreated(jobID, title, description string) {
+	s.broadcast(Event{
+		Type: EventTypeJobCreated,
+		Payload: JobCreatedPayload{
+			JobID:       jobID,
+			Title:       title,
+			Description: description,
+		},
+	})
+}
+
+// BroadcastTaskCreated broadcasts a task.created event. Implements
+// operator.SystemEventBroadcaster — called by SystemTools.createTask after the
+// new task is persisted.
+func (s *LocalService) BroadcastTaskCreated(taskID, jobID, title, teamID string) {
+	s.broadcast(Event{
+		Type: EventTypeTaskCreated,
+		Payload: TaskCreatedPayload{
+			TaskID: taskID,
+			JobID:  jobID,
+			Title:  title,
+			TeamID: teamID,
+		},
+	})
+}
+
+// BroadcastTaskAssigned broadcasts a task.assigned event. Implements
+// operator.SystemEventBroadcaster — called by SystemTools.assignTask after a
+// task has been pre-assigned or activated for a team.
+func (s *LocalService) BroadcastTaskAssigned(taskID, jobID, teamID, title string) {
+	s.broadcast(Event{
+		Type: EventTypeTaskAssigned,
+		Payload: TaskAssignedPayload{
+			TaskID: taskID,
+			JobID:  jobID,
+			TeamID: teamID,
+			Title:  title,
+		},
 	})
 }
 

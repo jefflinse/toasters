@@ -22,26 +22,47 @@ import (
 // convenience so callers don't need to import both packages.
 type TeamLeadSpawner = runtime.TeamLeadSpawner
 
+// SystemEventBroadcaster is the surface SystemTools uses to publish state
+// changes (job/task creation, task assignment) to the unified service event
+// stream so subscribers see real-time activity instead of waiting for the
+// next progress poll.
+//
+// This interface is satisfied by *service.LocalService. Defining it here in
+// the operator package keeps the dependency direction one-way (service
+// imports operator, never the reverse).
+//
+// Implementations are called synchronously from within tool execution, which
+// runs on the operator event loop goroutine. Implementations MUST NOT block
+// on the operator's event channel — broadcasting through a separate fan-out
+// channel (as LocalService.broadcast does) is the expected pattern.
+type SystemEventBroadcaster interface {
+	BroadcastJobCreated(jobID, title, description string)
+	BroadcastTaskCreated(taskID, jobID, title, teamID string)
+	BroadcastTaskAssigned(taskID, jobID, teamID, title string)
+}
+
 // SystemTools provides orchestration tools for system agents (planner,
 // scheduler, blocker-handler). These are distinct from the operator's own
 // tools — system agents use them to create/query jobs and tasks, assign
 // work to teams, and communicate with users.
 type SystemTools struct {
-	store    db.Store
-	composer *compose.Composer
-	eventCh  chan<- Event
-	spawner  TeamLeadSpawner
-	workDir  string // global workspace directory; per-job subdirs are created under this
+	store       db.Store
+	composer    *compose.Composer
+	eventCh     chan<- Event
+	spawner     TeamLeadSpawner
+	workDir     string // global workspace directory; per-job subdirs are created under this
+	broadcaster SystemEventBroadcaster // optional; nil means no service event broadcast
 }
 
 // NewSystemTools creates a new SystemTools instance.
-func NewSystemTools(store db.Store, composer *compose.Composer, eventCh chan<- Event, spawner TeamLeadSpawner, workDir string) *SystemTools {
+func NewSystemTools(store db.Store, composer *compose.Composer, eventCh chan<- Event, spawner TeamLeadSpawner, workDir string, broadcaster SystemEventBroadcaster) *SystemTools {
 	return &SystemTools{
-		store:    store,
-		composer: composer,
-		eventCh:  eventCh,
-		spawner:  spawner,
-		workDir:  workDir,
+		store:       store,
+		composer:    composer,
+		eventCh:     eventCh,
+		spawner:     spawner,
+		workDir:     workDir,
+		broadcaster: broadcaster,
 	}
 }
 
@@ -271,6 +292,10 @@ func (st *SystemTools) createJob(ctx context.Context, args json.RawMessage) (str
 		return "", fmt.Errorf("creating job: %w", err)
 	}
 
+	if st.broadcaster != nil {
+		st.broadcaster.BroadcastJobCreated(job.ID, job.Title, job.Description)
+	}
+
 	result, err := json.Marshal(map[string]string{"job_id": job.ID})
 	if err != nil {
 		return "", fmt.Errorf("marshaling result: %w", err)
@@ -310,6 +335,10 @@ func (st *SystemTools) createTask(ctx context.Context, args json.RawMessage) (st
 
 	if err := st.store.CreateTask(ctx, task); err != nil {
 		return "", fmt.Errorf("creating task: %w", err)
+	}
+
+	if st.broadcaster != nil {
+		st.broadcaster.BroadcastTaskCreated(task.ID, task.JobID, task.Title, task.TeamID)
 	}
 
 	result, err := json.Marshal(map[string]string{"task_id": task.ID})
@@ -395,6 +424,10 @@ func (st *SystemTools) assignTask(ctx context.Context, args json.RawMessage) (st
 	// 5. No task in progress — start this one. Set status to in_progress and assign team.
 	if err := st.store.AssignTask(ctx, params.TaskID, params.TeamID); err != nil {
 		return "", fmt.Errorf("assigning task: %w", err)
+	}
+
+	if st.broadcaster != nil {
+		st.broadcaster.BroadcastTaskAssigned(params.TaskID, task.JobID, params.TeamID, task.Title)
 	}
 
 	// 6. Compose the team lead agent.

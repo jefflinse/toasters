@@ -735,6 +735,19 @@ type wireOperatorPromptPayload struct {
 	PendingDispatch *wireToolCall `json:"pending_dispatch,omitempty"`
 }
 
+type wireJobCreatedPayload struct {
+	JobID       string `json:"job_id"`
+	Title       string `json:"title"`
+	Description string `json:"description"`
+}
+
+type wireTaskCreatedPayload struct {
+	TaskID string `json:"task_id"`
+	JobID  string `json:"job_id"`
+	Title  string `json:"title"`
+	TeamID string `json:"team_id,omitempty"`
+}
+
 type wireTaskAssignedPayload struct {
 	TaskID string `json:"task_id"`
 	JobID  string `json:"job_id"`
@@ -872,6 +885,10 @@ func eventPayloadToWire(ev service.Event) any {
 			}
 		}
 		return w
+	case service.JobCreatedPayload:
+		return wireJobCreatedPayload{JobID: p.JobID, Title: p.Title, Description: p.Description}
+	case service.TaskCreatedPayload:
+		return wireTaskCreatedPayload{TaskID: p.TaskID, JobID: p.JobID, Title: p.Title, TeamID: p.TeamID}
 	case service.TaskAssignedPayload:
 		return wireTaskAssignedPayload{TaskID: p.TaskID, JobID: p.JobID, TeamID: p.TeamID, Title: p.Title}
 	case service.TaskStartedPayload:

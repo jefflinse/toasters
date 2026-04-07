@@ -49,17 +49,18 @@ type Operator struct {
 
 // Config holds configuration for creating an Operator.
 type Config struct {
-	Runtime      *runtime.Runtime
-	Provider     provider.Provider
-	Model        string
-	WorkDir      string
-	SystemPrompt string // required; system prompt for the operator LLM session
-	Store        db.Store
-	Composer     *compose.Composer
-	Spawner      runtime.TeamLeadSpawner // spawns team lead sessions on task assignment; may be nil
-	OnText       func(text string)       // called with streamed text from the operator LLM
-	OnEvent      func(event Event)       // called when the event loop processes an event
-	OnTurnDone   func()                  // called when the operator finishes processing a user message turn
+	Runtime                *runtime.Runtime
+	Provider               provider.Provider
+	Model                  string
+	WorkDir                string
+	SystemPrompt           string // required; system prompt for the operator LLM session
+	Store                  db.Store
+	Composer               *compose.Composer
+	Spawner                runtime.TeamLeadSpawner // spawns team lead sessions on task assignment; may be nil
+	SystemEventBroadcaster SystemEventBroadcaster  // optional; for broadcasting service events from system tools
+	OnText                 func(text string)       // called with streamed text from the operator LLM
+	OnEvent                func(event Event)       // called when the event loop processes an event
+	OnTurnDone             func()                  // called when the operator finishes processing a user message turn
 }
 
 // New creates a new Operator. Call Start to begin processing events.
@@ -74,7 +75,7 @@ func New(cfg Config) (*Operator, error) {
 	eventCh := make(chan Event, eventChSize)
 	var systemTools *SystemTools
 	if cfg.Store != nil && cfg.Composer != nil {
-		systemTools = NewSystemTools(cfg.Store, cfg.Composer, eventCh, cfg.Spawner, cfg.WorkDir)
+		systemTools = NewSystemTools(cfg.Store, cfg.Composer, eventCh, cfg.Spawner, cfg.WorkDir, cfg.SystemEventBroadcaster)
 	}
 
 	tools := newOperatorTools(cfg.Runtime, cfg.Composer, cfg.Store, systemTools, cfg.WorkDir)

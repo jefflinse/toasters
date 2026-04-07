@@ -320,6 +320,19 @@ type wireOperatorPromptPayload struct {
 	PendingDispatch *wireToolCall `json:"pending_dispatch,omitempty"`
 }
 
+type wireJobCreatedPayload struct {
+	JobID       string `json:"job_id"`
+	Title       string `json:"title"`
+	Description string `json:"description"`
+}
+
+type wireTaskCreatedPayload struct {
+	TaskID string `json:"task_id"`
+	JobID  string `json:"job_id"`
+	Title  string `json:"title"`
+	TeamID string `json:"team_id,omitempty"`
+}
+
 type wireTaskAssignedPayload struct {
 	TaskID string `json:"task_id"`
 	JobID  string `json:"job_id"`
@@ -810,6 +823,29 @@ func parseSSEPayload(eventType string, raw json.RawMessage) (any, error) {
 			p.PendingDispatch = &tc
 		}
 		return p, nil
+
+	case service.EventTypeJobCreated:
+		var w wireJobCreatedPayload
+		if err := json.Unmarshal(raw, &w); err != nil {
+			return nil, fmt.Errorf("decoding job.created payload: %w", err)
+		}
+		return service.JobCreatedPayload{
+			JobID:       w.JobID,
+			Title:       w.Title,
+			Description: w.Description,
+		}, nil
+
+	case service.EventTypeTaskCreated:
+		var w wireTaskCreatedPayload
+		if err := json.Unmarshal(raw, &w); err != nil {
+			return nil, fmt.Errorf("decoding task.created payload: %w", err)
+		}
+		return service.TaskCreatedPayload{
+			TaskID: w.TaskID,
+			JobID:  w.JobID,
+			Title:  w.Title,
+			TeamID: w.TeamID,
+		}, nil
 
 	case service.EventTypeTaskAssigned:
 		var w wireTaskAssignedPayload

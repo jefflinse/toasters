@@ -74,7 +74,7 @@ func newTestSystemTools(t *testing.T) (*SystemTools, db.Store, *mockSpawner, cha
 
 	workDir := t.TempDir()
 	t.Setenv("HOME", workDir) // Ensure workDir passes home-directory validation
-	st := NewSystemTools(store, composer, eventCh, spawner, workDir)
+	st := NewSystemTools(store, composer, eventCh, spawner, workDir, nil)
 	return st, store, spawner, eventCh, workDir
 }
 
@@ -886,7 +886,7 @@ func TestCreateJob_RejectsWorkDirOutsideHome(t *testing.T) {
 	t.Setenv("HOME", fakeHome)
 
 	outsideDir := t.TempDir() // A different temp dir, not under fakeHome.
-	st := NewSystemTools(store, composer, eventCh, spawner, outsideDir)
+	st := NewSystemTools(store, composer, eventCh, spawner, outsideDir, nil)
 
 	ctx := context.Background()
 	args, _ := json.Marshal(map[string]string{
@@ -913,7 +913,7 @@ func TestCreateJob_AcceptsWorkDirUnderHome(t *testing.T) {
 		t.Fatalf("creating workDir: %v", err)
 	}
 
-	st := NewSystemTools(store, composer, eventCh, spawner, workDir)
+	st := NewSystemTools(store, composer, eventCh, spawner, workDir, nil)
 
 	ctx := context.Background()
 	args, _ := json.Marshal(map[string]string{

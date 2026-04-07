@@ -32,6 +32,14 @@ const (
 	// enters prompt mode → user answers → RespondToPrompt sends answer.
 	EventTypeOperatorPrompt EventType = "operator.prompt"
 
+	// EventTypeJobCreated is sent when the operator creates a new job via
+	// the create_job system tool. Payload: JobCreatedPayload.
+	EventTypeJobCreated EventType = "job.created"
+
+	// EventTypeTaskCreated is sent when the operator creates a new task via
+	// the create_task system tool. Payload: TaskCreatedPayload.
+	EventTypeTaskCreated EventType = "task.created"
+
 	// EventTypeTaskAssigned is sent when the operator assigns a task to a team.
 	// Payload: TaskAssignedPayload.
 	EventTypeTaskAssigned EventType = "task.assigned"
@@ -202,6 +210,21 @@ type OperatorPromptPayload struct {
 	// PendingDispatch holds the tool call awaiting confirmation, populated only
 	// when ConfirmDispatch is true. The TUI displays this for the user to review.
 	PendingDispatch *ToolCall
+}
+
+// JobCreatedPayload is the payload for EventTypeJobCreated events.
+type JobCreatedPayload struct {
+	JobID       string
+	Title       string
+	Description string
+}
+
+// TaskCreatedPayload is the payload for EventTypeTaskCreated events.
+type TaskCreatedPayload struct {
+	TaskID string
+	JobID  string
+	Title  string
+	TeamID string // may be empty if no team is pre-assigned
 }
 
 // TaskAssignedPayload is the payload for EventTypeTaskAssigned events.

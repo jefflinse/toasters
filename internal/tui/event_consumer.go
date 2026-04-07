@@ -151,12 +151,14 @@ func translateEvent(ev service.Event) tea.Msg {
 		}
 		return handleOperationFailed(p)
 
-	case service.EventTypeTaskStarted,
+	case service.EventTypeJobCreated,
+		service.EventTypeTaskCreated,
+		service.EventTypeTaskAssigned,
+		service.EventTypeTaskStarted,
 		service.EventTypeTaskCompleted,
 		service.EventTypeTaskFailed,
 		service.EventTypeBlockerReported,
-		service.EventTypeJobCompleted,
-		service.EventTypeTaskAssigned:
+		service.EventTypeJobCompleted:
 		// These are forwarded as OperatorEventMsg for feed display.
 		return OperatorEventMsg{Event: ev}
 

@@ -214,14 +214,15 @@ func runServe(cmd *cobra.Command, args []string) error {
 
 		var opErr error
 		op, opErr = operator.New(operator.Config{
-			Runtime:      rt,
-			Provider:     client,
-			Model:        cfg.Operator.Model,
-			WorkDir:      workspaceDir,
-			Store:        store,
-			Composer:     composer,
-			Spawner:      rt,
-			SystemPrompt: operatorPrompt,
+			Runtime:                rt,
+			Provider:               client,
+			Model:                  cfg.Operator.Model,
+			WorkDir:                workspaceDir,
+			Store:                  store,
+			Composer:               composer,
+			Spawner:                rt,
+			SystemPrompt:           operatorPrompt,
+			SystemEventBroadcaster: svc,
 			OnText: func(text string) {
 				batcher.Add(text)
 			},

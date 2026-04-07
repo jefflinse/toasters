@@ -1519,6 +1519,24 @@ func extractFrontmatterName(content string) string {
 // This is the service-layer equivalent of formatOperatorEvent (defined in helpers.go).
 func formatServiceEvent(ev service.Event) string {
 	switch ev.Type {
+	case service.EventTypeJobCreated:
+		if p, ok := ev.Payload.(service.JobCreatedPayload); ok {
+			return FeedTaskStartedStyle.Render(fmt.Sprintf("📋 Job created: %q", p.Title))
+		}
+		return FeedTaskStartedStyle.Render("📋 job created")
+
+	case service.EventTypeTaskCreated:
+		if p, ok := ev.Payload.(service.TaskCreatedPayload); ok {
+			return FeedTaskStartedStyle.Render(fmt.Sprintf("◇ Task created: %q", p.Title))
+		}
+		return FeedTaskStartedStyle.Render("◇ task created")
+
+	case service.EventTypeTaskAssigned:
+		if p, ok := ev.Payload.(service.TaskAssignedPayload); ok {
+			return FeedTaskStartedStyle.Render(fmt.Sprintf("➤ Task %q assigned to %s", p.Title, p.TeamID))
+		}
+		return FeedTaskStartedStyle.Render("➤ task assigned")
+
 	case service.EventTypeTaskStarted:
 		if p, ok := ev.Payload.(service.TaskStartedPayload); ok {
 			return FeedTaskStartedStyle.Render(fmt.Sprintf("⚡ %s started task: %q", p.TeamID, p.Title))
