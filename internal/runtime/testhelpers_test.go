@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/jefflinse/toasters/internal/db"
 )
@@ -22,14 +23,24 @@ type noopStore struct{}
 // captureProgressStore records progress/artifact writes for assertions.
 type captureProgressStore struct {
 	noopStore
-	lastProgress *db.ProgressReport
-	lastArtifact *db.Artifact
+	lastProgress     *db.ProgressReport
+	lastArtifact     *db.Artifact
+	lastQueriedJobID string
+
+	strictIDs      bool
+	expectedJobID  string
+	expectedTaskID string
 }
 
 func (s *captureProgressStore) ReportProgress(_ context.Context, report *db.ProgressReport) error {
 	if report == nil {
 		s.lastProgress = nil
 		return nil
+	}
+	if s.strictIDs {
+		if report.JobID != s.expectedJobID || report.TaskID != s.expectedTaskID {
+			return fmt.Errorf("SQLITE_CONSTRAINT_FOREIGNKEY (787)")
+		}
 	}
 	copy := *report
 	s.lastProgress = &copy
@@ -41,9 +52,22 @@ func (s *captureProgressStore) LogArtifact(_ context.Context, artifact *db.Artif
 		s.lastArtifact = nil
 		return nil
 	}
+	if s.strictIDs {
+		if artifact.JobID != s.expectedJobID || artifact.TaskID != s.expectedTaskID {
+			return fmt.Errorf("SQLITE_CONSTRAINT_FOREIGNKEY (787)")
+		}
+	}
 	copy := *artifact
 	s.lastArtifact = &copy
 	return nil
+}
+
+func (s *captureProgressStore) GetJob(_ context.Context, jobID string) (*db.Job, error) {
+	s.lastQueriedJobID = jobID
+	if s.strictIDs && jobID != s.expectedJobID {
+		return nil, fmt.Errorf("job not found: %s", jobID)
+	}
+	return &db.Job{ID: jobID}, nil
 }
 
 func (s *noopStore) CreateJob(_ context.Context, _ *db.Job) error                  { return nil }

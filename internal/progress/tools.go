@@ -90,7 +90,11 @@ func ProgressToolDefs() []ToolDef {
 				"properties": {
 					"job_id":  {"type": "string", "description": "The job ID"},
 					"task_id": {"type": "string", "description": "The task ID (optional)"},
-					"type":    {"type": "string", "description": "Artifact type: code, report, investigation, test_results, other"},
+					"type": {
+						"type": "string",
+						"enum": ["code", "report", "investigation", "test_results", "other"],
+						"description": "Artifact type"
+					},
 					"path":    {"type": "string", "description": "File path of the artifact"},
 					"summary": {"type": "string", "description": "Brief description of the artifact"}
 				},

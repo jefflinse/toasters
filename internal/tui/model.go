@@ -211,11 +211,14 @@ type Model struct {
 	nextToastID int
 
 	// Runtime session tracking.
-	runtimeSessions map[string]*runtimeSlot // keyed by session ID
+	runtimeSessions              map[string]*runtimeSlot // keyed by session ID
+	runtimeSessionSnapshotMisses map[string]int          // consecutive client snapshot misses by session ID
 
 	// Log view state.
 	logView logViewState
 }
+
+const runtimeSessionSnapshotMissThreshold = 2
 
 // activityItem represents a single tool-call activity for display in a runtime agent card.
 type activityItem struct {
@@ -302,6 +305,7 @@ func NewModel(cfg ModelConfig) Model {
 	m.chat.expandedReasoning = make(map[int]bool)
 	m.chat.collapsedTools = make(map[int]bool)
 	m.runtimeSessions = make(map[string]*runtimeSlot)
+	m.runtimeSessionSnapshotMisses = make(map[string]int)
 
 	return m
 }
@@ -1455,6 +1459,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.progress.reports = msg.Progress
 		m.progress.activeSessions = msg.Sessions
 		m.progress.runtimeSnapshots = msg.RuntimeSessions
+		// In client/remote mode we don't receive in-process runtime callbacks,
+		// so hydrate the shared runtimeSessions render source from snapshots.
+		// Embedded mode keeps runtimeSessions populated by direct runtime events,
+		// so avoid clobbering richer local fields there.
+		if m.openInEditor == nil {
+			m.syncRuntimeSessionsFromSnapshots(msg.RuntimeSessions)
+		}
 		m.progress.feedEntries = msg.FeedEntries
 		m.progress.mcpServers = msg.MCPServers
 		// Keep m.jobs in sync so the Jobs panel (which reads m.jobs via
@@ -1471,6 +1482,64 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	return m, tea.Batch(cmds...)
+}
+
+// syncRuntimeSessionsFromSnapshots updates runtimeSessions to match the latest
+// progress snapshot set. This is used by client/remote mode where direct
+// runtime callbacks are unavailable.
+func (m *Model) syncRuntimeSessionsFromSnapshots(snapshots []service.SessionSnapshot) {
+	if m.runtimeSessions == nil {
+		m.runtimeSessions = make(map[string]*runtimeSlot)
+	}
+	if m.runtimeSessionSnapshotMisses == nil {
+		m.runtimeSessionSnapshotMisses = make(map[string]int)
+	}
+
+	seen := make(map[string]struct{}, len(snapshots))
+	for _, snap := range snapshots {
+		if snap.ID == "" {
+			continue
+		}
+		seen[snap.ID] = struct{}{}
+
+		slot, ok := m.runtimeSessions[snap.ID]
+		if !ok {
+			m.runtimeSessions[snap.ID] = &runtimeSlot{
+				sessionID: snap.ID,
+				agentName: snap.AgentID,
+				teamName:  snap.TeamName,
+				jobID:     snap.JobID,
+				taskID:    snap.TaskID,
+				status:    snap.Status,
+				startTime: snap.StartTime,
+			}
+			delete(m.runtimeSessionSnapshotMisses, snap.ID)
+			continue
+		}
+
+		// Canonical snapshot-owned fields are authoritative in client mode.
+		slot.agentName = snap.AgentID
+		slot.teamName = snap.TeamName
+		slot.jobID = snap.JobID
+		slot.taskID = snap.TaskID
+		slot.startTime = snap.StartTime
+		slot.status = snap.Status
+		delete(m.runtimeSessionSnapshotMisses, snap.ID)
+	}
+
+	// Deterministic cleanup policy: only drop sessions after N consecutive
+	// missing snapshots to avoid flicker from transient polling gaps.
+	for id := range m.runtimeSessions {
+		if _, ok := seen[id]; !ok {
+			misses := m.runtimeSessionSnapshotMisses[id] + 1
+			if misses >= runtimeSessionSnapshotMissThreshold {
+				delete(m.runtimeSessions, id)
+				delete(m.runtimeSessionSnapshotMisses, id)
+				continue
+			}
+			m.runtimeSessionSnapshotMisses[id] = misses
+		}
+	}
 }
 
 // extractFrontmatterName extracts the name: field from a YAML frontmatter block.

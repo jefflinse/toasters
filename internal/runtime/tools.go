@@ -150,12 +150,7 @@ func (ct *CoreTools) Execute(ctx context.Context, name string, args json.RawMess
 		if err := json.Unmarshal(args, &params); err != nil {
 			return "", fmt.Errorf("parsing report_task_progress args: %w", err)
 		}
-		if params.JobID == "" {
-			params.JobID = ct.jobID
-		}
-		if params.TaskID == "" {
-			params.TaskID = ct.taskID
-		}
+		params.JobID, params.TaskID = ct.normalizeProgressIDs(params.JobID, params.TaskID)
 		if params.AgentID == "" {
 			params.AgentID = ct.agentID
 		}
@@ -165,12 +160,7 @@ func (ct *CoreTools) Execute(ctx context.Context, name string, args json.RawMess
 		if err := json.Unmarshal(args, &params); err != nil {
 			return "", fmt.Errorf("parsing report_blocker args: %w", err)
 		}
-		if params.JobID == "" {
-			params.JobID = ct.jobID
-		}
-		if params.TaskID == "" {
-			params.TaskID = ct.taskID
-		}
+		params.JobID, params.TaskID = ct.normalizeProgressIDs(params.JobID, params.TaskID)
 		if params.AgentID == "" {
 			params.AgentID = ct.agentID
 		}
@@ -186,12 +176,7 @@ func (ct *CoreTools) Execute(ctx context.Context, name string, args json.RawMess
 		if err := json.Unmarshal(args, &params); err != nil {
 			return "", fmt.Errorf("parsing request_review args: %w", err)
 		}
-		if params.JobID == "" {
-			params.JobID = ct.jobID
-		}
-		if params.TaskID == "" {
-			params.TaskID = ct.taskID
-		}
+		params.JobID, params.TaskID = ct.normalizeProgressIDs(params.JobID, params.TaskID)
 		if params.AgentID == "" {
 			params.AgentID = ct.agentID
 		}
@@ -201,22 +186,45 @@ func (ct *CoreTools) Execute(ctx context.Context, name string, args json.RawMess
 		if err := json.Unmarshal(args, &params); err != nil {
 			return "", fmt.Errorf("parsing query_job_context args: %w", err)
 		}
+		params.JobID = ct.normalizeProgressJobID(params.JobID)
 		return progress.QueryJobContext(ctx, ct.store, params)
 	case "log_artifact":
 		var params progress.LogArtifactParams
 		if err := json.Unmarshal(args, &params); err != nil {
 			return "", fmt.Errorf("parsing log_artifact args: %w", err)
 		}
-		if params.JobID == "" {
-			params.JobID = ct.jobID
-		}
-		if params.TaskID == "" {
-			params.TaskID = ct.taskID
-		}
+		params.JobID, params.TaskID = ct.normalizeProgressIDs(params.JobID, params.TaskID)
 		return progress.LogArtifact(ctx, ct.store, params)
 	default:
 		return "", fmt.Errorf("%w: %s", ErrUnknownTool, name)
 	}
+}
+
+func (ct *CoreTools) normalizeProgressIDs(jobID, taskID string) (string, string) {
+	if ct.hasSessionBoundProgressContext() {
+		return ct.jobID, ct.taskID
+	}
+	if jobID == "" {
+		jobID = ct.jobID
+	}
+	if taskID == "" {
+		taskID = ct.taskID
+	}
+	return jobID, taskID
+}
+
+func (ct *CoreTools) normalizeProgressJobID(jobID string) string {
+	if ct.hasSessionBoundProgressContext() {
+		return ct.jobID
+	}
+	if jobID == "" {
+		return ct.jobID
+	}
+	return jobID
+}
+
+func (ct *CoreTools) hasSessionBoundProgressContext() bool {
+	return ct.jobID != "" && ct.taskID != ""
 }
 
 // Definitions returns tool definitions for the LLM.

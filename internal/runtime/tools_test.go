@@ -1196,7 +1196,7 @@ func TestProgressToolsFillSessionJobAndTaskIDs(t *testing.T) {
 		assertEqual(t, "task-ctx", store.lastArtifact.TaskID)
 	})
 
-	t.Run("explicit ids are preserved", func(t *testing.T) {
+	t.Run("explicit mismatched ids are normalized to session context", func(t *testing.T) {
 		store.lastProgress = nil
 		_, err := ct.Execute(context.Background(), "report_task_progress", mustJSON(t, map[string]any{
 			"job_id":   "job-explicit",
@@ -1209,9 +1209,90 @@ func TestProgressToolsFillSessionJobAndTaskIDs(t *testing.T) {
 		if store.lastProgress == nil {
 			t.Fatal("expected progress write")
 		}
-		assertEqual(t, "job-explicit", store.lastProgress.JobID)
-		assertEqual(t, "task-explicit", store.lastProgress.TaskID)
+		assertEqual(t, "job-ctx", store.lastProgress.JobID)
+		assertEqual(t, "task-ctx", store.lastProgress.TaskID)
 		assertEqual(t, "agent-explicit", store.lastProgress.AgentID)
+	})
+
+	t.Run("query_job_context normalizes explicit mismatched job id", func(t *testing.T) {
+		store.lastQueriedJobID = ""
+		_, err := ct.Execute(context.Background(), "query_job_context", mustJSON(t, map[string]any{
+			"job_id": "job-explicit",
+		}))
+		assertNoError(t, err)
+		assertEqual(t, "job-ctx", store.lastQueriedJobID)
+	})
+
+	t.Run("query_job_context fills missing job id from session", func(t *testing.T) {
+		store.lastQueriedJobID = ""
+		_, err := ct.Execute(context.Background(), "query_job_context", mustJSON(t, map[string]any{}))
+		assertNoError(t, err)
+		assertEqual(t, "job-ctx", store.lastQueriedJobID)
+	})
+}
+
+func TestProgressToolsPreserveExplicitIDsWithoutSessionContext(t *testing.T) {
+	dir := t.TempDir()
+	store := &captureProgressStore{}
+	ct := NewCoreTools(dir, WithStore(store))
+
+	_, err := ct.Execute(context.Background(), "report_task_progress", mustJSON(t, map[string]any{
+		"job_id":   "job-explicit",
+		"task_id":  "task-explicit",
+		"agent_id": "agent-explicit",
+		"status":   "in_progress",
+		"message":  "working",
+	}))
+	assertNoError(t, err)
+	if store.lastProgress == nil {
+		t.Fatal("expected progress write")
+	}
+	assertEqual(t, "job-explicit", store.lastProgress.JobID)
+	assertEqual(t, "task-explicit", store.lastProgress.TaskID)
+	assertEqual(t, "agent-explicit", store.lastProgress.AgentID)
+}
+
+func TestProgressToolsNormalizeMismatchedIDsToAvoidForeignKeyErrors(t *testing.T) {
+	dir := t.TempDir()
+	store := &captureProgressStore{
+		strictIDs:      true,
+		expectedJobID:  "job-ctx",
+		expectedTaskID: "task-ctx",
+	}
+	ct := NewCoreTools(dir,
+		WithStore(store),
+		WithSessionContext("sess-1", "agent-ctx", "job-ctx", "task-ctx"),
+	)
+
+	t.Run("wrong explicit non-empty job_id and task_id are both normalized", func(t *testing.T) {
+		store.lastProgress = nil
+		_, err := ct.Execute(context.Background(), "report_task_progress", mustJSON(t, map[string]any{
+			"job_id":  "job-wrong",
+			"task_id": "task-wrong",
+			"status":  "in_progress",
+			"message": "working",
+		}))
+		assertNoError(t, err)
+		if store.lastProgress == nil {
+			t.Fatal("expected progress write")
+		}
+		assertEqual(t, "job-ctx", store.lastProgress.JobID)
+		assertEqual(t, "task-ctx", store.lastProgress.TaskID)
+	})
+
+	t.Run("wrong explicit non-empty job_id with missing task_id is normalized", func(t *testing.T) {
+		store.lastProgress = nil
+		_, err := ct.Execute(context.Background(), "report_task_progress", mustJSON(t, map[string]any{
+			"job_id":  "job-wrong",
+			"status":  "in_progress",
+			"message": "working",
+		}))
+		assertNoError(t, err)
+		if store.lastProgress == nil {
+			t.Fatal("expected progress write")
+		}
+		assertEqual(t, "job-ctx", store.lastProgress.JobID)
+		assertEqual(t, "task-ctx", store.lastProgress.TaskID)
 	})
 }
 

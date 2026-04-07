@@ -3,6 +3,9 @@ package tui
 import (
 	"strings"
 	"testing"
+	"time"
+
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/jefflinse/toasters/internal/service"
 )
@@ -329,4 +332,265 @@ func TestUpdate_ProgressPollMsg_NilFields(t *testing.T) {
 	if got.progress.activeSessions != nil {
 		t.Errorf("activeSessions = %v, want nil", got.progress.activeSessions)
 	}
+}
+
+func TestUpdate_ProgressPollMsg_ClientModeHydratesRuntimeSessionSources(t *testing.T) {
+	t.Parallel()
+
+	m := newMinimalModel(t)
+	start := time.Now().UTC()
+
+	msg := progressPollMsg{
+		RuntimeSessions: []service.SessionSnapshot{
+			{
+				ID:        "rt-1",
+				AgentID:   "agent-alpha",
+				TeamName:  "team-a",
+				JobID:     "job-1",
+				TaskID:    "task-1",
+				Status:    "active",
+				StartTime: start,
+			},
+		},
+	}
+
+	result, _ := m.Update(msg)
+	got := result.(*Model)
+
+	if len(got.runtimeSessions) == 0 {
+		t.Fatal("runtimeSessions is empty, want hydrated session")
+	}
+
+	if len(got.sortedRuntimeSessions()) == 0 {
+		t.Fatal("sortedRuntimeSessions is empty, want hydrated runtime session")
+	}
+
+	rs := got.runtimeSessionForGridCell(0)
+	if rs == nil || rs.sessionID != "rt-1" {
+		t.Fatalf("runtimeSessionForGridCell(0) = %+v, want session rt-1", rs)
+	}
+
+	taskSessions := got.runtimeSessionsForTask("task-1")
+	if len(taskSessions) != 1 || taskSessions[0].sessionID != "rt-1" {
+		t.Fatalf("runtimeSessionsForTask(task-1) = %+v, want [rt-1]", taskSessions)
+	}
+}
+
+func TestUpdate_ProgressPollMsg_ClientModeMissingSnapshotWithinGraceDoesNotDropSession(t *testing.T) {
+	t.Parallel()
+
+	m := newMinimalModel(t)
+	m.runtimeSessions["stale"] = &runtimeSlot{sessionID: "stale", status: "active"}
+
+	msg := progressPollMsg{
+		RuntimeSessions: []service.SessionSnapshot{{ID: "keep", Status: "active"}},
+	}
+
+	result, _ := m.Update(msg)
+	got := result.(*Model)
+
+	if _, ok := got.runtimeSessions["stale"]; !ok {
+		t.Fatal("stale runtime session dropped before grace threshold")
+	}
+	if _, ok := got.runtimeSessions["keep"]; !ok {
+		t.Fatal("expected keep runtime session to be present after snapshot sync")
+	}
+}
+
+func TestUpdate_ProgressPollMsg_ClientModeEventuallyRemovesStaleRuntimeSessionsAfterThreshold(t *testing.T) {
+	t.Parallel()
+
+	m := newMinimalModel(t)
+	m.runtimeSessions["stale"] = &runtimeSlot{sessionID: "stale", status: "active"}
+
+	msg := progressPollMsg{RuntimeSessions: []service.SessionSnapshot{{ID: "keep", Status: "active"}}}
+
+	for i := 0; i < runtimeSessionSnapshotMissThreshold; i++ {
+		result, _ := m.Update(msg)
+		m = *result.(*Model)
+	}
+
+	if _, ok := m.runtimeSessions["stale"]; ok {
+		t.Fatal("stale runtime session still present after grace threshold")
+	}
+	if _, ok := m.runtimeSessions["keep"]; !ok {
+		t.Fatal("expected keep runtime session to be present after snapshot sync")
+	}
+}
+
+func TestUpdate_ProgressPollMsg_ClientModeUpdatesCanonicalSnapshotFieldsAndPreservesLocalFields(t *testing.T) {
+	t.Parallel()
+
+	m := newMinimalModel(t)
+	var out strings.Builder
+	out.WriteString("existing output")
+	start := time.Now().Add(-1 * time.Minute).UTC()
+	updatedStart := time.Now().UTC()
+
+	m.runtimeSessions["rt-1"] = &runtimeSlot{
+		sessionID:      "rt-1",
+		agentName:      "Friendly Agent",
+		teamName:       "existing-team",
+		task:           "rich local task description",
+		jobID:          "job-1",
+		taskID:         "task-1",
+		status:         "active",
+		output:         out,
+		startTime:      start,
+		systemPrompt:   "local system prompt",
+		initialMessage: "local initial message",
+		activities:     []activityItem{{label: "read: main.go", toolName: "read"}},
+	}
+
+	msg := progressPollMsg{
+		RuntimeSessions: []service.SessionSnapshot{{
+			ID:        "rt-1",
+			AgentID:   "agent-alpha",
+			TeamName:  "remote-team",
+			JobID:     "job-2",
+			TaskID:    "task-2",
+			Status:    "completed",
+			StartTime: updatedStart,
+		}},
+	}
+
+	result, _ := m.Update(msg)
+	got := result.(*Model)
+	slot := got.runtimeSessions["rt-1"]
+	if slot == nil {
+		t.Fatal("expected runtime session rt-1 to exist")
+	}
+
+	if slot.agentName != "agent-alpha" {
+		t.Fatalf("agentName = %q, want snapshot value", slot.agentName)
+	}
+	if slot.teamName != "remote-team" {
+		t.Fatalf("teamName = %q, want snapshot value", slot.teamName)
+	}
+	if slot.jobID != "job-2" {
+		t.Fatalf("jobID = %q, want snapshot value", slot.jobID)
+	}
+	if slot.taskID != "task-2" {
+		t.Fatalf("taskID = %q, want snapshot value", slot.taskID)
+	}
+	if !slot.startTime.Equal(updatedStart) {
+		t.Fatalf("startTime = %v, want updated snapshot startTime %v", slot.startTime, updatedStart)
+	}
+	if slot.task != "rich local task description" {
+		t.Fatalf("task = %q, want preserved local task", slot.task)
+	}
+	if slot.systemPrompt != "local system prompt" {
+		t.Fatalf("systemPrompt = %q, want preserved local prompt", slot.systemPrompt)
+	}
+	if slot.initialMessage != "local initial message" {
+		t.Fatalf("initialMessage = %q, want preserved local initial message", slot.initialMessage)
+	}
+	if slot.output.String() != "existing output" {
+		t.Fatalf("output = %q, want preserved local output", slot.output.String())
+	}
+	if len(slot.activities) != 1 || slot.activities[0].toolName != "read" {
+		t.Fatalf("activities = %+v, want preserved local activities", slot.activities)
+	}
+	if start.Equal(updatedStart) {
+		t.Fatalf("test setup bug: local and snapshot start times unexpectedly equal: %v", start)
+	}
+	if slot.status != "completed" {
+		t.Fatalf("status = %q, want updated snapshot status", slot.status)
+	}
+}
+
+func TestUpdate_ProgressPollMsg_EmbeddedModeDoesNotHydrateRuntimeSessionsFromSnapshots(t *testing.T) {
+	t.Parallel()
+
+	m := newMinimalModel(t)
+	m.openInEditor = func(string) tea.Cmd { return nil }
+	m.runtimeSessions["local-1"] = &runtimeSlot{sessionID: "local-1", agentName: "local-agent", status: "active"}
+
+	msg := progressPollMsg{
+		RuntimeSessions: []service.SessionSnapshot{{
+			ID:      "remote-1",
+			AgentID: "remote-agent",
+			Status:  "active",
+		}},
+	}
+
+	result, _ := m.Update(msg)
+	got := result.(*Model)
+
+	if _, ok := got.runtimeSessions["local-1"]; !ok {
+		t.Fatal("embedded mode local runtime session was unexpectedly removed")
+	}
+	if _, ok := got.runtimeSessions["remote-1"]; ok {
+		t.Fatal("embedded mode unexpectedly hydrated snapshot session into runtimeSessions")
+	}
+}
+
+func TestUpdate_ProgressPollMsg_ClientModeRenderPathsUseHydratedRuntimeSessions(t *testing.T) {
+	t.Parallel()
+
+	m := newMinimalModel(t)
+	m.width = 180
+	m.height = 48
+
+	msg := progressPollMsg{
+		Jobs: []service.Job{{
+			ID:     "job-1",
+			Title:  "Job One",
+			Status: service.JobStatusActive,
+		}},
+		Tasks: map[string][]service.Task{
+			"job-1": {{
+				ID:     "task-1",
+				JobID:  "job-1",
+				Title:  "Task One",
+				Status: service.TaskStatusInProgress,
+			}},
+		},
+		// Keep persisted sessions empty to ensure render paths rely on hydrated
+		// runtimeSessions (from RuntimeSessions snapshots) in client mode.
+		Sessions: nil,
+		RuntimeSessions: []service.SessionSnapshot{{
+			ID:        "rt-1",
+			AgentID:   "snap-agent",
+			JobID:     "job-1",
+			TaskID:    "task-1",
+			Status:    "active",
+			StartTime: time.Now().UTC(),
+		}},
+	}
+
+	result, _ := m.Update(msg)
+	got := result.(*Model)
+
+	t.Run("agents panel reads sorted runtime sessions source", func(t *testing.T) {
+		left := stripANSI(got.renderLeftPanel(64, 40))
+		if !strings.Contains(left, "snap-agent · job-1") {
+			t.Fatalf("agents panel did not include hydrated runtime session, got:\n%s", left)
+		}
+	})
+
+	t.Run("grid view reads runtime session grid source", func(t *testing.T) {
+		got.grid.gridCols = 1
+		got.grid.gridRows = 1
+		got.grid.gridPage = 0
+		got.grid.gridFocusCell = 0
+
+		grid := stripANSI(got.renderGrid())
+		if !strings.Contains(grid, "snap-agent") {
+			t.Fatalf("grid view did not include hydrated runtime session, got:\n%s", grid)
+		}
+	})
+
+	t.Run("jobs view reads runtimeSessionsForTask source", func(t *testing.T) {
+		// renderJobsModal uses jobsModal data sources for job/task selection.
+		got.jobsModal.jobs = got.progress.jobs
+		got.jobsModal.tasks = got.progress.tasks
+		got.jobsModal.jobIdx = 0
+		got.jobsModal.taskIdx = 0
+
+		modal := stripANSI(got.renderJobsModal())
+		if !strings.Contains(modal, "snap-agent") {
+			t.Fatalf("jobs modal did not include hydrated runtime session for selected task, got:\n%s", modal)
+		}
+	})
 }
