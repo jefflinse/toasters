@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,32 +15,31 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/spf13/cobra"
 
-	"github.com/jefflinse/toasters/defaults"
 	"github.com/jefflinse/toasters/internal/auth"
-	"github.com/jefflinse/toasters/internal/bootstrap"
 	"github.com/jefflinse/toasters/internal/client"
-	"github.com/jefflinse/toasters/internal/compose"
 	"github.com/jefflinse/toasters/internal/config"
-	"github.com/jefflinse/toasters/internal/db"
-	"github.com/jefflinse/toasters/internal/loader"
-	"github.com/jefflinse/toasters/internal/mcp"
-	"github.com/jefflinse/toasters/internal/operator"
-	"github.com/jefflinse/toasters/internal/provider"
-	"github.com/jefflinse/toasters/internal/runtime"
 	"github.com/jefflinse/toasters/internal/service"
 	"github.com/jefflinse/toasters/internal/tui"
 )
+
+// defaultServerAddr is used when --server is not specified.
+const defaultServerAddr = "localhost:8080"
 
 var serverAddr string
 
 var rootCmd = &cobra.Command{
 	Use:   "toasters",
 	Short: "A TUI orchestrator for agentic coding work",
-	RunE:  runTUI,
+	Long: `Toasters is a TUI client for an agentic orchestration server.
+
+The server runs separately and the TUI connects to it over HTTP+SSE. Start a
+server with "toasters serve", then run "toasters" to connect.`,
+	RunE: runTUI,
 }
 
 func init() {
-	rootCmd.Flags().StringVar(&serverAddr, "server", "", "connect to remote server at address (e.g., localhost:8080)")
+	rootCmd.Flags().StringVar(&serverAddr, "server", defaultServerAddr,
+		"address of the toasters server (host:port)")
 }
 
 // Execute runs the root command.
@@ -55,20 +55,6 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 
-	// Bootstrap runs before config.Load() so that the default config.yaml is
-	// written to disk before Viper reads it. On first run this ensures the
-	// operator and provider settings from the embedded default are picked up
-	// rather than Viper's built-in fallback defaults.
-	if err := bootstrap.Run(configDir, defaults.SystemFiles, defaults.DefaultConfig); err != nil {
-		// Non-fatal — log to stderr since the slog handler isn't set up yet.
-		slog.Warn("bootstrap failed", "error", err)
-	}
-
-	cfg, err := config.Load()
-	if err != nil {
-		return err
-	}
-
 	// Redirect slog output to a file so structured log messages don't
 	// corrupt the TUI's alt-screen. Logs go to ~/.config/toasters/toasters.log.
 	if err := os.MkdirAll(configDir, 0755); err == nil {
@@ -77,268 +63,27 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 			slog.SetDefault(slog.New(slog.NewTextHandler(f, nil)))
 			defer func() { _ = f.Close() }()
 		} else {
-			// Can't open log file — discard logs rather than corrupt the TUI.
 			slog.SetDefault(slog.New(slog.NewTextHandler(io.Discard, nil)))
 		}
 	} else {
 		slog.SetDefault(slog.New(slog.NewTextHandler(io.Discard, nil)))
 	}
 
-	workspaceDir, err := config.WorkspaceDir(cfg)
+	// Reachability probe — give a friendly error before opening the alt-screen
+	// rather than letting Bubble Tea start and then strand the user on a loading
+	// screen with an SSE connection error.
+	if err := probeServer(serverAddr); err != nil {
+		return fmt.Errorf("cannot reach toasters server at %s: %w\n\nStart a server with: toasters serve", serverAddr, err)
+	}
+
+	token, _ := auth.LoadToken(configDir)
+	rc, err := client.New("http://"+serverAddr, client.WithToken(token))
 	if err != nil {
-		return err
+		return fmt.Errorf("creating client: %w", err)
 	}
+	defer rc.Close()
 
-	teamsDir := cfg.Operator.TeamsDir
-
-	// Open SQLite database for persistence (graceful degradation if it fails).
-	var store db.Store
-	dbPath, err := config.DatabasePath(cfg, workspaceDir)
-	if err != nil {
-		slog.Warn("failed to resolve database path", "error", err)
-	} else {
-		sqliteStore, dbErr := db.Open(dbPath)
-		if dbErr != nil {
-			slog.Warn("failed to open database", "path", dbPath, "error", dbErr)
-		} else {
-			store = sqliteStore
-			defer func() { _ = sqliteStore.Close() }()
-		}
-	}
-
-	// Load definitions from files into DB.
-	var ldr *loader.Loader
-	if store != nil {
-		ldr = loader.New(store, configDir)
-		if err := ldr.Load(context.Background()); err != nil {
-			slog.Warn("initial definition load failed", "error", err)
-		}
-	}
-
-	// Create composer for runtime agent composition.
-	var composer *compose.Composer
-	if store != nil {
-		composer = compose.New(store, cfg.Agents.Defaults.Provider, cfg.Agents.Defaults.Model)
-	}
-
-	// Create provider registry and register configured providers.
-	registry := provider.NewRegistry()
-	for _, pc := range cfg.Providers {
-		p, provErr := provider.NewFromConfig(pc)
-		if provErr != nil {
-			slog.Warn("failed to create provider", "id", pc.ID, "name", pc.Name, "error", provErr)
-			continue
-		}
-		registry.Register(pc.Key(), p)
-	}
-
-	// Create the runtime for agent session management.
-	rt := runtime.New(store, registry)
-	defer rt.Shutdown()
-
-	// Initialize MCP manager and connect to configured servers.
-	mcpManager := mcp.NewManager()
-	if len(cfg.MCP.Servers) > 0 {
-		if err := mcpManager.Connect(context.Background(), cfg.MCP.Servers); err != nil {
-			slog.Warn("MCP connect error", "error", err)
-		}
-	}
-	defer func() { _ = mcpManager.Close() }()
-
-	// Wire MCP tools into agent runtime with result truncation.
-	if len(mcpManager.Tools()) > 0 {
-		truncatingCaller := mcp.NewTruncatingCaller(mcpManager, mcp.DefaultMaxResultLen)
-		rt.SetMCPCaller(truncatingCaller, mcp.ToRuntimeToolDefs(mcpManager.Tools()))
-	}
-
-	llmProvider, err := resolveOperatorProvider(cfg, registry)
-	if err != nil {
-		return err
-	}
-
-	// p holds the Bubble Tea program pointer; set before operator starts so
-	// callbacks can safely call p.Load() and find a non-nil program.
-	var p atomic.Pointer[tea.Program]
-
-	// notifySessionStarted wires a runtime session into the TUI event loop.
-	// It is used for all sessions — both coordinator sessions (spawned by assign_team)
-	// and child sessions (spawned by spawn_agent) — via rt.OnSessionStarted.
-	notifySessionStarted := func(sess *runtime.Session) {
-		snap := sess.Snapshot()
-		if prog := p.Load(); prog != nil {
-			prog.Send(tui.RuntimeSessionStartedMsg{
-				SessionID:      snap.ID,
-				AgentName:      snap.AgentID,
-				TeamName:       snap.TeamName,
-				Task:           sess.Task(),
-				JobID:          snap.JobID,
-				TaskID:         snap.TaskID,
-				SystemPrompt:   sess.SystemPrompt(),
-				InitialMessage: sess.InitialMessage(),
-			})
-		}
-
-		// Forward session events in a goroutine.
-		go func() {
-			events := sess.Subscribe()
-			for ev := range events {
-				if prog := p.Load(); prog != nil {
-					var msg tui.RuntimeSessionEventMsg
-					switch ev.Type {
-					case runtime.SessionEventText:
-						msg = tui.RuntimeSessionEventMsg{
-							SessionID: snap.ID,
-							EventType: "text",
-							Text:      ev.Text,
-						}
-					case runtime.SessionEventToolCall:
-						msg = tui.RuntimeSessionEventMsg{
-							SessionID: snap.ID,
-							EventType: "tool_call",
-							ToolName:  ev.ToolCall.Name,
-							ToolInput: string(ev.ToolCall.Arguments),
-						}
-					case runtime.SessionEventToolResult:
-						msg = tui.RuntimeSessionEventMsg{
-							SessionID:  snap.ID,
-							EventType:  "tool_result",
-							ToolOutput: ev.ToolResult.Result,
-							IsError:    ev.ToolResult.Error != "",
-						}
-					default:
-						continue
-					}
-					prog.Send(msg)
-				}
-			}
-			// Session done — send completion message.
-			finalSnap := sess.Snapshot()
-			if prog := p.Load(); prog != nil {
-				prog.Send(tui.RuntimeSessionDoneMsg{
-					SessionID: finalSnap.ID,
-					AgentName: finalSnap.AgentID,
-					JobID:     finalSnap.JobID,
-					TaskID:    finalSnap.TaskID,
-					FinalText: sess.FinalText(),
-					Status:    finalSnap.Status,
-				})
-			}
-		}()
-	}
-
-	// Wire the callback on the runtime so all sessions (coordinator + children)
-	// are forwarded to the TUI through a single path.
-	rt.OnSessionStarted = notifySessionStarted
-
-	// Compose the operator agent from its .md file definition.
-	var operatorPrompt string
-	if composer != nil {
-		composedOperator, composeErr := composer.Compose(context.Background(), "operator", "system")
-		if composeErr != nil {
-			slog.Warn("failed to compose operator agent, using empty prompt", "error", composeErr)
-		} else {
-			operatorPrompt = composedOperator.SystemPrompt
-		}
-	}
-
-	// Determine which service implementation to use.
-	var svc service.Service
-
-	if serverAddr != "" {
-		// Client mode - connect to remote server.
-		// Skip all local component initialization; just connect and run TUI.
-		token, _ := auth.LoadToken(configDir)
-		rc, err := client.New("http://"+serverAddr, client.WithToken(token))
-		if err != nil {
-			return fmt.Errorf("creating client: %w", err)
-		}
-		defer rc.Close()
-		svc = rc
-
-		m := tui.NewModel(tui.ModelConfig{
-			Service: svc,
-		})
-
-		prog := tea.NewProgram(&m)
-		var p atomic.Pointer[tea.Program]
-		p.Store(prog)
-
-		// Start the service event consumer.
-		consumerCtx, consumerCancel := context.WithCancel(context.Background())
-		defer consumerCancel()
-		go tui.ConsumeServiceEvents(consumerCtx, svc, &p)
-
-		// Send AppReadyMsg after connection is established to exit loading state.
-		sendClientModeAppReady(svc, &p, configDir, serverAddr)
-
-		_, err = prog.Run()
-		p.Store(nil)
-		return err
-	}
-
-	// Embedded mode - use LocalService with all local components.
-	localSvc := service.NewLocal(service.LocalConfig{
-		Store:         store,
-		Runtime:       rt,
-		MCPManager:    mcpManager,
-		Provider:      llmProvider,
-		Composer:      composer,
-		Loader:        ldr,
-		ConfigDir:     configDir,
-		WorkspaceDir:  workspaceDir,
-		TeamsDir:      teamsDir,
-		OperatorModel: cfg.Operator.Model,
-		StartTime:     time.Now(),
-	})
-	svc = localSvc
-	defer localSvc.Shutdown()
-
-	// Create and start the operator event loop.
-	var op *operator.Operator
-	if store != nil {
-		textFlush := func(text string) {
-			localSvc.BroadcastOperatorText(text, "")
-		}
-		batcher := newTextBatcher(16*time.Millisecond, textFlush)
-
-		var opErr error
-		op, opErr = operator.New(operator.Config{
-			Runtime:      rt,
-			Provider:     llmProvider,
-			Model:        cfg.Operator.Model,
-			WorkDir:      workspaceDir,
-			Store:        store,
-			Composer:     composer,
-			Spawner:      rt,
-			SystemPrompt: operatorPrompt,
-			OnText: func(text string) {
-				batcher.Add(text)
-			},
-			OnEvent: func(event operator.Event) {
-				localSvc.BroadcastOperatorEvent(event)
-			},
-			OnTurnDone: func() {
-				batcher.Flush()
-				// TODO(Phase 2): Token counts are hardcoded to 0 because
-				// operator.Config.OnTurnDone does not receive token usage
-				// from the LLM response. The operator needs to be updated
-				// to pass actual tokensIn/tokensOut/reasoningTokens here.
-				// Until then, sidebar stats (prompt ctx, tokens out,
-				// reasoning, speed) will not update from real data.
-				localSvc.BroadcastOperatorDone(cfg.Operator.Model, 0, 0, 0)
-			},
-		})
-		if opErr != nil {
-			slog.Warn("failed to create operator", "error", opErr)
-		}
-	}
-
-	// Wire the operator into the service after creation. The operator's
-	// callbacks already close over localSvc, so we just need to inject the
-	// operator reference into the service to complete the circular wiring.
-	if op != nil {
-		localSvc.SetOperator(op)
-	}
+	var svc service.Service = rc
 
 	m := tui.NewModel(tui.ModelConfig{
 		Service:      svc,
@@ -346,86 +91,57 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 	})
 
 	prog := tea.NewProgram(&m)
-	// Store prog BEFORE starting the operator so that notifySessionStarted and
-	// all operator callbacks can safely call p.Load() and find a non-nil program.
+	var p atomic.Pointer[tea.Program]
 	p.Store(prog)
-
-	if op != nil {
-		opCtx, opCancel := context.WithCancel(context.Background())
-		defer opCancel()
-		op.Start(opCtx)
-	}
 
 	// Start the service event consumer — translates service events to TUI messages.
 	consumerCtx, consumerCancel := context.WithCancel(context.Background())
 	defer consumerCancel()
 	go tui.ConsumeServiceEvents(consumerCtx, svc, &p)
 
-	// Generate team awareness and send the operator greeting in the background.
-	go func() {
-		ctx := context.Background()
-
-		// Fetch initial teams from the service for awareness generation.
-		initialTeams, _ := svc.Definitions().ListTeams(ctx)
-		awareness := generateTeamAwareness(ctx, llmProvider, initialTeams, configDir)
-
-		if prog := p.Load(); prog != nil {
-			prog.Send(tui.TeamsReloadedMsg{Teams: initialTeams, Awareness: awareness})
-		}
-
-		if op != nil {
-			if prog := p.Load(); prog != nil {
-				prog.Send(tui.AppReadyMsg{Awareness: awareness, Greeting: ""})
-			}
-			// Send the greeting through the operator.
-			if err := op.Send(ctx, operator.Event{
-				Type: operator.EventUserMessage,
-				Payload: operator.UserMessagePayload{
-					Text: "Greet the user briefly. One or two sentences max. Be direct and ready to work.",
-				},
-			}); err != nil {
-				slog.Warn("failed to send greeting through operator", "error", err)
-			}
-		} else {
-			if prog := p.Load(); prog != nil {
-				prog.Send(tui.AppReadyMsg{
-					Awareness: awareness,
-					Greeting:  "⚠ Database unavailable — operator is offline. Check ~/.config/toasters/toasters.log for details.",
-				})
-			}
-		}
-	}()
-
-	watchCtx, watchCancel := context.WithCancel(context.Background())
-	defer watchCancel()
-
-	// Watch for definition file changes and reload.
-	if ldr != nil {
-		defWatcher, defWatchErr := loader.NewWatcher(ldr, func() {
-			localSvc.BroadcastDefinitionsReloaded()
-			// Rebuild team views and send TeamsReloadedMsg.
-			ctx := context.Background()
-			newTeams, _ := svc.Definitions().ListTeams(ctx)
-			newAwareness := generateTeamAwareness(ctx, llmProvider, newTeams, configDir)
-			if prog := p.Load(); prog != nil {
-				prog.Send(tui.TeamsReloadedMsg{Teams: newTeams, Awareness: newAwareness})
-			}
-		})
-		if defWatchErr != nil {
-			slog.Warn("failed to create definitions watcher", "error", defWatchErr)
-		} else {
-			go func() {
-				if err := defWatcher.Start(watchCtx); err != nil && watchCtx.Err() == nil {
-					slog.Error("definitions watcher error", "error", err)
-				}
-			}()
-			defer func() { _ = defWatcher.Stop() }()
-		}
-	}
+	// Hydrate teams + transition out of the loading screen as soon as the
+	// connection is established. Run in a goroutine so the TUI can render
+	// while the initial fetch happens.
+	go sendInitialAppReady(svc, &p, serverAddr)
 
 	_, err = prog.Run()
 	p.Store(nil) // Prevent post-shutdown sends
 	return err
+}
+
+// probeServer attempts a fast TCP dial to the server address to confirm it is
+// reachable before launching the TUI. Returns nil on success.
+func probeServer(addr string) error {
+	conn, err := net.DialTimeout("tcp", addr, 2*time.Second)
+	if err != nil {
+		return err
+	}
+	_ = conn.Close()
+	return nil
+}
+
+// sendInitialAppReady fetches initial state from the server and sends the
+// AppReadyMsg that transitions the TUI out of the loading screen. Runs in
+// its own goroutine.
+func sendInitialAppReady(svc service.Service, p *atomic.Pointer[tea.Program], serverAddr string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	initialTeams, err := svc.Definitions().ListTeams(ctx)
+	if err != nil {
+		slog.Warn("failed to list teams during startup", "error", err)
+	}
+
+	// Wait briefly for SSE connection to stabilize so the consumer is wired
+	// before any startup events arrive.
+	time.Sleep(200 * time.Millisecond)
+
+	if prog := p.Load(); prog != nil {
+		prog.Send(tui.TeamsReloadedMsg{Teams: initialTeams})
+		prog.Send(tui.AppReadyMsg{
+			Greeting: "Connected to " + serverAddr,
+		})
+	}
 }
 
 // openInEditor launches $EDITOR (or vi) for the given file path, suspending the TUI.
@@ -438,32 +154,4 @@ func openInEditor(path string) tea.Cmd {
 	return tea.ExecProcess(c, func(err error) tea.Msg {
 		return tui.EditorFinishedMsg{Err: err}
 	})
-}
-
-// sendClientModeAppReady sends the AppReadyMsg after client mode connection is established.
-// This is critical for transitioning the TUI from loading to ready state.
-// Without this, the TUI hangs indefinitely on the loading screen.
-func sendClientModeAppReady(svc service.Service, p *atomic.Pointer[tea.Program], configDir, serverAddr string) {
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-
-		initialTeams, err := svc.Definitions().ListTeams(ctx)
-		if err != nil {
-			slog.Warn("client mode: failed to list teams for awareness", "error", err)
-		}
-		awareness := generateTeamAwareness(ctx, nil, initialTeams, configDir)
-
-		// Wait for SSE connection to stabilize
-		time.Sleep(200 * time.Millisecond)
-		slog.Debug("client mode: sending AppReadyMsg", "server", serverAddr)
-
-		if prog := p.Load(); prog != nil {
-			prog.Send(tui.TeamsReloadedMsg{Teams: initialTeams, Awareness: awareness})
-			prog.Send(tui.AppReadyMsg{
-				Awareness: awareness,
-				Greeting:  "Connected to " + serverAddr,
-			})
-		}
-	}()
 }

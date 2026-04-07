@@ -160,16 +160,6 @@ func runServe(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	// notifySessionStarted wires a runtime session into the service event stream.
-	// For server mode, we don't have a TUI to notify, but we still need to set this
-	// so that session events are properly managed.
-	notifySessionStarted := func(sess *runtime.Session) {
-		// Sessions are managed through the service event stream.
-		// No TUI to notify in server mode.
-	}
-
-	rt.OnSessionStarted = notifySessionStarted
-
 	// Compose the operator agent from its .md file definition.
 	var operatorPrompt string
 	if composer != nil {
@@ -196,6 +186,11 @@ func runServe(cmd *cobra.Command, args []string) error {
 		StartTime:     time.Now(),
 	})
 	defer svc.Shutdown()
+
+	// Wire the runtime's session-started callback to broadcast session events
+	// through the service event stream. This is the only path by which agent
+	// session activity reaches subscribers (TUI, SSE clients).
+	rt.OnSessionStarted = svc.BroadcastSessionStarted
 
 	// Create and start the operator event loop.
 	var op *operator.Operator

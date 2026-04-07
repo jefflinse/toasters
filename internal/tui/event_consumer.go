@@ -61,25 +61,78 @@ func translateEvent(ev service.Event) tea.Msg {
 			return nil
 		}
 		return progressPollMsg{
-			Jobs:            p.State.Jobs,
-			Tasks:           p.State.Tasks,
-			Progress:        p.State.Reports,
-			Sessions:        p.State.ActiveSessions,
-			RuntimeSessions: p.State.LiveSnapshots,
-			FeedEntries:     p.State.FeedEntries,
-			MCPServers:      p.State.MCPServers,
+			Jobs:        p.State.Jobs,
+			Tasks:       p.State.Tasks,
+			Progress:    p.State.Reports,
+			Sessions:    p.State.ActiveSessions,
+			FeedEntries: p.State.FeedEntries,
+			MCPServers:  p.State.MCPServers,
 		}
 
-	case service.EventTypeSessionStarted,
-		service.EventTypeSessionText,
-		service.EventTypeSessionToolCall,
-		service.EventTypeSessionToolResult,
-		service.EventTypeSessionDone:
-		// Session events are delivered via the direct rt.OnSessionStarted callback
-		// in cmd/root.go, not through the service event stream. When Phase 2 moves
-		// session event broadcasting into LocalService, these handlers should be
-		// re-enabled and the direct callback removed.
-		return nil
+	case service.EventTypeSessionStarted:
+		p, ok := ev.Payload.(service.SessionStartedPayload)
+		if !ok {
+			return nil
+		}
+		return SessionStartedMsg{
+			SessionID:      p.SessionID,
+			AgentName:      p.AgentName,
+			TeamName:       p.TeamName,
+			Task:           p.Task,
+			JobID:          p.JobID,
+			TaskID:         p.TaskID,
+			SystemPrompt:   p.SystemPrompt,
+			InitialMessage: p.InitialMessage,
+		}
+
+	case service.EventTypeSessionText:
+		p, ok := ev.Payload.(service.SessionTextPayload)
+		if !ok {
+			return nil
+		}
+		return SessionTextMsg{
+			SessionID: ev.SessionID,
+			Text:      p.Text,
+		}
+
+	case service.EventTypeSessionToolCall:
+		p, ok := ev.Payload.(service.SessionToolCallPayload)
+		if !ok {
+			return nil
+		}
+		return SessionToolCallMsg{
+			SessionID: ev.SessionID,
+			ToolID:    p.ToolCall.ID,
+			ToolName:  p.ToolCall.Name,
+			ToolInput: string(p.ToolCall.Arguments),
+		}
+
+	case service.EventTypeSessionToolResult:
+		p, ok := ev.Payload.(service.SessionToolResultPayload)
+		if !ok {
+			return nil
+		}
+		return SessionToolResultMsg{
+			SessionID:  ev.SessionID,
+			CallID:     p.Result.CallID,
+			ToolName:   p.Result.Name,
+			ToolOutput: p.Result.Result,
+			IsError:    p.Result.Error != "",
+		}
+
+	case service.EventTypeSessionDone:
+		p, ok := ev.Payload.(service.SessionDonePayload)
+		if !ok {
+			return nil
+		}
+		return SessionDoneMsg{
+			SessionID: ev.SessionID,
+			AgentName: p.AgentName,
+			JobID:     p.JobID,
+			TaskID:    p.TaskID,
+			FinalText: p.FinalText,
+			Status:    p.Status,
+		}
 
 	case service.EventTypeDefinitionsReloaded:
 		return DefinitionsReloadedMsg{}

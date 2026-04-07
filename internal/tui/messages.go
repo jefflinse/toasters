@@ -87,15 +87,17 @@ func estimateTokens(s string) int {
 	return (n + 3) / 4 // ceiling division
 }
 
-// progressPollMsg carries the latest progress data from SQLite, fired every 500ms.
+// progressPollMsg carries the latest progress snapshot from the service event
+// stream. It is produced by the event consumer in response to progress.update
+// events. Note: it no longer carries runtime session info — those flow through
+// dedicated session.* events into m.runtimeSessions.
 type progressPollMsg struct {
-	Jobs            []service.Job
-	Tasks           map[string][]service.Task
-	Progress        map[string][]service.ProgressReport
-	Sessions        []service.AgentSession
-	RuntimeSessions []service.SessionSnapshot // live snapshots with real token counts
-	FeedEntries     []service.FeedEntry       // recent activity feed entries
-	MCPServers      []service.MCPServerStatus // MCP server connection status
+	Jobs        []service.Job
+	Tasks       map[string][]service.Task
+	Progress    map[string][]service.ProgressReport
+	Sessions    []service.AgentSession
+	FeedEntries []service.FeedEntry       // recent activity feed entries
+	MCPServers  []service.MCPServerStatus // MCP server connection status
 }
 
 // progressPollTickMsg is an internal tick that triggers the next poll.
@@ -108,8 +110,9 @@ type ModelsMsg struct {
 	Err    error
 }
 
-// RuntimeSessionStartedMsg is sent when a new runtime session begins.
-type RuntimeSessionStartedMsg struct {
+// SessionStartedMsg is sent when an agent session starts on the server.
+// Produced by the event consumer in response to a session.started event.
+type SessionStartedMsg struct {
 	SessionID      string
 	AgentName      string
 	TeamName       string // team this agent belongs to (may be empty)
@@ -120,20 +123,35 @@ type RuntimeSessionStartedMsg struct {
 	InitialMessage string
 }
 
-// RuntimeSessionEventMsg carries a runtime session event to the TUI.
-// It carries the event data inline rather than importing runtime.SessionEvent.
-type RuntimeSessionEventMsg struct {
-	SessionID  string
-	EventType  string // "text", "tool_call", "tool_result", "done", "error"
-	Text       string // populated for text events
-	ToolName   string // populated for tool_call events
-	ToolInput  string // populated for tool_call events (JSON arguments)
-	ToolOutput string // populated for tool_result events
-	IsError    bool   // true if this is an error event
+// SessionTextMsg carries a chunk of streamed text from an agent session.
+// Produced by the event consumer in response to a session.text event.
+type SessionTextMsg struct {
+	SessionID string
+	Text      string
 }
 
-// RuntimeSessionDoneMsg is sent when a runtime session completes.
-type RuntimeSessionDoneMsg struct {
+// SessionToolCallMsg is sent when an agent session invokes a tool.
+// Produced by the event consumer in response to a session.tool_call event.
+type SessionToolCallMsg struct {
+	SessionID string
+	ToolID    string
+	ToolName  string
+	ToolInput string // raw JSON arguments
+}
+
+// SessionToolResultMsg is sent when a tool result returns to an agent session.
+// Produced by the event consumer in response to a session.tool_result event.
+type SessionToolResultMsg struct {
+	SessionID  string
+	CallID     string
+	ToolName   string
+	ToolOutput string
+	IsError    bool
+}
+
+// SessionDoneMsg is sent when an agent session terminates.
+// Produced by the event consumer in response to a session.done event.
+type SessionDoneMsg struct {
 	SessionID string
 	AgentName string
 	JobID     string

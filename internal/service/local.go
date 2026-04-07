@@ -522,6 +522,112 @@ func (s *LocalService) BroadcastDefinitionsReloaded() {
 	})
 }
 
+// BroadcastSessionStarted bridges a runtime session into the unified service
+// event stream. It emits session.started immediately, then spawns a goroutine
+// that subscribes to the session's events and re-emits them as session.text /
+// session.tool_call / session.tool_result events. When the session terminates,
+// it emits a final session.done event.
+//
+// This is the only path by which agent session activity reaches subscribers
+// (TUI clients, SSE clients). It must be wired to runtime.Runtime.OnSessionStarted
+// during server startup.
+func (s *LocalService) BroadcastSessionStarted(sess *runtime.Session) {
+	snap := sess.Snapshot()
+	sessionID := snap.ID
+
+	// Subscribe BEFORE emitting session.started so that any events the session
+	// produces between SpawnAgent's OnSessionStarted invocation and the start
+	// of Run() are captured. Subscribe is safe to call before Run() begins.
+	events := sess.Subscribe()
+
+	s.broadcast(Event{
+		Type:      EventTypeSessionStarted,
+		SessionID: sessionID,
+		Payload: SessionStartedPayload{
+			SessionID:      sessionID,
+			AgentName:      snap.AgentID,
+			TeamName:       snap.TeamName,
+			Task:           sess.Task(),
+			JobID:          snap.JobID,
+			TaskID:         snap.TaskID,
+			SystemPrompt:   sess.SystemPrompt(),
+			InitialMessage: sess.InitialMessage(),
+		},
+	})
+
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				slog.Error("panic in session event forwarder",
+					"session_id", sessionID,
+					"panic", fmt.Sprintf("%v", r),
+					"stack", string(debug.Stack()))
+			}
+		}()
+
+		for ev := range events {
+			switch ev.Type {
+			case runtime.SessionEventText:
+				s.broadcast(Event{
+					Type:      EventTypeSessionText,
+					SessionID: sessionID,
+					Payload:   SessionTextPayload{Text: ev.Text},
+				})
+			case runtime.SessionEventToolCall:
+				if ev.ToolCall == nil {
+					continue
+				}
+				s.broadcast(Event{
+					Type:      EventTypeSessionToolCall,
+					SessionID: sessionID,
+					Payload: SessionToolCallPayload{
+						ToolCall: ToolCall{
+							ID:        ev.ToolCall.ID,
+							Name:      ev.ToolCall.Name,
+							Arguments: ev.ToolCall.Arguments,
+						},
+					},
+				})
+			case runtime.SessionEventToolResult:
+				if ev.ToolResult == nil {
+					continue
+				}
+				s.broadcast(Event{
+					Type:      EventTypeSessionToolResult,
+					SessionID: sessionID,
+					Payload: SessionToolResultPayload{
+						Result: ToolCallResult{
+							CallID: ev.ToolResult.CallID,
+							Name:   ev.ToolResult.Name,
+							Result: ev.ToolResult.Result,
+							Error:  ev.ToolResult.Error,
+						},
+					},
+				})
+			}
+			// SessionEventDone and SessionEventError do not need explicit
+			// re-emission here — the session done broadcast happens after the
+			// channel closes (below), which covers both normal completion and
+			// errors.
+		}
+
+		// Subscribe channel closed — session has terminated. Emit session.done
+		// with the final snapshot status so subscribers can finalize their state.
+		finalSnap := sess.Snapshot()
+		s.broadcast(Event{
+			Type:      EventTypeSessionDone,
+			SessionID: sessionID,
+			Payload: SessionDonePayload{
+				AgentName: finalSnap.AgentID,
+				JobID:     finalSnap.JobID,
+				TaskID:    finalSnap.TaskID,
+				Status:    finalSnap.Status,
+				FinalText: sess.FinalText(),
+			},
+		})
+	}()
+}
+
 // ---------------------------------------------------------------------------
 // OperatorService
 // ---------------------------------------------------------------------------

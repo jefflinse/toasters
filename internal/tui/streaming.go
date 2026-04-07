@@ -60,24 +60,6 @@ func (m *Model) sendMessage() tea.Cmd {
 	)
 }
 
-// notifyOperator sends a notification message to the operator. If the operator
-// is currently streaming, the notification is sent asynchronously (the operator
-// will queue it). Returns a tea.Cmd that performs the send.
-func (m *Model) notifyOperator(notification string) tea.Cmd {
-	if m.svc == nil {
-		return nil
-	}
-	svc := m.svc
-	return func() tea.Msg {
-		ctx := context.Background()
-		_, err := svc.Operator().SendMessage(ctx, notification)
-		if err != nil {
-			return OperatorDoneMsg{Err: err}
-		}
-		return nil
-	}
-}
-
 // fetchModels returns a command that fetches available models from the LLM server.
 func (m Model) fetchModels() tea.Cmd {
 	svc := m.svc
