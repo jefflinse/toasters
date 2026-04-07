@@ -88,10 +88,6 @@ type LocalService struct {
 	currentTurnID   string
 	pendingResponse strings.Builder // accumulates text during a turn
 
-	// Conversation history for reconnect hydration.
-	historyMu sync.Mutex
-	history   []ChatEntry
-
 	// asyncSem bounds concurrent async operations (generate, promote, detect).
 	asyncSem chan struct{}
 }
@@ -769,27 +765,53 @@ func (s *LocalService) Status(_ context.Context) (OperatorStatus, error) {
 	}, nil
 }
 
-// appendHistory appends a ChatEntry to the conversation history, capping at
-// maxHistoryEntries by dropping the oldest entries when the limit is exceeded.
+// appendHistory persists a ChatEntry to the chat_entries table so that the
+// conversation survives a server restart. If the store is unavailable the
+// entry is silently dropped — chat history is best-effort, not load-bearing.
 func (s *LocalService) appendHistory(entry ChatEntry) {
-	s.historyMu.Lock()
-	defer s.historyMu.Unlock()
-	s.history = append(s.history, entry)
-	if len(s.history) > maxHistoryEntries {
-		// Drop oldest entries to stay within the limit.
-		excess := len(s.history) - maxHistoryEntries
-		copy(s.history, s.history[excess:])
-		s.history = s.history[:maxHistoryEntries]
+	if s.cfg.Store == nil {
+		return
+	}
+	dbEntry := &db.ChatEntry{
+		Timestamp: entry.Timestamp,
+		Role:      string(entry.Message.Role),
+		Content:   entry.Message.Content,
+		Reasoning: entry.Reasoning,
+		Meta:      entry.ClaudeMeta,
+	}
+	// AppendChatEntry takes its own short-lived context so a slow caller can't
+	// stall on a transient DB write.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := s.cfg.Store.AppendChatEntry(ctx, dbEntry); err != nil {
+		slog.Warn("failed to persist chat entry", "error", err)
 	}
 }
 
-// History returns the conversation history for the current session.
-func (s *LocalService) History(_ context.Context) ([]ChatEntry, error) {
-	s.historyMu.Lock()
-	defer s.historyMu.Unlock()
-	result := make([]ChatEntry, len(s.history))
-	copy(result, s.history)
-	return result, nil
+// History returns the most recent maxHistoryEntries chat entries from SQLite,
+// in chronological order (oldest first). Used by clients to hydrate the chat
+// view on connect.
+func (s *LocalService) History(ctx context.Context) ([]ChatEntry, error) {
+	if s.cfg.Store == nil {
+		return nil, nil
+	}
+	dbEntries, err := s.cfg.Store.ListRecentChatEntries(ctx, maxHistoryEntries)
+	if err != nil {
+		return nil, fmt.Errorf("listing chat entries: %w", err)
+	}
+	out := make([]ChatEntry, 0, len(dbEntries))
+	for _, e := range dbEntries {
+		out = append(out, ChatEntry{
+			Message: ChatMessage{
+				Role:    MessageRole(e.Role),
+				Content: e.Content,
+			},
+			Timestamp:  e.Timestamp,
+			Reasoning:  e.Reasoning,
+			ClaudeMeta: e.Meta,
+		})
+	}
+	return out, nil
 }
 
 // RespondToBlocker submits the user's answers to a blocker reported by an agent.

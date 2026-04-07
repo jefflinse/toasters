@@ -192,6 +192,18 @@ type AgentSession struct {
 	CostUSD   *float64
 }
 
+// ChatEntry records a single message in the operator/user conversation.
+// Persisted so that a server restart can rehydrate the chat view.
+type ChatEntry struct {
+	ID        int64
+	Timestamp time.Time
+	Role      string // "user", "assistant", "tool", "system"
+	Content   string
+	Reasoning string // chain-of-thought; assistant only
+	Meta      string // byline / model name string
+	TurnID    string // operator turn correlation
+}
+
 // Artifact records a file or output produced during a job.
 type Artifact struct {
 	ID        int64

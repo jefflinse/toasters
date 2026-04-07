@@ -143,6 +143,13 @@ func sendInitialAppReady(svc service.Service, p *atomic.Pointer[tea.Program], se
 		slog.Warn("failed to fetch operator status during startup", "error", err)
 	}
 
+	// Pull persisted chat history so the conversation survives a server
+	// restart. Best-effort — an empty list is fine.
+	history, err := svc.Operator().History(ctx)
+	if err != nil {
+		slog.Warn("failed to fetch chat history during startup", "error", err)
+	}
+
 	// Wait briefly for SSE connection to stabilize so the consumer is wired
 	// before any startup events arrive.
 	time.Sleep(200 * time.Millisecond)
@@ -153,6 +160,7 @@ func sendInitialAppReady(svc service.Service, p *atomic.Pointer[tea.Program], se
 			Greeting:  "Connected to " + serverAddr,
 			ModelName: modelName,
 			Endpoint:  endpoint,
+			History:   history,
 		})
 	}
 }

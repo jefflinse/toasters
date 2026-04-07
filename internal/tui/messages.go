@@ -175,9 +175,10 @@ type JobsReloadedMsg struct {
 // It carries the operator metadata fetched from the server so the sidebar
 // (model name, endpoint URL) can be populated before any LLM calls happen.
 type AppReadyMsg struct {
-	Greeting  string // pre-fetched operator greeting; injected immediately on render
-	ModelName string // canonical operator model name from the server config
-	Endpoint  string // operator's LLM provider endpoint URL
+	Greeting  string              // pre-fetched operator greeting; injected immediately on render
+	ModelName string              // canonical operator model name from the server config
+	Endpoint  string              // operator's LLM provider endpoint URL
+	History   []service.ChatEntry // persisted chat history from server (oldest first)
 }
 
 // loadingTickMsg drives the loading screen animation.

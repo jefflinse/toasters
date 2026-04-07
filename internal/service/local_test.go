@@ -185,6 +185,12 @@ func (m *mockStore) LogArtifact(_ context.Context, _ *db.Artifact) error {
 func (m *mockStore) ListArtifactsForJob(_ context.Context, _ string) ([]*db.Artifact, error) {
 	return nil, fmt.Errorf("not implemented")
 }
+func (m *mockStore) AppendChatEntry(_ context.Context, _ *db.ChatEntry) error {
+	return nil
+}
+func (m *mockStore) ListRecentChatEntries(_ context.Context, _ int) ([]*db.ChatEntry, error) {
+	return nil, nil
+}
 func (m *mockStore) Close() error { return nil }
 
 // ---------------------------------------------------------------------------

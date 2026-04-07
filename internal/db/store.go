@@ -68,6 +68,10 @@ type Store interface {
 	LogArtifact(ctx context.Context, artifact *Artifact) error
 	ListArtifactsForJob(ctx context.Context, jobID string) ([]*Artifact, error)
 
+	// Chat history — survives server restart for reconnect hydration.
+	AppendChatEntry(ctx context.Context, entry *ChatEntry) error
+	ListRecentChatEntries(ctx context.Context, limit int) ([]*ChatEntry, error)
+
 	// Lifecycle
 	Close() error
 }

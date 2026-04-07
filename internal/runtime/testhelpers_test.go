@@ -138,4 +138,8 @@ func (s *noopStore) LogArtifact(_ context.Context, _ *db.Artifact) error { retur
 func (s *noopStore) ListArtifactsForJob(_ context.Context, _ string) ([]*db.Artifact, error) {
 	return nil, nil
 }
+func (s *noopStore) AppendChatEntry(_ context.Context, _ *db.ChatEntry) error { return nil }
+func (s *noopStore) ListRecentChatEntries(_ context.Context, _ int) ([]*db.ChatEntry, error) {
+	return nil, nil
+}
 func (s *noopStore) Close() error { return nil }

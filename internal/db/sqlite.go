@@ -823,6 +823,76 @@ func (s *SQLiteStore) ListRecentFeedEntries(ctx context.Context, limit int) ([]*
 	return scanFeedEntries(rows)
 }
 
+// --- Chat history ---
+
+func (s *SQLiteStore) AppendChatEntry(ctx context.Context, entry *ChatEntry) error {
+	if entry.Timestamp.IsZero() {
+		entry.Timestamp = time.Now().UTC()
+	}
+
+	result, err := s.db.ExecContext(ctx,
+		`INSERT INTO chat_entries (ts, role, content, reasoning, meta, turn_id)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		entry.Timestamp.UTC().Format(time.RFC3339Nano),
+		entry.Role,
+		entry.Content,
+		entry.Reasoning,
+		entry.Meta,
+		entry.TurnID,
+	)
+	if err != nil {
+		return fmt.Errorf("inserting chat entry: %w", err)
+	}
+
+	id, err := result.LastInsertId()
+	if err != nil {
+		return fmt.Errorf("getting chat entry id: %w", err)
+	}
+	entry.ID = id
+	return nil
+}
+
+func (s *SQLiteStore) ListRecentChatEntries(ctx context.Context, limit int) ([]*ChatEntry, error) {
+	if limit <= 0 {
+		limit = 1000
+	}
+
+	// Pull the most recent N rows ordered desc, then return them oldest-first
+	// so callers receive the conversation in chronological order without
+	// needing to reverse it themselves.
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, ts, role, content, reasoning, meta, turn_id
+		 FROM chat_entries
+		 ORDER BY id DESC
+		 LIMIT ?`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("listing recent chat entries: %w", err)
+	}
+	defer rows.Close() //nolint:errcheck
+
+	var entries []*ChatEntry
+	for rows.Next() {
+		var (
+			e  ChatEntry
+			ts string
+		)
+		if err := rows.Scan(&e.ID, &ts, &e.Role, &e.Content, &e.Reasoning, &e.Meta, &e.TurnID); err != nil {
+			return nil, fmt.Errorf("scanning chat entry: %w", err)
+		}
+		e.Timestamp = parseTime(ts)
+		entries = append(entries, &e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating chat entries: %w", err)
+	}
+
+	// Reverse so oldest-first.
+	for i, j := 0, len(entries)-1; i < j; i, j = i+1, j-1 {
+		entries[i], entries[j] = entries[j], entries[i]
+	}
+	return entries, nil
+}
+
 // --- Rebuild ---
 
 func (s *SQLiteStore) RebuildDefinitions(ctx context.Context, skills []*Skill, agents []*Agent, teams []*Team, teamAgents []*TeamAgent) error {

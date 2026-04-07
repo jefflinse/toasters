@@ -980,8 +980,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Endpoint != "" {
 			m.stats.Endpoint = msg.Endpoint
 		}
+		// Hydrate persisted chat history from the server. This survives
+		// server restarts so the user picks up where they left off.
+		for _, entry := range msg.History {
+			m.appendEntry(entry)
+		}
 		// Inject the pre-fetched greeting directly — no stream, no flash.
-		if msg.Greeting != "" {
+		// Only fire a greeting when no history exists; otherwise it would
+		// look stale on top of a real conversation.
+		if msg.Greeting != "" && len(msg.History) == 0 {
 			m.appendEntry(service.ChatEntry{
 				Message: service.ChatMessage{
 					Role:    service.MessageRoleAssistant,
@@ -989,8 +996,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				},
 				Timestamp: time.Now(),
 			})
-			m.updateViewportContent()
 		}
+		m.updateViewportContent()
 		return m, tea.Batch(cmds...)
 
 	case TeamsAutoDetectDoneMsg:
