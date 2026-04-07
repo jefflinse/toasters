@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(find /Users/jefflinse/dev/toasters -path **/.cursor/rules -o -path **/.github/copilot*)",
+      "Bash(go test:*)",
+      "Bash(ls:*)",
+      "Bash(grep -n \"OnTurnDone\\\\|Config struct\\\\|tokens\" /Users/jefflinse/dev/toasters/internal/operator/*.go)",
+      "Bash(grep -n \"ask_user\\\\|AskUser\\\\|EventTypeOperatorPrompt\\\\|operator.prompt\\\\|RespondToPrompt\" /Users/jefflinse/dev/toasters/internal/operator/*.go /Users/jefflinse/dev/toasters/internal/tui/*.go)",
+      "Bash(grep:*)"
+    ]
+  }
+}
