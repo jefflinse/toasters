@@ -72,14 +72,13 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 	// Per-connection sequence counter.
 	var seq uint64
 
-	// Heartbeat timer — 15 seconds.
-	heartbeat := time.NewTicker(15 * time.Second)
-	defer heartbeat.Stop()
-
 	reqID := requestIDFromContext(ctx)
 	slog.Info("SSE client connected", "request_id", reqID)
 	defer slog.Info("SSE client disconnected", "request_id", reqID)
 
+	// Heartbeats are produced by LocalService.heartbeatLoop and arrive on the
+	// subscription channel like any other event. No SSE-side ticker is needed
+	// (a previous version had one, which delivered double heartbeats).
 	for {
 		select {
 		case <-ctx.Done():
@@ -93,19 +92,6 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 			seq++
 			if err := writeSSEEvent(w, rc, seq, ev); err != nil {
 				slog.Debug("SSE write error", "error", err, "request_id", reqID)
-				return
-			}
-
-		case <-heartbeat.C:
-			seq++
-			now := time.Now()
-			hbEvent := service.Event{
-				Type:      service.EventTypeHeartbeat,
-				Timestamp: now,
-				Payload:   service.HeartbeatPayload{ServerTime: now},
-			}
-			if err := writeSSEEvent(w, rc, seq, hbEvent); err != nil {
-				slog.Debug("SSE heartbeat write error", "error", err, "request_id", reqID)
 				return
 			}
 		}

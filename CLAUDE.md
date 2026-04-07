@@ -14,9 +14,9 @@ No Makefile or task runner — pure Go module (Go 1.25, see `go.mod`).
 
 ```bash
 go build -o toasters ./                     # build the binary
-go run .                                    # embedded TUI mode
-go run . serve                              # HTTP/SSE server mode
-go run . --server <addr>                    # remote TUI client mode
+go run . serve                              # HTTP/SSE server mode (start this first)
+go run .                                    # connect TUI to localhost:8080 (default)
+go run . --server <addr>                    # connect TUI to a different server
 
 go test ./...                               # all tests
 go test -race ./...                         # race detector (kept clean across all packages)
@@ -28,11 +28,18 @@ gofmt -w . && goimports -w .                # formatting (no golangci config exi
 
 ## Run modes
 
-The same backend can be exercised three ways — knowing which one you're working in matters because session/event wiring differs:
+There are exactly two run modes — server and client — and they're always
+in separate processes. The TUI cannot run "embedded" alongside the backend
+anymore; the embedded mode was removed during the client/server cleanup.
 
-1. **Embedded TUI** — `cmd/root.go`. LocalService + Runtime + Operator + TUI in one process. Session-started events flow via a direct `rt.OnSessionStarted` callback into Bubble Tea.
-2. **Server** — `cmd/serve.go`. Same backend, no TUI, exposes REST + SSE for remote clients. Bearer-token auth from `~/.config/toasters/server.token` (mode 0600), constant-time comparison; `--no-auth` is dev-only.
-3. **Remote client** — `cmd/client_mode.go`. The TUI runs locally and talks to a remote server over HTTP + SSE.
+1. **Server** — `cmd/serve.go`. Owns all state: runtime, operator, composer,
+   loader, MCP, SQLite. Exposes REST + SSE on `:8080` by default. Bearer-token
+   auth from `~/.config/toasters/server.token` (mode 0600), constant-time
+   comparison; `--no-auth` is dev-only.
+2. **TUI client** — `cmd/root.go`. Always a remote client. TCP-probes the
+   server before opening the alt-screen so a missing server gives a clean
+   error rather than a stranded loading screen. All state comes from the
+   service interface; all events come from the unified SSE stream.
 
 ## Architecture
 
@@ -44,7 +51,7 @@ The codebase is a layered hub-and-spoke around `internal/service`. Read this sec
 
 - **`internal/operator`** is the operator LLM coordination layer — a special "session" with its own tool set (`createJob`, `assignTask`, `reportBlocker`, team queries, decomposer tools). It drives the top-level state machine.
 
-- **`internal/tui`** is a thin Bubble Tea client. `event_consumer.go` translates service events into Bubble Tea messages; `update.go` / `view.go` / `model.go` are the standard Bubble Tea triplet. **The TUI is fully decoupled from DB and runtime internals — don't reintroduce direct access** (see `TUI_COUPLING_AUDIT.md` and recent commit `accae68` which explicitly removed the last filesystem access from TUI code).
+- **`internal/tui`** is a thin Bubble Tea client. `event_consumer.go` translates service events into Bubble Tea messages; `update.go` / `view.go` / `model.go` are the standard Bubble Tea triplet. **The TUI is fully decoupled from DB and runtime internals — don't reintroduce direct access.** It is also a *viewer*, not a *router*: don't add code that pushes state back into the operator from the TUI (an old `notifyOperator` hack tried this and was deleted; agent completion is reported to the operator via team_lead's `complete_task` tool, not via the TUI).
 
 - **`internal/server`** + **`internal/client`** + **`internal/sse`** — REST/SSE server, HTTP client used in remote-client mode, and SSE protocol utilities.
 
@@ -68,16 +75,10 @@ The codebase is a layered hub-and-spoke around `internal/service`. Read this sec
 
 ## Where the deeper docs live
 
-The repo has no README; design intent is captured in root-level markdown files. Reach for these only when you need them — don't pre-load them all:
+The repo has no README; design intent is captured in root-level markdown files. Reach for these only when you need them:
 
 - `VISION.md` — long-term philosophy and the "Go owns state" insight
 - `AMBITIONS.md` — feature ambitions and rationale
-- `ROADMAP.md`, `PHASE_1.md` … `PHASE_4.md`, `PRE_PHASE_4_*.md` — phased delivery roadmap
-- `CLIENT_SERVER_SPLIT.md` and `CLIENT_SERVER_SPLIT_REMAINING.md` — current architectural work and known gaps
+- `ROADMAP.md` — high-level roadmap
 - `API_SPEC.md` — REST + SSE API specification
-- `TUI_COUPLING_AUDIT.md` — rationale behind the TUI decoupling rule
 - `docs/mcp-integration-plan.md` — MCP integration design
-
-## Current focus (mid-2026)
-
-The project is mid-way through a client-server split refactor. The in-flight P0 is wiring session events through the service event stream so server mode actually broadcasts agent activity — currently `rt.OnSessionStarted` is set to a no-op in `cmd/serve.go` and remote SSE clients see nothing for session lifecycle. See `CLIENT_SERVER_SPLIT_REMAINING.md` and `P0.md` for the live picture before starting work in `internal/service`, `cmd/serve.go`, or `internal/tui/event_consumer.go`.

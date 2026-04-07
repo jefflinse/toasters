@@ -60,17 +60,13 @@ type OperatorService interface {
 
 	// RespondToPrompt sends the user's answer to an active ask_user prompt.
 	// requestID must match the RequestID from the OperatorPromptPayload that
-	// triggered the prompt. Returns an error if no prompt with that ID is active.
+	// triggered the prompt.
 	//
-	// This unblocks the operator event loop, which will continue processing
-	// after receiving the response.
-	//
-	// TODO(Phase 2): This method and EventTypeOperatorPrompt are defined but
-	// not yet wired end-to-end. The TUI currently handles prompts via the
-	// regular SendMessage path. For Phase 2, the full flow must be wired:
-	// LocalService emits EventTypeOperatorPrompt → event consumer enters
-	// prompt mode → user answers → RespondToPrompt sends the answer back.
-	// Without this, remote clients cannot participate in interactive prompts.
+	// NOT YET FUNCTIONAL: there is no ask_user tool defined in the operator,
+	// so this method, EventTypeOperatorPrompt, and OperatorPromptPayload are
+	// all reserved for a future bidirectional-prompt feature but are not
+	// exercised today. Calling this method just routes through to the
+	// operator event loop with no recipient.
 	RespondToPrompt(ctx context.Context, requestID string, response string) error
 
 	// Status returns the current state of the operator (idle, streaming,

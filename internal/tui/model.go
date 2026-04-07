@@ -159,7 +159,6 @@ type Model struct {
 
 	teams        []service.TeamView // available teams
 	teamsDir     string             // path to the configured teams directory
-	awareness    string             // team-awareness content used to build the operator prompt
 	systemPrompt string             // assembled at startup; prepended to every LLM call
 
 	// Teams modal state.
@@ -947,12 +946,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else if len(m.teams) == 0 {
 			m.selectedTeam = 0
 		}
-		if msg.Awareness != "" {
-			m.awareness = msg.Awareness
-		}
-		// The operator's system prompt is composed from operator.md at startup and
-		// does not change when teams reload. The operator discovers teams at runtime
-		// via the query_teams tool.
+		// The operator's system prompt is composed from operator.md at startup
+		// (server side) and does not change when teams reload. The operator
+		// discovers teams at runtime via the query_teams tool.
 		return m, tea.Batch(cmds...)
 
 	case JobsReloadedMsg:

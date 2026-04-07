@@ -162,8 +162,7 @@ type SessionDoneMsg struct {
 
 // TeamsReloadedMsg is sent by the hot-reload watcher when the teams directory changes.
 type TeamsReloadedMsg struct {
-	Teams     []service.TeamView
-	Awareness string
+	Teams []service.TeamView
 }
 
 // JobsReloadedMsg is sent when jobs are reloaded (e.g. from SQLite polling).

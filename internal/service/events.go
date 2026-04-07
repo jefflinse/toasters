@@ -22,14 +22,16 @@ const (
 	// Payload: OperatorDonePayload. Carries TurnID for correlation.
 	EventTypeOperatorDone EventType = "operator.done"
 
-	// EventTypeOperatorPrompt is sent when the operator calls ask_user and needs
-	// a response from the human. Payload: OperatorPromptPayload.
-	// The client must call Operator().RespondToPrompt() to unblock the operator.
+	// EventTypeOperatorPrompt is sent when the operator calls ask_user and
+	// needs a response from the human. Payload: OperatorPromptPayload.
+	// The client must call Operator().RespondToPrompt() to unblock the
+	// operator.
 	//
-	// TODO(Phase 2): This event type is defined but never emitted by
-	// LocalService. The prompt flow must be fully wired before Phase 2:
-	// operator ask_user → LocalService emits this event → event consumer
-	// enters prompt mode → user answers → RespondToPrompt sends answer.
+	// NOT YET FUNCTIONAL: there is no ask_user tool defined in the operator,
+	// so this event type, its payload, the wire serialization, the client
+	// stubs, and the RespondToPrompt service method are all reserved for a
+	// future bidirectional-prompt feature but are not exercised today. Do
+	// not rely on this in client code.
 	EventTypeOperatorPrompt EventType = "operator.prompt"
 
 	// EventTypeJobCreated is sent when the operator creates a new job via
