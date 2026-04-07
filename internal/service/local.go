@@ -50,18 +50,19 @@ const maxHistoryEntries = 1000
 
 // LocalConfig holds the dependencies for LocalService.
 type LocalConfig struct {
-	Store         db.Store
-	Runtime       *runtime.Runtime
-	Operator      *operator.Operator
-	MCPManager    *mcp.Manager
-	Provider      provider.Provider // operator's LLM provider (for ListModels, generation)
-	Composer      *compose.Composer
-	Loader        *loader.Loader
-	ConfigDir     string
-	WorkspaceDir  string
-	TeamsDir      string
-	OperatorModel string    // for OperatorStatus.ModelName
-	StartTime     time.Time // for Health().Uptime
+	Store            db.Store
+	Runtime          *runtime.Runtime
+	Operator         *operator.Operator
+	MCPManager       *mcp.Manager
+	Provider         provider.Provider // operator's LLM provider (for ListModels, generation)
+	Composer         *compose.Composer
+	Loader           *loader.Loader
+	ConfigDir        string
+	WorkspaceDir     string
+	TeamsDir         string
+	OperatorModel    string    // for OperatorStatus.ModelName
+	OperatorEndpoint string    // for OperatorStatus.Endpoint (LLM provider URL)
+	StartTime        time.Time // for Health().Uptime
 }
 
 // LocalService is the in-process implementation of Service. It delegates to
@@ -698,10 +699,16 @@ func (s *LocalService) Status(_ context.Context) (OperatorStatus, error) {
 	turnID := s.currentTurnID
 	s.turnMu.Unlock()
 
+	state := OperatorStateIdle
+	if turnID != "" {
+		state = OperatorStateStreaming
+	}
+
 	return OperatorStatus{
-		State:         OperatorStateIdle, // deferred: real state tracking requires operator changes
+		State:         state,
 		CurrentTurnID: turnID,
 		ModelName:     s.cfg.OperatorModel,
+		Endpoint:      s.cfg.OperatorEndpoint,
 	}, nil
 }
 

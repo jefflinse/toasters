@@ -172,9 +172,12 @@ type JobsReloadedMsg struct {
 }
 
 // AppReadyMsg is sent when the app has finished loading and is ready to start.
+// It carries the operator metadata fetched from the server so the sidebar
+// (model name, endpoint URL) can be populated before any LLM calls happen.
 type AppReadyMsg struct {
-	Awareness string
 	Greeting  string // pre-fetched operator greeting; injected immediately on render
+	ModelName string // canonical operator model name from the server config
+	Endpoint  string // operator's LLM provider endpoint URL
 }
 
 // loadingTickMsg drives the loading screen animation.

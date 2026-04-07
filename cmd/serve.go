@@ -160,6 +160,17 @@ func runServe(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	// Look up the operator's provider config to capture the endpoint URL for
+	// the sidebar. Falls back to empty string if not found, which is fine —
+	// the sidebar will simply leave the field blank.
+	var operatorEndpoint string
+	for _, pc := range cfg.Providers {
+		if pc.Key() == cfg.Operator.Provider {
+			operatorEndpoint = pc.Endpoint
+			break
+		}
+	}
+
 	// Compose the operator agent from its .md file definition.
 	var operatorPrompt string
 	if composer != nil {
@@ -173,17 +184,18 @@ func runServe(cmd *cobra.Command, args []string) error {
 
 	// Create the LocalService.
 	svc := service.NewLocal(service.LocalConfig{
-		Store:         store,
-		Runtime:       rt,
-		MCPManager:    mcpManager,
-		Provider:      client,
-		Composer:      composer,
-		Loader:        ldr,
-		ConfigDir:     configDir,
-		WorkspaceDir:  workspaceDir,
-		TeamsDir:      teamsDir,
-		OperatorModel: cfg.Operator.Model,
-		StartTime:     time.Now(),
+		Store:            store,
+		Runtime:          rt,
+		MCPManager:       mcpManager,
+		Provider:         client,
+		Composer:         composer,
+		Loader:           ldr,
+		ConfigDir:        configDir,
+		WorkspaceDir:     workspaceDir,
+		TeamsDir:         teamsDir,
+		OperatorModel:    cfg.Operator.Model,
+		OperatorEndpoint: operatorEndpoint,
+		StartTime:        time.Now(),
 	})
 	defer svc.Shutdown()
 

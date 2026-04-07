@@ -910,28 +910,32 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.stats.Connected = true
 			m.err = nil
-			// Pick the displayed model name: prefer the configured model if it
-			// appears in the list, then a "loaded" model, then the first in list.
 			if len(msg.Models) > 0 {
-				picked := msg.Models[0]
-				for _, mi := range msg.Models {
-					if mi.State == "loaded" {
-						picked = mi
-						break
-					}
-				}
-				// If we have a configured model name, prefer it over the list pick
-				// so the sidebar reflects what's actually configured.
 				if m.stats.ModelName != "" {
+					// We already have a configured model name from
+					// AppReadyMsg. Try to find its context length from the
+					// list, but never overwrite the name itself — provider
+					// IDs (e.g. LM Studio filenames) often don't match the
+					// canonical config value.
 					for _, mi := range msg.Models {
 						if mi.ID == m.stats.ModelName {
+							m.stats.ContextLength = mi.ContextLength()
+							break
+						}
+					}
+				} else {
+					// No configured name yet — fall back to a "loaded" model,
+					// or the first one in the list.
+					picked := msg.Models[0]
+					for _, mi := range msg.Models {
+						if mi.State == "loaded" {
 							picked = mi
 							break
 						}
 					}
+					m.stats.ModelName = picked.ID
+					m.stats.ContextLength = picked.ContextLength()
 				}
-				m.stats.ModelName = picked.ID
-				m.stats.ContextLength = picked.ContextLength()
 			}
 		}
 		m.updateViewportContent()
@@ -964,9 +968,18 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case AppReadyMsg:
-		m.awareness = msg.Awareness
 		m.initMessages()
 		m.loading = false
+		// Hydrate sidebar fields from the server-provided operator status so
+		// they reflect the canonical configured values (rather than e.g. an
+		// LM Studio filename that ListModels would return). Set these BEFORE
+		// the ListModels response arrives so the model picker doesn't clobber.
+		if msg.ModelName != "" {
+			m.stats.ModelName = msg.ModelName
+		}
+		if msg.Endpoint != "" {
+			m.stats.Endpoint = msg.Endpoint
+		}
 		// Inject the pre-fetched greeting directly — no stream, no flash.
 		if msg.Greeting != "" {
 			m.appendEntry(service.ChatEntry{

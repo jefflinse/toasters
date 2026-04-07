@@ -272,6 +272,7 @@ type operatorStatusResponse struct {
 	State         string `json:"state"`
 	CurrentTurnID string `json:"current_turn_id"`
 	ModelName     string `json:"model_name"`
+	Endpoint      string `json:"endpoint"`
 }
 
 type logsResponse struct {

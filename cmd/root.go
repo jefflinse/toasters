@@ -132,6 +132,17 @@ func sendInitialAppReady(svc service.Service, p *atomic.Pointer[tea.Program], se
 		slog.Warn("failed to list teams during startup", "error", err)
 	}
 
+	// Pull operator status so the sidebar shows the canonical model name and
+	// endpoint URL from the server config (rather than whatever ListModels
+	// happens to return first).
+	var modelName, endpoint string
+	if status, err := svc.Operator().Status(ctx); err == nil {
+		modelName = status.ModelName
+		endpoint = status.Endpoint
+	} else {
+		slog.Warn("failed to fetch operator status during startup", "error", err)
+	}
+
 	// Wait briefly for SSE connection to stabilize so the consumer is wired
 	// before any startup events arrive.
 	time.Sleep(200 * time.Millisecond)
@@ -139,7 +150,9 @@ func sendInitialAppReady(svc service.Service, p *atomic.Pointer[tea.Program], se
 	if prog := p.Load(); prog != nil {
 		prog.Send(tui.TeamsReloadedMsg{Teams: initialTeams})
 		prog.Send(tui.AppReadyMsg{
-			Greeting: "Connected to " + serverAddr,
+			Greeting:  "Connected to " + serverAddr,
+			ModelName: modelName,
+			Endpoint:  endpoint,
 		})
 	}
 }

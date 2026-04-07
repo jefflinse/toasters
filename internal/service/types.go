@@ -490,11 +490,13 @@ const (
 )
 
 // OperatorStatus is the current status of the operator, returned by
-// Operator().Status(). Used by clients to rebuild state on reconnect.
+// Operator().Status(). Used by clients to rebuild state on reconnect and to
+// populate the sidebar (model name, endpoint URL).
 type OperatorStatus struct {
 	State         OperatorState
 	CurrentTurnID string // non-empty while a turn is in progress
-	ModelName     string // the model the operator is using
+	ModelName     string // the model the operator is using (canonical, from server config)
+	Endpoint      string // the LLM provider endpoint URL the operator is using
 }
 
 // ---------------------------------------------------------------------------

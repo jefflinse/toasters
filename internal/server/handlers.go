@@ -102,6 +102,7 @@ func (s *Server) operatorStatus(w http.ResponseWriter, r *http.Request) {
 		State:         string(st.State),
 		CurrentTurnID: st.CurrentTurnID,
 		ModelName:     st.ModelName,
+		Endpoint:      st.Endpoint,
 	})
 }
 
