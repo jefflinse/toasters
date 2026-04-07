@@ -229,9 +229,9 @@ func runServe(cmd *cobra.Command, args []string) error {
 			OnEvent: func(event operator.Event) {
 				svc.BroadcastOperatorEvent(event)
 			},
-			OnTurnDone: func() {
+			OnTurnDone: func(tokensIn, tokensOut, reasoningTokens int) {
 				batcher.Flush()
-				svc.BroadcastOperatorDone(cfg.Operator.Model, 0, 0, 0)
+				svc.BroadcastOperatorDone(cfg.Operator.Model, tokensIn, tokensOut, reasoningTokens)
 			},
 		})
 		if opErr != nil {

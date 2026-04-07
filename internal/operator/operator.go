@@ -42,9 +42,9 @@ type Operator struct {
 	provTools    []provider.Tool
 
 	// Callbacks — set at construction time via Config, immutable after New().
-	onText     func(text string) // called with streamed text from the operator LLM
-	onEvent    func(event Event) // called when the event loop processes an event
-	onTurnDone func()            // called when the operator finishes processing a user message turn
+	onText     func(text string)                                    // called with streamed text from the operator LLM
+	onEvent    func(event Event)                                    // called when the event loop processes an event
+	onTurnDone func(tokensIn, tokensOut, reasoningTokens int)       // called when the operator finishes processing a user message turn
 }
 
 // Config holds configuration for creating an Operator.
@@ -60,7 +60,12 @@ type Config struct {
 	SystemEventBroadcaster SystemEventBroadcaster  // optional; for broadcasting service events from system tools
 	OnText                 func(text string)       // called with streamed text from the operator LLM
 	OnEvent                func(event Event)       // called when the event loop processes an event
-	OnTurnDone             func()                  // called when the operator finishes processing a user message turn
+	// OnTurnDone is called when the operator finishes processing a user
+	// message turn. tokensIn / tokensOut / reasoningTokens are the totals
+	// across all LLM round-trips that occurred during the turn (the operator
+	// may make several when tool calls are involved). reasoningTokens is 0
+	// for providers that don't surface them.
+	OnTurnDone func(tokensIn, tokensOut, reasoningTokens int)
 }
 
 // New creates a new Operator. Call Start to begin processing events.
@@ -396,7 +401,10 @@ func (o *Operator) checkJobComplete(ctx context.Context, jobID string) {
 // the response, including any tool calls. This drives the operator's
 // conversation turn by turn.
 func (o *Operator) handleUserMessage(ctx context.Context, payload UserMessagePayload) {
-	defer o.emitTurnDone()
+	// Aggregate token usage across all LLM round-trips in this turn so the
+	// emitted OnTurnDone reflects the full cost of handling the user message.
+	var totalIn, totalOut int
+	defer func() { o.emitTurnDone(totalIn, totalOut, 0) }()
 
 	// Append user message to the long-lived conversation.
 	o.appendMessage(provider.Message{
@@ -429,12 +437,14 @@ func (o *Operator) handleUserMessage(ctx context.Context, payload UserMessagePay
 			return
 		}
 
-		assistantMsg, toolCalls, err := o.collectResponse(ctx, eventCh)
+		assistantMsg, toolCalls, usage, err := o.collectResponse(ctx, eventCh)
 		if err != nil {
 			slog.Error("operator response collection failed", "error", err)
 			o.emitText(fmt.Sprintf("[operator error: %s]", err))
 			return
 		}
+		totalIn += usage.InputTokens
+		totalOut += usage.OutputTokens
 		o.appendMessage(assistantMsg)
 
 		// No tool calls — the operator's turn is done.
@@ -507,15 +517,18 @@ func truncateMessages(messages []provider.Message, maxMessages int) []provider.M
 }
 
 // collectResponse reads from the event channel, accumulates text and tool
-// calls, and streams text to the OnText callback.
-func (o *Operator) collectResponse(ctx context.Context, eventCh <-chan provider.StreamEvent) (provider.Message, []provider.ToolCall, error) {
+// calls, streams text to the OnText callback, and aggregates usage tokens.
+// The returned Usage is the per-call total — handleUserMessage sums these
+// across all round-trips in a turn before reporting via OnTurnDone.
+func (o *Operator) collectResponse(ctx context.Context, eventCh <-chan provider.StreamEvent) (provider.Message, []provider.ToolCall, provider.Usage, error) {
 	var textBuf strings.Builder
 	var toolCalls []provider.ToolCall
+	var usage provider.Usage
 
 	for {
 		select {
 		case <-ctx.Done():
-			return provider.Message{}, nil, ctx.Err()
+			return provider.Message{}, nil, usage, ctx.Err()
 
 		case ev, ok := <-eventCh:
 			if !ok {
@@ -524,7 +537,7 @@ func (o *Operator) collectResponse(ctx context.Context, eventCh <-chan provider.
 					Content:   textBuf.String(),
 					ToolCalls: toolCalls,
 				}
-				return msg, toolCalls, nil
+				return msg, toolCalls, usage, nil
 			}
 
 			switch ev.Type {
@@ -538,13 +551,16 @@ func (o *Operator) collectResponse(ctx context.Context, eventCh <-chan provider.
 				}
 
 			case provider.EventError:
-				return provider.Message{}, nil, ev.Error
+				return provider.Message{}, nil, usage, ev.Error
 
 			case provider.EventDone:
 				// Continue reading until channel closes.
 
 			case provider.EventUsage:
-				// Track usage if needed in the future.
+				if ev.Usage != nil {
+					usage.InputTokens += ev.Usage.InputTokens
+					usage.OutputTokens += ev.Usage.OutputTokens
+				}
 			}
 		}
 	}
@@ -558,9 +574,9 @@ func (o *Operator) emitText(text string) {
 }
 
 // emitTurnDone calls the OnTurnDone callback if set.
-func (o *Operator) emitTurnDone() {
+func (o *Operator) emitTurnDone(tokensIn, tokensOut, reasoningTokens int) {
 	if o.onTurnDone != nil {
-		o.onTurnDone()
+		o.onTurnDone(tokensIn, tokensOut, reasoningTokens)
 	}
 }
 
