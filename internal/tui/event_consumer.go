@@ -4,8 +4,11 @@ package tui
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
+	"runtime/debug"
 	"sync/atomic"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -20,15 +23,49 @@ import (
 //
 //	go tui.ConsumeServiceEvents(ctx, svc, &p)
 func ConsumeServiceEvents(ctx context.Context, svc service.Service, prog *atomic.Pointer[tea.Program]) {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("PANIC in service event consumer — TUI will stop receiving events",
+				"panic", fmt.Sprintf("%v", r),
+				"stack", string(debug.Stack()),
+			)
+		}
+	}()
+
 	ch := svc.Events().Subscribe(ctx)
 	for ev := range ch {
+		// Trace every event so a freeze investigation has timing data.
+		// Filter out heartbeats and progress updates from the trace because
+		// they are extremely high-frequency and would drown out everything
+		// useful.
+		if ev.Type != service.EventTypeHeartbeat && ev.Type != service.EventTypeProgressUpdate {
+			slog.Debug("consume event", "type", ev.Type, "seq", ev.Seq, "session_id", ev.SessionID, "turn_id", ev.TurnID)
+		}
+
 		msg := translateEvent(ev)
-		if msg != nil {
-			if p := prog.Load(); p != nil {
-				p.Send(msg)
-			}
+		if msg == nil {
+			continue
+		}
+
+		// p.Send is BLOCKING in Bubble Tea v2 — the program's message channel
+		// is unbuffered. If the Update loop is slow, this stalls the consumer
+		// goroutine and the SSE reader's channel fills up, dropping events.
+		// Track how long Send takes so we can spot pathological cases in the
+		// log without manually instrumenting the model.
+		p := prog.Load()
+		if p == nil {
+			continue
+		}
+		start := time.Now()
+		p.Send(msg)
+		if d := time.Since(start); d > 100*time.Millisecond {
+			slog.Warn("slow prog.Send blocking the event consumer",
+				"event_type", ev.Type,
+				"duration", d,
+			)
 		}
 	}
+	slog.Info("service event consumer exited (channel closed)")
 }
 
 // translateEvent converts a service.Event into a Bubble Tea message.

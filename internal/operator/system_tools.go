@@ -426,10 +426,6 @@ func (st *SystemTools) assignTask(ctx context.Context, args json.RawMessage) (st
 		return "", fmt.Errorf("assigning task: %w", err)
 	}
 
-	if st.broadcaster != nil {
-		st.broadcaster.BroadcastTaskAssigned(params.TaskID, task.JobID, params.TeamID, task.Title)
-	}
-
 	// 6. Compose the team lead agent.
 	composed, err := st.composer.Compose(ctx, team.LeadAgent, params.TeamID)
 	if err != nil {
@@ -448,6 +444,13 @@ func (st *SystemTools) assignTask(ctx context.Context, args json.RawMessage) (st
 
 	if err := st.spawner.SpawnTeamLead(ctx, composed, params.TaskID, task.JobID, job.WorkspaceDir, initialMsg, teamLeadTools); err != nil {
 		return "", fmt.Errorf("spawning team lead: %w", err)
+	}
+
+	// Broadcast task.assigned only AFTER the team_lead has successfully spawned.
+	// Otherwise the user sees "task assigned" in chat for an assignment that
+	// silently fell over at the compose or spawn step.
+	if st.broadcaster != nil {
+		st.broadcaster.BroadcastTaskAssigned(params.TaskID, task.JobID, params.TeamID, task.Title)
 	}
 
 	// After SpawnTeamLead succeeds, promote the job to active (only if still pending).

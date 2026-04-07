@@ -75,11 +75,13 @@ func runServe(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	// Set up logging to file.
+	// Set up logging to a SERVER-only file so we don't race the client logger
+	// on the same file. Truncate on startup so each server run has a clean log
+	// to inspect.
 	if err := os.MkdirAll(configDir, 0755); err == nil {
-		logPath := filepath.Join(configDir, "toasters.log")
-		if f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600); err == nil {
-			slog.SetDefault(slog.New(slog.NewTextHandler(f, nil)))
+		logPath := filepath.Join(configDir, "server.log")
+		if f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600); err == nil {
+			slog.SetDefault(slog.New(slog.NewTextHandler(f, &slog.HandlerOptions{Level: slog.LevelDebug})))
 			defer func() { _ = f.Close() }()
 		} else {
 			slog.SetDefault(slog.New(slog.NewTextHandler(io.Discard, nil)))

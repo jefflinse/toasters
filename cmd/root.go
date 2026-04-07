@@ -56,11 +56,13 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 	}
 
 	// Redirect slog output to a file so structured log messages don't
-	// corrupt the TUI's alt-screen. Logs go to ~/.config/toasters/toasters.log.
+	// corrupt the TUI's alt-screen. Use a CLIENT-only log file so we don't
+	// race the server's logger on the same file. Truncate on startup so each
+	// session has a clean log to inspect after a freeze.
 	if err := os.MkdirAll(configDir, 0755); err == nil {
-		logPath := filepath.Join(configDir, "toasters.log")
+		logPath := filepath.Join(configDir, "client.log")
 		if f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600); err == nil {
-			slog.SetDefault(slog.New(slog.NewTextHandler(f, nil)))
+			slog.SetDefault(slog.New(slog.NewTextHandler(f, &slog.HandlerOptions{Level: slog.LevelDebug})))
 			defer func() { _ = f.Close() }()
 		} else {
 			slog.SetDefault(slog.New(slog.NewTextHandler(io.Discard, nil)))
