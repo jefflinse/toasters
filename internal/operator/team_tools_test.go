@@ -219,6 +219,60 @@ func TestCompleteTask_HasNextTask(t *testing.T) {
 	}
 }
 
+func TestTeamLeadTools_CompletionTracker(t *testing.T) {
+	// Verifies the runtime.TeamLeadCompletionTracker contract: CompletedCalled
+	// flips after the LLM invokes complete_task, and ForceComplete provides a
+	// synthetic-completion path for the safety-net watcher in
+	// runtime.SpawnTeamLead.
+	t.Run("CompletedCalled false until complete_task fires", func(t *testing.T) {
+		tl, _, _ := newTestTeamLeadTools(t)
+		if tl.CompletedCalled() {
+			t.Fatal("CompletedCalled should be false on a fresh TeamLeadTools")
+		}
+		_, err := tl.Execute(context.Background(), "complete_task", json.RawMessage(`{"summary":"done"}`))
+		assertNoError(t, err)
+		if !tl.CompletedCalled() {
+			t.Fatal("CompletedCalled should be true after complete_task")
+		}
+	})
+
+	t.Run("CompletedCalled flips even when complete_task is called with bad json", func(t *testing.T) {
+		// The watcher should NOT trigger when the LLM tried to call the tool,
+		// even if the call was malformed. Otherwise we'd double-complete.
+		tl, _, _ := newTestTeamLeadTools(t)
+		_, err := tl.Execute(context.Background(), "complete_task", json.RawMessage(`{not json`))
+		if err == nil {
+			t.Fatal("expected JSON parse error")
+		}
+		if !tl.CompletedCalled() {
+			t.Fatal("CompletedCalled should still flip on attempted-but-failed calls")
+		}
+	})
+
+	t.Run("ForceComplete marks the task done and emits the event", func(t *testing.T) {
+		tl, store, eventCh := newTestTeamLeadTools(t)
+		if err := tl.ForceComplete(context.Background(), "synthetic summary"); err != nil {
+			t.Fatalf("ForceComplete: %v", err)
+		}
+		task, err := store.GetTask(context.Background(), "task-1")
+		assertNoError(t, err)
+		if task.Status != db.TaskStatusCompleted {
+			t.Fatalf("task status = %q, want completed", task.Status)
+		}
+		if !strings.Contains(task.ResultSummary, "synthetic") {
+			t.Fatalf("task summary = %q, want it to include 'synthetic'", task.ResultSummary)
+		}
+		select {
+		case ev := <-eventCh:
+			if ev.Type != EventTaskCompleted {
+				t.Fatalf("event type = %q, want %q", ev.Type, EventTaskCompleted)
+			}
+		default:
+			t.Fatal("expected EventTaskCompleted on the channel")
+		}
+	})
+}
+
 func TestCompleteTask_MissingSummary(t *testing.T) {
 	// Regression: previously this returned an error ("summary is required").
 	// Small models frequently call complete_task without a summary, and

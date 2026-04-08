@@ -2,6 +2,8 @@ package runtime
 
 import (
 	"context"
+	"log/slog"
+	"time"
 
 	"github.com/jefflinse/toasters/internal/compose"
 )
@@ -12,6 +14,51 @@ import (
 // would be a cycle.
 type TeamLeadSpawner interface {
 	SpawnTeamLead(ctx context.Context, composed *compose.ComposedAgent, taskID, jobID, workDir, taskDescription string, extraTools ToolExecutor) error
+}
+
+// TeamLeadCompletionTracker is an optional interface that a team_lead's
+// extraTools may satisfy. SpawnTeamLead's safety-net watcher uses it to
+// detect team_lead sessions that ended without explicitly calling
+// complete_task — for example because the model wrote a final assistant
+// text message instead of invoking the tool — and force-completes the task
+// so the orchestrator can advance.
+//
+// *operator.TeamLeadTools satisfies this interface; the runtime side checks
+// for it via a type assertion to keep the dependency direction one-way.
+type TeamLeadCompletionTracker interface {
+	// CompletedCalled reports whether complete_task was invoked at least once.
+	CompletedCalled() bool
+	// ForceComplete marks the task as completed with the given summary.
+	// Implementations should still emit any task-completion event their
+	// owning subsystem expects so the orchestrator advances.
+	ForceComplete(ctx context.Context, summary string) error
+}
+
+// teamLeadCompletionFallbackTimeout bounds the synthetic completion call so a
+// stuck operator event channel can't permanently leak the watcher goroutine.
+const teamLeadCompletionFallbackTimeout = 5 * time.Second
+
+// watchTeamLeadForCompletion blocks until sess terminates and, if the team
+// lead never invoked complete_task, force-completes its task with a
+// placeholder summary. Designed to be invoked as `go watchTeamLeadForCompletion(...)`.
+func watchTeamLeadForCompletion(sess *Session, taskID string, tracker TeamLeadCompletionTracker) {
+	<-sess.Done()
+	if tracker.CompletedCalled() {
+		return
+	}
+	slog.Warn("team_lead session ended without calling complete_task; auto-completing",
+		"task_id", taskID,
+		"session_id", sess.ID(),
+	)
+	ctx, cancel := context.WithTimeout(context.Background(), teamLeadCompletionFallbackTimeout)
+	defer cancel()
+	if err := tracker.ForceComplete(ctx, "Task auto-completed (team_lead ended without explicit completion)"); err != nil {
+		slog.Error("team_lead auto-completion failed",
+			"task_id", taskID,
+			"session_id", sess.ID(),
+			"error", err,
+		)
+	}
 }
 
 // SpawnTeamLead implements TeamLeadSpawner. It spawns a team lead agent session
@@ -74,6 +121,20 @@ func (r *Runtime) SpawnTeamLead(ctx context.Context, composed *compose.ComposedA
 		opts.MaxTurns = *composed.MaxTurns
 	}
 
-	_, err := r.SpawnAgent(ctx, opts)
-	return err
+	sess, err := r.SpawnAgent(ctx, opts)
+	if err != nil {
+		return err
+	}
+
+	// Safety net: if extraTools knows how to track and force completion
+	// (e.g. *operator.TeamLeadTools), spawn a watcher that auto-completes
+	// the task if the session ends without complete_task ever being called.
+	// Without this, a team_lead model that writes a final text message
+	// instead of invoking the tool would strand the task at "in_progress"
+	// forever and the operator would never advance the job.
+	if tracker, ok := extraTools.(TeamLeadCompletionTracker); ok {
+		go watchTeamLeadForCompletion(sess, taskID, tracker)
+	}
+
+	return nil
 }

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync/atomic"
 
 	"github.com/jefflinse/toasters/internal/db"
 	"github.com/jefflinse/toasters/internal/runtime"
@@ -19,6 +20,35 @@ type TeamLeadTools struct {
 	taskID  string // the task this lead is working on
 	jobID   string // the job this task belongs to
 	teamID  string // the team this lead belongs to
+
+	// completed is set to true the first time complete_task is invoked
+	// (regardless of whether the underlying store call succeeded). It allows
+	// runtime.SpawnTeamLead's safety-net watcher to detect team_lead sessions
+	// that ended without ever calling complete_task — small models frequently
+	// produce a final assistant text message instead of the tool call, leaving
+	// the task stranded at "in_progress" forever.
+	completed atomic.Bool
+}
+
+// CompletedCalled reports whether complete_task has been invoked on this
+// TeamLeadTools instance. Implements runtime.TeamLeadCompletionTracker.
+func (tl *TeamLeadTools) CompletedCalled() bool {
+	return tl.completed.Load()
+}
+
+// ForceComplete marks the task as completed with a synthesized summary,
+// bypassing the LLM. Used by runtime.SpawnTeamLead's safety-net watcher when
+// a team_lead session ends without explicitly calling complete_task.
+// Implements runtime.TeamLeadCompletionTracker.
+func (tl *TeamLeadTools) ForceComplete(ctx context.Context, summary string) error {
+	args, err := json.Marshal(map[string]string{"summary": summary})
+	if err != nil {
+		return fmt.Errorf("marshaling synthetic complete_task args: %w", err)
+	}
+	if _, err := tl.completeTask(ctx, args); err != nil {
+		return fmt.Errorf("synthetic complete_task: %w", err)
+	}
+	return nil
 }
 
 // NewTeamLeadTools creates a new TeamLeadTools instance.
@@ -138,6 +168,12 @@ func (tl *TeamLeadTools) Execute(ctx context.Context, name string, args json.Raw
 }
 
 func (tl *TeamLeadTools) completeTask(ctx context.Context, args json.RawMessage) (string, error) {
+	// Mark as called immediately, even before parsing/validation, so the
+	// runtime watcher knows the team_lead model attempted completion. The
+	// watcher's job is to catch sessions that ended *without any call*, not
+	// to second-guess attempted-but-failed calls.
+	tl.completed.Store(true)
+
 	var params struct {
 		Summary         string `json:"summary"`
 		Recommendations string `json:"recommendations"`
