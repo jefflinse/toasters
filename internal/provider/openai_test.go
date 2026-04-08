@@ -749,6 +749,93 @@ func TestOpenAI_Models_FallbackToOpenAI(t *testing.T) {
 	}
 }
 
+func TestChatCompletionsURL(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		endpoint string
+		want     string
+	}{
+		{
+			"bare host (LM Studio default)",
+			"http://localhost:1234",
+			"http://localhost:1234/v1/chat/completions",
+		},
+		{
+			"trailing slash is trimmed",
+			"http://localhost:1234/",
+			"http://localhost:1234/v1/chat/completions",
+		},
+		{
+			"openai bare host",
+			"https://api.openai.com",
+			"https://api.openai.com/v1/chat/completions",
+		},
+		{
+			"endpoint already has /v1",
+			"http://localhost:1234/v1",
+			"http://localhost:1234/v1/chat/completions",
+		},
+		{
+			"z.ai GLM coding (custom version path)",
+			"https://api.z.ai/api/coding/paas/v4",
+			"https://api.z.ai/api/coding/paas/v4/chat/completions",
+		},
+		{
+			"v2 version path",
+			"https://example.com/api/v2",
+			"https://example.com/api/v2/chat/completions",
+		},
+		{
+			"v10 multi-digit version",
+			"https://example.com/api/v10",
+			"https://example.com/api/v10/chat/completions",
+		},
+		{
+			"full URL passed through unchanged",
+			"https://example.com/api/v1/chat/completions",
+			"https://example.com/api/v1/chat/completions",
+		},
+		{
+			"non-standard path without version is treated as bare",
+			"https://gateway.example.com/inference",
+			"https://gateway.example.com/inference/v1/chat/completions",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := chatCompletionsURL(tt.endpoint)
+			if got != tt.want {
+				t.Errorf("chatCompletionsURL(%q) = %q, want %q", tt.endpoint, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestModelsURL(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		endpoint string
+		want     string
+	}{
+		{"bare host", "http://localhost:1234", "http://localhost:1234/v1/models"},
+		{"with /v1", "http://localhost:1234/v1", "http://localhost:1234/v1/models"},
+		{"z.ai", "https://api.z.ai/api/coding/paas/v4", "https://api.z.ai/api/coding/paas/v4/models"},
+		{"full URL passed through", "https://example.com/v1/models", "https://example.com/v1/models"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := modelsURL(tt.endpoint)
+			if got != tt.want {
+				t.Errorf("modelsURL(%q) = %q, want %q", tt.endpoint, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestOpenAI_Models_BothFailWith5xx(t *testing.T) {
 	// 5xx is a real failure (not a missing-endpoint case) and should
 	// propagate so the user knows something is wrong with the provider.

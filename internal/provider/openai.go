@@ -7,12 +7,52 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
 
 	"github.com/jefflinse/toasters/internal/sse"
 )
+
+// versionPathSuffix matches a trailing /v\d+ segment in an endpoint base URL
+// (e.g. /v1, /v4). Used by chatCompletionsURL and modelsURL to decide whether
+// to add a /v1 prefix when constructing the per-call URL.
+var versionPathSuffix = regexp.MustCompile(`/v\d+$`)
+
+// chatCompletionsURL constructs the chat completions URL for an endpoint
+// base. The intent is to be tolerant of how users configure the endpoint:
+//
+//   - Full URL ending in /chat/completions → use as-is
+//   - Endpoint ending in a version path (/v1, /v4, …) → append /chat/completions
+//   - Anything else → assume a v1 OpenAI layout, append /v1/chat/completions
+//
+// This is what makes "endpoint: http://localhost:1234" (the LM Studio default)
+// AND "endpoint: https://api.z.ai/api/coding/paas/v4" (z.ai's GLM coding API)
+// both work without users having to know the difference.
+func chatCompletionsURL(endpoint string) string {
+	endpoint = strings.TrimRight(endpoint, "/")
+	if strings.HasSuffix(endpoint, "/chat/completions") {
+		return endpoint
+	}
+	if versionPathSuffix.MatchString(endpoint) {
+		return endpoint + "/chat/completions"
+	}
+	return endpoint + "/v1/chat/completions"
+}
+
+// modelsURL constructs the model listing URL for an endpoint base, using the
+// same heuristics as chatCompletionsURL.
+func modelsURL(endpoint string) string {
+	endpoint = strings.TrimRight(endpoint, "/")
+	if strings.HasSuffix(endpoint, "/models") {
+		return endpoint
+	}
+	if versionPathSuffix.MatchString(endpoint) {
+		return endpoint + "/models"
+	}
+	return endpoint + "/v1/models"
+}
 
 // OpenAIProvider implements Provider for OpenAI-compatible APIs
 // (OpenAI, LM Studio, Ollama, etc.).
@@ -113,7 +153,7 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, req ChatRequest) (<-cha
 		return nil, fmt.Errorf("marshaling request: %w", err)
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, p.endpoint+"/v1/chat/completions", bytes.NewReader(jsonBody))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, chatCompletionsURL(p.endpoint), bytes.NewReader(jsonBody))
 	if err != nil {
 		return nil, fmt.Errorf("creating request: %w", err)
 	}
@@ -358,7 +398,7 @@ func (p *OpenAIProvider) fetchLMStudioModels(ctx context.Context) ([]ModelInfo, 
 }
 
 func (p *OpenAIProvider) fetchOpenAIModels(ctx context.Context) ([]ModelInfo, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, p.endpoint+"/v1/models", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, modelsURL(p.endpoint), nil)
 	if err != nil {
 		return nil, fmt.Errorf("creating request: %w", err)
 	}
