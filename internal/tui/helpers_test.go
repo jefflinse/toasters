@@ -821,6 +821,47 @@ func TestRenderCompletionBlock(t *testing.T) {
 	}
 }
 
+func TestTruncateToWidth(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		input    string
+		maxWidth int
+		want     string
+	}{
+		{"empty", "", 10, ""},
+		{"fits exactly", "hello", 5, "hello"},
+		{"fits with room", "hi", 10, "hi"},
+		{"truncates ascii", "hello world", 8, "hello w…"},
+		{"single char budget", "abc", 1, "…"},
+		{"zero budget", "abc", 0, ""},
+		{"negative budget", "abc", -5, ""},
+		{"unicode emoji fits", "🤖 ok", 6, "🤖 ok"},
+		{"long ascii string is bounded by single pass", strings.Repeat("a", 1000), 5, "aaaa…"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := truncateToWidth(tt.input, tt.maxWidth)
+			if got != tt.want {
+				t.Errorf("truncateToWidth(%q, %d) = %q, want %q", tt.input, tt.maxWidth, got, tt.want)
+			}
+		})
+	}
+
+	// Regression: the previous renderToasts truncation was O(n²) and
+	// catastrophically slow. truncateToWidth must finish in well under a
+	// millisecond even for adversarial inputs.
+	t.Run("does not regress to O(n^2)", func(t *testing.T) {
+		long := strings.Repeat("a", 100_000)
+		start := time.Now()
+		_ = truncateToWidth(long, 38)
+		if d := time.Since(start); d > 100*time.Millisecond {
+			t.Fatalf("truncateToWidth took %v on a 100k-char input — possible O(n²) regression", d)
+		}
+	})
+}
+
 func TestOverlayToasts(t *testing.T) {
 	t.Parallel()
 

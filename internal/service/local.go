@@ -619,66 +619,109 @@ func (s *LocalService) BroadcastSessionStarted(sess *runtime.Session) {
 			}
 		}()
 
-		for ev := range events {
-			switch ev.Type {
-			case runtime.SessionEventText:
-				s.broadcast(Event{
-					Type:      EventTypeSessionText,
-					SessionID: sessionID,
-					Payload:   SessionTextPayload{Text: ev.Text},
-				})
-			case runtime.SessionEventToolCall:
-				if ev.ToolCall == nil {
-					continue
-				}
-				s.broadcast(Event{
-					Type:      EventTypeSessionToolCall,
-					SessionID: sessionID,
-					Payload: SessionToolCallPayload{
-						ToolCall: ToolCall{
-							ID:        ev.ToolCall.ID,
-							Name:      ev.ToolCall.Name,
-							Arguments: ev.ToolCall.Arguments,
-						},
-					},
-				})
-			case runtime.SessionEventToolResult:
-				if ev.ToolResult == nil {
-					continue
-				}
-				s.broadcast(Event{
-					Type:      EventTypeSessionToolResult,
-					SessionID: sessionID,
-					Payload: SessionToolResultPayload{
-						Result: ToolCallResult{
-							CallID: ev.ToolResult.CallID,
-							Name:   ev.ToolResult.Name,
-							Result: ev.ToolResult.Result,
-							Error:  ev.ToolResult.Error,
-						},
-					},
-				})
+		// Batch session.text events with a 16ms window. The runtime emits one
+		// SessionEventText per token, which for a fast model can be 100+ events
+		// per second. Each broadcast turns into a wire message, an SSE write,
+		// and (on the client) a Bubble Tea Msg that has to traverse an
+		// unbuffered prog.Send. Without batching, the TUI's main loop falls
+		// behind and the Subscribe channel fills, dropping events and freezing
+		// the UI. The operator already does this for its own text — see
+		// cmd/batcher.go — and the same fix applies here.
+		const textBatchWindow = 16 * time.Millisecond
+		var textBuf strings.Builder
+		var textTimer *time.Timer
+		var textTimerCh <-chan time.Time
+		flushText := func() {
+			if textBuf.Len() == 0 {
+				return
 			}
-			// SessionEventDone and SessionEventError do not need explicit
-			// re-emission here — the session done broadcast happens after the
-			// channel closes (below), which covers both normal completion and
-			// errors.
+			s.broadcast(Event{
+				Type:      EventTypeSessionText,
+				SessionID: sessionID,
+				Payload:   SessionTextPayload{Text: textBuf.String()},
+			})
+			textBuf.Reset()
+			if textTimer != nil {
+				textTimer.Stop()
+				textTimer = nil
+				textTimerCh = nil
+			}
+		}
+		armTimer := func() {
+			if textTimer != nil {
+				return
+			}
+			textTimer = time.NewTimer(textBatchWindow)
+			textTimerCh = textTimer.C
 		}
 
-		// Subscribe channel closed — session has terminated. Emit session.done
-		// with the final snapshot status so subscribers can finalize their state.
-		finalSnap := sess.Snapshot()
-		s.broadcast(Event{
-			Type:      EventTypeSessionDone,
-			SessionID: sessionID,
-			Payload: SessionDonePayload{
-				AgentName: finalSnap.AgentID,
-				JobID:     finalSnap.JobID,
-				TaskID:    finalSnap.TaskID,
-				Status:    finalSnap.Status,
-				FinalText: sess.FinalText(),
-			},
-		})
+		for {
+			select {
+			case ev, ok := <-events:
+				if !ok {
+					// Subscribe channel closed — session has terminated. Flush
+					// any pending text and emit session.done.
+					flushText()
+					finalSnap := sess.Snapshot()
+					s.broadcast(Event{
+						Type:      EventTypeSessionDone,
+						SessionID: sessionID,
+						Payload: SessionDonePayload{
+							AgentName: finalSnap.AgentID,
+							JobID:     finalSnap.JobID,
+							TaskID:    finalSnap.TaskID,
+							Status:    finalSnap.Status,
+							FinalText: sess.FinalText(),
+						},
+					})
+					return
+				}
+				switch ev.Type {
+				case runtime.SessionEventText:
+					textBuf.WriteString(ev.Text)
+					armTimer()
+				case runtime.SessionEventToolCall:
+					if ev.ToolCall == nil {
+						continue
+					}
+					// Flush pending text before structural events so the
+					// ordering observed by clients matches what the model
+					// emitted.
+					flushText()
+					s.broadcast(Event{
+						Type:      EventTypeSessionToolCall,
+						SessionID: sessionID,
+						Payload: SessionToolCallPayload{
+							ToolCall: ToolCall{
+								ID:        ev.ToolCall.ID,
+								Name:      ev.ToolCall.Name,
+								Arguments: ev.ToolCall.Arguments,
+							},
+						},
+					})
+				case runtime.SessionEventToolResult:
+					if ev.ToolResult == nil {
+						continue
+					}
+					flushText()
+					s.broadcast(Event{
+						Type:      EventTypeSessionToolResult,
+						SessionID: sessionID,
+						Payload: SessionToolResultPayload{
+							Result: ToolCallResult{
+								CallID: ev.ToolResult.CallID,
+								Name:   ev.ToolResult.Name,
+								Result: ev.ToolResult.Result,
+								Error:  ev.ToolResult.Error,
+							},
+						},
+					})
+				}
+
+			case <-textTimerCh:
+				flushText()
+			}
+		}
 	}()
 }
 

@@ -212,19 +212,13 @@ func (m *Model) renderToasts() string {
 	if len(m.toasts) == 0 {
 		return ""
 	}
+	// Inner budget = MaxWidth(40) minus horizontal padding (Padding(0,1) → 2).
+	innerBudget := 40 - ToastBaseStyle.GetHorizontalPadding()
 	var lines []string
 	// Render newest first (reverse order).
 	for i := len(m.toasts) - 1; i >= 0; i-- {
 		t := m.toasts[i]
-		msg := t.message
-		// Truncate by display width, not rune count, so wide characters (emoji,
-		// CJK) don't overflow the toast box. Inner budget = MaxWidth(40) minus
-		// horizontal padding (Padding(0,1) → 1+1 = 2 columns).
-		innerBudget := 40 - ToastBaseStyle.GetHorizontalPadding()
-		for lipgloss.Width(msg) > innerBudget {
-			runes := []rune(msg)
-			msg = string(runes[:len(runes)-1]) + "…"
-		}
+		msg := truncateToWidth(t.message, innerBudget)
 		var rendered string
 		switch t.level {
 		case toastSuccess:
@@ -237,6 +231,48 @@ func (m *Model) renderToasts() string {
 		lines = append(lines, rendered)
 	}
 	return strings.Join(lines, "\n")
+}
+
+// truncateToWidth truncates s to fit within maxWidth display cells (using
+// lipgloss.Width semantics: emoji = 2 cells, CJK = 2 cells, ANSI escapes = 0
+// cells). If s already fits, it is returned unchanged. Otherwise the result
+// is truncated and the trailing rune is replaced with "…", with the budget
+// reserved for the ellipsis.
+//
+// Implementation note: this is a single O(n) pass over the runes of s,
+// computing per-rune width via lipgloss.Width(string(r)) once. Previously this
+// was an O(n²) loop that called lipgloss.Width on the whole string after
+// removing one rune at a time, which made renderToasts catastrophically slow
+// for any non-trivial message and could freeze the entire TUI by starving the
+// Bubble Tea message loop. See investigation in cleanup/server-only.
+func truncateToWidth(s string, maxWidth int) string {
+	if maxWidth <= 0 {
+		return ""
+	}
+	if lipgloss.Width(s) <= maxWidth {
+		return s
+	}
+	// Reserve 1 cell for the ellipsis itself ("…" is one cell).
+	const ellipsis = "…"
+	const ellipsisWidth = 1
+	budget := maxWidth - ellipsisWidth
+	if budget <= 0 {
+		return ellipsis
+	}
+	var b strings.Builder
+	used := 0
+	for _, r := range s {
+		// lipgloss.Width is the canonical authority on display width here so
+		// our truncation matches what the renderer will measure.
+		w := lipgloss.Width(string(r))
+		if used+w > budget {
+			break
+		}
+		b.WriteRune(r)
+		used += w
+	}
+	b.WriteString(ellipsis)
+	return b.String()
 }
 
 // overlayToasts splices the toast block into the top-right corner of the screen.
