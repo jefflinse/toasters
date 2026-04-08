@@ -269,13 +269,53 @@ func (p *OpenAIProvider) emitToolCalls(accumulated map[int]*sse.OpenAIToolAccumu
 	clear(accumulated)
 }
 
-// Models returns available models. Tries LM Studio endpoint first, falls back to OpenAI.
+// Models returns available models. Tries the LM Studio endpoint first, then
+// falls back to the OpenAI /v1/models endpoint. If BOTH endpoints respond
+// with "not found / not allowed" status codes, returns an empty list with
+// nil error — many OpenAI-compatible servers (vLLM, TGI, Llama.cpp, custom
+// proxies, gateways) only implement /v1/chat/completions and have no model
+// listing endpoint at all. Treating that as a hard error stranded users on
+// a fully-functional provider behind a non-essential capability check.
+//
+// Real network errors and non-listing failures (auth, 5xx, etc.) still
+// propagate so the caller can surface them.
 func (p *OpenAIProvider) Models(ctx context.Context) ([]ModelInfo, error) {
-	models, err := p.fetchLMStudioModels(ctx)
-	if err == nil {
+	if models, err := p.fetchLMStudioModels(ctx); err == nil {
 		return models, nil
+	} else if !isMissingModelsEndpoint(err) {
+		// LM Studio endpoint failed for a non-404 reason — try the OpenAI
+		// path but remember the original error in case it also fails.
+		if models, err2 := p.fetchOpenAIModels(ctx); err2 == nil {
+			return models, nil
+		} else if !isMissingModelsEndpoint(err2) {
+			return nil, err2
+		}
+		return []ModelInfo{}, nil
 	}
-	return p.fetchOpenAIModels(ctx)
+
+	// LM Studio endpoint returned a "no such endpoint" status. Try OpenAI.
+	if models, err := p.fetchOpenAIModels(ctx); err == nil {
+		return models, nil
+	} else if !isMissingModelsEndpoint(err) {
+		return nil, err
+	}
+
+	// Neither endpoint exists on this provider — that's fine, the provider
+	// just doesn't expose model listing. Return an empty list.
+	return []ModelInfo{}, nil
+}
+
+// isMissingModelsEndpoint reports whether err indicates the provider simply
+// has no model listing endpoint (HTTP 404 or 405). Used to distinguish
+// "this provider doesn't support listing models" (degrade gracefully) from
+// "the request actually failed for some other reason" (propagate).
+func isMissingModelsEndpoint(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "unexpected status 404") ||
+		strings.Contains(msg, "unexpected status 405")
 }
 
 func (p *OpenAIProvider) fetchLMStudioModels(ctx context.Context) ([]ModelInfo, error) {

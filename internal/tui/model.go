@@ -903,12 +903,21 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case ModelsMsg:
+		// ListModels is a non-essential capability check. The model name
+		// and endpoint already come from Operator().Status() during
+		// AppReadyMsg, and the chat works whether or not the provider
+		// supports a model listing endpoint. So when the call fails:
+		//   - log a warning so a real failure is debuggable
+		//   - flip the sidebar Connected indicator (it's the only signal
+		//     of "the operator's provider is reachable")
+		//   - DO NOT set m.err — surfacing a non-fatal capability check
+		//     as a chat error makes the whole TUI look broken when in
+		//     fact the operator is fully functional.
 		if msg.Err != nil {
 			m.stats.Connected = false
-			m.err = fmt.Errorf("fetching models: %w", msg.Err)
+			slog.Warn("ListModels failed; sidebar context length unavailable", "error", msg.Err)
 		} else {
 			m.stats.Connected = true
-			m.err = nil
 			if len(msg.Models) > 0 {
 				if m.stats.ModelName != "" {
 					// We already have a configured model name from
