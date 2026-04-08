@@ -37,20 +37,19 @@ func (tl *TeamLeadTools) Definitions() []runtime.ToolDef {
 	return []runtime.ToolDef{
 		{
 			Name:        "complete_task",
-			Description: "Mark the team's current task as done. Provide a summary of what was accomplished and optional follow-up recommendations.",
+			Description: "Mark the team's current task as done. A summary of what was accomplished is strongly encouraged but not strictly required — call this tool whenever the work is finished, even if you can't write a summary.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
 					"summary": {
 						"type": "string",
-						"description": "Summary of what was accomplished"
+						"description": "Summary of what was accomplished. Optional but strongly recommended."
 					},
 					"recommendations": {
 						"type": "string",
 						"description": "Optional follow-up recommendations for future work"
 					}
-				},
-				"required": ["summary"]
+				}
 			}`),
 		},
 		{
@@ -147,12 +146,19 @@ func (tl *TeamLeadTools) completeTask(ctx context.Context, args json.RawMessage)
 		return "", fmt.Errorf("parsing complete_task args: %w", err)
 	}
 
-	if params.Summary == "" {
-		return "", fmt.Errorf("summary is required")
+	// Summary is strongly encouraged but not strictly required. Small models
+	// frequently call complete_task without one. Erroring out here would
+	// strand the entire job at "active" forever, because the team_lead's
+	// best signal that the work is done is the call itself, regardless of
+	// whether it could write a summary. Default to a generic placeholder so
+	// the orchestrator can still advance.
+	summary := strings.TrimSpace(params.Summary)
+	if summary == "" {
+		summary = "Task completed (no summary provided by agent)"
 	}
 
 	// Update task status, summary, and recommendations atomically.
-	if err := tl.store.CompleteTask(ctx, tl.taskID, db.TaskStatusCompleted, params.Summary, params.Recommendations); err != nil {
+	if err := tl.store.CompleteTask(ctx, tl.taskID, db.TaskStatusCompleted, summary, params.Recommendations); err != nil {
 		return "", fmt.Errorf("completing task: %w", err)
 	}
 
@@ -169,7 +175,7 @@ func (tl *TeamLeadTools) completeTask(ctx context.Context, args json.RawMessage)
 			TaskID:          tl.taskID,
 			JobID:           tl.jobID,
 			TeamID:          tl.teamID,
-			Summary:         params.Summary,
+			Summary:         summary,
 			Recommendations: params.Recommendations,
 			HasNextTask:     len(readyTasks) > 0,
 		},

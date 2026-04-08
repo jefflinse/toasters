@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/jefflinse/toasters/internal/db"
@@ -219,12 +220,39 @@ func TestCompleteTask_HasNextTask(t *testing.T) {
 }
 
 func TestCompleteTask_MissingSummary(t *testing.T) {
-	tl, _, _ := newTestTeamLeadTools(t)
+	// Regression: previously this returned an error ("summary is required").
+	// Small models frequently call complete_task without a summary, and
+	// erroring out stranded the entire job at "active" forever — the
+	// orchestrator never received EventTaskCompleted, so it never advanced
+	// to the next task or marked the job done. We now accept the call and
+	// substitute a placeholder summary so the job can advance.
+	tl, store, eventCh := newTestTeamLeadTools(t)
 	ctx := context.Background()
 
-	_, err := tl.Execute(ctx, "complete_task", json.RawMessage(`{}`))
-	assertError(t, err)
-	assertContains(t, err.Error(), "summary is required")
+	result, err := tl.Execute(ctx, "complete_task", json.RawMessage(`{}`))
+	assertNoError(t, err)
+	assertContains(t, result, "Task completed successfully")
+
+	// The task should be marked completed in the store with the placeholder
+	// summary.
+	task, err := store.GetTask(ctx, "task-1")
+	assertNoError(t, err)
+	if task.Status != db.TaskStatusCompleted {
+		t.Fatalf("task status = %q, want completed", task.Status)
+	}
+	if task.ResultSummary == "" || !strings.Contains(task.ResultSummary, "no summary") {
+		t.Fatalf("task summary = %q, want a placeholder mentioning 'no summary'", task.ResultSummary)
+	}
+
+	// EventTaskCompleted should still fire so the operator can advance.
+	select {
+	case ev := <-eventCh:
+		if ev.Type != EventTaskCompleted {
+			t.Fatalf("event type = %q, want %q", ev.Type, EventTaskCompleted)
+		}
+	default:
+		t.Fatal("expected EventTaskCompleted on the event channel")
+	}
 }
 
 func TestRequestNewTask(t *testing.T) {
