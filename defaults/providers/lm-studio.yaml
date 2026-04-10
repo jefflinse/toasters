@@ -1,0 +1,4 @@
+id: lm-studio
+name: LM Studio
+type: local
+endpoint: http://localhost:1234

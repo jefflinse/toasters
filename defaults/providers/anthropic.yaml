@@ -1,0 +1,4 @@
+id: anthropic
+name: Anthropic
+type: anthropic
+api_key: ${ANTHROPIC_API_KEY}
