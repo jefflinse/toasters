@@ -200,6 +200,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/health", s.health)
 	mux.HandleFunc("GET /api/v1/logs", s.getLogs)
 	mux.HandleFunc("GET /api/v1/models", s.listModels)
+	mux.HandleFunc("GET /api/v1/catalog", s.listCatalog)
 	mux.HandleFunc("GET /api/v1/mcp/servers", s.listMCPServers)
 	mux.HandleFunc("GET /api/v1/progress", s.getProgress)
 

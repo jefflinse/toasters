@@ -320,6 +320,11 @@ type SystemService interface {
 	// GetLogs returns the contents of the application log file.
 	// Returns ("", nil) if the log file does not exist.
 	GetLogs(ctx context.Context) (string, error)
+
+	// ListCatalogProviders returns the full provider/model catalog from models.dev.
+	// The data is cached in memory and refreshed periodically. Returns nil (not an
+	// error) if the catalog is unavailable (e.g. no network).
+	ListCatalogProviders(ctx context.Context) ([]CatalogProvider, error)
 }
 
 // ---------------------------------------------------------------------------

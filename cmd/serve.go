@@ -24,6 +24,7 @@ import (
 	"github.com/jefflinse/toasters/internal/mcp"
 	"github.com/jefflinse/toasters/internal/operator"
 	"github.com/jefflinse/toasters/internal/provider"
+	"github.com/jefflinse/toasters/internal/modelsdev"
 	"github.com/jefflinse/toasters/internal/runtime"
 	"github.com/jefflinse/toasters/internal/server"
 	"github.com/jefflinse/toasters/internal/service"
@@ -184,6 +185,9 @@ func runServe(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	// Initialize the models.dev catalog client for the provider/model browser.
+	catalog := modelsdev.NewCatalogSource(modelsdev.NewClient())
+
 	// Create the LocalService.
 	svc := service.NewLocal(service.LocalConfig{
 		Store:            store,
@@ -198,6 +202,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 		OperatorModel:    cfg.Operator.Model,
 		OperatorEndpoint: operatorEndpoint,
 		StartTime:        time.Now(),
+		Catalog:          catalog,
 	})
 	defer svc.Shutdown()
 

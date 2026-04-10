@@ -357,3 +357,6 @@ func (m *mockSystemService) GetProgressState(ctx context.Context) (service.Progr
 func (m *mockSystemService) GetLogs(_ context.Context) (string, error) {
 	return "", nil
 }
+func (m *mockSystemService) ListCatalogProviders(_ context.Context) ([]service.CatalogProvider, error) {
+	return nil, nil
+}

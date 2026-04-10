@@ -513,6 +513,58 @@ func modelInfoToWire(m service.ModelInfo) wireModelInfo {
 	}
 }
 
+// wireCatalogProvider is the JSON wire representation of a service.CatalogProvider.
+type wireCatalogProvider struct {
+	ID     string             `json:"id"`
+	Name   string             `json:"name"`
+	API    string             `json:"api,omitempty"`
+	Doc    string             `json:"doc,omitempty"`
+	Env    []string           `json:"env,omitempty"`
+	Models []wireCatalogModel `json:"models"`
+}
+
+// wireCatalogModel is the JSON wire representation of a service.CatalogModel.
+type wireCatalogModel struct {
+	ID               string  `json:"id"`
+	Name             string  `json:"name"`
+	Family           string  `json:"family,omitempty"`
+	ToolCall         bool    `json:"tool_call"`
+	Reasoning        bool    `json:"reasoning"`
+	StructuredOutput bool    `json:"structured_output"`
+	OpenWeights      bool    `json:"open_weights"`
+	ContextLimit     int     `json:"context_limit"`
+	OutputLimit      int     `json:"output_limit"`
+	InputCost        float64 `json:"input_cost"`
+	OutputCost       float64 `json:"output_cost"`
+}
+
+func catalogProviderToWire(p service.CatalogProvider) wireCatalogProvider {
+	models := make([]wireCatalogModel, 0, len(p.Models))
+	for _, m := range p.Models {
+		models = append(models, wireCatalogModel{
+			ID:               m.ID,
+			Name:             m.Name,
+			Family:           m.Family,
+			ToolCall:         m.ToolCall,
+			Reasoning:        m.Reasoning,
+			StructuredOutput: m.StructuredOutput,
+			OpenWeights:      m.OpenWeights,
+			ContextLimit:     m.ContextLimit,
+			OutputLimit:      m.OutputLimit,
+			InputCost:        m.InputCost,
+			OutputCost:       m.OutputCost,
+		})
+	}
+	return wireCatalogProvider{
+		ID:     p.ID,
+		Name:   p.Name,
+		API:    p.API,
+		Doc:    p.Doc,
+		Env:    p.Env,
+		Models: models,
+	}
+}
+
 // wireMCPToolInfo is the JSON wire representation of a service.MCPToolInfo.
 type wireMCPToolInfo struct {
 	NamespacedName string          `json:"namespaced_name"`

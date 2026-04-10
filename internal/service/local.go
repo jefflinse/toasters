@@ -32,6 +32,38 @@ import (
 // Compile-time assertion that LocalService satisfies the Service interface.
 var _ Service = (*LocalService)(nil)
 
+// CatalogSource provides access to the models.dev catalog data.
+// Implemented by modelsdev.Client.
+type CatalogSource interface {
+	ProvidersSorted(ctx context.Context) ([]CatalogSourceProvider, error)
+}
+
+// CatalogSourceProvider is the provider shape expected from the catalog source.
+type CatalogSourceProvider struct {
+	ID   string
+	Name string
+	API  string
+	Doc  string
+	Env  []string
+
+	Models []CatalogSourceModel
+}
+
+// CatalogSourceModel is the model shape expected from the catalog source.
+type CatalogSourceModel struct {
+	ID               string
+	Name             string
+	Family           string
+	ToolCall         bool
+	Reasoning        bool
+	StructuredOutput bool
+	OpenWeights      bool
+	ContextLimit     int
+	OutputLimit      int
+	InputCost        float64
+	OutputCost       float64
+}
+
 // Size limits for input validation.
 const (
 	maxMessageLen     = 102400           // 100KB — maximum user message size
@@ -63,6 +95,7 @@ type LocalConfig struct {
 	OperatorModel    string    // for OperatorStatus.ModelName
 	OperatorEndpoint string    // for OperatorStatus.Endpoint (LLM provider URL)
 	StartTime        time.Time // for Health().Uptime
+	Catalog          CatalogSource // optional models.dev catalog; nil disables ListCatalogProviders
 }
 
 // LocalService is the in-process implementation of Service. It delegates to
@@ -2335,6 +2368,44 @@ func (s *LocalService) GetLogs(_ context.Context) (string, error) {
 		return "", fmt.Errorf("reading log file: %w", err)
 	}
 	return string(data), nil
+}
+
+// ListCatalogProviders returns the full provider/model catalog from models.dev.
+func (s *LocalService) ListCatalogProviders(ctx context.Context) ([]CatalogProvider, error) {
+	if s.cfg.Catalog == nil {
+		return nil, nil
+	}
+	provs, err := s.cfg.Catalog.ProvidersSorted(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("listing catalog providers: %w", err)
+	}
+	result := make([]CatalogProvider, 0, len(provs))
+	for _, p := range provs {
+		cp := CatalogProvider{
+			ID:   p.ID,
+			Name: p.Name,
+			API:  p.API,
+			Doc:  p.Doc,
+			Env:  p.Env,
+		}
+		for _, m := range p.Models {
+			cp.Models = append(cp.Models, CatalogModel{
+				ID:               m.ID,
+				Name:             m.Name,
+				Family:           m.Family,
+				ToolCall:         m.ToolCall,
+				Reasoning:        m.Reasoning,
+				StructuredOutput: m.StructuredOutput,
+				OpenWeights:      m.OpenWeights,
+				ContextLimit:     m.ContextLimit,
+				OutputLimit:      m.OutputLimit,
+				InputCost:        m.InputCost,
+				OutputCost:       m.OutputCost,
+			})
+		}
+		result = append(result, cp)
+	}
+	return result, nil
 }
 
 // ---------------------------------------------------------------------------

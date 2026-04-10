@@ -376,6 +376,9 @@ func (sys *mockSystem) GetLogs(ctx context.Context) (string, error) {
 	}
 	return "", nil
 }
+func (sys *mockSystem) ListCatalogProviders(_ context.Context) ([]service.CatalogProvider, error) {
+	return nil, nil
+}
 
 // ---------------------------------------------------------------------------
 // Test helper: start a real server with a mock service, return a client

@@ -442,6 +442,35 @@ func (m ModelInfo) ContextLength() int {
 }
 
 // ---------------------------------------------------------------------------
+// Catalog types (models.dev)
+// ---------------------------------------------------------------------------
+
+// CatalogProvider is a provider entry from the models.dev catalog.
+type CatalogProvider struct {
+	ID     string         // provider ID (e.g. "anthropic", "openai")
+	Name   string         // display name (e.g. "Anthropic")
+	API    string         // base API URL, if known
+	Doc    string         // documentation URL
+	Env    []string       // environment variable names for API keys
+	Models []CatalogModel // sorted by name
+}
+
+// CatalogModel is a model entry from the models.dev catalog.
+type CatalogModel struct {
+	ID               string  // model ID (e.g. "claude-sonnet-4-6")
+	Name             string  // display name (e.g. "Claude Sonnet 4.6")
+	Family           string  // model family
+	ToolCall         bool    // supports tool/function calling
+	Reasoning        bool    // supports chain-of-thought reasoning
+	StructuredOutput bool    // supports structured/JSON output
+	OpenWeights      bool    // open-weight model
+	ContextLimit     int     // max context window (tokens)
+	OutputLimit      int     // max output tokens
+	InputCost        float64 // cost per 1M input tokens (0 for free/local)
+	OutputCost       float64 // cost per 1M output tokens (0 for free/local)
+}
+
+// ---------------------------------------------------------------------------
 // Progress state (replaces progressPollMsg)
 // ---------------------------------------------------------------------------
 

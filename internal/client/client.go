@@ -654,6 +654,22 @@ func (s *remoteSystemService) ListModels(ctx context.Context) ([]service.ModelIn
 	return models, nil
 }
 
+func (s *remoteSystemService) ListCatalogProviders(ctx context.Context) ([]service.CatalogProvider, error) {
+	resp, err := s.c.http.get(ctx, "/api/v1/catalog")
+	if err != nil {
+		return nil, fmt.Errorf("list catalog: %w", err)
+	}
+	pr, err := decodeResponse[paginatedResponse[wireCatalogProvider]](resp)
+	if err != nil {
+		return nil, fmt.Errorf("list catalog: %w", err)
+	}
+	providers := make([]service.CatalogProvider, 0, len(pr.Items))
+	for _, w := range pr.Items {
+		providers = append(providers, wireCatalogProviderToService(w))
+	}
+	return providers, nil
+}
+
 func (s *remoteSystemService) ListMCPServers(ctx context.Context) ([]service.MCPServerStatus, error) {
 	resp, err := s.c.http.get(ctx, "/api/v1/mcp/servers")
 	if err != nil {

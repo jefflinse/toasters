@@ -159,6 +159,29 @@ type wireModelInfo struct {
 	LoadedContextLength int    `json:"loaded_context_length"`
 }
 
+type wireCatalogProvider struct {
+	ID     string             `json:"id"`
+	Name   string             `json:"name"`
+	API    string             `json:"api,omitempty"`
+	Doc    string             `json:"doc,omitempty"`
+	Env    []string           `json:"env,omitempty"`
+	Models []wireCatalogModel `json:"models"`
+}
+
+type wireCatalogModel struct {
+	ID               string  `json:"id"`
+	Name             string  `json:"name"`
+	Family           string  `json:"family,omitempty"`
+	ToolCall         bool    `json:"tool_call"`
+	Reasoning        bool    `json:"reasoning"`
+	StructuredOutput bool    `json:"structured_output"`
+	OpenWeights      bool    `json:"open_weights"`
+	ContextLimit     int     `json:"context_limit"`
+	OutputLimit      int     `json:"output_limit"`
+	InputCost        float64 `json:"input_cost"`
+	OutputCost       float64 `json:"output_cost"`
+}
+
 type wireMCPToolInfo struct {
 	NamespacedName string          `json:"namespaced_name"`
 	OriginalName   string          `json:"original_name"`
@@ -619,6 +642,33 @@ func wireModelInfoToService(w wireModelInfo) service.ModelInfo {
 		State:               w.State,
 		MaxContextLength:    w.MaxContextLength,
 		LoadedContextLength: w.LoadedContextLength,
+	}
+}
+
+func wireCatalogProviderToService(w wireCatalogProvider) service.CatalogProvider {
+	models := make([]service.CatalogModel, 0, len(w.Models))
+	for _, m := range w.Models {
+		models = append(models, service.CatalogModel{
+			ID:               m.ID,
+			Name:             m.Name,
+			Family:           m.Family,
+			ToolCall:         m.ToolCall,
+			Reasoning:        m.Reasoning,
+			StructuredOutput: m.StructuredOutput,
+			OpenWeights:      m.OpenWeights,
+			ContextLimit:     m.ContextLimit,
+			OutputLimit:      m.OutputLimit,
+			InputCost:        m.InputCost,
+			OutputCost:       m.OutputCost,
+		})
+	}
+	return service.CatalogProvider{
+		ID:     w.ID,
+		Name:   w.Name,
+		API:    w.API,
+		Doc:    w.Doc,
+		Env:    w.Env,
+		Models: models,
 	}
 }
 

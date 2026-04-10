@@ -412,3 +412,6 @@ func (m *shutdownTestSystem) GetProgressState(ctx context.Context) (service.Prog
 func (m *shutdownTestSystem) GetLogs(_ context.Context) (string, error) {
 	return "", nil
 }
+func (m *shutdownTestSystem) ListCatalogProviders(_ context.Context) ([]service.CatalogProvider, error) {
+	return nil, nil
+}

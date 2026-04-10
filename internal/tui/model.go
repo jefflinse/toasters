@@ -173,6 +173,9 @@ type Model struct {
 	// MCP modal state.
 	mcpModal mcpModalState
 
+	// Catalog modal state (models.dev browser).
+	catalogModal catalogModalState
+
 	// Blocker modal state.
 	blockerModal blockerModalState
 
@@ -323,6 +326,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case tea.KeyPressMsg:
+		// Catalog modal key handling — intercept all keys when modal is open.
+		if m.catalogModal.show {
+			return m.updateCatalogModal(msg)
+		}
+
 		// MCP modal key handling — intercept all keys when modal is open.
 		if m.mcpModal.show {
 			return m.updateMCPModal(msg)
@@ -838,6 +846,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.mcpModal = mcpModalState{show: true}
 					// servers field will be populated when mcpModal is updated to use service types
 					return m, nil
+				case "/models":
+					m.input.Reset()
+					m.cmdPopup.show = false
+					m.catalogModal = catalogModalState{show: true, loading: true}
+					return m, m.fetchCatalog()
 				}
 				// /job <prompt> — create a new job via the operator LLM.
 				if strings.HasPrefix(text, "/job ") {
@@ -947,6 +960,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		m.updateViewportContent()
+
+	case CatalogMsg:
+		m.catalogModal.loading = false
+		if msg.Err != nil {
+			m.catalogModal.err = msg.Err
+		} else {
+			m.catalogModal.providers = msg.Providers
+		}
 
 	case TeamsReloadedMsg:
 		m.teams = msg.Teams
@@ -1144,7 +1165,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Click-to-focus: route clicks to the appropriate panel.
 		// Don't steal clicks when any overlay is active.
 		if !m.teamsModal.show && !m.skillsModal.show && !m.agentsModal.show &&
-			!m.mcpModal.show && !m.blockerModal.show && !m.grid.showGrid &&
+			!m.mcpModal.show && !m.catalogModal.show && !m.blockerModal.show && !m.grid.showGrid &&
 			!m.promptModal.show && !m.outputModal.show && !m.loading {
 			showLeftPanel := m.width >= minWidthForLeftPanel && !m.leftPanelHidden
 			showSidebar := m.width >= minWidthForBar && !m.sidebarHidden

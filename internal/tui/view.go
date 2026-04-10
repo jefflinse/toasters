@@ -228,6 +228,15 @@ func (m *Model) View() tea.View {
 		return v
 	}
 
+	// Catalog modal takes over the full terminal as a centered overlay.
+	if m.catalogModal.show {
+		catalogView := m.renderCatalogModal()
+		v := tea.NewView(catalogView)
+		v.AltScreen = true
+		v.MouseMode = tea.MouseModeCellMotion
+		return v
+	}
+
 	// MCP modal takes over the full terminal as a centered overlay.
 	if m.mcpModal.show {
 		mcpView := m.renderMCPModal()

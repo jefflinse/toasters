@@ -712,6 +712,22 @@ func (s *Server) listModels(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, PaginatedResponse[wireModelInfo]{Items: wireModels, Total: len(wireModels)})
 }
 
+// listCatalog handles GET /api/v1/catalog.
+func (s *Server) listCatalog(w http.ResponseWriter, r *http.Request) {
+	providers, err := s.svc.System().ListCatalogProviders(r.Context())
+	if err != nil {
+		handleServiceError(w, r, err)
+		return
+	}
+
+	wireProviders := make([]wireCatalogProvider, 0, len(providers))
+	for _, p := range providers {
+		wireProviders = append(wireProviders, catalogProviderToWire(p))
+	}
+
+	writeJSON(w, http.StatusOK, PaginatedResponse[wireCatalogProvider]{Items: wireProviders, Total: len(wireProviders)})
+}
+
 // listMCPServers handles GET /api/v1/mcp/servers.
 func (s *Server) listMCPServers(w http.ResponseWriter, r *http.Request) {
 	servers, err := s.svc.System().ListMCPServers(r.Context())
