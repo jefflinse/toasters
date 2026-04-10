@@ -138,9 +138,11 @@ func sendInitialAppReady(svc service.Service, p *atomic.Pointer[tea.Program], se
 	// endpoint URL from the server config (rather than whatever ListModels
 	// happens to return first).
 	var modelName, endpoint string
+	var operatorDisabled bool
 	if status, err := svc.Operator().Status(ctx); err == nil {
 		modelName = status.ModelName
 		endpoint = status.Endpoint
+		operatorDisabled = status.State == service.OperatorStateDisabled
 	} else {
 		slog.Warn("failed to fetch operator status during startup", "error", err)
 	}
@@ -158,11 +160,16 @@ func sendInitialAppReady(svc service.Service, p *atomic.Pointer[tea.Program], se
 
 	if prog := p.Load(); prog != nil {
 		prog.Send(tui.TeamsReloadedMsg{Teams: initialTeams})
+		greeting := "Connected to " + serverAddr
+		if operatorDisabled {
+			greeting = ""
+		}
 		prog.Send(tui.AppReadyMsg{
-			Greeting:  "Connected to " + serverAddr,
-			ModelName: modelName,
-			Endpoint:  endpoint,
-			History:   history,
+			Greeting:         greeting,
+			ModelName:        modelName,
+			Endpoint:         endpoint,
+			History:          history,
+			OperatorDisabled: operatorDisabled,
 		})
 	}
 }

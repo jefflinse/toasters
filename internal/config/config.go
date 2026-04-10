@@ -53,7 +53,7 @@ type AgentDefaultsConfig struct {
 
 // OperatorConfig holds configuration for the operator LLM backend.
 type OperatorConfig struct {
-	Provider string `mapstructure:"provider"` // provider ID from the providers list (default: "lm-studio")
+	Provider string `mapstructure:"provider"` // provider ID; empty means operator is disabled until configured
 	Model    string `mapstructure:"model"`
 	TeamsDir string `mapstructure:"teams_dir"`
 }
@@ -72,7 +72,7 @@ func Load() (*Config, error) {
 
 	viper.SetDefault("workspace_dir", filepath.Join(home, "toasters"))
 	viper.SetDefault("database_path", "")
-	viper.SetDefault("operator.provider", "lm-studio")
+	viper.SetDefault("operator.provider", "")
 	viper.SetDefault("operator.model", "")
 	viper.SetDefault("operator.teams_dir", filepath.Join(home, ".config", "toasters", "user", "teams"))
 	viper.SetDefault("agents.defaults.provider", "")

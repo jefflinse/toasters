@@ -1760,7 +1760,7 @@ func TestGetTeam_NotFound(t *testing.T) {
 	}
 }
 
-func TestStatus_IdleWhenNoTurn(t *testing.T) {
+func TestStatus_DisabledWhenNoOperator(t *testing.T) {
 	t.Parallel()
 
 	svc := NewLocal(LocalConfig{OperatorModel: "claude-3-sonnet"})
@@ -1768,31 +1768,8 @@ func TestStatus_IdleWhenNoTurn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Status() error = %v", err)
 	}
-	if status.State != OperatorStateIdle {
-		t.Errorf("State = %q, want %q", status.State, OperatorStateIdle)
-	}
-	if status.ModelName != "claude-3-sonnet" {
-		t.Errorf("ModelName = %q, want %q", status.ModelName, "claude-3-sonnet")
-	}
-	if status.CurrentTurnID != "" {
-		t.Errorf("CurrentTurnID = %q, want empty", status.CurrentTurnID)
-	}
-}
-
-func TestStatus_ReturnsCurrentTurnID(t *testing.T) {
-	t.Parallel()
-
-	svc := newTestService(t)
-	svc.turnMu.Lock()
-	svc.currentTurnID = "turn-in-progress"
-	svc.turnMu.Unlock()
-
-	status, err := svc.Status(context.Background())
-	if err != nil {
-		t.Fatalf("Status() error = %v", err)
-	}
-	if status.CurrentTurnID != "turn-in-progress" {
-		t.Errorf("CurrentTurnID = %q, want %q", status.CurrentTurnID, "turn-in-progress")
+	if status.State != OperatorStateDisabled {
+		t.Errorf("State = %q, want %q", status.State, OperatorStateDisabled)
 	}
 }
 

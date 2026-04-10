@@ -208,8 +208,11 @@ func runServe(cmd *cobra.Command, args []string) error {
 	rt.OnSessionStarted = svc.BroadcastSessionStarted
 
 	// Create and start the operator event loop.
+	// Both a store and a provider are required — if the provider couldn't be
+	// resolved (no providers configured, or operator.provider not found), the
+	// operator is left nil and the TUI will show the disabled state.
 	var op *operator.Operator
-	if store != nil {
+	if store != nil && client != nil {
 		textFlush := func(text string) {
 			svc.BroadcastOperatorText(text, "")
 		}

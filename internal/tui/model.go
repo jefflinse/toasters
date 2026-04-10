@@ -185,8 +185,9 @@ type Model struct {
 	// Agent pane state.
 	selectedAgentSlot int // which slot is highlighted in the agents pane
 
-	loading      bool // true while waiting for AppReadyMsg before initializing the conversation
-	loadingFrame int  // current animation frame index (0..numLoadingFrames-1)
+	loading          bool // true while waiting for AppReadyMsg before initializing the conversation
+	loadingFrame     int  // current animation frame index (0..numLoadingFrames-1)
+	operatorDisabled bool // true when no operator provider is configured
 
 	flashText string // transient status line; empty = hidden
 
@@ -865,6 +866,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, m.sendMessage()
 				}
 				// Not a recognized slash command — send to LLM.
+				if m.operatorDisabled {
+					m.cmdPopup.show = false
+					return m, m.addToast("Operator not configured — use /providers then /operator", toastWarning)
+				}
 				m.cmdPopup.show = false
 				return m, m.sendMessage()
 			}
@@ -1011,6 +1016,21 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case AppReadyMsg:
 		m.initMessages()
 		m.loading = false
+		m.operatorDisabled = msg.OperatorDisabled
+
+		if msg.OperatorDisabled {
+			// Operator is not configured — show setup message.
+			m.appendEntry(service.ChatEntry{
+				Message: service.ChatMessage{
+					Role:    service.MessageRoleAssistant,
+					Content: "No operator provider is configured. Use `/providers` to add a provider, then `/operator` to select it.",
+				},
+				Timestamp: time.Now(),
+			})
+			m.updateViewportContent()
+			return m, tea.Batch(cmds...)
+		}
+
 		// Hydrate sidebar fields from the server-provided operator status so
 		// they reflect the canonical configured values (rather than e.g. an
 		// LM Studio filename that ListModels would return). Set these BEFORE

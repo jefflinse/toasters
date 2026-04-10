@@ -1,5 +1,5 @@
 operator:
-  provider: lm-studio
+  provider:
   model:
 
 agents:

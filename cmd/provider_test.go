@@ -30,7 +30,7 @@ func TestResolveOperatorProvider_FromRegistry(t *testing.T) {
 	}
 }
 
-func TestResolveOperatorProvider_RegistryMiss_ReturnsError(t *testing.T) {
+func TestResolveOperatorProvider_RegistryMiss_ReturnsNil(t *testing.T) {
 	registry := provider.NewRegistry()
 
 	cfg := &config.Config{
@@ -41,20 +41,19 @@ func TestResolveOperatorProvider_RegistryMiss_ReturnsError(t *testing.T) {
 	}
 
 	p, err := resolveOperatorProvider(cfg, registry)
-	if err == nil {
-		t.Fatal("expected error for missing provider, got nil")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
 	if p != nil {
-		t.Error("expected nil provider on error")
+		t.Error("expected nil provider when provider not in registry")
 	}
 }
 
-func TestResolveOperatorProvider_DefaultLMStudio(t *testing.T) {
+func TestResolveOperatorProvider_EmptyProvider_ReturnsNil(t *testing.T) {
 	registry := provider.NewRegistry()
-	registeredProvider := provider.NewOpenAI("lm-studio", "http://localhost:1234", "", "my-model")
-	registry.Register("lm-studio", registeredProvider)
+	registry.Register("lm-studio", provider.NewOpenAI("lm-studio", "http://localhost:1234", "", "my-model"))
 
-	// When Operator.Provider is empty, it should default to "lm-studio".
+	// When Operator.Provider is empty, it should return nil (operator disabled).
 	cfg := &config.Config{
 		Operator: config.OperatorConfig{
 			Provider: "",
@@ -65,10 +64,7 @@ func TestResolveOperatorProvider_DefaultLMStudio(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if p != registeredProvider {
-		t.Error("expected to get the lm-studio provider back when provider is empty")
-	}
-	if p.Name() != "lm-studio" {
-		t.Errorf("Name() = %q, want %q", p.Name(), "lm-studio")
+	if p != nil {
+		t.Error("expected nil provider when operator.provider is empty")
 	}
 }

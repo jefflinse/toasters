@@ -825,6 +825,12 @@ func (s *LocalService) RespondToPrompt(ctx context.Context, requestID string, re
 
 // Status returns the current state of the operator.
 func (s *LocalService) Status(_ context.Context) (OperatorStatus, error) {
+	if s.cfg.Operator == nil {
+		return OperatorStatus{
+			State: OperatorStateDisabled,
+		}, nil
+	}
+
 	s.turnMu.Lock()
 	turnID := s.currentTurnID
 	s.turnMu.Unlock()

@@ -523,6 +523,8 @@ type ProgressState struct {
 type OperatorState string
 
 const (
+	// OperatorStateDisabled means no operator provider is configured.
+	OperatorStateDisabled OperatorState = "disabled"
 	// OperatorStateIdle means the operator is waiting for input.
 	OperatorStateIdle OperatorState = "idle"
 	// OperatorStateStreaming means the operator is generating a response.
