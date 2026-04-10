@@ -1015,7 +1015,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.operatorModal.err = msg.Err
 		} else {
 			m.operatorModal = operatorModalState{}
-			return m, m.addToast("✓ Operator set to '"+msg.ProviderID+"' — restart server to apply", toastSuccess)
+			m.operatorDisabled = false
+			return m, m.addToast("✓ Operator activated with '"+msg.ProviderID+"'", toastSuccess)
 		}
 
 	case TeamsReloadedMsg:

@@ -199,6 +199,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 		OperatorEndpoint: operatorEndpoint,
 		StartTime:        time.Now(),
 		Catalog:          catalog,
+		Registry:         registry,
 	})
 	defer svc.Shutdown()
 

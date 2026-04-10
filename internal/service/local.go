@@ -97,6 +97,7 @@ type LocalConfig struct {
 	OperatorEndpoint string    // for OperatorStatus.Endpoint (LLM provider URL)
 	StartTime        time.Time // for Health().Uptime
 	Catalog          CatalogSource // optional models.dev catalog; nil disables ListCatalogProviders
+	Registry         *provider.Registry // provider registry for live operator activation
 }
 
 // LocalService is the in-process implementation of Service. It delegates to
@@ -124,6 +125,10 @@ type LocalService struct {
 
 	// asyncSem bounds concurrent async operations (generate, promote, detect).
 	asyncSem chan struct{}
+
+	// Operator lifecycle — for live activation.
+	opMu     sync.Mutex
+	opCancel context.CancelFunc // cancels the running operator; nil if no operator
 }
 
 // localJobService wraps LocalService to implement JobService without conflicting
@@ -2468,9 +2473,103 @@ func (s *LocalService) ListConfiguredProviderIDs(_ context.Context) ([]string, e
 	return ids, nil
 }
 
-// SetOperatorProvider updates the operator provider ID in config.yaml.
+// SetOperatorProvider updates the operator provider ID in config.yaml and
+// starts the operator live if a provider with that ID is in the registry.
 func (s *LocalService) SetOperatorProvider(_ context.Context, providerID string) error {
-	return config.SetOperatorProvider(s.cfg.ConfigDir, providerID)
+	if err := config.SetOperatorProvider(s.cfg.ConfigDir, providerID); err != nil {
+		return err
+	}
+
+	// Attempt live activation.
+	if s.cfg.Registry == nil {
+		return nil
+	}
+	p, ok := s.cfg.Registry.Get(providerID)
+	if !ok {
+		slog.Warn("operator provider saved but not in registry yet; restart to activate", "provider", providerID)
+		return nil
+	}
+
+	return s.startOperator(p, providerID, "")
+}
+
+// startOperator creates and starts a new operator, replacing any existing one.
+func (s *LocalService) startOperator(p provider.Provider, providerID, model string) error {
+	s.opMu.Lock()
+	defer s.opMu.Unlock()
+
+	// Stop existing operator if running.
+	if s.opCancel != nil {
+		s.opCancel()
+		s.opCancel = nil
+	}
+
+	// Compose the operator system prompt.
+	var systemPrompt string
+	if s.cfg.Composer != nil {
+		composed, err := s.cfg.Composer.Compose(context.Background(), "operator", "system")
+		if err != nil {
+			slog.Warn("failed to compose operator for live activation", "error", err)
+		} else {
+			systemPrompt = composed.SystemPrompt
+		}
+	}
+	if systemPrompt == "" {
+		systemPrompt = "You are the Toasters operator."
+	}
+
+	textFlush := func(text string) {
+		s.BroadcastOperatorText(text, "")
+	}
+	batcher := newTextBatcher(16*time.Millisecond, textFlush)
+
+	op, err := operator.New(operator.Config{
+		Runtime:                s.cfg.Runtime,
+		Provider:               p,
+		Model:                  model,
+		WorkDir:                s.cfg.WorkspaceDir,
+		Store:                  s.cfg.Store,
+		Composer:               s.cfg.Composer,
+		Spawner:                s.cfg.Runtime,
+		SystemPrompt:           systemPrompt,
+		SystemEventBroadcaster: s,
+		OnText: func(text string) {
+			batcher.Add(text)
+		},
+		OnEvent: func(event operator.Event) {
+			s.BroadcastOperatorEvent(event)
+		},
+		OnTurnDone: func(tokensIn, tokensOut, reasoningTokens int) {
+			batcher.Flush()
+			s.BroadcastOperatorDone(model, tokensIn, tokensOut, reasoningTokens)
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("creating operator: %w", err)
+	}
+
+	// Update service state.
+	s.cfg.Operator = op
+	s.cfg.OperatorModel = model
+	s.cfg.Provider = p
+
+	// Look up endpoint for sidebar display.
+	if s.cfg.Loader != nil {
+		for _, pc := range s.cfg.Loader.Providers() {
+			if pc.Key() == providerID {
+				s.cfg.OperatorEndpoint = pc.Endpoint
+				break
+			}
+		}
+	}
+
+	// Start the operator event loop.
+	opCtx, opCancel := context.WithCancel(s.ctx)
+	s.opCancel = opCancel
+	op.Start(opCtx)
+
+	slog.Info("operator started live", "provider", providerID, "model", model)
+	return nil
 }
 
 // ---------------------------------------------------------------------------
