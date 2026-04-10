@@ -1018,16 +1018,27 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.operatorModal.providerIDs = msg.ProviderIDs
 		}
 
+	case ProviderModelsMsg:
+		m.operatorModal.modelsLoading = false
+		if msg.Err != nil {
+			m.operatorModal.modelsErr = msg.Err
+		} else {
+			m.operatorModal.models = msg.Models
+		}
+
 	case OperatorProviderSetMsg:
 		if msg.Err != nil {
 			m.operatorModal.err = msg.Err
 		} else {
+			label := msg.ProviderID
+			if msg.Model != "" {
+				label = msg.ProviderID + "/" + msg.Model
+			}
 			m.operatorModal = operatorModalState{}
 			m.operatorDisabled = false
 			m.stats.Connected = true
-			// Refresh operator status to update sidebar (model, endpoint).
 			return m, tea.Batch(
-				m.addToast("✓ Operator activated with '"+msg.ProviderID+"'", toastSuccess),
+				m.addToast("✓ Operator: "+label, toastSuccess),
 				m.refreshOperatorStatus(),
 				m.fetchModels(),
 			)

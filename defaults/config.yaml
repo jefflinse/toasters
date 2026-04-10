@@ -2,7 +2,7 @@ operator:
   provider:
   model:
 
-agents:
+roles:
   defaults:
     provider:
     model:

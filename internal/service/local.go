@@ -2475,8 +2475,8 @@ func (s *LocalService) ListConfiguredProviderIDs(_ context.Context) ([]string, e
 
 // SetOperatorProvider updates the operator provider ID in config.yaml and
 // starts the operator live if a provider with that ID is in the registry.
-func (s *LocalService) SetOperatorProvider(_ context.Context, providerID string) error {
-	if err := config.SetOperatorProvider(s.cfg.ConfigDir, providerID); err != nil {
+func (s *LocalService) SetOperatorProvider(_ context.Context, providerID string, model string) error {
+	if err := config.SetOperatorProvider(s.cfg.ConfigDir, providerID, model); err != nil {
 		return err
 	}
 
@@ -2490,7 +2490,27 @@ func (s *LocalService) SetOperatorProvider(_ context.Context, providerID string)
 		return nil
 	}
 
-	return s.startOperator(p, providerID, "")
+	return s.startOperator(p, providerID, model)
+}
+
+// ListProviderModels returns models from a specific configured provider.
+func (s *LocalService) ListProviderModels(ctx context.Context, providerID string) ([]ModelInfo, error) {
+	if s.cfg.Registry == nil {
+		return nil, fmt.Errorf("no provider registry")
+	}
+	p, ok := s.cfg.Registry.Get(providerID)
+	if !ok {
+		return nil, fmt.Errorf("provider %q not found", providerID)
+	}
+	provModels, err := p.Models(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("listing models for %q: %w", providerID, err)
+	}
+	models := make([]ModelInfo, 0, len(provModels))
+	for _, m := range provModels {
+		models = append(models, providerModelInfoToService(m))
+	}
+	return models, nil
 }
 
 // startOperator creates and starts a new operator, replacing any existing one.

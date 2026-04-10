@@ -764,15 +764,31 @@ func (s *Server) listConfiguredProviderIDs(w http.ResponseWriter, r *http.Reques
 func (s *Server) setOperatorProvider(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		ProviderID string `json:"provider_id"`
+		Model      string `json:"model"`
 	}
 	if !decodeBody(w, r, &req) {
 		return
 	}
-	if err := s.svc.System().SetOperatorProvider(r.Context(), req.ProviderID); err != nil {
+	if err := s.svc.System().SetOperatorProvider(r.Context(), req.ProviderID, req.Model); err != nil {
 		handleServiceError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// listProviderModels handles GET /api/v1/providers/{id}/models.
+func (s *Server) listProviderModels(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	models, err := s.svc.System().ListProviderModels(r.Context(), id)
+	if err != nil {
+		handleServiceError(w, r, err)
+		return
+	}
+	wireModels := make([]wireModelInfo, 0, len(models))
+	for _, m := range models {
+		wireModels = append(wireModels, modelInfoToWire(m))
+	}
+	writeJSON(w, http.StatusOK, PaginatedResponse[wireModelInfo]{Items: wireModels, Total: len(wireModels)})
 }
 
 // listCatalog handles GET /api/v1/catalog.

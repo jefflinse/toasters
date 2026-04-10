@@ -718,9 +718,10 @@ func (s *remoteSystemService) ListConfiguredProviderIDs(ctx context.Context) ([]
 	return ids, nil
 }
 
-func (s *remoteSystemService) SetOperatorProvider(ctx context.Context, providerID string) error {
+func (s *remoteSystemService) SetOperatorProvider(ctx context.Context, providerID string, model string) error {
 	resp, err := s.c.http.put(ctx, "/api/v1/operator/provider", map[string]string{
 		"provider_id": providerID,
+		"model":       model,
 	})
 	if err != nil {
 		return fmt.Errorf("set operator provider: %w", err)
@@ -730,6 +731,22 @@ func (s *remoteSystemService) SetOperatorProvider(ctx context.Context, providerI
 		return fmt.Errorf("set operator provider: unexpected status %d", resp.StatusCode)
 	}
 	return nil
+}
+
+func (s *remoteSystemService) ListProviderModels(ctx context.Context, providerID string) ([]service.ModelInfo, error) {
+	resp, err := s.c.http.get(ctx, "/api/v1/providers/"+providerID+"/models")
+	if err != nil {
+		return nil, fmt.Errorf("list provider models: %w", err)
+	}
+	pr, err := decodeResponse[paginatedResponse[wireModelInfo]](resp)
+	if err != nil {
+		return nil, fmt.Errorf("list provider models: %w", err)
+	}
+	models := make([]service.ModelInfo, 0, len(pr.Items))
+	for _, w := range pr.Items {
+		models = append(models, wireModelInfoToService(w))
+	}
+	return models, nil
 }
 
 func (s *remoteSystemService) ListMCPServers(ctx context.Context) ([]service.MCPServerStatus, error) {

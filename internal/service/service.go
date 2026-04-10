@@ -339,9 +339,13 @@ type SystemService interface {
 	// YAML files in the providers/ directory (i.e. are configured locally).
 	ListConfiguredProviderIDs(ctx context.Context) ([]string, error)
 
-	// SetOperatorProvider sets the operator's provider ID in config.yaml.
-	// Requires a server restart to take effect.
-	SetOperatorProvider(ctx context.Context, providerID string) error
+	// SetOperatorProvider sets the operator's provider and model in config.yaml
+	// and starts the operator live if the provider is available.
+	SetOperatorProvider(ctx context.Context, providerID string, model string) error
+
+	// ListProviderModels returns the models available from a specific configured
+	// provider, queried live from the provider's API.
+	ListProviderModels(ctx context.Context, providerID string) ([]ModelInfo, error)
 }
 
 // ---------------------------------------------------------------------------

@@ -424,4 +424,9 @@ func (m *shutdownTestSystem) UpdateProvider(_ context.Context, _ service.AddProv
 func (m *shutdownTestSystem) ListConfiguredProviderIDs(_ context.Context) ([]string, error) {
 	return nil, nil
 }
-func (m *shutdownTestSystem) SetOperatorProvider(_ context.Context, _ string) error { return nil }
+func (m *shutdownTestSystem) SetOperatorProvider(_ context.Context, _ string, _ string) error {
+	return nil
+}
+func (m *shutdownTestSystem) ListProviderModels(_ context.Context, _ string) ([]service.ModelInfo, error) {
+	return nil, nil
+}

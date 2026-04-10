@@ -200,7 +200,12 @@ func (m *mockSystemService) UpdateProvider(_ context.Context, _ service.AddProvi
 func (m *mockSystemService) ListConfiguredProviderIDs(_ context.Context) ([]string, error) {
 	return nil, nil
 }
-func (m *mockSystemService) SetOperatorProvider(_ context.Context, _ string) error { return nil }
+func (m *mockSystemService) SetOperatorProvider(_ context.Context, _ string, _ string) error {
+	return nil
+}
+func (m *mockSystemService) ListProviderModels(_ context.Context, _ string) ([]service.ModelInfo, error) {
+	return nil, nil
+}
 
 // ---------------------------------------------------------------------------
 // Handler tests

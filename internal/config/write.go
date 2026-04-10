@@ -46,7 +46,7 @@ func AddProvider(configDir string, entry ProviderEntry) error {
 }
 
 // SetOperatorProvider updates the operator.provider field in config.yaml.
-func SetOperatorProvider(configDir, providerID string) error {
+func SetOperatorProvider(configDir, providerID, model string) error {
 	configPath := filepath.Join(configDir, "config.yaml")
 
 	data, err := os.ReadFile(configPath)
@@ -77,8 +77,9 @@ func SetOperatorProvider(configDir, providerID string) error {
 		)
 	}
 
-	// Set the provider field.
+	// Set the provider and model fields.
 	setMappingValue(opNode, "provider", providerID)
+	setMappingValue(opNode, "model", model)
 
 	out, err := yaml.Marshal(&root)
 	if err != nil {
