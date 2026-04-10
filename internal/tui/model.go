@@ -978,14 +978,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Err != nil {
 			m.catalogModal.configErr = msg.Err.Error()
 		} else {
-			m.catalogModal.configDone = "Provider saved! It will be available shortly."
-			// Mark as configured so it shows the indicator immediately.
-			id := m.catalogModal.configValues[fieldID]
-			if m.catalogModal.configuredIDs == nil {
-				m.catalogModal.configuredIDs = make(map[string]bool)
-			}
-			m.catalogModal.configuredIDs[id] = true
-			m.catalogModal.filterProviders()
+			name := m.catalogModal.configValues[fieldName]
+			// Close the entire modal and show a toast.
+			m.catalogModal = catalogModalState{}
+			return m, m.addToast("✓ Provider '"+name+"' saved", toastSuccess)
 		}
 
 	case TeamsReloadedMsg:
