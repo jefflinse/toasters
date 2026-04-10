@@ -68,6 +68,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 
 	// Bootstrap runs before config.Load() so that the default config.yaml is
 	// written to disk before Viper reads it.
+	bootstrap.UserFS = defaults.UserFiles
 	if err := bootstrap.Run(configDir, defaults.SystemFiles, defaults.DefaultConfig); err != nil {
 		slog.Warn("bootstrap failed", "error", err)
 	}
@@ -114,10 +115,21 @@ func runServe(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	// Create prompt engine for role-based prompt composition.
+	// Must be created before the loader so role-based teams can resolve.
+	promptEngine := prompt.NewEngine()
+	userDir := filepath.Join(configDir, "user")
+	if err := promptEngine.LoadDir(userDir); err != nil {
+		slog.Warn("failed to load prompt definitions", "dir", userDir, "error", err)
+	} else {
+		slog.Info("loaded prompt definitions", "roles", len(promptEngine.Roles()))
+	}
+
 	// Load definitions from files into DB.
 	var ldr *loader.Loader
 	if store != nil {
 		ldr = loader.New(store, configDir)
+		ldr.SetPromptEngine(promptEngine)
 		if err := ldr.Load(context.Background()); err != nil {
 			slog.Warn("initial definition load failed", "error", err)
 		}
@@ -127,15 +139,6 @@ func runServe(cmd *cobra.Command, args []string) error {
 	var composer *compose.Composer
 	if store != nil {
 		composer = compose.New(store, cfg.Agents.Defaults.Provider, cfg.Agents.Defaults.Model)
-	}
-
-	// Create prompt engine for role-based prompt composition.
-	promptEngine := prompt.NewEngine()
-	userDir := filepath.Join(configDir, "user")
-	if err := promptEngine.LoadDir(userDir); err != nil {
-		slog.Warn("failed to load prompt definitions", "dir", userDir, "error", err)
-	} else {
-		slog.Info("loaded prompt definitions", "roles", len(promptEngine.Roles()))
 	}
 
 	// Create provider registry and register providers from providers/*.yaml.

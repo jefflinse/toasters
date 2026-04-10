@@ -16,6 +16,7 @@ import (
 
 	"github.com/jefflinse/toasters/internal/agentfmt"
 	"github.com/jefflinse/toasters/internal/db"
+	"github.com/jefflinse/toasters/internal/prompt"
 	"github.com/jefflinse/toasters/internal/provider"
 
 	"gopkg.in/yaml.v3"
@@ -23,8 +24,9 @@ import (
 
 // Loader walks config directories and loads definitions into the database.
 type Loader struct {
-	store     db.Store
-	configDir string
+	store        db.Store
+	configDir    string
+	promptEngine *prompt.Engine // optional; for role-based team loading
 
 	provMu    sync.RWMutex
 	providers []provider.ProviderConfig
@@ -33,6 +35,11 @@ type Loader struct {
 // New creates a new Loader.
 func New(store db.Store, configDir string) *Loader {
 	return &Loader{store: store, configDir: configDir}
+}
+
+// SetPromptEngine sets the prompt engine for role-based team loading.
+func (l *Loader) SetPromptEngine(e *prompt.Engine) {
+	l.promptEngine = e
 }
 
 // Providers returns the most recently loaded provider configs.
@@ -336,6 +343,15 @@ func (l *Loader) loadUserTeams(teamsDir string, sharedAgents, systemAgents map[s
 
 		// Parse team.md if it exists.
 		teamPath := filepath.Join(teamDir, "team.md")
+
+		// Check for new role-based team format first.
+		if t, a, ta, ok := l.tryLoadRoleBasedTeam(teamPath, teamID, teamDir, source); ok {
+			teams = append(teams, t)
+			agents = append(agents, a...)
+			teamAgents = append(teamAgents, ta...)
+			continue
+		}
+
 		td, err := agentfmt.ParseTeam(teamPath)
 		if err != nil {
 			if isAuto {
@@ -428,6 +444,111 @@ func (l *Loader) loadUserTeams(teamsDir string, sharedAgents, systemAgents map[s
 	}
 
 	return teams, agents, teamAgents
+}
+
+// roleTeamDef is the YAML frontmatter format for role-based teams.
+type roleTeamDef struct {
+	Name        string   `yaml:"name"`
+	Description string   `yaml:"description"`
+	Lead        string   `yaml:"lead"`
+	Roles       []string `yaml:"roles"`
+}
+
+// tryLoadRoleBasedTeam attempts to parse a team.md as a role-based team.
+// Returns the team, synthetic agents, and team-agent mappings if successful.
+func (l *Loader) tryLoadRoleBasedTeam(teamPath, teamID, teamDir, source string) (*db.Team, []*db.Agent, []*db.TeamAgent, bool) {
+	data, err := os.ReadFile(teamPath)
+	if err != nil {
+		return nil, nil, nil, false
+	}
+
+	// Parse frontmatter to check for the roles field.
+	var def roleTeamDef
+	content := string(data)
+	if !strings.HasPrefix(content, "---\n") {
+		return nil, nil, nil, false
+	}
+	rest := content[4:]
+	idx := strings.Index(rest, "\n---")
+	if idx < 0 {
+		return nil, nil, nil, false
+	}
+	if err := yaml.Unmarshal([]byte(rest[:idx]), &def); err != nil {
+		return nil, nil, nil, false
+	}
+
+	// If no roles field, this is not a role-based team.
+	if len(def.Roles) == 0 {
+		return nil, nil, nil, false
+	}
+
+	slog.Info("loading role-based team", "team", teamID, "lead", def.Lead, "roles", len(def.Roles))
+
+	team := &db.Team{
+		ID:          teamID,
+		Name:        def.Name,
+		Description: def.Description,
+		Source:      source,
+		SourcePath:  teamDir,
+	}
+
+	var agents []*db.Agent
+	var teamAgents []*db.TeamAgent
+
+	// Create a synthetic agent for the lead role.
+	if def.Lead != "" {
+		leadAgentID := teamID + "/" + def.Lead
+		team.LeadAgent = leadAgentID
+
+		leadAgent := l.syntheticAgentFromRole(def.Lead, leadAgentID, teamID, source)
+		agents = append(agents, leadAgent)
+		teamAgents = append(teamAgents, &db.TeamAgent{
+			TeamID:  teamID,
+			AgentID: leadAgentID,
+			Role:    "lead",
+		})
+	}
+
+	// Create synthetic agents for each worker role.
+	for _, roleName := range def.Roles {
+		agentID := teamID + "/" + roleName
+		agent := l.syntheticAgentFromRole(roleName, agentID, teamID, source)
+		agents = append(agents, agent)
+		teamAgents = append(teamAgents, &db.TeamAgent{
+			TeamID:  teamID,
+			AgentID: agentID,
+			Role:    "worker",
+		})
+	}
+
+	return team, agents, teamAgents, true
+}
+
+// syntheticAgentFromRole creates a db.Agent from a prompt engine role.
+// The agent's system prompt is left empty — it will be composed by the
+// prompt engine at spawn time.
+func (l *Loader) syntheticAgentFromRole(roleName, agentID, teamID, source string) *db.Agent {
+	agent := &db.Agent{
+		ID:     agentID,
+		Name:   roleName,
+		Mode:   "worker",
+		Source: source,
+		TeamID: teamID,
+	}
+
+	// If the prompt engine is available, populate metadata from the role.
+	if l.promptEngine != nil {
+		if role := l.promptEngine.Role(roleName); role != nil {
+			agent.Name = role.Name
+			agent.Description = role.Description
+			agent.Mode = role.Mode
+			if agent.Mode == "" {
+				agent.Mode = "worker"
+			}
+		}
+	}
+
+	return agent
 }
 
 // resolveAgent looks up an agent name across scopes in priority order:

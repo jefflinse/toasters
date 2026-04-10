@@ -24,6 +24,10 @@ import (
 // defaultConfig is the default config.yaml content to write on first run
 // (e.g. defaults.DefaultConfig). It is only written if config.yaml does not
 // already exist.
+// UserFS is the embedded filesystem containing default user definition files
+// (roles, toolchains, instructions, teams). Set by the caller before Run().
+var UserFS embed.FS
+
 func Run(configDir string, systemFS embed.FS, defaultConfig []byte) error {
 	if err := firstRun(configDir, systemFS, defaultConfig); err != nil {
 		return fmt.Errorf("first-run bootstrap: %w", err)
@@ -84,10 +88,19 @@ func firstRun(configDir string, systemFS embed.FS, defaultConfig []byte) error {
 		return fmt.Errorf("copying system files: %w", err)
 	}
 
-	// Create empty user directory structure.
-	for _, dir := range userDirs(configDir) {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return fmt.Errorf("creating %s: %w", dir, err)
+	// Copy default user files (roles, toolchains, instructions, teams).
+	userDir := filepath.Join(configDir, "user")
+	if UserFS != (embed.FS{}) {
+		if err := copyEmbeddedFS(UserFS, "user", userDir); err != nil {
+			return fmt.Errorf("copying default user files: %w", err)
+		}
+		slog.Info("Wrote default user files", "dir", userDir)
+	} else {
+		// No user files embedded — just create empty directories.
+		for _, dir := range userDirs(configDir) {
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				return fmt.Errorf("creating %s: %w", dir, err)
+			}
 		}
 	}
 
@@ -520,6 +533,9 @@ func userDirs(configDir string) []string {
 		filepath.Join(configDir, "user", "skills"),
 		filepath.Join(configDir, "user", "agents"),
 		filepath.Join(configDir, "user", "teams"),
+		filepath.Join(configDir, "user", "roles"),
+		filepath.Join(configDir, "user", "toolchains"),
+		filepath.Join(configDir, "user", "instructions"),
 	}
 }
 
