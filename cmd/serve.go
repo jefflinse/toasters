@@ -67,6 +67,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 
 	// Bootstrap runs before config.Load() so that the default config.yaml is
 	// written to disk before Viper reads it.
+	bootstrap.ProviderFS = defaults.ProviderFiles
 	if err := bootstrap.Run(configDir, defaults.SystemFiles, defaults.DefaultConfig); err != nil {
 		slog.Warn("bootstrap failed", "error", err)
 	}
@@ -128,16 +129,9 @@ func runServe(cmd *cobra.Command, args []string) error {
 		composer = compose.New(store, cfg.Agents.Defaults.Provider, cfg.Agents.Defaults.Model)
 	}
 
-	// Create provider registry and register configured providers.
+	// Create provider registry and register providers from providers/*.yaml.
 	registry := provider.NewRegistry()
-	for _, pc := range cfg.Providers {
-		p, provErr := provider.NewFromConfig(pc)
-		if provErr != nil {
-			slog.Warn("failed to create provider", "id", pc.ID, "name", pc.Name, "error", provErr)
-			continue
-		}
-		registry.Register(pc.Key(), p)
-	}
+	registerProviders(registry, ldr)
 
 	// Create the runtime for agent session management.
 	rt := runtime.New(store, registry)
@@ -167,10 +161,12 @@ func runServe(cmd *cobra.Command, args []string) error {
 	// the sidebar. Falls back to empty string if not found, which is fine —
 	// the sidebar will simply leave the field blank.
 	var operatorEndpoint string
-	for _, pc := range cfg.Providers {
-		if pc.Key() == cfg.Operator.Provider {
-			operatorEndpoint = pc.Endpoint
-			break
+	if ldr != nil {
+		for _, pc := range ldr.Providers() {
+			if pc.Key() == cfg.Operator.Provider {
+				operatorEndpoint = pc.Endpoint
+				break
+			}
 		}
 	}
 
@@ -278,6 +274,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 
 	if ldr != nil {
 		defWatcher, defWatchErr := loader.NewWatcher(ldr, func() {
+			registerProviders(registry, ldr)
 			svc.BroadcastDefinitionsReloaded()
 		})
 		if defWatchErr != nil {
@@ -326,4 +323,24 @@ func runServe(cmd *cobra.Command, args []string) error {
 	}
 
 	return nil
+}
+
+// registerProviders reads provider configs from the loader and registers them
+// in the provider registry. Safe to call multiple times (hot-reload).
+func registerProviders(registry *provider.Registry, ldr *loader.Loader) {
+	if ldr == nil {
+		return
+	}
+	for _, pc := range ldr.Providers() {
+		// Expand ${ENV_VAR} references in API key and endpoint.
+		pc.APIKey = os.Expand(pc.APIKey, os.Getenv)
+		pc.Endpoint = os.Expand(pc.Endpoint, os.Getenv)
+
+		p, err := provider.NewFromConfig(pc)
+		if err != nil {
+			slog.Warn("failed to create provider", "id", pc.ID, "name", pc.Name, "error", err)
+			continue
+		}
+		registry.Register(pc.Key(), p)
+	}
 }

@@ -12,20 +12,36 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 
 	"github.com/jefflinse/toasters/internal/agentfmt"
 	"github.com/jefflinse/toasters/internal/db"
+	"github.com/jefflinse/toasters/internal/provider"
+
+	"gopkg.in/yaml.v3"
 )
 
 // Loader walks config directories and loads definitions into the database.
 type Loader struct {
 	store     db.Store
 	configDir string
+
+	provMu    sync.RWMutex
+	providers []provider.ProviderConfig
 }
 
 // New creates a new Loader.
 func New(store db.Store, configDir string) *Loader {
 	return &Loader{store: store, configDir: configDir}
+}
+
+// Providers returns the most recently loaded provider configs.
+func (l *Loader) Providers() []provider.ProviderConfig {
+	l.provMu.RLock()
+	defer l.provMu.RUnlock()
+	out := make([]provider.ProviderConfig, len(l.providers))
+	copy(out, l.providers)
+	return out
 }
 
 // Load walks all directories, parses definitions, resolves references,
@@ -108,12 +124,55 @@ func (l *Loader) Load(ctx context.Context) error {
 	agents = append(agents, uAgents...)
 	teamAgents = append(teamAgents, uTeamAgents...)
 
-	// 5. Rebuild database.
+	// 5. Load providers from providers/*.yaml.
+	provs := l.loadProviders()
+	l.provMu.Lock()
+	l.providers = provs
+	l.provMu.Unlock()
+
+	// 6. Rebuild database.
 	if err := l.store.RebuildDefinitions(ctx, skills, agents, teams, teamAgents); err != nil {
 		return fmt.Errorf("rebuilding definitions: %w", err)
 	}
 
 	return nil
+}
+
+// loadProviders reads all .yaml files in the providers/ directory.
+func (l *Loader) loadProviders() []provider.ProviderConfig {
+	dir := filepath.Join(l.configDir, "providers")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+
+	var configs []provider.ProviderConfig
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".yaml") {
+			continue
+		}
+		path := filepath.Join(dir, e.Name())
+		if info, err := e.Info(); err == nil && info.Size() > maxDefinitionFileSize {
+			slog.Warn("skipping oversized provider file", "path", path, "size", info.Size())
+			continue
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			slog.Warn("skipping unreadable provider file", "path", path, "error", err)
+			continue
+		}
+		var pc provider.ProviderConfig
+		if err := yaml.Unmarshal(data, &pc); err != nil {
+			slog.Warn("skipping unparseable provider file", "path", path, "error", err)
+			continue
+		}
+		if pc.ID == "" && pc.Name == "" {
+			slog.Warn("skipping provider file with no id or name", "path", path)
+			continue
+		}
+		configs = append(configs, pc)
+	}
+	return configs
 }
 
 // maxDefinitionFileSize is the maximum size (in bytes) for agent/skill/team

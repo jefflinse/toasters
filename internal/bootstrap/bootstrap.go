@@ -24,6 +24,10 @@ import (
 // defaultConfig is the default config.yaml content to write on first run
 // (e.g. defaults.DefaultConfig). It is only written if config.yaml does not
 // already exist.
+// ProviderFS is the embedded filesystem containing default provider YAML files.
+// Set by the caller (cmd/serve.go) to defaults.ProviderFiles.
+var ProviderFS embed.FS
+
 func Run(configDir string, systemFS embed.FS, defaultConfig []byte) error {
 	if err := firstRun(configDir, systemFS, defaultConfig); err != nil {
 		return fmt.Errorf("first-run bootstrap: %w", err)
@@ -86,6 +90,15 @@ func firstRun(configDir string, systemFS embed.FS, defaultConfig []byte) error {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return fmt.Errorf("creating %s: %w", dir, err)
 		}
+	}
+
+	// Copy default provider files if providers/ doesn't exist yet.
+	providersDir := filepath.Join(configDir, "providers")
+	if !dirExists(providersDir) && ProviderFS != (embed.FS{}) {
+		if err := copyEmbeddedFS(ProviderFS, "providers", providersDir); err != nil {
+			return fmt.Errorf("copying default provider files: %w", err)
+		}
+		slog.Info("Wrote default provider files", "dir", providersDir)
 	}
 
 	slog.Info("Initialized toasters config", "dir", configDir)
@@ -497,7 +510,10 @@ func removeMappingKey(node *yaml.Node, key string) {
 // ensureDirectories creates all required directories if they don't already exist.
 func ensureDirectories(configDir string) error {
 	dirs := append(
-		[]string{filepath.Join(configDir, "system")},
+		[]string{
+			filepath.Join(configDir, "system"),
+			filepath.Join(configDir, "providers"),
+		},
 		userDirs(configDir)...,
 	)
 	for _, dir := range dirs {

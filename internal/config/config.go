@@ -10,18 +10,17 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
-
-	"github.com/jefflinse/toasters/internal/provider"
 )
 
 // Config holds all application configuration.
+// Providers are no longer stored here — they live in providers/*.yaml files
+// and are loaded by the Loader.
 type Config struct {
-	WorkspaceDir string                    `mapstructure:"workspace_dir"`
-	DatabasePath string                    `mapstructure:"database_path"`
-	Operator     OperatorConfig            `mapstructure:"operator"`
-	Providers    []provider.ProviderConfig `mapstructure:"providers"`
-	Agents       AgentsConfig              `mapstructure:"agents"`
-	MCP          MCPConfig                 `mapstructure:"mcp"`
+	WorkspaceDir string         `mapstructure:"workspace_dir"`
+	DatabasePath string         `mapstructure:"database_path"`
+	Operator     OperatorConfig `mapstructure:"operator"`
+	Agents       AgentsConfig   `mapstructure:"agents"`
+	MCP          MCPConfig      `mapstructure:"mcp"`
 }
 
 // MCPServerConfig holds configuration for a single MCP server.
@@ -91,9 +90,7 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 
-	warnPlaintextAPIKeys(&cfg)
 	expandMCPEnvVars(&cfg)
-	expandAPIKeys(&cfg)
 	ensureConfigFilePermissions()
 
 	return &cfg, nil
@@ -103,19 +100,6 @@ func Load() (*Config, error) {
 // not use the ${ENV_VAR} syntax for environment variable substitution.
 func isPlaintextKey(key string) bool {
 	return key != "" && !strings.Contains(key, "${")
-}
-
-// warnPlaintextAPIKeys checks all configured providers for plaintext API keys
-// and emits slog warnings recommending env var syntax.
-func warnPlaintextAPIKeys(cfg *Config) {
-	for _, p := range cfg.Providers {
-		if isPlaintextKey(p.APIKey) {
-			slog.Warn("plaintext API key in config",
-				"provider", p.Name,
-				"recommendation", "use ${ENV_VAR} syntax instead",
-			)
-		}
-	}
 }
 
 // ensureConfigFilePermissions checks the config file permissions and tightens
@@ -159,15 +143,6 @@ func expandMCPEnvVars(cfg *Config) {
 		for k, v := range s.Headers {
 			s.Headers[k] = os.Expand(v, os.Getenv)
 		}
-	}
-}
-
-// expandAPIKeys expands ${VAR} references in provider API keys and endpoints
-// using os.Getenv.
-func expandAPIKeys(cfg *Config) {
-	for i := range cfg.Providers {
-		cfg.Providers[i].APIKey = os.Expand(cfg.Providers[i].APIKey, os.Getenv)
-		cfg.Providers[i].Endpoint = os.Expand(cfg.Providers[i].Endpoint, os.Getenv)
 	}
 }
 

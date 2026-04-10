@@ -1,15 +1,3 @@
-providers:
-  # local provider
-  - id: lm-studio
-    name: LM Studio
-    type: local
-    endpoint: http://localhost:1234
-  # remote providers
-  - id: anthropic
-    name: Anthropic
-    type: anthropic
-    api_key: ${ANTHROPIC_API_KEY}
-
 operator:
   provider: lm-studio
   model:

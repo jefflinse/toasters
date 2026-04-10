@@ -61,8 +61,10 @@ func (w *Watcher) Start(ctx context.Context) error {
 			if event.Op&fsnotify.Create != 0 {
 				w.maybeWatchNewDir(event.Name)
 			}
-			// Only react to .md file changes.
-			if strings.HasSuffix(event.Name, ".md") {
+			// React to .md file changes (definitions) and .yaml file changes in providers/.
+			isProviderYAML := strings.HasSuffix(event.Name, ".yaml") &&
+				strings.HasPrefix(event.Name, filepath.Join(w.loader.configDir, "providers"))
+			if strings.HasSuffix(event.Name, ".md") || isProviderYAML {
 				if !debounceTimer.Stop() {
 					select {
 					case <-debounceTimer.C:
@@ -106,6 +108,7 @@ func (w *Watcher) addWatchDirs() {
 		filepath.Join(configDir, "user", "skills"),
 		filepath.Join(configDir, "user", "agents"),
 		filepath.Join(configDir, "user", "teams"),
+		filepath.Join(configDir, "providers"),
 	}
 
 	for _, dir := range dirs {

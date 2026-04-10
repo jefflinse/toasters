@@ -973,7 +973,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Err != nil {
 			m.catalogModal.configErr = msg.Err.Error()
 		} else {
-			m.catalogModal.configDone = "Provider saved to config.yaml (restart server to activate)"
+			m.catalogModal.configDone = "Provider saved! It will be available shortly."
 		}
 
 	case TeamsReloadedMsg:

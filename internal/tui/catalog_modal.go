@@ -98,8 +98,8 @@ func (m *Model) updateCatalogModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 
 	case "enter":
-		// Enter on a provider → open configure form.
-		if m.catalogModal.focus == 0 && len(m.catalogModal.providers) > 0 &&
+		// Enter opens the configure form for the selected provider (from either panel).
+		if len(m.catalogModal.providers) > 0 &&
 			m.catalogModal.providerIdx < len(m.catalogModal.providers) {
 			p := m.catalogModal.providers[m.catalogModal.providerIdx]
 			m.catalogModal.configuring = true
