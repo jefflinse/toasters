@@ -44,3 +44,26 @@ func AddProvider(configDir string, entry ProviderEntry) error {
 
 	return nil
 }
+
+// UpdateProvider overwrites an existing provider YAML file.
+// If the file doesn't exist, it creates it (upsert behavior).
+func UpdateProvider(configDir string, entry ProviderEntry) error {
+	providersDir := filepath.Join(configDir, "providers")
+	if err := os.MkdirAll(providersDir, 0o755); err != nil {
+		return fmt.Errorf("creating providers dir: %w", err)
+	}
+
+	filename := entry.ID + ".yaml"
+	path := filepath.Join(providersDir, filename)
+
+	data, err := yaml.Marshal(&entry)
+	if err != nil {
+		return fmt.Errorf("marshaling provider: %w", err)
+	}
+
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		return fmt.Errorf("writing provider file: %w", err)
+	}
+
+	return nil
+}

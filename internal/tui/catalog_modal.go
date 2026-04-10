@@ -28,14 +28,22 @@ const (
 type catalogModalState struct {
 	show        bool
 	providers   []service.CatalogProvider
-	providerIdx int // selected provider in left panel
+	providerIdx int // selected provider in filtered list
 	modelIdx    int // selected model in right panel
 	focus       int // 0=left panel (providers), 1=right panel (models)
 	loading     bool
 	err         error
 
+	// Search state.
+	search   string                    // current search query
+	filtered []service.CatalogProvider // providers matching search
+
+	// Configured provider tracking.
+	configuredIDs map[string]bool // IDs of locally configured providers
+
 	// Configure form sub-state.
 	configuring  bool
+	configEdit   bool               // true if editing an existing provider
 	configField  configField
 	configValues [fieldCount]string // indexed by configField
 	configErr    string             // validation/save error
@@ -44,8 +52,9 @@ type catalogModalState struct {
 
 // CatalogMsg is sent when the catalog data finishes loading.
 type CatalogMsg struct {
-	Providers []service.CatalogProvider
-	Err       error
+	Providers     []service.CatalogProvider
+	ConfiguredIDs []string
+	Err           error
 }
 
 // AddProviderMsg is sent when a provider has been saved.
@@ -53,20 +62,29 @@ type AddProviderMsg struct {
 	Err error
 }
 
-// fetchCatalog returns a command that fetches the models.dev catalog.
+// fetchCatalog returns a command that fetches the models.dev catalog and configured IDs.
 func (m Model) fetchCatalog() tea.Cmd {
 	svc := m.svc
 	return func() tea.Msg {
 		providers, err := svc.System().ListCatalogProviders(context.Background())
-		return CatalogMsg{Providers: providers, Err: err}
+		if err != nil {
+			return CatalogMsg{Err: err}
+		}
+		ids, _ := svc.System().ListConfiguredProviderIDs(context.Background())
+		return CatalogMsg{Providers: providers, ConfiguredIDs: ids}
 	}
 }
 
-// addProvider returns a command that saves a provider to config.
-func (m Model) addProvider(req service.AddProviderRequest) tea.Cmd {
+// saveProvider returns a command that saves (add or update) a provider to config.
+func (m Model) saveProvider(req service.AddProviderRequest, isEdit bool) tea.Cmd {
 	svc := m.svc
 	return func() tea.Msg {
-		err := svc.System().AddProvider(context.Background(), req)
+		var err error
+		if isEdit {
+			err = svc.System().UpdateProvider(context.Background(), req)
+		} else {
+			err = svc.System().AddProvider(context.Background(), req)
+		}
 		return AddProviderMsg{Err: err}
 	}
 }
@@ -79,6 +97,36 @@ var configFieldLabels = [fieldCount]string{
 	"API Key:  ",
 }
 
+// filterProviders returns providers matching the search query, with configured first.
+func (s *catalogModalState) filterProviders() {
+	query := strings.ToLower(s.search)
+	s.filtered = s.filtered[:0]
+
+	// Configured providers first.
+	for _, p := range s.providers {
+		if !s.configuredIDs[p.ID] {
+			continue
+		}
+		if query != "" && !strings.Contains(strings.ToLower(p.Name), query) &&
+			!strings.Contains(strings.ToLower(p.ID), query) {
+			continue
+		}
+		s.filtered = append(s.filtered, p)
+	}
+
+	// Then unconfigured.
+	for _, p := range s.providers {
+		if s.configuredIDs[p.ID] {
+			continue
+		}
+		if query != "" && !strings.Contains(strings.ToLower(p.Name), query) &&
+			!strings.Contains(strings.ToLower(p.ID), query) {
+			continue
+		}
+		s.filtered = append(s.filtered, p)
+	}
+}
+
 // updateCatalogModal handles key presses when the catalog modal is open.
 func (m *Model) updateCatalogModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	// Configure form sub-state.
@@ -88,7 +136,15 @@ func (m *Model) updateCatalogModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	switch msg.String() {
 	case "esc":
-		m.catalogModal.show = false
+		// Esc clears search first, then closes modal.
+		if m.catalogModal.search != "" {
+			m.catalogModal.search = ""
+			m.catalogModal.providerIdx = 0
+			m.catalogModal.modelIdx = 0
+			m.catalogModal.filterProviders()
+		} else {
+			m.catalogModal.show = false
+		}
 
 	case "tab":
 		if m.catalogModal.focus == 0 {
@@ -99,13 +155,14 @@ func (m *Model) updateCatalogModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	case "enter":
 		// Enter opens the configure form for the selected provider (from either panel).
-		if len(m.catalogModal.providers) > 0 &&
-			m.catalogModal.providerIdx < len(m.catalogModal.providers) {
-			p := m.catalogModal.providers[m.catalogModal.providerIdx]
+		if len(m.catalogModal.filtered) > 0 &&
+			m.catalogModal.providerIdx < len(m.catalogModal.filtered) {
+			p := m.catalogModal.filtered[m.catalogModal.providerIdx]
 			m.catalogModal.configuring = true
 			m.catalogModal.configField = fieldID
 			m.catalogModal.configErr = ""
 			m.catalogModal.configDone = ""
+			m.catalogModal.configEdit = m.catalogModal.configuredIDs[p.ID]
 
 			// Pre-fill from catalog data.
 			m.catalogModal.configValues[fieldID] = p.ID
@@ -143,17 +200,36 @@ func (m *Model) updateCatalogModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	case "down":
 		if m.catalogModal.focus == 0 {
-			if m.catalogModal.providerIdx < len(m.catalogModal.providers)-1 {
+			if m.catalogModal.providerIdx < len(m.catalogModal.filtered)-1 {
 				m.catalogModal.providerIdx++
 				m.catalogModal.modelIdx = 0
 			}
 		} else {
-			if len(m.catalogModal.providers) > 0 && m.catalogModal.providerIdx < len(m.catalogModal.providers) {
-				provider := m.catalogModal.providers[m.catalogModal.providerIdx]
+			if len(m.catalogModal.filtered) > 0 && m.catalogModal.providerIdx < len(m.catalogModal.filtered) {
+				provider := m.catalogModal.filtered[m.catalogModal.providerIdx]
 				if m.catalogModal.modelIdx < len(provider.Models)-1 {
 					m.catalogModal.modelIdx++
 				}
 			}
+		}
+
+	case "backspace":
+		if len(m.catalogModal.search) > 0 {
+			runes := []rune(m.catalogModal.search)
+			m.catalogModal.search = string(runes[:len(runes)-1])
+			m.catalogModal.providerIdx = 0
+			m.catalogModal.modelIdx = 0
+			m.catalogModal.filterProviders()
+		}
+
+	default:
+		// Typing goes to search box (printable ASCII).
+		k := msg.String()
+		if len(k) == 1 && k[0] >= 32 && k[0] < 127 {
+			m.catalogModal.search += k
+			m.catalogModal.providerIdx = 0
+			m.catalogModal.modelIdx = 0
+			m.catalogModal.filterProviders()
 		}
 	}
 	return m, nil
@@ -196,13 +272,13 @@ func (m *Model) updateCatalogConfigForm(msg tea.KeyPressMsg) (tea.Model, tea.Cmd
 			m.catalogModal.configErr = "Type must be openai, local, or anthropic"
 			return m, nil
 		}
-		return m, m.addProvider(service.AddProviderRequest{
+		return m, m.saveProvider(service.AddProviderRequest{
 			ID:       vals[fieldID],
 			Name:     vals[fieldName],
 			Type:     vals[fieldType],
 			Endpoint: vals[fieldEndpoint],
 			APIKey:   vals[fieldAPIKey],
-		})
+		}, m.catalogModal.configEdit)
 
 	case "backspace":
 		f := m.catalogModal.configField
@@ -227,7 +303,7 @@ func (m *Model) renderCatalogModal() string {
 		return m.renderCatalogConfigForm()
 	}
 
-	providers := m.catalogModal.providers
+	filtered := m.catalogModal.filtered
 
 	// Modal dimensions.
 	modalW := m.width - 4
@@ -275,10 +351,17 @@ func (m *Model) renderCatalogModal() string {
 		panelInnerH = 3
 	}
 
-	// --- Left panel: provider list ---
+	// --- Left panel: provider list with search ---
 	var leftLines []string
-	leftLines = append(leftLines, gradientText("Model Catalog", [3]uint8{255, 140, 50}, [3]uint8{255, 200, 80}))
-	leftLines = append(leftLines, DimStyle.Render(fmt.Sprintf("%d providers", len(providers))))
+
+	// Search box.
+	searchPrompt := "Search: "
+	searchDisplay := m.catalogModal.search
+	if searchDisplay == "" {
+		searchDisplay = DimStyle.Render("type to filter...")
+	}
+	leftLines = append(leftLines, searchPrompt+searchDisplay+"█")
+	leftLines = append(leftLines, DimStyle.Render(fmt.Sprintf("%d/%d providers", len(filtered), len(m.catalogModal.providers))))
 	leftLines = append(leftLines, "")
 
 	if m.catalogModal.loading {
@@ -286,8 +369,12 @@ func (m *Model) renderCatalogModal() string {
 	} else if m.catalogModal.err != nil {
 		leftLines = append(leftLines, ErrorStyle.Render("Failed to load catalog"))
 		leftLines = append(leftLines, DimStyle.Render(m.catalogModal.err.Error()))
-	} else if len(providers) == 0 {
-		leftLines = append(leftLines, DimStyle.Render("No providers available"))
+	} else if len(filtered) == 0 {
+		if m.catalogModal.search != "" {
+			leftLines = append(leftLines, DimStyle.Render("No matches"))
+		} else {
+			leftLines = append(leftLines, DimStyle.Render("No providers available"))
+		}
 	} else {
 		// Compute scroll offset for providers.
 		provAreaH := panelInnerH - len(leftLines)
@@ -295,24 +382,33 @@ func (m *Model) renderCatalogModal() string {
 			provAreaH = 1
 		}
 		scrollOffset := 0
-		if len(providers) > provAreaH {
+		if len(filtered) > provAreaH {
 			scrollOffset = m.catalogModal.providerIdx - provAreaH/2
 			if scrollOffset < 0 {
 				scrollOffset = 0
 			}
-			if scrollOffset > len(providers)-provAreaH {
-				scrollOffset = len(providers) - provAreaH
+			if scrollOffset > len(filtered)-provAreaH {
+				scrollOffset = len(filtered) - provAreaH
 			}
 		}
 		end := scrollOffset + provAreaH
-		if end > len(providers) {
-			end = len(providers)
+		if end > len(filtered) {
+			end = len(filtered)
 		}
-		for vi, p := range providers[scrollOffset:end] {
+		for vi, p := range filtered[scrollOffset:end] {
 			i := vi + scrollOffset
 			modelCount := len(p.Models)
-			name := truncateStr(p.Name, leftInnerW-8)
-			line := fmt.Sprintf(" %s (%d)", name, modelCount)
+			configured := m.catalogModal.configuredIDs[p.ID]
+
+			var prefix string
+			if configured {
+				prefix = ConnectedStyle.Render("*") + " "
+			} else {
+				prefix = "  "
+			}
+
+			name := truncateStr(p.Name, leftInnerW-10)
+			line := fmt.Sprintf("%s%s (%d)", prefix, name, modelCount)
 			if i == m.catalogModal.providerIdx {
 				line = ModalSelectedStyle.Width(leftInnerW).Render(line)
 			}
@@ -338,13 +434,17 @@ func (m *Model) renderCatalogModal() string {
 	// --- Right panel: models for selected provider ---
 	var rightLines []string
 
-	if len(providers) == 0 || m.catalogModal.providerIdx >= len(providers) {
+	if len(filtered) == 0 || m.catalogModal.providerIdx >= len(filtered) {
 		rightLines = append(rightLines, DimStyle.Render("Select a provider"))
 	} else {
-		provider := providers[m.catalogModal.providerIdx]
+		provider := filtered[m.catalogModal.providerIdx]
 
 		// Provider header.
-		rightLines = append(rightLines, HeaderStyle.Render(truncateStr(provider.Name, rightInnerW)))
+		headerText := provider.Name
+		if m.catalogModal.configuredIDs[provider.ID] {
+			headerText += " " + ConnectedStyle.Render("(configured)")
+		}
+		rightLines = append(rightLines, HeaderStyle.Render(truncateStr(headerText, rightInnerW)))
 		rightLines = append(rightLines, DimStyle.Render(strings.Repeat("─", rightInnerW)))
 
 		if provider.API != "" {
@@ -472,8 +572,13 @@ func (m *Model) renderCatalogConfigForm() string {
 		innerW = 10
 	}
 
+	title := "Configure Provider"
+	if m.catalogModal.configEdit {
+		title = "Edit Provider"
+	}
+
 	var lines []string
-	lines = append(lines, gradientText("Configure Provider", [3]uint8{50, 200, 100}, [3]uint8{100, 255, 180}))
+	lines = append(lines, gradientText(title, [3]uint8{50, 200, 100}, [3]uint8{100, 255, 180}))
 	lines = append(lines, DimStyle.Render(strings.Repeat("─", innerW)))
 	lines = append(lines, "")
 
@@ -512,9 +617,13 @@ func (m *Model) renderCatalogConfigForm() string {
 
 	lines = append(lines, "")
 
+	action := "Save"
+	if m.catalogModal.configEdit {
+		action = "Update"
+	}
 	footer := lipgloss.JoinHorizontal(lipgloss.Left,
 		DimStyle.Render("[↑↓/Tab] Field"), "  ",
-		DimStyle.Render("[Enter] Save"), "  ",
+		DimStyle.Render(fmt.Sprintf("[Enter] %s", action)), "  ",
 		DimStyle.Render("[Esc] Cancel"),
 	)
 	lines = append(lines, footer)

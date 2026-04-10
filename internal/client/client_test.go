@@ -382,6 +382,12 @@ func (sys *mockSystem) ListCatalogProviders(_ context.Context) ([]service.Catalo
 func (sys *mockSystem) AddProvider(_ context.Context, _ service.AddProviderRequest) error {
 	return nil
 }
+func (sys *mockSystem) UpdateProvider(_ context.Context, _ service.AddProviderRequest) error {
+	return nil
+}
+func (sys *mockSystem) ListConfiguredProviderIDs(_ context.Context) ([]string, error) {
+	return nil, nil
+}
 
 // ---------------------------------------------------------------------------
 // Test helper: start a real server with a mock service, return a client

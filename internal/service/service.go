@@ -326,10 +326,18 @@ type SystemService interface {
 	// error) if the catalog is unavailable (e.g. no network).
 	ListCatalogProviders(ctx context.Context) ([]CatalogProvider, error)
 
-	// AddProvider adds a new provider entry to config.yaml. The provider
-	// becomes available after a server restart. Returns an error if a provider
-	// with the same ID already exists.
+	// AddProvider writes a provider YAML file to the providers/ directory.
+	// The file watcher will pick it up and register the provider automatically.
+	// Returns an error if a provider with the same ID already exists.
 	AddProvider(ctx context.Context, entry AddProviderRequest) error
+
+	// UpdateProvider overwrites an existing provider YAML file. Returns an error
+	// if the provider does not exist.
+	UpdateProvider(ctx context.Context, entry AddProviderRequest) error
+
+	// ListConfiguredProviderIDs returns the IDs of all providers that have
+	// YAML files in the providers/ directory (i.e. are configured locally).
+	ListConfiguredProviderIDs(ctx context.Context) ([]string, error)
 }
 
 // ---------------------------------------------------------------------------

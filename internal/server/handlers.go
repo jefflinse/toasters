@@ -731,6 +731,35 @@ func (s *Server) addProvider(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, map[string]string{"status": "ok"})
 }
 
+// updateProvider handles PUT /api/v1/providers.
+func (s *Server) updateProvider(w http.ResponseWriter, r *http.Request) {
+	var req wireAddProviderRequest
+	if !decodeBody(w, r, &req) {
+		return
+	}
+	if err := s.svc.System().UpdateProvider(r.Context(), service.AddProviderRequest{
+		ID:       req.ID,
+		Name:     req.Name,
+		Type:     req.Type,
+		Endpoint: req.Endpoint,
+		APIKey:   req.APIKey,
+	}); err != nil {
+		handleServiceError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// listConfiguredProviderIDs handles GET /api/v1/providers/configured.
+func (s *Server) listConfiguredProviderIDs(w http.ResponseWriter, r *http.Request) {
+	ids, err := s.svc.System().ListConfiguredProviderIDs(r.Context())
+	if err != nil {
+		handleServiceError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, ids)
+}
+
 // listCatalog handles GET /api/v1/catalog.
 func (s *Server) listCatalog(w http.ResponseWriter, r *http.Request) {
 	providers, err := s.svc.System().ListCatalogProviders(r.Context())

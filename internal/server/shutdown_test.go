@@ -418,3 +418,9 @@ func (m *shutdownTestSystem) ListCatalogProviders(_ context.Context) ([]service.
 func (m *shutdownTestSystem) AddProvider(_ context.Context, _ service.AddProviderRequest) error {
 	return nil
 }
+func (m *shutdownTestSystem) UpdateProvider(_ context.Context, _ service.AddProviderRequest) error {
+	return nil
+}
+func (m *shutdownTestSystem) ListConfiguredProviderIDs(_ context.Context) ([]string, error) {
+	return nil, nil
+}

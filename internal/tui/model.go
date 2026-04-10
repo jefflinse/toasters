@@ -846,7 +846,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.mcpModal = mcpModalState{show: true}
 					// servers field will be populated when mcpModal is updated to use service types
 					return m, nil
-				case "/models":
+				case "/models", "/providers":
 					m.input.Reset()
 					m.cmdPopup.show = false
 					m.catalogModal = catalogModalState{show: true, loading: true}
@@ -967,6 +967,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.catalogModal.err = msg.Err
 		} else {
 			m.catalogModal.providers = msg.Providers
+			m.catalogModal.configuredIDs = make(map[string]bool, len(msg.ConfiguredIDs))
+			for _, id := range msg.ConfiguredIDs {
+				m.catalogModal.configuredIDs[id] = true
+			}
+			m.catalogModal.filterProviders()
 		}
 
 	case AddProviderMsg:
@@ -974,6 +979,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.catalogModal.configErr = msg.Err.Error()
 		} else {
 			m.catalogModal.configDone = "Provider saved! It will be available shortly."
+			// Mark as configured so it shows the indicator immediately.
+			id := m.catalogModal.configValues[fieldID]
+			if m.catalogModal.configuredIDs == nil {
+				m.catalogModal.configuredIDs = make(map[string]bool)
+			}
+			m.catalogModal.configuredIDs[id] = true
+			m.catalogModal.filterProviders()
 		}
 
 	case TeamsReloadedMsg:

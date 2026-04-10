@@ -2435,6 +2435,33 @@ func (s *LocalService) AddProvider(_ context.Context, req AddProviderRequest) er
 	})
 }
 
+// UpdateProvider overwrites an existing provider YAML file.
+func (s *LocalService) UpdateProvider(_ context.Context, req AddProviderRequest) error {
+	if req.ID == "" {
+		return fmt.Errorf("provider ID is required")
+	}
+	return config.UpdateProvider(s.cfg.ConfigDir, config.ProviderEntry{
+		ID:       req.ID,
+		Name:     req.Name,
+		Type:     req.Type,
+		Endpoint: req.Endpoint,
+		APIKey:   req.APIKey,
+	})
+}
+
+// ListConfiguredProviderIDs returns the IDs of locally configured providers.
+func (s *LocalService) ListConfiguredProviderIDs(_ context.Context) ([]string, error) {
+	if s.cfg.Loader == nil {
+		return nil, nil
+	}
+	provs := s.cfg.Loader.Providers()
+	ids := make([]string, 0, len(provs))
+	for _, p := range provs {
+		ids = append(ids, p.Key())
+	}
+	return ids, nil
+}
+
 // ---------------------------------------------------------------------------
 // Type mapping helpers
 // ---------------------------------------------------------------------------

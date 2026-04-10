@@ -832,9 +832,9 @@ func TestUpdate_DoesNotDispatchToMCPModalWhenClosed(t *testing.T) {
 
 func TestAllCommandsCount(t *testing.T) {
 	t.Parallel()
-	// Verify the total command count is 11 (including /mcp, /models, /skills, /agents, /jobs).
-	if len(allCommands) != 11 {
-		t.Errorf("expected 11 commands in allCommands, got %d", len(allCommands))
+	// Verify the total command count is 12 (including /mcp, /models, /providers, /skills, /agents, /jobs).
+	if len(allCommands) != 12 {
+		t.Errorf("expected 12 commands in allCommands, got %d", len(allCommands))
 	}
 	// Verify /mcp is present.
 	found := false

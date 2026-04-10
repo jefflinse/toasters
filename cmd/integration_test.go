@@ -363,3 +363,9 @@ func (m *mockSystemService) ListCatalogProviders(_ context.Context) ([]service.C
 func (m *mockSystemService) AddProvider(_ context.Context, _ service.AddProviderRequest) error {
 	return nil
 }
+func (m *mockSystemService) UpdateProvider(_ context.Context, _ service.AddProviderRequest) error {
+	return nil
+}
+func (m *mockSystemService) ListConfiguredProviderIDs(_ context.Context) ([]string, error) {
+	return nil, nil
+}

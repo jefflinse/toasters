@@ -688,6 +688,36 @@ func (s *remoteSystemService) AddProvider(ctx context.Context, req service.AddPr
 	return nil
 }
 
+func (s *remoteSystemService) UpdateProvider(ctx context.Context, req service.AddProviderRequest) error {
+	resp, err := s.c.http.put(ctx, "/api/v1/providers", wireAddProviderRequest{
+		ID:       req.ID,
+		Name:     req.Name,
+		Type:     req.Type,
+		Endpoint: req.Endpoint,
+		APIKey:   req.APIKey,
+	})
+	if err != nil {
+		return fmt.Errorf("update provider: %w", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return fmt.Errorf("update provider: unexpected status %d", resp.StatusCode)
+	}
+	return nil
+}
+
+func (s *remoteSystemService) ListConfiguredProviderIDs(ctx context.Context) ([]string, error) {
+	resp, err := s.c.http.get(ctx, "/api/v1/providers/configured")
+	if err != nil {
+		return nil, fmt.Errorf("list configured providers: %w", err)
+	}
+	ids, err := decodeResponse[[]string](resp)
+	if err != nil {
+		return nil, fmt.Errorf("list configured providers: %w", err)
+	}
+	return ids, nil
+}
+
 func (s *remoteSystemService) ListMCPServers(ctx context.Context) ([]service.MCPServerStatus, error) {
 	resp, err := s.c.http.get(ctx, "/api/v1/mcp/servers")
 	if err != nil {
