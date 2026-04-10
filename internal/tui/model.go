@@ -969,6 +969,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.catalogModal.providers = msg.Providers
 		}
 
+	case AddProviderMsg:
+		if msg.Err != nil {
+			m.catalogModal.configErr = msg.Err.Error()
+		} else {
+			m.catalogModal.configDone = "Provider saved to config.yaml (restart server to activate)"
+		}
+
 	case TeamsReloadedMsg:
 		m.teams = msg.Teams
 		if m.selectedTeam >= len(m.teams) && len(m.teams) > 0 {

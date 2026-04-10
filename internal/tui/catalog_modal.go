@@ -1,4 +1,4 @@
-// Catalog modal: models.dev provider and model browser UI.
+// Catalog modal: models.dev provider and model browser UI with provider configuration.
 package tui
 
 import (
@@ -12,6 +12,18 @@ import (
 	"github.com/jefflinse/toasters/internal/service"
 )
 
+// configField identifies which field is focused in the configure form.
+type configField int
+
+const (
+	fieldID configField = iota
+	fieldName
+	fieldType
+	fieldEndpoint
+	fieldAPIKey
+	fieldCount // sentinel
+)
+
 // catalogModalState holds all state for the /models modal overlay.
 type catalogModalState struct {
 	show        bool
@@ -21,12 +33,24 @@ type catalogModalState struct {
 	focus       int // 0=left panel (providers), 1=right panel (models)
 	loading     bool
 	err         error
+
+	// Configure form sub-state.
+	configuring  bool
+	configField  configField
+	configValues [fieldCount]string // indexed by configField
+	configErr    string             // validation/save error
+	configDone   string             // success message
 }
 
 // CatalogMsg is sent when the catalog data finishes loading.
 type CatalogMsg struct {
 	Providers []service.CatalogProvider
 	Err       error
+}
+
+// AddProviderMsg is sent when a provider has been saved.
+type AddProviderMsg struct {
+	Err error
 }
 
 // fetchCatalog returns a command that fetches the models.dev catalog.
@@ -38,8 +62,30 @@ func (m Model) fetchCatalog() tea.Cmd {
 	}
 }
 
+// addProvider returns a command that saves a provider to config.
+func (m Model) addProvider(req service.AddProviderRequest) tea.Cmd {
+	svc := m.svc
+	return func() tea.Msg {
+		err := svc.System().AddProvider(context.Background(), req)
+		return AddProviderMsg{Err: err}
+	}
+}
+
+var configFieldLabels = [fieldCount]string{
+	"ID:       ",
+	"Name:     ",
+	"Type:     ",
+	"Endpoint: ",
+	"API Key:  ",
+}
+
 // updateCatalogModal handles key presses when the catalog modal is open.
 func (m *Model) updateCatalogModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	// Configure form sub-state.
+	if m.catalogModal.configuring {
+		return m.updateCatalogConfigForm(msg)
+	}
+
 	switch msg.String() {
 	case "esc":
 		m.catalogModal.show = false
@@ -49,6 +95,38 @@ func (m *Model) updateCatalogModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.catalogModal.focus = 1
 		} else {
 			m.catalogModal.focus = 0
+		}
+
+	case "enter":
+		// Enter on a provider → open configure form.
+		if m.catalogModal.focus == 0 && len(m.catalogModal.providers) > 0 &&
+			m.catalogModal.providerIdx < len(m.catalogModal.providers) {
+			p := m.catalogModal.providers[m.catalogModal.providerIdx]
+			m.catalogModal.configuring = true
+			m.catalogModal.configField = fieldID
+			m.catalogModal.configErr = ""
+			m.catalogModal.configDone = ""
+
+			// Pre-fill from catalog data.
+			m.catalogModal.configValues[fieldID] = p.ID
+			m.catalogModal.configValues[fieldName] = p.Name
+
+			// Infer type from catalog data.
+			switch p.ID {
+			case "anthropic":
+				m.catalogModal.configValues[fieldType] = "anthropic"
+			case "lmstudio":
+				m.catalogModal.configValues[fieldType] = "local"
+			default:
+				m.catalogModal.configValues[fieldType] = "openai"
+			}
+
+			m.catalogModal.configValues[fieldEndpoint] = p.API
+			if len(p.Env) > 0 {
+				m.catalogModal.configValues[fieldAPIKey] = "${" + p.Env[0] + "}"
+			} else {
+				m.catalogModal.configValues[fieldAPIKey] = ""
+			}
 		}
 
 	case "up":
@@ -81,8 +159,74 @@ func (m *Model) updateCatalogModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// updateCatalogConfigForm handles key presses in the configure form sub-state.
+func (m *Model) updateCatalogConfigForm(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		m.catalogModal.configuring = false
+		m.catalogModal.configErr = ""
+		m.catalogModal.configDone = ""
+
+	case "up":
+		if m.catalogModal.configField > 0 {
+			m.catalogModal.configField--
+		}
+
+	case "down":
+		if m.catalogModal.configField < fieldCount-1 {
+			m.catalogModal.configField++
+		}
+
+	case "tab":
+		m.catalogModal.configField = (m.catalogModal.configField + 1) % fieldCount
+
+	case "enter":
+		// Submit the form.
+		m.catalogModal.configErr = ""
+		vals := m.catalogModal.configValues
+		if vals[fieldID] == "" {
+			m.catalogModal.configErr = "ID is required"
+			return m, nil
+		}
+		if vals[fieldName] == "" {
+			m.catalogModal.configErr = "Name is required"
+			return m, nil
+		}
+		if vals[fieldType] != "openai" && vals[fieldType] != "local" && vals[fieldType] != "anthropic" {
+			m.catalogModal.configErr = "Type must be openai, local, or anthropic"
+			return m, nil
+		}
+		return m, m.addProvider(service.AddProviderRequest{
+			ID:       vals[fieldID],
+			Name:     vals[fieldName],
+			Type:     vals[fieldType],
+			Endpoint: vals[fieldEndpoint],
+			APIKey:   vals[fieldAPIKey],
+		})
+
+	case "backspace":
+		f := m.catalogModal.configField
+		if len(m.catalogModal.configValues[f]) > 0 {
+			runes := []rune(m.catalogModal.configValues[f])
+			m.catalogModal.configValues[f] = string(runes[:len(runes)-1])
+		}
+
+	default:
+		// Append printable characters to current field.
+		k := msg.String()
+		if len(k) == 1 && k[0] >= 32 && k[0] < 127 {
+			m.catalogModal.configValues[m.catalogModal.configField] += k
+		}
+	}
+	return m, nil
+}
+
 // renderCatalogModal renders the full-screen catalog browser modal.
 func (m *Model) renderCatalogModal() string {
+	if m.catalogModal.configuring {
+		return m.renderCatalogConfigForm()
+	}
+
 	providers := m.catalogModal.providers
 
 	// Modal dimensions.
@@ -294,6 +438,7 @@ func (m *Model) renderCatalogModal() string {
 
 	footer := lipgloss.JoinHorizontal(lipgloss.Left,
 		DimStyle.Render("[↑↓] Navigate"), "  ",
+		DimStyle.Render("[Enter] Configure"), "  ",
 		DimStyle.Render("[Tab] Switch Panel"), "  ",
 		DimStyle.Render("[Esc] Close"), "  ",
 		DimStyle.Render("models.dev"),
@@ -301,6 +446,81 @@ func (m *Model) renderCatalogModal() string {
 
 	inner := lipgloss.JoinVertical(lipgloss.Left, panels, footer)
 	modal := ModalStyle.Width(modalW).Render(inner)
+
+	return lipgloss.Place(m.width, m.height,
+		lipgloss.Center, lipgloss.Center,
+		modal,
+		lipgloss.WithWhitespaceStyle(lipgloss.NewStyle().Background(lipgloss.Color("235"))),
+	)
+}
+
+// renderCatalogConfigForm renders the provider configuration form.
+func (m *Model) renderCatalogConfigForm() string {
+	modalW := m.width - 4
+	if modalW < 60 {
+		modalW = 60
+	}
+	if modalW > 80 {
+		modalW = 80
+	}
+	if modalW > m.width {
+		modalW = m.width
+	}
+
+	innerW := modalW - ModalStyle.GetHorizontalFrameSize()
+	if innerW < 10 {
+		innerW = 10
+	}
+
+	var lines []string
+	lines = append(lines, gradientText("Configure Provider", [3]uint8{50, 200, 100}, [3]uint8{100, 255, 180}))
+	lines = append(lines, DimStyle.Render(strings.Repeat("─", innerW)))
+	lines = append(lines, "")
+
+	for i := configField(0); i < fieldCount; i++ {
+		label := configFieldLabels[i]
+		value := m.catalogModal.configValues[i]
+
+		var line string
+		if i == m.catalogModal.configField {
+			// Active field: show cursor.
+			line = HeaderStyle.Render(label) + value + "█"
+		} else {
+			if value == "" {
+				line = DimStyle.Render(label) + DimStyle.Render("(empty)")
+			} else {
+				line = DimStyle.Render(label) + value
+			}
+		}
+		lines = append(lines, line)
+	}
+
+	lines = append(lines, "")
+
+	// Type hint.
+	lines = append(lines, DimStyle.Render("Types: openai, local, anthropic"))
+
+	// Error / success.
+	if m.catalogModal.configErr != "" {
+		lines = append(lines, "")
+		lines = append(lines, ErrorStyle.Render(m.catalogModal.configErr))
+	}
+	if m.catalogModal.configDone != "" {
+		lines = append(lines, "")
+		lines = append(lines, ConnectedStyle.Render(m.catalogModal.configDone))
+	}
+
+	lines = append(lines, "")
+
+	footer := lipgloss.JoinHorizontal(lipgloss.Left,
+		DimStyle.Render("[↑↓/Tab] Field"), "  ",
+		DimStyle.Render("[Enter] Save"), "  ",
+		DimStyle.Render("[Esc] Cancel"),
+	)
+	lines = append(lines, footer)
+
+	content := strings.Join(lines, "\n")
+	modal := ModalStyle.Width(modalW).Render(content)
 
 	return lipgloss.Place(m.width, m.height,
 		lipgloss.Center, lipgloss.Center,

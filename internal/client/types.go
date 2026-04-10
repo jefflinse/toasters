@@ -159,6 +159,14 @@ type wireModelInfo struct {
 	LoadedContextLength int    `json:"loaded_context_length"`
 }
 
+type wireAddProviderRequest struct {
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Type     string `json:"type"`
+	Endpoint string `json:"endpoint,omitempty"`
+	APIKey   string `json:"api_key,omitempty"`
+}
+
 type wireCatalogProvider struct {
 	ID     string             `json:"id"`
 	Name   string             `json:"name"`

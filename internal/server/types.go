@@ -513,6 +513,15 @@ func modelInfoToWire(m service.ModelInfo) wireModelInfo {
 	}
 }
 
+// wireAddProviderRequest is the JSON wire representation for POST /api/v1/providers.
+type wireAddProviderRequest struct {
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Type     string `json:"type"`
+	Endpoint string `json:"endpoint,omitempty"`
+	APIKey   string `json:"api_key,omitempty"`
+}
+
 // wireCatalogProvider is the JSON wire representation of a service.CatalogProvider.
 type wireCatalogProvider struct {
 	ID     string             `json:"id"`

@@ -191,6 +191,9 @@ func (m *mockSystemService) GetLogs(_ context.Context) (string, error) {
 func (m *mockSystemService) ListCatalogProviders(_ context.Context) ([]service.CatalogProvider, error) {
 	return nil, nil
 }
+func (m *mockSystemService) AddProvider(_ context.Context, _ service.AddProviderRequest) error {
+	return nil
+}
 
 // ---------------------------------------------------------------------------
 // Handler tests

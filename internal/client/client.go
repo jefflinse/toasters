@@ -670,6 +670,24 @@ func (s *remoteSystemService) ListCatalogProviders(ctx context.Context) ([]servi
 	return providers, nil
 }
 
+func (s *remoteSystemService) AddProvider(ctx context.Context, req service.AddProviderRequest) error {
+	resp, err := s.c.http.post(ctx, "/api/v1/providers", wireAddProviderRequest{
+		ID:       req.ID,
+		Name:     req.Name,
+		Type:     req.Type,
+		Endpoint: req.Endpoint,
+		APIKey:   req.APIKey,
+	})
+	if err != nil {
+		return fmt.Errorf("add provider: %w", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 201 {
+		return fmt.Errorf("add provider: unexpected status %d", resp.StatusCode)
+	}
+	return nil
+}
+
 func (s *remoteSystemService) ListMCPServers(ctx context.Context) ([]service.MCPServerStatus, error) {
 	resp, err := s.c.http.get(ctx, "/api/v1/mcp/servers")
 	if err != nil {

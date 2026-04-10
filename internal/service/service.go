@@ -325,6 +325,11 @@ type SystemService interface {
 	// The data is cached in memory and refreshed periodically. Returns nil (not an
 	// error) if the catalog is unavailable (e.g. no network).
 	ListCatalogProviders(ctx context.Context) ([]CatalogProvider, error)
+
+	// AddProvider adds a new provider entry to config.yaml. The provider
+	// becomes available after a server restart. Returns an error if a provider
+	// with the same ID already exists.
+	AddProvider(ctx context.Context, entry AddProviderRequest) error
 }
 
 // ---------------------------------------------------------------------------

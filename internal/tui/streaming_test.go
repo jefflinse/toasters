@@ -32,6 +32,9 @@ func (m *mockSystemService) GetLogs(_ context.Context) (string, error) {
 func (m *mockSystemService) ListCatalogProviders(_ context.Context) ([]service.CatalogProvider, error) {
 	return nil, nil
 }
+func (m *mockSystemService) AddProvider(_ context.Context, _ service.AddProviderRequest) error {
+	return nil
+}
 
 // mockDefinitionService implements service.DefinitionService with no-op methods.
 // Tests can override individual fields (e.g. listTeams) to inject behaviour.

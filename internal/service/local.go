@@ -21,6 +21,7 @@ import (
 
 	"github.com/jefflinse/toasters/internal/agentfmt"
 	"github.com/jefflinse/toasters/internal/compose"
+	"github.com/jefflinse/toasters/internal/config"
 	"github.com/jefflinse/toasters/internal/db"
 	"github.com/jefflinse/toasters/internal/loader"
 	"github.com/jefflinse/toasters/internal/mcp"
@@ -2406,6 +2407,32 @@ func (s *LocalService) ListCatalogProviders(ctx context.Context) ([]CatalogProvi
 		result = append(result, cp)
 	}
 	return result, nil
+}
+
+// AddProvider appends a new provider to config.yaml.
+func (s *LocalService) AddProvider(_ context.Context, req AddProviderRequest) error {
+	if req.ID == "" {
+		return fmt.Errorf("provider ID is required")
+	}
+	if req.Name == "" {
+		return fmt.Errorf("provider name is required")
+	}
+	if req.Type == "" {
+		return fmt.Errorf("provider type is required")
+	}
+	switch req.Type {
+	case "openai", "local", "anthropic":
+	default:
+		return fmt.Errorf("invalid provider type %q (must be openai, local, or anthropic)", req.Type)
+	}
+
+	return config.AddProvider(s.cfg.ConfigDir, config.ProviderEntry{
+		ID:       req.ID,
+		Name:     req.Name,
+		Type:     req.Type,
+		Endpoint: req.Endpoint,
+		APIKey:   req.APIKey,
+	})
 }
 
 // ---------------------------------------------------------------------------

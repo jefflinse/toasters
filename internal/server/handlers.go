@@ -712,6 +712,25 @@ func (s *Server) listModels(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, PaginatedResponse[wireModelInfo]{Items: wireModels, Total: len(wireModels)})
 }
 
+// addProvider handles POST /api/v1/providers.
+func (s *Server) addProvider(w http.ResponseWriter, r *http.Request) {
+	var req wireAddProviderRequest
+	if !decodeBody(w, r, &req) {
+		return
+	}
+	if err := s.svc.System().AddProvider(r.Context(), service.AddProviderRequest{
+		ID:       req.ID,
+		Name:     req.Name,
+		Type:     req.Type,
+		Endpoint: req.Endpoint,
+		APIKey:   req.APIKey,
+	}); err != nil {
+		handleServiceError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]string{"status": "ok"})
+}
+
 // listCatalog handles GET /api/v1/catalog.
 func (s *Server) listCatalog(w http.ResponseWriter, r *http.Request) {
 	providers, err := s.svc.System().ListCatalogProviders(r.Context())

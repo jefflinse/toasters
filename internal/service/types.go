@@ -471,6 +471,19 @@ type CatalogModel struct {
 }
 
 // ---------------------------------------------------------------------------
+// Provider configuration types
+// ---------------------------------------------------------------------------
+
+// AddProviderRequest holds the data needed to add a new provider to config.yaml.
+type AddProviderRequest struct {
+	ID       string // unique identifier (e.g. "my-openai")
+	Name     string // display name (e.g. "My OpenAI")
+	Type     string // "openai", "local", or "anthropic"
+	Endpoint string // API endpoint URL (optional for some types)
+	APIKey   string // API key value or ${ENV_VAR} reference (optional)
+}
+
+// ---------------------------------------------------------------------------
 // Progress state (replaces progressPollMsg)
 // ---------------------------------------------------------------------------
 
