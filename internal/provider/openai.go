@@ -320,21 +320,16 @@ func (p *OpenAIProvider) emitToolCalls(accumulated map[int]*sse.OpenAIToolAccumu
 // Real network errors and non-listing failures (auth, 5xx, etc.) still
 // propagate so the caller can surface them.
 func (p *OpenAIProvider) Models(ctx context.Context) ([]ModelInfo, error) {
-	if models, err := p.fetchLMStudioModels(ctx); err == nil {
+	// Try the standard OpenAI-compatible /v1/models endpoint first. This
+	// works for most providers including LM Studio, Ollama, and vLLM.
+	if models, err := p.fetchOpenAIModels(ctx); err == nil {
 		return models, nil
 	} else if !isMissingModelsEndpoint(err) {
-		// LM Studio endpoint failed for a non-404 reason — try the OpenAI
-		// path but remember the original error in case it also fails.
-		if models, err2 := p.fetchOpenAIModels(ctx); err2 == nil {
-			return models, nil
-		} else if !isMissingModelsEndpoint(err2) {
-			return nil, err2
-		}
-		return []ModelInfo{}, nil
+		return nil, err
 	}
 
-	// LM Studio endpoint returned a "no such endpoint" status. Try OpenAI.
-	if models, err := p.fetchOpenAIModels(ctx); err == nil {
+	// Fall back to LM Studio's proprietary /api/v0/models endpoint.
+	if models, err := p.fetchLMStudioModels(ctx); err == nil {
 		return models, nil
 	} else if !isMissingModelsEndpoint(err) {
 		return nil, err

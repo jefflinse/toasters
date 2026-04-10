@@ -897,11 +897,9 @@ func TestOpenAI_Models_405MethodNotAllowed(t *testing.T) {
 	}
 }
 
-func TestOpenAI_Models_LMStudio500_OpenAI404(t *testing.T) {
-	// Mixed case: LM Studio endpoint returns a non-404 error (5xx) but the
-	// OpenAI endpoint is missing. Should still propagate the 5xx because
-	// the user needs to know something is genuinely broken with the LM
-	// Studio path even though the fallback gracefully degraded.
+func TestOpenAI_Models_OpenAI404_LMStudio500(t *testing.T) {
+	// OpenAI endpoint returns 404 (missing), LM Studio returns 500.
+	// The 500 should propagate as an error since it's a real failure.
 	t.Parallel()
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -914,17 +912,9 @@ func TestOpenAI_Models_LMStudio500_OpenAI404(t *testing.T) {
 	defer srv.Close()
 
 	p := NewOpenAI("test", srv.URL, "", "")
-	// With the LM Studio endpoint returning 500 and the OpenAI endpoint
-	// returning 404, we end up with no models — and that's actually fine
-	// because the OpenAI fallback succeeded its "missing endpoint" check.
-	// The user will still see "Connected: false" because of the inability
-	// to list, but the chat will work.
-	models, err := p.Models(context.Background())
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(models) != 0 {
-		t.Fatalf("expected empty model list, got %d models", len(models))
+	_, err := p.Models(context.Background())
+	if err == nil {
+		t.Fatal("expected error when LM Studio returns 500")
 	}
 }
 
