@@ -6,7 +6,20 @@
       "Bash(ls:*)",
       "Bash(grep -n \"OnTurnDone\\\\|Config struct\\\\|tokens\" /Users/jefflinse/dev/toasters/internal/operator/*.go)",
       "Bash(grep -n \"ask_user\\\\|AskUser\\\\|EventTypeOperatorPrompt\\\\|operator.prompt\\\\|RespondToPrompt\" /Users/jefflinse/dev/toasters/internal/operator/*.go /Users/jefflinse/dev/toasters/internal/tui/*.go)",
-      "Bash(grep:*)"
+      "Bash(grep:*)",
+      "WebFetch(domain:models.dev)",
+      "WebFetch(domain:github.com)",
+      "Bash(curl -s https://models.dev/api)",
+      "Bash(curl -sL -D- https://models.dev/api)",
+      "Bash(curl -sL https://models.dev/api/providers)",
+      "Bash(curl -sL https://models.dev/api/models)",
+      "Bash(go build:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git branch:*)",
+      "Bash(git reset:*)",
+      "Bash(git checkout:*)",
+      "Bash(find:*)"
     ]
   }
 }
