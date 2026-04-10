@@ -26,6 +26,7 @@ import (
 	"github.com/jefflinse/toasters/internal/loader"
 	"github.com/jefflinse/toasters/internal/mcp"
 	"github.com/jefflinse/toasters/internal/operator"
+	"github.com/jefflinse/toasters/internal/prompt"
 	"github.com/jefflinse/toasters/internal/provider"
 	"github.com/jefflinse/toasters/internal/runtime"
 )
@@ -98,6 +99,7 @@ type LocalConfig struct {
 	StartTime        time.Time // for Health().Uptime
 	Catalog          CatalogSource // optional models.dev catalog; nil disables ListCatalogProviders
 	Registry         *provider.Registry // provider registry for live operator activation
+	PromptEngine     *prompt.Engine     // optional; for role-based prompt composition
 }
 
 // LocalService is the in-process implementation of Service. It delegates to
@@ -2553,6 +2555,7 @@ func (s *LocalService) startOperator(p provider.Provider, providerID, model stri
 		Spawner:                s.cfg.Runtime,
 		SystemPrompt:           systemPrompt,
 		SystemEventBroadcaster: s,
+		PromptEngine:           s.cfg.PromptEngine,
 		OnText: func(text string) {
 			batcher.Add(text)
 		},

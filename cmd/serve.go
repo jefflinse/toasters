@@ -25,6 +25,7 @@ import (
 	"github.com/jefflinse/toasters/internal/operator"
 	"github.com/jefflinse/toasters/internal/provider"
 	"github.com/jefflinse/toasters/internal/modelsdev"
+	"github.com/jefflinse/toasters/internal/prompt"
 	"github.com/jefflinse/toasters/internal/runtime"
 	"github.com/jefflinse/toasters/internal/server"
 	"github.com/jefflinse/toasters/internal/service"
@@ -128,6 +129,15 @@ func runServe(cmd *cobra.Command, args []string) error {
 		composer = compose.New(store, cfg.Agents.Defaults.Provider, cfg.Agents.Defaults.Model)
 	}
 
+	// Create prompt engine for role-based prompt composition.
+	promptEngine := prompt.NewEngine()
+	userDir := filepath.Join(configDir, "user")
+	if err := promptEngine.LoadDir(userDir); err != nil {
+		slog.Warn("failed to load prompt definitions", "dir", userDir, "error", err)
+	} else {
+		slog.Info("loaded prompt definitions", "roles", len(promptEngine.Roles()))
+	}
+
 	// Create provider registry and register providers from providers/*.yaml.
 	registry := provider.NewRegistry()
 	registerProviders(registry, ldr)
@@ -199,6 +209,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 		StartTime:        time.Now(),
 		Catalog:          catalog,
 		Registry:         registry,
+		PromptEngine:     promptEngine,
 	})
 	defer svc.Shutdown()
 
@@ -229,6 +240,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 			Spawner:                rt,
 			SystemPrompt:           operatorPrompt,
 			SystemEventBroadcaster: svc,
+			PromptEngine:           promptEngine,
 			OnText: func(text string) {
 				batcher.Add(text)
 			},

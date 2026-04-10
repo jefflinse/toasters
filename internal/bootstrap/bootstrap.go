@@ -37,9 +37,12 @@ func Run(configDir string, systemFS embed.FS, defaultConfig []byte) error {
 		return fmt.Errorf("provider ID migration: %w", err)
 	}
 
-	if err := autoTeamDetection(configDir); err != nil {
-		return fmt.Errorf("auto-team detection: %w", err)
-	}
+	// Auto-team detection disabled — the legacy agent import system from
+	// Claude Code, OpenCode, etc. is being replaced by the new role-based
+	// prompt engine. Re-enable by uncommenting the call below.
+	// if err := autoTeamDetection(configDir); err != nil {
+	// 	return fmt.Errorf("auto-team detection: %w", err)
+	// }
 
 	if err := migrateDatabase(configDir); err != nil {
 		return fmt.Errorf("database migration: %w", err)

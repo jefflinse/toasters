@@ -14,6 +14,7 @@ import (
 	"sync"
 
 	"github.com/jefflinse/toasters/internal/compose"
+	"github.com/jefflinse/toasters/internal/prompt"
 	"github.com/jefflinse/toasters/internal/db"
 	"github.com/jefflinse/toasters/internal/provider"
 	"github.com/jefflinse/toasters/internal/runtime"
@@ -58,6 +59,7 @@ type Config struct {
 	Composer               *compose.Composer
 	Spawner                runtime.TeamLeadSpawner // spawns team lead sessions on task assignment; may be nil
 	SystemEventBroadcaster SystemEventBroadcaster  // optional; for broadcasting service events from system tools
+	PromptEngine           *prompt.Engine          // optional; for role-based prompt composition
 	OnText                 func(text string)       // called with streamed text from the operator LLM
 	OnEvent                func(event Event)       // called when the event loop processes an event
 	// OnTurnDone is called when the operator finishes processing a user
@@ -81,6 +83,9 @@ func New(cfg Config) (*Operator, error) {
 	var systemTools *SystemTools
 	if cfg.Store != nil && cfg.Composer != nil {
 		systemTools = NewSystemTools(cfg.Store, cfg.Composer, eventCh, cfg.Spawner, cfg.WorkDir, cfg.SystemEventBroadcaster)
+		if cfg.PromptEngine != nil {
+			systemTools.SetPromptEngine(cfg.PromptEngine)
+		}
 	}
 
 	tools := newOperatorTools(cfg.Runtime, cfg.Composer, cfg.Store, systemTools, cfg.WorkDir)

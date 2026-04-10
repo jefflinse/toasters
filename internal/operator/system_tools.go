@@ -14,6 +14,7 @@ import (
 
 	"github.com/jefflinse/toasters/internal/compose"
 	"github.com/jefflinse/toasters/internal/db"
+	"github.com/jefflinse/toasters/internal/prompt"
 	"github.com/jefflinse/toasters/internal/runtime"
 )
 
@@ -46,12 +47,13 @@ type SystemEventBroadcaster interface {
 // tools — system agents use them to create/query jobs and tasks, assign
 // work to teams, and communicate with users.
 type SystemTools struct {
-	store       db.Store
-	composer    *compose.Composer
-	eventCh     chan<- Event
-	spawner     TeamLeadSpawner
-	workDir     string // global workspace directory; per-job subdirs are created under this
-	broadcaster SystemEventBroadcaster // optional; nil means no service event broadcast
+	store        db.Store
+	composer     *compose.Composer
+	promptEngine *prompt.Engine // optional; when set, used for role-based prompt composition
+	eventCh      chan<- Event
+	spawner      TeamLeadSpawner
+	workDir      string // global workspace directory; per-job subdirs are created under this
+	broadcaster  SystemEventBroadcaster // optional; nil means no service event broadcast
 }
 
 // NewSystemTools creates a new SystemTools instance.
@@ -64,6 +66,13 @@ func NewSystemTools(store db.Store, composer *compose.Composer, eventCh chan<- E
 		workDir:     workDir,
 		broadcaster: broadcaster,
 	}
+}
+
+// SetPromptEngine sets the prompt engine for role-based prompt composition.
+// When set, assignTask will try to compose team lead prompts from role
+// definitions before falling back to the legacy Composer.
+func (st *SystemTools) SetPromptEngine(e *prompt.Engine) {
+	st.promptEngine = e
 }
 
 // Definitions returns the tool definitions available to system agents.
@@ -427,9 +436,33 @@ func (st *SystemTools) assignTask(ctx context.Context, args json.RawMessage) (st
 	}
 
 	// 6. Compose the team lead agent.
-	composed, err := st.composer.Compose(ctx, team.LeadAgent, params.TeamID)
-	if err != nil {
-		return "", fmt.Errorf("composing team lead: %w", err)
+	// Try the prompt engine first (role-based composition), then fall back
+	// to the legacy Composer.
+	var composed *compose.ComposedAgent
+	if st.promptEngine != nil {
+		if role := st.promptEngine.Role(team.LeadAgent); role != nil {
+			prompt, promptErr := st.promptEngine.Compose(team.LeadAgent, nil)
+			if promptErr != nil {
+				slog.Warn("prompt engine failed, falling back to legacy composer",
+					"role", team.LeadAgent, "error", promptErr)
+			} else {
+				composed = &compose.ComposedAgent{
+					AgentID:      team.LeadAgent,
+					Name:         role.Name,
+					SystemPrompt: prompt,
+					TeamID:       params.TeamID,
+				}
+				slog.Info("composed team lead from prompt engine",
+					"role", team.LeadAgent, "team", params.TeamID, "prompt_len", len(prompt))
+			}
+		}
+	}
+	if composed == nil {
+		var err error
+		composed, err = st.composer.Compose(ctx, team.LeadAgent, params.TeamID)
+		if err != nil {
+			return "", fmt.Errorf("composing team lead: %w", err)
+		}
 	}
 
 	// 7. Spawn team lead goroutine (fire-and-forget) with the job's workspace dir.
