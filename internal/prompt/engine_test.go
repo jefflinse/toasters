@@ -201,6 +201,40 @@ func TestEngine_Compose_WithActualDefaults(t *testing.T) {
 	t.Logf("Composed prompt (%d chars):\n%s", len(result), result)
 }
 
+func TestEngine_Compose_AllRoles(t *testing.T) {
+	defaultsDir := filepath.Join("..", "..", "defaults", "user")
+	if _, err := os.Stat(defaultsDir); os.IsNotExist(err) {
+		t.Skip("defaults/user not found, skipping integration test")
+	}
+
+	engine := NewEngine()
+	if err := engine.LoadDir(defaultsDir); err != nil {
+		t.Fatalf("LoadDir: %v", err)
+	}
+
+	for _, name := range engine.Roles() {
+		t.Run(name, func(t *testing.T) {
+			result, err := engine.Compose(name, nil)
+			if err != nil {
+				t.Fatalf("Compose(%q): %v", name, err)
+			}
+
+			// No unresolved references.
+			for _, line := range strings.Split(result, "\n") {
+				if strings.Contains(line, "{{ ") {
+					t.Errorf("unresolved reference: %s", line)
+				}
+			}
+
+			if len(result) == 0 {
+				t.Error("composed prompt is empty")
+			}
+
+			t.Logf("Composed %q (%d chars)", name, len(result))
+		})
+	}
+}
+
 func mkdirAll(t *testing.T, path string) {
 	t.Helper()
 	if err := os.MkdirAll(path, 0o755); err != nil {
