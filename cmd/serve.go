@@ -67,7 +67,6 @@ func runServe(cmd *cobra.Command, args []string) error {
 
 	// Bootstrap runs before config.Load() so that the default config.yaml is
 	// written to disk before Viper reads it.
-	bootstrap.ProviderFS = defaults.ProviderFiles
 	if err := bootstrap.Run(configDir, defaults.SystemFiles, defaults.DefaultConfig); err != nil {
 		slog.Warn("bootstrap failed", "error", err)
 	}
