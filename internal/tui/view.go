@@ -228,6 +228,15 @@ func (m *Model) View() tea.View {
 		return v
 	}
 
+	// Operator modal takes over the full terminal.
+	if m.operatorModal.show {
+		operatorView := m.renderOperatorModal()
+		v := tea.NewView(operatorView)
+		v.AltScreen = true
+		v.MouseMode = tea.MouseModeCellMotion
+		return v
+	}
+
 	// Catalog modal takes over the full terminal as a centered overlay.
 	if m.catalogModal.show {
 		catalogView := m.renderCatalogModal()

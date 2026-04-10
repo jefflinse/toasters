@@ -760,6 +760,21 @@ func (s *Server) listConfiguredProviderIDs(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, http.StatusOK, ids)
 }
 
+// setOperatorProvider handles PUT /api/v1/operator/provider.
+func (s *Server) setOperatorProvider(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ProviderID string `json:"provider_id"`
+	}
+	if !decodeBody(w, r, &req) {
+		return
+	}
+	if err := s.svc.System().SetOperatorProvider(r.Context(), req.ProviderID); err != nil {
+		handleServiceError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
 // listCatalog handles GET /api/v1/catalog.
 func (s *Server) listCatalog(w http.ResponseWriter, r *http.Request) {
 	providers, err := s.svc.System().ListCatalogProviders(r.Context())

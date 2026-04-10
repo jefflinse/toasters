@@ -176,6 +176,9 @@ type Model struct {
 	// Catalog modal state (models.dev browser).
 	catalogModal catalogModalState
 
+	// Operator modal state (provider picker).
+	operatorModal operatorModalState
+
 	// Blocker modal state.
 	blockerModal blockerModalState
 
@@ -327,6 +330,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case tea.KeyPressMsg:
+		// Operator modal key handling.
+		if m.operatorModal.show {
+			return m.updateOperatorModal(msg)
+		}
+
 		// Catalog modal key handling — intercept all keys when modal is open.
 		if m.catalogModal.show {
 			return m.updateCatalogModal(msg)
@@ -852,6 +860,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.cmdPopup.show = false
 					m.catalogModal = catalogModalState{show: true, loading: true}
 					return m, m.fetchCatalog()
+				case "/operator":
+					m.input.Reset()
+					m.cmdPopup.show = false
+					m.operatorModal = operatorModalState{show: true, loading: true}
+					return m, m.fetchConfiguredProviders()
 				}
 				// /job <prompt> — create a new job via the operator LLM.
 				if strings.HasPrefix(text, "/job ") {
@@ -868,7 +881,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				// Not a recognized slash command — send to LLM.
 				if m.operatorDisabled {
 					m.cmdPopup.show = false
-					return m, m.addToast("Operator not configured — use /providers then /operator", toastWarning)
+					return m, m.addToast("No operator — use /providers", toastWarning)
 				}
 				m.cmdPopup.show = false
 				return m, m.sendMessage()
@@ -987,6 +1000,22 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Close the entire modal and show a toast.
 			m.catalogModal = catalogModalState{}
 			return m, m.addToast("✓ Provider '"+name+"' saved", toastSuccess)
+		}
+
+	case OperatorConfiguredMsg:
+		m.operatorModal.loading = false
+		if msg.Err != nil {
+			m.operatorModal.err = msg.Err
+		} else {
+			m.operatorModal.providerIDs = msg.ProviderIDs
+		}
+
+	case OperatorProviderSetMsg:
+		if msg.Err != nil {
+			m.operatorModal.err = msg.Err
+		} else {
+			m.operatorModal = operatorModalState{}
+			return m, m.addToast("✓ Operator set to '"+msg.ProviderID+"' — restart server to apply", toastSuccess)
 		}
 
 	case TeamsReloadedMsg:
@@ -1200,7 +1229,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Click-to-focus: route clicks to the appropriate panel.
 		// Don't steal clicks when any overlay is active.
 		if !m.teamsModal.show && !m.skillsModal.show && !m.agentsModal.show &&
-			!m.mcpModal.show && !m.catalogModal.show && !m.blockerModal.show && !m.grid.showGrid &&
+			!m.mcpModal.show && !m.catalogModal.show && !m.operatorModal.show &&
+			!m.blockerModal.show && !m.grid.showGrid &&
 			!m.promptModal.show && !m.outputModal.show && !m.loading {
 			showLeftPanel := m.width >= minWidthForLeftPanel && !m.leftPanelHidden
 			showSidebar := m.width >= minWidthForBar && !m.sidebarHidden

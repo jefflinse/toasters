@@ -718,6 +718,20 @@ func (s *remoteSystemService) ListConfiguredProviderIDs(ctx context.Context) ([]
 	return ids, nil
 }
 
+func (s *remoteSystemService) SetOperatorProvider(ctx context.Context, providerID string) error {
+	resp, err := s.c.http.put(ctx, "/api/v1/operator/provider", map[string]string{
+		"provider_id": providerID,
+	})
+	if err != nil {
+		return fmt.Errorf("set operator provider: %w", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return fmt.Errorf("set operator provider: unexpected status %d", resp.StatusCode)
+	}
+	return nil
+}
+
 func (s *remoteSystemService) ListMCPServers(ctx context.Context) ([]service.MCPServerStatus, error) {
 	resp, err := s.c.http.get(ctx, "/api/v1/mcp/servers")
 	if err != nil {

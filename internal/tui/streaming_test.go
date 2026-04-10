@@ -41,6 +41,7 @@ func (m *mockSystemService) UpdateProvider(_ context.Context, _ service.AddProvi
 func (m *mockSystemService) ListConfiguredProviderIDs(_ context.Context) ([]string, error) {
 	return nil, nil
 }
+func (m *mockSystemService) SetOperatorProvider(_ context.Context, _ string) error { return nil }
 
 // mockDefinitionService implements service.DefinitionService with no-op methods.
 // Tests can override individual fields (e.g. listTeams) to inject behaviour.

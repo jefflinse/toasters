@@ -2468,6 +2468,11 @@ func (s *LocalService) ListConfiguredProviderIDs(_ context.Context) ([]string, e
 	return ids, nil
 }
 
+// SetOperatorProvider updates the operator provider ID in config.yaml.
+func (s *LocalService) SetOperatorProvider(_ context.Context, providerID string) error {
+	return config.SetOperatorProvider(s.cfg.ConfigDir, providerID)
+}
+
 // ---------------------------------------------------------------------------
 // Type mapping helpers
 // ---------------------------------------------------------------------------

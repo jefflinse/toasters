@@ -338,6 +338,10 @@ type SystemService interface {
 	// ListConfiguredProviderIDs returns the IDs of all providers that have
 	// YAML files in the providers/ directory (i.e. are configured locally).
 	ListConfiguredProviderIDs(ctx context.Context) ([]string, error)
+
+	// SetOperatorProvider sets the operator's provider ID in config.yaml.
+	// Requires a server restart to take effect.
+	SetOperatorProvider(ctx context.Context, providerID string) error
 }
 
 // ---------------------------------------------------------------------------
