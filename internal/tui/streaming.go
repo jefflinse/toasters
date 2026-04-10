@@ -60,6 +60,29 @@ func (m *Model) sendMessage() tea.Cmd {
 	)
 }
 
+// OperatorStatusRefreshedMsg carries updated operator status after live activation.
+type OperatorStatusRefreshedMsg struct {
+	ModelName string
+	Endpoint  string
+}
+
+// refreshOperatorStatus fetches the current operator status from the server.
+func (m Model) refreshOperatorStatus() tea.Cmd {
+	svc := m.svc
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		status, err := svc.Operator().Status(ctx)
+		if err != nil {
+			return nil
+		}
+		return OperatorStatusRefreshedMsg{
+			ModelName: status.ModelName,
+			Endpoint:  status.Endpoint,
+		}
+	}
+}
+
 // fetchModels returns a command that fetches available models from the LLM server.
 func (m Model) fetchModels() tea.Cmd {
 	svc := m.svc
