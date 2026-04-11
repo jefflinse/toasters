@@ -100,6 +100,20 @@ func New(store Store, defaultProvider, defaultModel string) *Composer {
 	}
 }
 
+// DefaultProvider returns the global default provider name.
+func (c *Composer) DefaultProvider() string { return c.defaultProvider }
+
+// DefaultModel returns the global default model name.
+func (c *Composer) DefaultModel() string { return c.defaultModel }
+
+// SetDefaults updates the default provider and model. This is called when
+// the operator provider is changed live so that team leads spawned after
+// the change inherit the correct provider.
+func (c *Composer) SetDefaults(provider, model string) {
+	c.defaultProvider = provider
+	c.defaultModel = model
+}
+
 // Compose assembles a fully composed agent from its DB definition.
 // If teamID is non-empty, team context (culture, team skills) is included.
 func (c *Composer) Compose(ctx context.Context, agentID string, teamID string) (*ComposedAgent, error) {

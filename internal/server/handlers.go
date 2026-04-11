@@ -2,6 +2,7 @@ package server
 
 import (
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -781,7 +782,11 @@ func (s *Server) listProviderModels(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	models, err := s.svc.System().ListProviderModels(r.Context(), id)
 	if err != nil {
-		handleServiceError(w, r, err)
+		// Provider model listing errors are user-actionable (provider unreachable,
+		// misconfigured, etc.), not internal bugs. Surface the message as a 502
+		// so the TUI can display it instead of a generic "internal server error".
+		slog.Warn("failed to list provider models", "provider", id, "error", err)
+		writeError(w, http.StatusBadGateway, "provider_error", service.SanitizeErrorMessage(err.Error()))
 		return
 	}
 	wireModels := make([]wireModelInfo, 0, len(models))

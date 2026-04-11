@@ -510,7 +510,11 @@ func (l *Loader) tryLoadRoleBasedTeam(teamPath, teamID, teamDir, source string) 
 	}
 
 	// Create synthetic agents for each worker role.
+	// Skip any role that matches the lead — it's already registered above.
 	for _, roleName := range def.Roles {
+		if roleName == def.Lead {
+			continue
+		}
 		agentID := teamID + "/" + roleName
 		agent := l.syntheticAgentFromRole(roleName, agentID, teamID, source)
 		agents = append(agents, agent)

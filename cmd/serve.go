@@ -136,9 +136,19 @@ func runServe(cmd *cobra.Command, args []string) error {
 	}
 
 	// Create composer for runtime agent composition.
+	// Fall back to the operator's provider/model when agents.defaults is empty,
+	// so team leads inherit the operator's provider by default.
 	var composer *compose.Composer
 	if store != nil {
-		composer = compose.New(store, cfg.Agents.Defaults.Provider, cfg.Agents.Defaults.Model)
+		defaultProvider := cfg.Agents.Defaults.Provider
+		if defaultProvider == "" {
+			defaultProvider = cfg.Operator.Provider
+		}
+		defaultModel := cfg.Agents.Defaults.Model
+		if defaultModel == "" {
+			defaultModel = cfg.Operator.Model
+		}
+		composer = compose.New(store, defaultProvider, defaultModel)
 	}
 
 	// Create provider registry and register providers from providers/*.yaml.
@@ -147,6 +157,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 
 	// Create the runtime for agent session management.
 	rt := runtime.New(store, registry)
+	rt.SetPromptEngine(promptEngine)
 	defer rt.Shutdown()
 
 	// Initialize MCP manager and connect to configured servers.

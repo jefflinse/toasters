@@ -2482,6 +2482,12 @@ func (s *LocalService) SetOperatorProvider(_ context.Context, providerID string,
 		return err
 	}
 
+	// Update composer defaults so team leads spawned after this change
+	// inherit the operator's provider.
+	if s.cfg.Composer != nil {
+		s.cfg.Composer.SetDefaults(providerID, model)
+	}
+
 	// Attempt live activation.
 	if s.cfg.Registry == nil {
 		return nil

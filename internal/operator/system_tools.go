@@ -52,7 +52,7 @@ type SystemTools struct {
 	promptEngine *prompt.Engine // optional; when set, used for role-based prompt composition
 	eventCh      chan<- Event
 	spawner      TeamLeadSpawner
-	workDir      string // global workspace directory; per-job subdirs are created under this
+	workDir      string                 // global workspace directory; per-job subdirs are created under this
 	broadcaster  SystemEventBroadcaster // optional; nil means no service event broadcast
 }
 
@@ -437,19 +437,38 @@ func (st *SystemTools) assignTask(ctx context.Context, args json.RawMessage) (st
 
 	// 6. Compose the team lead agent.
 	// Try the prompt engine first (role-based composition), then fall back
-	// to the legacy Composer.
+	// to the legacy Composer. The engine stores roles by filename stem
+	// (e.g. "coordinator"), but team.LeadAgent is the qualified DB agent ID
+	// (e.g. "the-kitchen/coordinator"), so extract the role name.
 	var composed *compose.ComposedAgent
 	if st.promptEngine != nil {
-		if role := st.promptEngine.Role(team.LeadAgent); role != nil {
-			prompt, promptErr := st.promptEngine.Compose(team.LeadAgent, nil)
+		roleName := team.LeadAgent
+		if idx := strings.LastIndex(roleName, "/"); idx >= 0 {
+			roleName = roleName[idx+1:]
+		}
+		if role := st.promptEngine.Role(roleName); role != nil {
+			prompt, promptErr := st.promptEngine.Compose(roleName, nil)
 			if promptErr != nil {
 				slog.Warn("prompt engine failed, falling back to legacy composer",
 					"role", team.LeadAgent, "error", promptErr)
 			} else {
+				// Resolve provider/model: team → global default (same cascade
+				// as the legacy composer, minus the agent level since role-based
+				// agents don't have per-agent provider config).
+				prov := team.Provider
+				if prov == "" {
+					prov = st.composer.DefaultProvider()
+				}
+				mod := team.Model
+				if mod == "" {
+					mod = st.composer.DefaultModel()
+				}
 				composed = &compose.ComposedAgent{
 					AgentID:      team.LeadAgent,
 					Name:         role.Name,
 					SystemPrompt: prompt,
+					Provider:     prov,
+					Model:        mod,
 					TeamID:       params.TeamID,
 				}
 				slog.Info("composed team lead from prompt engine",

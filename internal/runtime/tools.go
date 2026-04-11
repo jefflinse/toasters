@@ -20,6 +20,7 @@ import (
 	"github.com/jefflinse/toasters/internal/db"
 	"github.com/jefflinse/toasters/internal/httputil"
 	"github.com/jefflinse/toasters/internal/progress"
+	"github.com/jefflinse/toasters/internal/prompt"
 )
 
 // ErrUnknownTool is returned by Execute when the tool name is not recognized.
@@ -41,11 +42,12 @@ type AgentSpawner interface {
 type CoreTools struct {
 	workDir      string
 	allowShell   bool
-	spawner      AgentSpawner // for spawn_agent; may be nil
-	depth        int          // current spawn depth
-	maxDepth     int          // max spawn depth
-	httpClient   *http.Client // for web_fetch; nil uses webFetchClient
-	store        db.Store     // required; for progress tools
+	spawner      AgentSpawner   // for spawn_agent; may be nil
+	depth        int            // current spawn depth
+	maxDepth     int            // max spawn depth
+	httpClient   *http.Client   // for web_fetch; nil uses webFetchClient
+	store        db.Store       // required; for progress tools
+	promptEngine *prompt.Engine // for spawn_worker; may be nil
 	denylist     map[string]bool
 	sessionID    string
 	agentID      string
@@ -101,6 +103,11 @@ func WithDenylist(names []string) CoreToolsOption {
 	}
 }
 
+// WithPromptEngine sets the prompt engine for spawn_worker.
+func WithPromptEngine(e *prompt.Engine) CoreToolsOption {
+	return func(ct *CoreTools) { ct.promptEngine = e }
+}
+
 // WithProvider sets the provider name and model for child agent spawns.
 func WithProvider(providerName, model string) CoreToolsOption {
 	return func(ct *CoreTools) {
@@ -145,6 +152,8 @@ func (ct *CoreTools) Execute(ctx context.Context, name string, args json.RawMess
 		return ct.webFetch(ctx, args)
 	case "spawn_agent":
 		return ct.spawnAgent(ctx, args)
+	case "spawn_worker":
+		return ct.spawnWorker(ctx, args)
 	case "report_task_progress":
 		var params progress.ReportTaskProgressParams
 		if err := json.Unmarshal(args, &params); err != nil {
@@ -332,6 +341,23 @@ func (ct *CoreTools) Definitions() []ToolDef {
 					"task":          {"type": "string", "description": "Short human-readable description of what this agent is being asked to do (\u226460 chars), shown in the TUI card. E.g. 'building core data models', 'performing code review'."}
 				},
 				"required": ["system_prompt", "message"]
+			}`),
+		})
+	}
+
+	// Only include spawn_worker if spawner, engine, and depth all allow it.
+	if ct.spawner != nil && ct.promptEngine != nil && ct.depth < ct.maxDepth {
+		defs = append(defs, ToolDef{
+			Name:        "spawn_worker",
+			Description: "Spawn a worker with a role-based system prompt composed by the prompt engine. Use this instead of spawn_agent when the worker's role is defined in the prompt engine. Blocks until the worker completes and returns its final text output.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"role":    {"type": "string", "description": "Worker role name (e.g. 'go-coder', 'go-tester', 'go-reviewer'). Must match a role loaded in the prompt engine."},
+					"message": {"type": "string", "description": "Task instruction to send to the worker."},
+					"task":    {"type": "string", "description": "Short human-readable description of what this worker is doing (\u226460 chars), shown in the TUI card."}
+				},
+				"required": ["role", "message"]
 			}`),
 		})
 	}
@@ -905,6 +931,59 @@ func (ct *CoreTools) spawnAgent(ctx context.Context, args json.RawMessage) (stri
 	})
 	if err != nil {
 		return "", fmt.Errorf("spawning agent: %w", err)
+	}
+
+	return result, nil
+}
+
+func (ct *CoreTools) spawnWorker(ctx context.Context, args json.RawMessage) (string, error) {
+	if ct.spawner == nil {
+		return "", fmt.Errorf("spawn_worker is not available")
+	}
+	if ct.promptEngine == nil {
+		return "", fmt.Errorf("spawn_worker requires a prompt engine")
+	}
+	if ct.depth >= ct.maxDepth {
+		return "", fmt.Errorf("max spawn depth (%d) exceeded", ct.maxDepth)
+	}
+
+	var params struct {
+		Role    string `json:"role"`
+		Message string `json:"message"`
+		Task    string `json:"task"`
+	}
+	if err := json.Unmarshal(args, &params); err != nil {
+		return "", fmt.Errorf("parsing arguments: %w", err)
+	}
+
+	// Verify the role exists.
+	role := ct.promptEngine.Role(params.Role)
+	if role == nil {
+		available := ct.promptEngine.Roles()
+		return "", fmt.Errorf("role %q not found; available roles: %s", params.Role, strings.Join(available, ", "))
+	}
+
+	// Compose the system prompt from the role definition.
+	systemPrompt, err := ct.promptEngine.Compose(params.Role, nil)
+	if err != nil {
+		return "", fmt.Errorf("composing prompt for role %q: %w", params.Role, err)
+	}
+
+	result, err := ct.spawner.SpawnAndWait(ctx, SpawnOpts{
+		SystemPrompt:   systemPrompt,
+		InitialMessage: params.Message,
+		WorkDir:        ct.workDir,
+		MaxDepth:       ct.maxDepth,
+		Depth:          ct.depth + 1,
+		ProviderName:   ct.providerName,
+		Model:          ct.model,
+		AgentID:        params.Role,
+		JobID:          ct.jobID,
+		TaskID:         ct.taskID,
+		Task:           params.Task,
+	})
+	if err != nil {
+		return "", fmt.Errorf("spawning worker %q: %w", params.Role, err)
 	}
 
 	return result, nil

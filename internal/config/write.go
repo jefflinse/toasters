@@ -111,6 +111,7 @@ func setMappingValue(node *yaml.Node, key, value string) {
 	for i := 0; i+1 < len(node.Content); i += 2 {
 		if node.Content[i].Value == key {
 			node.Content[i+1].Value = value
+			node.Content[i+1].Tag = "!!str"
 			return
 		}
 	}

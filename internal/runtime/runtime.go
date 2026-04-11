@@ -10,6 +10,7 @@ import (
 
 	"github.com/gofrs/uuid/v5"
 	"github.com/jefflinse/toasters/internal/db"
+	"github.com/jefflinse/toasters/internal/prompt"
 	"github.com/jefflinse/toasters/internal/provider"
 )
 
@@ -20,6 +21,7 @@ type Runtime struct {
 	sessions         map[string]*Session
 	store            db.Store // may be nil
 	providers        *provider.Registry
+	promptEngine     *prompt.Engine // may be nil; for spawn_worker role-based composition
 	mcpCaller        MCPCaller      // may be nil
 	mcpDefs          []ToolDef      // pre-converted MCP tool definitions
 	OnSessionStarted func(*Session) // called after each SpawnAgent; may be nil
@@ -32,6 +34,14 @@ func New(store db.Store, providers *provider.Registry) *Runtime {
 		store:     store,
 		providers: providers,
 	}
+}
+
+// SetPromptEngine wires a prompt engine into the runtime so that CoreTools
+// can offer spawn_worker for role-based worker spawning.
+func (r *Runtime) SetPromptEngine(e *prompt.Engine) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.promptEngine = e
 }
 
 // SetMCPCaller wires an MCP caller into the runtime for agent tool dispatch.
@@ -70,8 +80,9 @@ func (r *Runtime) SpawnAgent(ctx context.Context, opts SpawnOpts) (*Session, err
 		maxDepth = defaultMaxDepth
 	}
 
-	// Snapshot MCP state under lock for use below.
+	// Snapshot shared state under lock for use below.
 	r.mu.Lock()
+	promptEng := r.promptEngine
 	mcpCaller := r.mcpCaller
 	mcpDefs := r.mcpDefs
 	r.mu.Unlock()
@@ -89,6 +100,9 @@ func (r *Runtime) SpawnAgent(ctx context.Context, opts SpawnOpts) (*Session, err
 			WithStore(r.store),
 			WithSessionContext(id, opts.AgentID, opts.JobID, opts.TaskID),
 			WithProvider(opts.ProviderName, opts.Model),
+		}
+		if promptEng != nil {
+			coreOpts = append(coreOpts, WithPromptEngine(promptEng))
 		}
 		if len(opts.DisallowedTools) > 0 {
 			coreOpts = append(coreOpts, WithDenylist(opts.DisallowedTools))
