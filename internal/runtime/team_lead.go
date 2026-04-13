@@ -18,20 +18,21 @@ type TeamLeadSpawner interface {
 
 // TeamLeadCompletionTracker is an optional interface that a team_lead's
 // extraTools may satisfy. SpawnTeamLead's safety-net watcher uses it to
-// detect team_lead sessions that ended without explicitly calling
-// complete_task — for example because the model wrote a final assistant
-// text message instead of invoking the tool — and force-completes the task
-// so the orchestrator can advance.
+// detect team_lead sessions that ended without taking any terminal action
+// (complete_task or report_blocker). When no terminal action was taken —
+// for example because the model wrote a final text message instead of
+// invoking a tool — the watcher force-fails the task so the operator can
+// decide next steps.
 //
 // *operator.TeamLeadTools satisfies this interface; the runtime side checks
 // for it via a type assertion to keep the dependency direction one-way.
 type TeamLeadCompletionTracker interface {
-	// CompletedCalled reports whether complete_task was invoked at least once.
-	CompletedCalled() bool
-	// ForceComplete marks the task as completed with the given summary.
-	// Implementations should still emit any task-completion event their
-	// owning subsystem expects so the orchestrator advances.
-	ForceComplete(ctx context.Context, summary string) error
+	// TerminalActionTaken reports whether any terminal tool (complete_task or
+	// report_blocker) was invoked at least once.
+	TerminalActionTaken() bool
+	// ForceFail marks the task as failed with the given reason and emits a
+	// TaskFailed event so the operator can decide how to proceed.
+	ForceFail(ctx context.Context, reason string) error
 }
 
 // teamLeadCompletionFallbackTimeout bounds the synthetic completion call so a
@@ -39,21 +40,23 @@ type TeamLeadCompletionTracker interface {
 const teamLeadCompletionFallbackTimeout = 5 * time.Second
 
 // watchTeamLeadForCompletion blocks until sess terminates and, if the team
-// lead never invoked complete_task, force-completes its task with a
-// placeholder summary. Designed to be invoked as `go watchTeamLeadForCompletion(...)`.
+// lead never invoked a terminal tool (complete_task or report_blocker),
+// force-fails the task so the operator can decide next steps. A session
+// ending without any terminal action typically means the model wrote pushback
+// text or hit a turn limit rather than completing the work.
 func watchTeamLeadForCompletion(sess *Session, taskID string, tracker TeamLeadCompletionTracker) {
 	<-sess.Done()
-	if tracker.CompletedCalled() {
+	if tracker.TerminalActionTaken() {
 		return
 	}
-	slog.Warn("team_lead session ended without calling complete_task; auto-completing",
+	slog.Warn("team_lead session ended without terminal action; force-failing task",
 		"task_id", taskID,
 		"session_id", sess.ID(),
 	)
 	ctx, cancel := context.WithTimeout(context.Background(), teamLeadCompletionFallbackTimeout)
 	defer cancel()
-	if err := tracker.ForceComplete(ctx, "Task auto-completed (team_lead ended without explicit completion)"); err != nil {
-		slog.Error("team_lead auto-completion failed",
+	if err := tracker.ForceFail(ctx, "Team lead session ended without completing or blocking the task"); err != nil {
+		slog.Error("team_lead force-fail failed",
 			"task_id", taskID,
 			"session_id", sess.ID(),
 			"error", err,

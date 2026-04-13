@@ -220,23 +220,35 @@ func TestCompleteTask_HasNextTask(t *testing.T) {
 }
 
 func TestTeamLeadTools_CompletionTracker(t *testing.T) {
-	// Verifies the runtime.TeamLeadCompletionTracker contract: CompletedCalled
-	// flips after the LLM invokes complete_task, and ForceComplete provides a
-	// synthetic-completion path for the safety-net watcher in
-	// runtime.SpawnTeamLead.
-	t.Run("CompletedCalled false until complete_task fires", func(t *testing.T) {
+	// Verifies the runtime.TeamLeadCompletionTracker contract:
+	// TerminalActionTaken flips after the LLM invokes complete_task or
+	// report_blocker, and ForceFail provides a failure path for the
+	// safety-net watcher in runtime.SpawnTeamLead.
+	t.Run("TerminalActionTaken false until complete_task fires", func(t *testing.T) {
 		tl, _, _ := newTestTeamLeadTools(t)
-		if tl.CompletedCalled() {
-			t.Fatal("CompletedCalled should be false on a fresh TeamLeadTools")
+		if tl.TerminalActionTaken() {
+			t.Fatal("TerminalActionTaken should be false on a fresh TeamLeadTools")
 		}
 		_, err := tl.Execute(context.Background(), "complete_task", json.RawMessage(`{"summary":"done"}`))
 		assertNoError(t, err)
-		if !tl.CompletedCalled() {
-			t.Fatal("CompletedCalled should be true after complete_task")
+		if !tl.TerminalActionTaken() {
+			t.Fatal("TerminalActionTaken should be true after complete_task")
 		}
 	})
 
-	t.Run("CompletedCalled flips even when complete_task is called with bad json", func(t *testing.T) {
+	t.Run("TerminalActionTaken flips on report_blocker", func(t *testing.T) {
+		tl, _, _ := newTestTeamLeadTools(t)
+		if tl.TerminalActionTaken() {
+			t.Fatal("TerminalActionTaken should be false on a fresh TeamLeadTools")
+		}
+		_, err := tl.Execute(context.Background(), "report_blocker", json.RawMessage(`{"description":"out of scope"}`))
+		assertNoError(t, err)
+		if !tl.TerminalActionTaken() {
+			t.Fatal("TerminalActionTaken should be true after report_blocker")
+		}
+	})
+
+	t.Run("TerminalActionTaken flips even when complete_task is called with bad json", func(t *testing.T) {
 		// The watcher should NOT trigger when the LLM tried to call the tool,
 		// even if the call was malformed. Otherwise we'd double-complete.
 		tl, _, _ := newTestTeamLeadTools(t)
@@ -244,31 +256,32 @@ func TestTeamLeadTools_CompletionTracker(t *testing.T) {
 		if err == nil {
 			t.Fatal("expected JSON parse error")
 		}
-		if !tl.CompletedCalled() {
-			t.Fatal("CompletedCalled should still flip on attempted-but-failed calls")
+		if !tl.TerminalActionTaken() {
+			t.Fatal("TerminalActionTaken should still flip on attempted-but-failed calls")
 		}
 	})
 
-	t.Run("ForceComplete marks the task done and emits the event", func(t *testing.T) {
+	t.Run("ForceFail marks the task failed and emits the event", func(t *testing.T) {
 		tl, store, eventCh := newTestTeamLeadTools(t)
-		if err := tl.ForceComplete(context.Background(), "synthetic summary"); err != nil {
-			t.Fatalf("ForceComplete: %v", err)
+		if err := tl.ForceFail(context.Background(), "session ended without action"); err != nil {
+			t.Fatalf("ForceFail: %v", err)
 		}
 		task, err := store.GetTask(context.Background(), "task-1")
 		assertNoError(t, err)
-		if task.Status != db.TaskStatusCompleted {
-			t.Fatalf("task status = %q, want completed", task.Status)
-		}
-		if !strings.Contains(task.ResultSummary, "synthetic") {
-			t.Fatalf("task summary = %q, want it to include 'synthetic'", task.ResultSummary)
+		if task.Status != db.TaskStatusFailed {
+			t.Fatalf("task status = %q, want failed", task.Status)
 		}
 		select {
 		case ev := <-eventCh:
-			if ev.Type != EventTaskCompleted {
-				t.Fatalf("event type = %q, want %q", ev.Type, EventTaskCompleted)
+			if ev.Type != EventTaskFailed {
+				t.Fatalf("event type = %q, want %q", ev.Type, EventTaskFailed)
+			}
+			payload := ev.Payload.(TaskFailedPayload)
+			if !strings.Contains(payload.Error, "session ended") {
+				t.Fatalf("error = %q, want it to contain 'session ended'", payload.Error)
 			}
 		default:
-			t.Fatal("expected EventTaskCompleted on the channel")
+			t.Fatal("expected EventTaskFailed on the channel")
 		}
 	})
 }

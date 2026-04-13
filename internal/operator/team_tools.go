@@ -21,33 +21,39 @@ type TeamLeadTools struct {
 	jobID   string // the job this task belongs to
 	teamID  string // the team this lead belongs to
 
-	// completed is set to true the first time complete_task is invoked
-	// (regardless of whether the underlying store call succeeded). It allows
-	// runtime.SpawnTeamLead's safety-net watcher to detect team_lead sessions
-	// that ended without ever calling complete_task — small models frequently
-	// produce a final assistant text message instead of the tool call, leaving
-	// the task stranded at "in_progress" forever.
-	completed atomic.Bool
+	// terminalAction is set to true when any terminal tool is invoked
+	// (complete_task or report_blocker), regardless of whether the underlying
+	// store call succeeded. It allows runtime.SpawnTeamLead's safety-net
+	// watcher to detect sessions that ended without any terminal action —
+	// e.g. the model wrote pushback text instead of calling a tool.
+	terminalAction atomic.Bool
 }
 
-// CompletedCalled reports whether complete_task has been invoked on this
-// TeamLeadTools instance. Implements runtime.TeamLeadCompletionTracker.
-func (tl *TeamLeadTools) CompletedCalled() bool {
-	return tl.completed.Load()
+// TerminalActionTaken reports whether any terminal tool (complete_task or
+// report_blocker) has been invoked. Implements runtime.TeamLeadCompletionTracker.
+func (tl *TeamLeadTools) TerminalActionTaken() bool {
+	return tl.terminalAction.Load()
 }
 
-// ForceComplete marks the task as completed with a synthesized summary,
-// bypassing the LLM. Used by runtime.SpawnTeamLead's safety-net watcher when
-// a team_lead session ends without explicitly calling complete_task.
+// ForceFail marks the task as failed and emits a TaskFailed event so the
+// operator can decide how to proceed. Used by the safety-net watcher when a
+// team_lead session ends without any terminal action.
 // Implements runtime.TeamLeadCompletionTracker.
-func (tl *TeamLeadTools) ForceComplete(ctx context.Context, summary string) error {
-	args, err := json.Marshal(map[string]string{"summary": summary})
-	if err != nil {
-		return fmt.Errorf("marshaling synthetic complete_task args: %w", err)
+func (tl *TeamLeadTools) ForceFail(ctx context.Context, reason string) error {
+	if err := tl.store.UpdateTaskStatus(ctx, tl.taskID, db.TaskStatusFailed, reason); err != nil {
+		return fmt.Errorf("force-failing task: %w", err)
 	}
-	if _, err := tl.completeTask(ctx, args); err != nil {
-		return fmt.Errorf("synthetic complete_task: %w", err)
-	}
+
+	trySendEvent(ctx, tl.eventCh, Event{
+		Type: EventTaskFailed,
+		Payload: TaskFailedPayload{
+			TaskID: tl.taskID,
+			JobID:  tl.jobID,
+			TeamID: tl.teamID,
+			Error:  reason,
+		},
+	})
+
 	return nil
 }
 
@@ -168,11 +174,9 @@ func (tl *TeamLeadTools) Execute(ctx context.Context, name string, args json.Raw
 }
 
 func (tl *TeamLeadTools) completeTask(ctx context.Context, args json.RawMessage) (string, error) {
-	// Mark as called immediately, even before parsing/validation, so the
-	// runtime watcher knows the team_lead model attempted completion. The
-	// watcher's job is to catch sessions that ended *without any call*, not
-	// to second-guess attempted-but-failed calls.
-	tl.completed.Store(true)
+	// Mark terminal action immediately, even before parsing/validation, so the
+	// runtime watcher knows the team_lead model attempted a terminal tool call.
+	tl.terminalAction.Store(true)
 
 	var params struct {
 		Summary         string `json:"summary"`
@@ -250,6 +254,10 @@ func (tl *TeamLeadTools) requestNewTask(ctx context.Context, args json.RawMessag
 }
 
 func (tl *TeamLeadTools) reportBlocker(ctx context.Context, args json.RawMessage) (string, error) {
+	// Mark terminal action immediately so the safety-net watcher doesn't
+	// override the blocked status with a force-fail.
+	tl.terminalAction.Store(true)
+
 	var params struct {
 		Description string `json:"description"`
 	}
