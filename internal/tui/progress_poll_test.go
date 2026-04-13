@@ -266,7 +266,7 @@ func TestUpdate_ProgressPollMsg_UpdatesFields(t *testing.T) {
 	progress := map[string][]service.ProgressReport{
 		"job-1": {{ID: 1, Message: "done"}},
 	}
-	sessions := []service.AgentSession{{ID: "sess-1"}}
+	sessions := []service.WorkerSession{{ID: "sess-1"}}
 
 	m := newMinimalModel(t)
 

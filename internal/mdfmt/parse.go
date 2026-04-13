@@ -1,4 +1,4 @@
-package agentfmt
+package mdfmt
 
 import (
 	"errors"

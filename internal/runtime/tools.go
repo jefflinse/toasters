@@ -33,16 +33,16 @@ type ToolExecutor interface {
 	Definitions() []ToolDef
 }
 
-// AgentSpawner creates child agent sessions.
-type AgentSpawner interface {
+// WorkerSpawner creates child worker sessions.
+type WorkerSpawner interface {
 	SpawnAndWait(ctx context.Context, opts SpawnOpts) (string, error)
 }
 
-// CoreTools implements the standard agent tool set.
+// CoreTools implements the standard worker tool set.
 type CoreTools struct {
 	workDir      string
 	allowShell   bool
-	spawner      AgentSpawner   // for spawn_agent; may be nil
+	spawner      WorkerSpawner  // for spawn_worker; may be nil
 	depth        int            // current spawn depth
 	maxDepth     int            // max spawn depth
 	httpClient   *http.Client   // for web_fetch; nil uses webFetchClient
@@ -50,7 +50,7 @@ type CoreTools struct {
 	promptEngine *prompt.Engine // for spawn_worker; may be nil
 	denylist     map[string]bool
 	sessionID    string
-	agentID      string
+	workerID     string
 	jobID        string
 	taskID       string
 	providerName string
@@ -65,8 +65,8 @@ func WithShell(allow bool) CoreToolsOption {
 	return func(ct *CoreTools) { ct.allowShell = allow }
 }
 
-// WithSpawner sets the agent spawner for spawn_agent.
-func WithSpawner(s AgentSpawner, depth, maxDepth int) CoreToolsOption {
+// WithSpawner sets the worker spawner for spawn_worker.
+func WithSpawner(s WorkerSpawner, depth, maxDepth int) CoreToolsOption {
 	return func(ct *CoreTools) {
 		ct.spawner = s
 		ct.depth = depth
@@ -80,10 +80,10 @@ func WithStore(store db.Store) CoreToolsOption {
 }
 
 // WithSessionContext sets the session context for progress tool calls.
-func WithSessionContext(sessionID, agentID, jobID, taskID string) CoreToolsOption {
+func WithSessionContext(sessionID, workerID, jobID, taskID string) CoreToolsOption {
 	return func(ct *CoreTools) {
 		ct.sessionID = sessionID
-		ct.agentID = agentID
+		ct.workerID = workerID
 		ct.jobID = jobID
 		ct.taskID = taskID
 	}
@@ -108,7 +108,7 @@ func WithPromptEngine(e *prompt.Engine) CoreToolsOption {
 	return func(ct *CoreTools) { ct.promptEngine = e }
 }
 
-// WithProvider sets the provider name and model for child agent spawns.
+// WithProvider sets the provider name and model for child worker spawns.
 func WithProvider(providerName, model string) CoreToolsOption {
 	return func(ct *CoreTools) {
 		ct.providerName = providerName
@@ -132,7 +132,7 @@ func NewCoreTools(workDir string, opts ...CoreToolsOption) *CoreTools {
 // Execute dispatches a tool call by name.
 func (ct *CoreTools) Execute(ctx context.Context, name string, args json.RawMessage) (string, error) {
 	if ct.denylist[name] {
-		return "", fmt.Errorf("tool %q is not allowed for this agent", name)
+		return "", fmt.Errorf("tool %q is not allowed for this worker", name)
 	}
 
 	switch name {
@@ -150,8 +150,6 @@ func (ct *CoreTools) Execute(ctx context.Context, name string, args json.RawMess
 		return ct.shell(ctx, args)
 	case "web_fetch":
 		return ct.webFetch(ctx, args)
-	case "spawn_agent":
-		return ct.spawnAgent(ctx, args)
 	case "spawn_worker":
 		return ct.spawnWorker(ctx, args)
 	case "report_task_progress":
@@ -160,8 +158,8 @@ func (ct *CoreTools) Execute(ctx context.Context, name string, args json.RawMess
 			return "", fmt.Errorf("parsing report_task_progress args: %w", err)
 		}
 		params.JobID, params.TaskID = ct.normalizeProgressIDs(params.JobID, params.TaskID)
-		if params.AgentID == "" {
-			params.AgentID = ct.agentID
+		if params.WorkerID == "" {
+			params.WorkerID = ct.workerID
 		}
 		return progress.ReportTaskProgress(ctx, ct.store, params)
 	case "report_blocker":
@@ -170,8 +168,8 @@ func (ct *CoreTools) Execute(ctx context.Context, name string, args json.RawMess
 			return "", fmt.Errorf("parsing report_blocker args: %w", err)
 		}
 		params.JobID, params.TaskID = ct.normalizeProgressIDs(params.JobID, params.TaskID)
-		if params.AgentID == "" {
-			params.AgentID = ct.agentID
+		if params.WorkerID == "" {
+			params.WorkerID = ct.workerID
 		}
 		return progress.ReportBlocker(ctx, ct.store, params)
 	case "update_task_status":
@@ -186,8 +184,8 @@ func (ct *CoreTools) Execute(ctx context.Context, name string, args json.RawMess
 			return "", fmt.Errorf("parsing request_review args: %w", err)
 		}
 		params.JobID, params.TaskID = ct.normalizeProgressIDs(params.JobID, params.TaskID)
-		if params.AgentID == "" {
-			params.AgentID = ct.agentID
+		if params.WorkerID == "" {
+			params.WorkerID = ct.workerID
 		}
 		return progress.RequestReview(ctx, ct.store, params)
 	case "query_job_context":
@@ -326,30 +324,11 @@ func (ct *CoreTools) Definitions() []ToolDef {
 		},
 	}
 
-	// Only include spawn_agent if spawner is available and depth allows it.
-	if ct.spawner != nil && ct.depth < ct.maxDepth {
-		defs = append(defs, ToolDef{
-			Name:        "spawn_agent",
-			Description: "Spawn a child agent session. Blocks until the child completes and returns its final text output.",
-			Parameters: json.RawMessage(`{
-				"type": "object",
-				"properties": {
-					"system_prompt": {"type": "string", "description": "System prompt for the child agent"},
-					"message":       {"type": "string", "description": "Initial message to send to the child agent"},
-					"tools":         {"type": "array", "items": {"type": "string"}, "description": "Tool names to make available to the child agent"},
-					"agent_name":    {"type": "string", "description": "Short display name for this agent in the TUI (e.g. 'tui-engineer', 'builder'). Omitting this will display the child under the parent agent's name."},
-					"task":          {"type": "string", "description": "Short human-readable description of what this agent is being asked to do (\u226460 chars), shown in the TUI card. E.g. 'building core data models', 'performing code review'."}
-				},
-				"required": ["system_prompt", "message"]
-			}`),
-		})
-	}
-
 	// Only include spawn_worker if spawner, engine, and depth all allow it.
 	if ct.spawner != nil && ct.promptEngine != nil && ct.depth < ct.maxDepth {
 		defs = append(defs, ToolDef{
 			Name:        "spawn_worker",
-			Description: "Spawn a worker with a role-based system prompt composed by the prompt engine. Use this instead of spawn_agent when the worker's role is defined in the prompt engine. Blocks until the worker completes and returns its final text output.",
+			Description: "Spawn a worker with a role-based system prompt composed by the prompt engine. Blocks until the worker completes and returns its final text output.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
@@ -871,71 +850,6 @@ func (ct *CoreTools) webFetch(ctx context.Context, args json.RawMessage) (string
 	return string(body), nil
 }
 
-func (ct *CoreTools) spawnAgent(ctx context.Context, args json.RawMessage) (string, error) {
-	if ct.spawner == nil {
-		return "", fmt.Errorf("spawn_agent is not available")
-	}
-	if ct.depth >= ct.maxDepth {
-		return "", fmt.Errorf("max spawn depth (%d) exceeded", ct.maxDepth)
-	}
-
-	var params struct {
-		SystemPrompt string   `json:"system_prompt"`
-		Message      string   `json:"message"`
-		Tools        []string `json:"tools"`
-		AgentName    string   `json:"agent_name"`
-		Task         string   `json:"task"`
-	}
-	if err := json.Unmarshal(args, &params); err != nil {
-		return "", fmt.Errorf("parsing arguments: %w", err)
-	}
-
-	// Resolve requested tool names to full ToolDef values using the parent's
-	// available tool set. Unknown names are silently skipped — the LLM may
-	// request tools that are conditionally available (e.g. shell, spawn_agent).
-	var toolDefs []ToolDef
-	if len(params.Tools) > 0 {
-		available := ct.DefinitionsByName()
-		for _, name := range params.Tools {
-			if td, ok := available[name]; ok {
-				toolDefs = append(toolDefs, td)
-			}
-		}
-	}
-
-	// Use agent_name from params if provided; fall back to "worker" so that
-	// anonymous subagents don't inherit the parent's name and appear confusingly in the TUI.
-	childAgentID := params.AgentName
-	if childAgentID == "" {
-		childAgentID = "worker"
-	}
-
-	// TODO: When WorkerTools event wiring is implemented, propagate the parent
-	// session's ExtraTools (or a worker-specific subset) to child sessions so
-	// that workers spawned by team leads get event-aware report_progress and
-	// query_team_context tools. Currently workers use CoreTools' report_task_progress
-	// which writes to DB but doesn't send operator events.
-	result, err := ct.spawner.SpawnAndWait(ctx, SpawnOpts{
-		SystemPrompt:   params.SystemPrompt,
-		InitialMessage: params.Message,
-		WorkDir:        ct.workDir,
-		MaxDepth:       ct.maxDepth,
-		Depth:          ct.depth + 1,
-		ProviderName:   ct.providerName,
-		Model:          ct.model,
-		AgentID:        childAgentID,
-		JobID:          ct.jobID,
-		TaskID:         ct.taskID,
-		Task:           params.Task,
-		Tools:          toolDefs,
-	})
-	if err != nil {
-		return "", fmt.Errorf("spawning agent: %w", err)
-	}
-
-	return result, nil
-}
-
 func (ct *CoreTools) spawnWorker(ctx context.Context, args json.RawMessage) (string, error) {
 	if ct.spawner == nil {
 		return "", fmt.Errorf("spawn_worker is not available")
@@ -977,7 +891,7 @@ func (ct *CoreTools) spawnWorker(ctx context.Context, args json.RawMessage) (str
 		Depth:          ct.depth + 1,
 		ProviderName:   ct.providerName,
 		Model:          ct.model,
-		AgentID:        params.Role,
+		WorkerID:       params.Role,
 		JobID:          ct.jobID,
 		TaskID:         ct.taskID,
 		Task:           params.Task,

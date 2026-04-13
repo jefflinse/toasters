@@ -113,7 +113,7 @@ func translateEvent(ev service.Event) tea.Msg {
 		}
 		return SessionStartedMsg{
 			SessionID:      p.SessionID,
-			AgentName:      p.AgentName,
+			WorkerName:     p.WorkerName,
 			TeamName:       p.TeamName,
 			Task:           p.Task,
 			JobID:          p.JobID,
@@ -163,8 +163,8 @@ func translateEvent(ev service.Event) tea.Msg {
 			return nil
 		}
 		return SessionDoneMsg{
-			SessionID: ev.SessionID,
-			AgentName: p.AgentName,
+			SessionID:  ev.SessionID,
+			WorkerName: p.WorkerName,
 			JobID:     p.JobID,
 			TaskID:    p.TaskID,
 			FinalText: p.FinalText,
@@ -225,8 +225,6 @@ func handleOperationCompleted(p service.OperationCompletedPayload) tea.Msg {
 	switch p.Kind {
 	case "generate_skill":
 		return skillGeneratedMsg{content: p.Result.Content}
-	case "generate_agent":
-		return agentGeneratedMsg{content: p.Result.Content}
 	case "generate_team":
 		return teamGeneratedMsg{content: p.Result.Content, agentNames: p.Result.AgentNames}
 	case "promote_team":
@@ -248,8 +246,6 @@ func handleOperationFailed(p service.OperationFailedPayload) tea.Msg {
 	switch p.Kind {
 	case "generate_skill":
 		return skillGeneratedMsg{err: err}
-	case "generate_agent":
-		return agentGeneratedMsg{err: err}
 	case "generate_team":
 		return teamGeneratedMsg{err: err}
 	case "promote_team":

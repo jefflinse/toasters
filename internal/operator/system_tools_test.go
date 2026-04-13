@@ -26,7 +26,7 @@ type mockSpawner struct {
 }
 
 type spawnCall struct {
-	Composed        *runtime.ComposedAgent
+	Composed        *runtime.ComposedWorker
 	TaskID          string
 	JobID           string
 	WorkDir         string
@@ -34,7 +34,7 @@ type spawnCall struct {
 	ExtraTools      runtime.ToolExecutor
 }
 
-func (m *mockSpawner) SpawnTeamLead(_ context.Context, composed *runtime.ComposedAgent, taskID string, jobID string, workDir string, taskDescription string, extraTools runtime.ToolExecutor) error {
+func (m *mockSpawner) SpawnTeamLead(_ context.Context, composed *runtime.ComposedWorker, taskID string, jobID string, workDir string, taskDescription string, extraTools runtime.ToolExecutor) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.calls = append(m.calls, spawnCall{Composed: composed, TaskID: taskID, JobID: jobID, WorkDir: workDir, TaskDescription: taskDescription, ExtraTools: extraTools})
@@ -92,35 +92,35 @@ func newTestSystemTools(t *testing.T) (*SystemTools, db.Store, *mockSpawner, cha
 	return st, store, spawner, eventCh, workDir
 }
 
-// seedTeam inserts a team, its lead agent, and team membership into the store.
-func seedTeam(t *testing.T, ctx context.Context, store db.Store, teamID, teamName, leadAgentID string) {
+// seedTeam inserts a team, its lead worker, and team membership into the store.
+func seedTeam(t *testing.T, ctx context.Context, store db.Store, teamID, teamName, leadWorkerID string) {
 	t.Helper()
 
-	if err := store.UpsertAgent(ctx, &db.Agent{
-		ID:           leadAgentID,
-		Name:         leadAgentID + "-name",
-		Description:  "Test lead agent",
+	if err := store.UpsertWorker(ctx, &db.Worker{
+		ID:           leadWorkerID,
+		Name:         leadWorkerID + "-name",
+		Description:  "Test lead worker",
 		Mode:         "lead",
 		SystemPrompt: "You are a test lead.",
 	}); err != nil {
-		t.Fatalf("upserting agent: %v", err)
+		t.Fatalf("upserting worker: %v", err)
 	}
 
 	if err := store.UpsertTeam(ctx, &db.Team{
 		ID:          teamID,
 		Name:        teamName,
 		Description: "A test team",
-		LeadAgent:   leadAgentID,
+		LeadWorker:  leadWorkerID,
 	}); err != nil {
 		t.Fatalf("upserting team: %v", err)
 	}
 
-	if err := store.AddTeamAgent(ctx, &db.TeamAgent{
-		TeamID:  teamID,
-		AgentID: leadAgentID,
-		Role:    "lead",
+	if err := store.AddTeamWorker(ctx, &db.TeamWorker{
+		TeamID:   teamID,
+		WorkerID: leadWorkerID,
+		Role:     "lead",
 	}); err != nil {
-		t.Fatalf("adding team agent: %v", err)
+		t.Fatalf("adding team worker: %v", err)
 	}
 }
 
@@ -331,7 +331,7 @@ func TestAssignTask(t *testing.T) {
 	}
 	assertEqual(t, taskID, calls[0].TaskID)
 	assertEqual(t, jobID, calls[0].JobID)
-	assertEqual(t, "lead-agent", calls[0].Composed.AgentID)
+	assertEqual(t, "lead-agent", calls[0].Composed.WorkerID)
 	if calls[0].ExtraTools == nil {
 		t.Fatal("expected non-nil ExtraTools (TeamLeadTools) to be passed to SpawnTeamLead")
 	}
@@ -429,41 +429,41 @@ func TestQueryTeams(t *testing.T) {
 	seedTeam(t, ctx, store, "backend", "Backend Team", "backend-lead")
 
 	// Add a second team with a worker.
-	if err := store.UpsertAgent(ctx, &db.Agent{
+	if err := store.UpsertWorker(ctx, &db.Worker{
 		ID:   "frontend-lead",
 		Name: "Frontend Lead",
 		Mode: "lead",
 	}); err != nil {
-		t.Fatalf("upserting agent: %v", err)
+		t.Fatalf("upserting worker: %v", err)
 	}
-	if err := store.UpsertAgent(ctx, &db.Agent{
+	if err := store.UpsertWorker(ctx, &db.Worker{
 		ID:   "frontend-worker",
 		Name: "Frontend Worker",
 		Mode: "worker",
 	}); err != nil {
-		t.Fatalf("upserting agent: %v", err)
+		t.Fatalf("upserting worker: %v", err)
 	}
 	if err := store.UpsertTeam(ctx, &db.Team{
 		ID:          "frontend",
 		Name:        "Frontend Team",
 		Description: "Handles UI work",
-		LeadAgent:   "frontend-lead",
+		LeadWorker:  "frontend-lead",
 	}); err != nil {
 		t.Fatalf("upserting team: %v", err)
 	}
-	if err := store.AddTeamAgent(ctx, &db.TeamAgent{
-		TeamID:  "frontend",
-		AgentID: "frontend-lead",
-		Role:    "lead",
+	if err := store.AddTeamWorker(ctx, &db.TeamWorker{
+		TeamID:   "frontend",
+		WorkerID: "frontend-lead",
+		Role:     "lead",
 	}); err != nil {
-		t.Fatalf("adding team agent: %v", err)
+		t.Fatalf("adding team worker: %v", err)
 	}
-	if err := store.AddTeamAgent(ctx, &db.TeamAgent{
-		TeamID:  "frontend",
-		AgentID: "frontend-worker",
-		Role:    "worker",
+	if err := store.AddTeamWorker(ctx, &db.TeamWorker{
+		TeamID:   "frontend",
+		WorkerID: "frontend-worker",
+		Role:     "worker",
 	}); err != nil {
-		t.Fatalf("adding team agent: %v", err)
+		t.Fatalf("adding team worker: %v", err)
 	}
 
 	result, err := st.Execute(ctx, "query_teams", json.RawMessage(`{}`))

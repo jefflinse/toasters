@@ -34,11 +34,11 @@ type Store interface {
 	ListSkills(ctx context.Context) ([]*Skill, error)
 	DeleteAllSkills(ctx context.Context) error
 
-	// Agents
-	UpsertAgent(ctx context.Context, agent *Agent) error
-	GetAgent(ctx context.Context, id string) (*Agent, error)
-	ListAgents(ctx context.Context) ([]*Agent, error)
-	DeleteAllAgents(ctx context.Context) error
+	// Workers
+	UpsertWorker(ctx context.Context, worker *Worker) error
+	GetWorker(ctx context.Context, id string) (*Worker, error)
+	ListWorkers(ctx context.Context) ([]*Worker, error)
+	DeleteAllWorkers(ctx context.Context) error
 
 	// Teams
 	UpsertTeam(ctx context.Context, team *Team) error
@@ -46,10 +46,10 @@ type Store interface {
 	ListTeams(ctx context.Context) ([]*Team, error)
 	DeleteAllTeams(ctx context.Context) error
 
-	// Team Agents
-	AddTeamAgent(ctx context.Context, ta *TeamAgent) error
-	ListTeamAgents(ctx context.Context, teamID string) ([]*TeamAgent, error)
-	DeleteAllTeamAgents(ctx context.Context) error
+	// Team Workers
+	AddTeamWorker(ctx context.Context, tw *TeamWorker) error
+	ListTeamWorkers(ctx context.Context, teamID string) ([]*TeamWorker, error)
+	DeleteAllTeamWorkers(ctx context.Context) error
 
 	// Feed
 	CreateFeedEntry(ctx context.Context, entry *FeedEntry) error
@@ -57,12 +57,12 @@ type Store interface {
 	ListRecentFeedEntries(ctx context.Context, limit int) ([]*FeedEntry, error)
 
 	// Rebuild — wraps delete-all + insert-all in a transaction
-	RebuildDefinitions(ctx context.Context, skills []*Skill, agents []*Agent, teams []*Team, teamAgents []*TeamAgent) error
+	RebuildDefinitions(ctx context.Context, skills []*Skill, workers []*Worker, teams []*Team, teamWorkers []*TeamWorker) error
 
 	// Sessions
-	CreateSession(ctx context.Context, session *AgentSession) error
+	CreateSession(ctx context.Context, session *WorkerSession) error
 	UpdateSession(ctx context.Context, id string, update SessionUpdate) error
-	GetActiveSessions(ctx context.Context) ([]*AgentSession, error)
+	GetActiveSessions(ctx context.Context) ([]*WorkerSession, error)
 
 	// Artifacts
 	LogArtifact(ctx context.Context, artifact *Artifact) error

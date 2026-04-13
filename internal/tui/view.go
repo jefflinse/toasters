@@ -210,10 +210,10 @@ func (m *Model) View() tea.View {
 		return v
 	}
 
-	// Agents modal takes over the full terminal as a centered overlay.
-	if m.agentsModal.show {
-		agentsView := m.renderAgentsModal()
-		v := tea.NewView(agentsView)
+	// Workers modal takes over the full terminal as a centered overlay.
+	if m.workersModal.show {
+		workersView := m.renderWorkersModal()
+		v := tea.NewView(workersView)
 		v.AltScreen = true
 		v.MouseMode = tea.MouseModeCellMotion
 		return v

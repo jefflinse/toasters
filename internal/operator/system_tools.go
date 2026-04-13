@@ -401,9 +401,9 @@ func (st *SystemTools) assignTask(ctx context.Context, args json.RawMessage) (st
 		return "", fmt.Errorf("cannot assign job tasks to system team %q; use a user or auto team", team.Name)
 	}
 
-	// 3b. Validate that the team has a lead agent before we modify the task.
-	if team.LeadAgent == "" {
-		return "", fmt.Errorf("team %q has no lead agent configured; cannot assign task", team.Name)
+	// 3b. Validate that the team has a lead worker before we modify the task.
+	if team.LeadWorker == "" {
+		return "", fmt.Errorf("team %q has no lead worker configured; cannot assign task", team.Name)
 	}
 
 	// 4. Enforce serial execution: if another task in this job is already in progress,
@@ -431,11 +431,11 @@ func (st *SystemTools) assignTask(ctx context.Context, args json.RawMessage) (st
 		return "", fmt.Errorf("assigning task: %w", err)
 	}
 
-	// 6. Compose the team lead agent via the prompt engine.
+	// 6. Compose the team lead worker via the prompt engine.
 	// The engine stores roles by filename stem (e.g. "coordinator"), but
-	// team.LeadAgent is the qualified agent ID (e.g. "the-kitchen/coordinator"),
+	// team.LeadWorker is the qualified worker ID (e.g. "the-kitchen/coordinator"),
 	// so extract the role name.
-	roleName := team.LeadAgent
+	roleName := team.LeadWorker
 	if idx := strings.LastIndex(roleName, "/"); idx >= 0 {
 		roleName = roleName[idx+1:]
 	}
@@ -444,11 +444,11 @@ func (st *SystemTools) assignTask(ctx context.Context, args json.RawMessage) (st
 	}
 	role := st.promptEngine.Role(roleName)
 	if role == nil {
-		return "", fmt.Errorf("no role %q found for team lead %q", roleName, team.LeadAgent)
+		return "", fmt.Errorf("no role %q found for team lead %q", roleName, team.LeadWorker)
 	}
 	leadPrompt, promptErr := st.promptEngine.Compose(roleName, nil)
 	if promptErr != nil {
-		return "", fmt.Errorf("composing team lead %q: %w", team.LeadAgent, promptErr)
+		return "", fmt.Errorf("composing team lead %q: %w", team.LeadWorker, promptErr)
 	}
 	// Resolve provider/model: team → global default.
 	prov := team.Provider
@@ -459,8 +459,8 @@ func (st *SystemTools) assignTask(ctx context.Context, args json.RawMessage) (st
 	if mod == "" {
 		mod = st.defaultModel
 	}
-	composed := &runtime.ComposedAgent{
-		AgentID:      team.LeadAgent,
+	composed := &runtime.ComposedWorker{
+		WorkerID:     team.LeadWorker,
 		Name:         role.Name,
 		SystemPrompt: leadPrompt,
 		Provider:     prov,
@@ -468,7 +468,7 @@ func (st *SystemTools) assignTask(ctx context.Context, args json.RawMessage) (st
 		TeamID:       params.TeamID,
 	}
 	slog.Info("composed team lead from prompt engine",
-		"role", team.LeadAgent, "team", params.TeamID, "prompt_len", len(leadPrompt))
+		"role", team.LeadWorker, "team", params.TeamID, "prompt_len", len(leadPrompt))
 
 	// 7. Spawn team lead goroutine (fire-and-forget) with the job's workspace dir.
 	if st.spawner == nil {
@@ -548,12 +548,12 @@ func (st *SystemTools) queryTeams(ctx context.Context) (string, error) {
 		if team.Description != "" {
 			fmt.Fprintf(&b, "  Description: %s\n", team.Description)
 		}
-		if team.LeadAgent != "" {
-			fmt.Fprintf(&b, "  Lead: %s\n", team.LeadAgent)
+		if team.LeadWorker != "" {
+			fmt.Fprintf(&b, "  Lead: %s\n", team.LeadWorker)
 		}
-		members, err := st.store.ListTeamAgents(ctx, team.ID)
+		members, err := st.store.ListTeamWorkers(ctx, team.ID)
 		if err != nil {
-			slog.Warn("failed to list team agents", "team_id", team.ID, "error", err)
+			slog.Warn("failed to list team workers", "team_id", team.ID, "error", err)
 		} else {
 			fmt.Fprintf(&b, "  Members: %d\n", len(members))
 		}

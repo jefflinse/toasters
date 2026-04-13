@@ -290,86 +290,34 @@ func (s *remoteDefinitionService) GenerateSkill(ctx context.Context, prompt stri
 	return ar.OperationID, nil
 }
 
-// --- Agents ---
+// --- Workers ---
 
-func (s *remoteDefinitionService) ListAgents(ctx context.Context) ([]service.Agent, error) {
-	resp, err := s.c.http.get(ctx, "/api/v1/agents")
+func (s *remoteDefinitionService) ListWorkers(ctx context.Context) ([]service.Worker, error) {
+	resp, err := s.c.http.get(ctx, "/api/v1/workers")
 	if err != nil {
-		return nil, fmt.Errorf("list agents: %w", err)
+		return nil, fmt.Errorf("list workers: %w", err)
 	}
-	pr, err := decodeResponse[paginatedResponse[wireAgent]](resp)
+	pr, err := decodeResponse[paginatedResponse[wireWorker]](resp)
 	if err != nil {
-		return nil, fmt.Errorf("list agents: %w", err)
+		return nil, fmt.Errorf("list workers: %w", err)
 	}
-	agents := make([]service.Agent, 0, len(pr.Items))
+	workers := make([]service.Worker, 0, len(pr.Items))
 	for _, w := range pr.Items {
-		agents = append(agents, wireAgentToService(w))
+		workers = append(workers, wireWorkerToService(w))
 	}
-	return agents, nil
+	return workers, nil
 }
 
-func (s *remoteDefinitionService) GetAgent(ctx context.Context, id string) (service.Agent, error) {
-	resp, err := s.c.http.get(ctx, fmt.Sprintf("/api/v1/agents/%s", url.PathEscape(id)))
+func (s *remoteDefinitionService) GetWorker(ctx context.Context, id string) (service.Worker, error) {
+	resp, err := s.c.http.get(ctx, fmt.Sprintf("/api/v1/workers/%s", url.PathEscape(id)))
 	if err != nil {
-		return service.Agent{}, fmt.Errorf("get agent: %w", err)
+		return service.Worker{}, fmt.Errorf("get worker: %w", err)
 	}
-	w, err := decodeResponse[wireAgent](resp)
+	w, err := decodeResponse[wireWorker](resp)
 	if err != nil {
-		return service.Agent{}, fmt.Errorf("get agent: %w", err)
+		return service.Worker{}, fmt.Errorf("get worker: %w", err)
 	}
-	return wireAgentToService(w), nil
-}
-
-func (s *remoteDefinitionService) CreateAgent(ctx context.Context, name string) (service.Agent, error) {
-	resp, err := s.c.http.post(ctx, "/api/v1/agents", struct {
-		Name string `json:"name"`
-	}{Name: name})
-	if err != nil {
-		return service.Agent{}, fmt.Errorf("create agent: %w", err)
-	}
-	w, err := decodeResponse[wireAgent](resp)
-	if err != nil {
-		return service.Agent{}, fmt.Errorf("create agent: %w", err)
-	}
-	return wireAgentToService(w), nil
-}
-
-func (s *remoteDefinitionService) DeleteAgent(ctx context.Context, id string) error {
-	resp, err := s.c.http.delete(ctx, fmt.Sprintf("/api/v1/agents/%s", url.PathEscape(id)))
-	if err != nil {
-		return fmt.Errorf("delete agent: %w", err)
-	}
-	if err := decodeNoContent(resp); err != nil {
-		return fmt.Errorf("delete agent: %w", err)
-	}
-	return nil
-}
-
-func (s *remoteDefinitionService) AddSkillToAgent(ctx context.Context, agentID string, skillName string) error {
-	resp, err := s.c.http.post(ctx, fmt.Sprintf("/api/v1/agents/%s/skills", url.PathEscape(agentID)), struct {
-		SkillName string `json:"skill_name"`
-	}{SkillName: skillName})
-	if err != nil {
-		return fmt.Errorf("add skill to agent: %w", err)
-	}
-	if err := decodeNoContent(resp); err != nil {
-		return fmt.Errorf("add skill to agent: %w", err)
-	}
-	return nil
-}
-
-func (s *remoteDefinitionService) GenerateAgent(ctx context.Context, prompt string) (string, error) {
-	resp, err := s.c.http.post(ctx, "/api/v1/agents/generate", struct {
-		Prompt string `json:"prompt"`
-	}{Prompt: prompt})
-	if err != nil {
-		return "", fmt.Errorf("generate agent: %w", err)
-	}
-	ar, err := decodeResponse[asyncResponse](resp)
-	if err != nil {
-		return "", fmt.Errorf("generate agent: %w", err)
-	}
-	return ar.OperationID, nil
+	return wireWorkerToService(w), nil
 }
 
 // --- Teams ---
@@ -427,23 +375,10 @@ func (s *remoteDefinitionService) DeleteTeam(ctx context.Context, id string) err
 	return nil
 }
 
-func (s *remoteDefinitionService) AddAgentToTeam(ctx context.Context, teamID string, agentID string) error {
-	resp, err := s.c.http.post(ctx, fmt.Sprintf("/api/v1/teams/%s/agents", url.PathEscape(teamID)), struct {
-		AgentID string `json:"agent_id"`
-	}{AgentID: agentID})
-	if err != nil {
-		return fmt.Errorf("add agent to team: %w", err)
-	}
-	if err := decodeNoContent(resp); err != nil {
-		return fmt.Errorf("add agent to team: %w", err)
-	}
-	return nil
-}
-
-func (s *remoteDefinitionService) SetCoordinator(ctx context.Context, teamID string, agentName string) error {
+func (s *remoteDefinitionService) SetCoordinator(ctx context.Context, teamID string, workerName string) error {
 	resp, err := s.c.http.put(ctx, fmt.Sprintf("/api/v1/teams/%s/coordinator", url.PathEscape(teamID)), struct {
-		AgentName string `json:"agent_name"`
-	}{AgentName: agentName})
+		WorkerName string `json:"worker_name"`
+	}{WorkerName: workerName})
 	if err != nil {
 		return fmt.Errorf("set coordinator: %w", err)
 	}

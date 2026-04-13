@@ -265,119 +265,41 @@ func (s *Server) generateSkill(w http.ResponseWriter, r *http.Request) {
 }
 
 // ---------------------------------------------------------------------------
-// Agents handlers
+// Workers handlers
 // ---------------------------------------------------------------------------
 
-// listAgents handles GET /api/v1/agents.
-func (s *Server) listAgents(w http.ResponseWriter, r *http.Request) {
+// listWorkers handles GET /api/v1/workers.
+func (s *Server) listWorkers(w http.ResponseWriter, r *http.Request) {
 	pg, err := parsePagination(r)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "bad_request", err.Error())
 		return
 	}
 
-	agents, err := s.svc.Definitions().ListAgents(r.Context())
+	workers, err := s.svc.Definitions().ListWorkers(r.Context())
 	if err != nil {
 		handleServiceError(w, r, err)
 		return
 	}
 
-	wireAgents := make([]wireAgent, 0, len(agents))
-	for _, a := range agents {
-		wireAgents = append(wireAgents, agentToWire(a))
+	wireWorkers := make([]wireWorker, 0, len(workers))
+	for _, a := range workers {
+		wireWorkers = append(wireWorkers, workerToWire(a))
 	}
 
-	page, total := paginate(wireAgents, pg)
-	writeJSON(w, http.StatusOK, PaginatedResponse[wireAgent]{Items: page, Total: total})
+	page, total := paginate(wireWorkers, pg)
+	writeJSON(w, http.StatusOK, PaginatedResponse[wireWorker]{Items: page, Total: total})
 }
 
-// getAgent handles GET /api/v1/agents/{id}.
-func (s *Server) getAgent(w http.ResponseWriter, r *http.Request) {
+// getWorker handles GET /api/v1/workers/{id}.
+func (s *Server) getWorker(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	a, err := s.svc.Definitions().GetAgent(r.Context(), id)
+	a, err := s.svc.Definitions().GetWorker(r.Context(), id)
 	if err != nil {
 		handleServiceError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, agentToWire(a))
-}
-
-// createAgent handles POST /api/v1/agents.
-func (s *Server) createAgent(w http.ResponseWriter, r *http.Request) {
-	var req CreateAgentRequest
-	if !decodeBody(w, r, &req) {
-		return
-	}
-	if strings.TrimSpace(req.Name) == "" {
-		writeError(w, http.StatusBadRequest, "bad_request", "name is required")
-		return
-	}
-
-	a, err := s.svc.Definitions().CreateAgent(r.Context(), req.Name)
-	if err != nil {
-		handleServiceError(w, r, err)
-		return
-	}
-
-	w.Header().Set("Location", fmt.Sprintf("/api/v1/agents/%s", a.ID))
-	writeJSON(w, http.StatusCreated, agentToWire(a))
-}
-
-// deleteAgent handles DELETE /api/v1/agents/{id}.
-func (s *Server) deleteAgent(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	if err := s.svc.Definitions().DeleteAgent(r.Context(), id); err != nil {
-		handleServiceError(w, r, err)
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
-}
-
-// addSkillToAgent handles POST /api/v1/agents/{id}/skills.
-func (s *Server) addSkillToAgent(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-
-	var req AddSkillToAgentRequest
-	if !decodeBody(w, r, &req) {
-		return
-	}
-	if strings.TrimSpace(req.SkillName) == "" {
-		writeError(w, http.StatusBadRequest, "bad_request", "skill_name is required")
-		return
-	}
-
-	if err := s.svc.Definitions().AddSkillToAgent(r.Context(), id, req.SkillName); err != nil {
-		handleServiceError(w, r, err)
-		return
-	}
-
-	w.WriteHeader(http.StatusNoContent)
-}
-
-// generateAgent handles POST /api/v1/agents/generate.
-func (s *Server) generateAgent(w http.ResponseWriter, r *http.Request) {
-	var req GenerateRequest
-	if !decodeBody(w, r, &req) {
-		return
-	}
-	if strings.TrimSpace(req.Prompt) == "" {
-		writeError(w, http.StatusBadRequest, "bad_request", "prompt is required")
-		return
-	}
-	if len(req.Prompt) > maxPromptBytes {
-		writeError(w, http.StatusBadRequest, "bad_request",
-			fmt.Sprintf("prompt too long: %d bytes exceeds maximum %d", len(req.Prompt), maxPromptBytes))
-		return
-	}
-
-	opID, err := s.svc.Definitions().GenerateAgent(r.Context(), req.Prompt)
-	if err != nil {
-		setRetryAfterIfRateLimited(w, err)
-		handleServiceError(w, r, err)
-		return
-	}
-
-	writeJSON(w, http.StatusAccepted, AsyncResponse{OperationID: opID})
+	writeJSON(w, http.StatusOK, workerToWire(a))
 }
 
 // ---------------------------------------------------------------------------
@@ -449,27 +371,6 @@ func (s *Server) deleteTeam(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// addAgentToTeam handles POST /api/v1/teams/{id}/agents.
-func (s *Server) addAgentToTeam(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-
-	var req AddAgentToTeamRequest
-	if !decodeBody(w, r, &req) {
-		return
-	}
-	if strings.TrimSpace(req.AgentID) == "" {
-		writeError(w, http.StatusBadRequest, "bad_request", "agent_id is required")
-		return
-	}
-
-	if err := s.svc.Definitions().AddAgentToTeam(r.Context(), id, req.AgentID); err != nil {
-		handleServiceError(w, r, err)
-		return
-	}
-
-	w.WriteHeader(http.StatusNoContent)
-}
-
 // setCoordinator handles PUT /api/v1/teams/{id}/coordinator.
 func (s *Server) setCoordinator(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
@@ -478,12 +379,12 @@ func (s *Server) setCoordinator(w http.ResponseWriter, r *http.Request) {
 	if !decodeBody(w, r, &req) {
 		return
 	}
-	if strings.TrimSpace(req.AgentName) == "" {
-		writeError(w, http.StatusBadRequest, "bad_request", "agent_name is required")
+	if strings.TrimSpace(req.WorkerName) == "" {
+		writeError(w, http.StatusBadRequest, "bad_request", "worker_name is required")
 		return
 	}
 
-	if err := s.svc.Definitions().SetCoordinator(r.Context(), id, req.AgentName); err != nil {
+	if err := s.svc.Definitions().SetCoordinator(r.Context(), id, req.WorkerName); err != nil {
 		handleServiceError(w, r, err)
 		return
 	}

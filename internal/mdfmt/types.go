@@ -1,8 +1,8 @@
-// Package agentfmt provides YAML-based frontmatter parsing for toasters
+// Package mdfmt provides YAML-based frontmatter parsing for toasters
 // skill and team definition files. Each definition is a Markdown file with
 // YAML frontmatter delimited by "---" lines. The markdown body is the
 // prompt/content.
-package agentfmt
+package mdfmt
 
 // DefType identifies the kind of definition.
 type DefType string

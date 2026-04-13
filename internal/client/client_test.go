@@ -40,17 +40,12 @@ type mockService struct {
 	createSkillFn       func(ctx context.Context, name string) (service.Skill, error)
 	deleteSkillFn       func(ctx context.Context, id string) error
 	generateSkillFn     func(ctx context.Context, prompt string) (string, error)
-	listAgentsFn        func(ctx context.Context) ([]service.Agent, error)
-	getAgentFn          func(ctx context.Context, id string) (service.Agent, error)
-	createAgentFn       func(ctx context.Context, name string) (service.Agent, error)
-	deleteAgentFn       func(ctx context.Context, id string) error
-	addSkillToAgentFn   func(ctx context.Context, agentID, skillName string) error
-	generateAgentFn     func(ctx context.Context, prompt string) (string, error)
+	listWorkersFn        func(ctx context.Context) ([]service.Worker, error)
+	getWorkerFn          func(ctx context.Context, id string) (service.Worker, error)
 	listTeamsFn         func(ctx context.Context) ([]service.TeamView, error)
 	getTeamFn           func(ctx context.Context, id string) (service.TeamView, error)
 	createTeamFn        func(ctx context.Context, name string) (service.TeamView, error)
 	deleteTeamFn        func(ctx context.Context, id string) error
-	addAgentToTeamFn    func(ctx context.Context, teamID, agentID string) error
 	setCoordinatorFn    func(ctx context.Context, teamID, agentName string) error
 	promoteTeamFn       func(ctx context.Context, teamID string) (string, error)
 	generateTeamFn      func(ctx context.Context, prompt string) (string, error)
@@ -163,46 +158,18 @@ func (d *mockDefinitions) GenerateSkill(ctx context.Context, prompt string) (str
 	return "", nil
 }
 
-func (d *mockDefinitions) ListAgents(ctx context.Context) ([]service.Agent, error) {
-	if d.s.listAgentsFn != nil {
-		return d.s.listAgentsFn(ctx)
+func (d *mockDefinitions) ListWorkers(ctx context.Context) ([]service.Worker, error) {
+	if d.s.listWorkersFn != nil {
+		return d.s.listWorkersFn(ctx)
 	}
 	return nil, nil
 }
 
-func (d *mockDefinitions) GetAgent(ctx context.Context, id string) (service.Agent, error) {
-	if d.s.getAgentFn != nil {
-		return d.s.getAgentFn(ctx, id)
+func (d *mockDefinitions) GetWorker(ctx context.Context, id string) (service.Worker, error) {
+	if d.s.getWorkerFn != nil {
+		return d.s.getWorkerFn(ctx, id)
 	}
-	return service.Agent{}, nil
-}
-
-func (d *mockDefinitions) CreateAgent(ctx context.Context, name string) (service.Agent, error) {
-	if d.s.createAgentFn != nil {
-		return d.s.createAgentFn(ctx, name)
-	}
-	return service.Agent{}, nil
-}
-
-func (d *mockDefinitions) DeleteAgent(ctx context.Context, id string) error {
-	if d.s.deleteAgentFn != nil {
-		return d.s.deleteAgentFn(ctx, id)
-	}
-	return nil
-}
-
-func (d *mockDefinitions) AddSkillToAgent(ctx context.Context, agentID, skillName string) error {
-	if d.s.addSkillToAgentFn != nil {
-		return d.s.addSkillToAgentFn(ctx, agentID, skillName)
-	}
-	return nil
-}
-
-func (d *mockDefinitions) GenerateAgent(ctx context.Context, prompt string) (string, error) {
-	if d.s.generateAgentFn != nil {
-		return d.s.generateAgentFn(ctx, prompt)
-	}
-	return "", nil
+	return service.Worker{}, nil
 }
 
 func (d *mockDefinitions) ListTeams(ctx context.Context) ([]service.TeamView, error) {
@@ -229,13 +196,6 @@ func (d *mockDefinitions) CreateTeam(ctx context.Context, name string) (service.
 func (d *mockDefinitions) DeleteTeam(ctx context.Context, id string) error {
 	if d.s.deleteTeamFn != nil {
 		return d.s.deleteTeamFn(ctx, id)
-	}
-	return nil
-}
-
-func (d *mockDefinitions) AddAgentToTeam(ctx context.Context, teamID, agentID string) error {
-	if d.s.addAgentToTeamFn != nil {
-		return d.s.addAgentToTeamFn(ctx, teamID, agentID)
 	}
 	return nil
 }
@@ -709,7 +669,7 @@ func TestSessions_List(t *testing.T) {
 			return []service.SessionSnapshot{
 				{
 					ID:        "sess-1",
-					AgentID:   "agent-a",
+					WorkerID:   "agent-a",
 					TeamName:  "team-alpha",
 					Status:    "active",
 					Model:     "gpt-4",
@@ -720,7 +680,7 @@ func TestSessions_List(t *testing.T) {
 				},
 				{
 					ID:        "sess-2",
-					AgentID:   "agent-b",
+					WorkerID:   "agent-b",
 					Status:    "active",
 					StartTime: testTime.Add(time.Minute),
 					TokensIn:  200,
@@ -814,41 +774,6 @@ func TestDefinitions_ListSkills(t *testing.T) {
 	}
 }
 
-func TestDefinitions_CreateAgent(t *testing.T) {
-	t.Parallel()
-
-	mock := &mockService{
-		createAgentFn: func(_ context.Context, name string) (service.Agent, error) {
-			return service.Agent{
-				ID:        "agent-new",
-				Name:      name,
-				Source:    "user",
-				Tools:     []string{},
-				Skills:    []string{},
-				CreatedAt: testTime,
-				UpdatedAt: testTime,
-			}, nil
-		},
-	}
-
-	rc := setupTestServer(t, mock)
-	ctx := context.Background()
-
-	agent, err := rc.Definitions().CreateAgent(ctx, "my-agent")
-	if err != nil {
-		t.Fatalf("CreateAgent: %v", err)
-	}
-	if agent.ID != "agent-new" {
-		t.Errorf("agent.ID = %q, want %q", agent.ID, "agent-new")
-	}
-	if agent.Name != "my-agent" {
-		t.Errorf("agent.Name = %q, want %q", agent.Name, "my-agent")
-	}
-	if agent.Source != "user" {
-		t.Errorf("agent.Source = %q, want %q", agent.Source, "user")
-	}
-}
-
 func TestDefinitions_GenerateSkill(t *testing.T) {
 	t.Parallel()
 
@@ -924,11 +849,11 @@ func TestSystem_GetProgressState(t *testing.T) {
 						{ID: 1, JobID: "job-1", Message: "Working"},
 					},
 				},
-				ActiveSessions: []service.AgentSession{
-					{ID: "sess-1", AgentID: "agent-a", Status: service.SessionStatusActive},
+				ActiveSessions: []service.WorkerSession{
+					{ID: "sess-1", WorkerID: "agent-a", Status: service.SessionStatusActive},
 				},
 				LiveSnapshots: []service.SessionSnapshot{
-					{ID: "sess-1", AgentID: "agent-a", Status: "active", TokensIn: 42},
+					{ID: "sess-1", WorkerID: "agent-a", Status: "active", TokensIn: 42},
 				},
 				FeedEntries: []service.FeedEntry{
 					{ID: 1, EntryType: service.FeedEntryTypeTaskStarted, Content: "Task started"},

@@ -19,7 +19,7 @@ import (
 	"github.com/gofrs/uuid/v5"
 	"gopkg.in/yaml.v3"
 
-	"github.com/jefflinse/toasters/internal/agentfmt"
+	"github.com/jefflinse/toasters/internal/mdfmt"
 	"github.com/jefflinse/toasters/internal/config"
 	"github.com/jefflinse/toasters/internal/db"
 	"github.com/jefflinse/toasters/internal/loader"
@@ -401,7 +401,7 @@ func (s *LocalService) buildProgressState() ProgressState {
 	dbSessions, err := s.cfg.Store.GetActiveSessions(ctx)
 	if err == nil {
 		for _, sess := range dbSessions {
-			state.ActiveSessions = append(state.ActiveSessions, dbAgentSessionToService(sess))
+			state.ActiveSessions = append(state.ActiveSessions, dbWorkerSessionToService(sess))
 		}
 	}
 
@@ -513,7 +513,7 @@ func (s *LocalService) BroadcastOperatorEvent(ev operator.Event) {
 			Payload: BlockerReportedPayload{
 				TaskID:      payload.TaskID,
 				TeamID:      payload.TeamID,
-				AgentID:     payload.AgentID,
+				WorkerID:    payload.WorkerID,
 				Description: payload.Description,
 			},
 		})
@@ -623,7 +623,7 @@ func (s *LocalService) BroadcastTaskAssigned(taskID, jobID, teamID, title string
 // session.tool_call / session.tool_result events. When the session terminates,
 // it emits a final session.done event.
 //
-// This is the only path by which agent session activity reaches subscribers
+// This is the only path by which worker session activity reaches subscribers
 // (TUI clients, SSE clients). It must be wired to runtime.Runtime.OnSessionStarted
 // during server startup.
 func (s *LocalService) BroadcastSessionStarted(sess *runtime.Session) {
@@ -640,7 +640,7 @@ func (s *LocalService) BroadcastSessionStarted(sess *runtime.Session) {
 		SessionID: sessionID,
 		Payload: SessionStartedPayload{
 			SessionID:      sessionID,
-			AgentName:      snap.AgentID,
+			WorkerName:     snap.WorkerID,
 			TeamName:       snap.TeamName,
 			Task:           sess.Task(),
 			JobID:          snap.JobID,
@@ -708,7 +708,7 @@ func (s *LocalService) BroadcastSessionStarted(sess *runtime.Session) {
 						Type:      EventTypeSessionDone,
 						SessionID: sessionID,
 						Payload: SessionDonePayload{
-							AgentName: finalSnap.AgentID,
+							WorkerName: finalSnap.WorkerID,
 							JobID:     finalSnap.JobID,
 							TaskID:    finalSnap.TaskID,
 							Status:    finalSnap.Status,
@@ -1175,7 +1175,7 @@ Detailed instructions for the agent using this skill. This is the system prompt 
 
 	content = stripCodeFences(content)
 
-	if _, err := agentfmt.ParseBytes([]byte(content), agentfmt.DefSkill); err != nil {
+	if _, err := mdfmt.ParseBytes([]byte(content), mdfmt.DefSkill); err != nil {
 		return "", fmt.Errorf("generated content is not a valid skill definition: %w", err)
 	}
 
@@ -1183,75 +1183,55 @@ Detailed instructions for the agent using this skill. This is the system prompt 
 }
 
 // ---------------------------------------------------------------------------
-// DefinitionService — Agents
+// DefinitionService — Workers
 // ---------------------------------------------------------------------------
 
-// ListAgents returns all agents ordered: shared → team-local → system.
-func (s *LocalService) ListAgents(ctx context.Context) ([]Agent, error) {
+// ListWorkers returns all workers ordered: shared → team-local → system.
+func (s *LocalService) ListWorkers(ctx context.Context) ([]Worker, error) {
 	if s.cfg.Store == nil {
 		return nil, fmt.Errorf("store not configured")
 	}
-	dbAgents, err := s.cfg.Store.ListAgents(ctx)
+	dbWorkers, err := s.cfg.Store.ListWorkers(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("listing agents: %w", err)
+		return nil, fmt.Errorf("listing workers: %w", err)
 	}
 
-	var shared, teamLocal, system []*db.Agent
-	for _, a := range dbAgents {
+	var shared, teamLocal, system []*db.Worker
+	for _, w := range dbWorkers {
 		switch {
-		case a.Source == "system":
-			system = append(system, a)
-		case a.TeamID != "":
-			teamLocal = append(teamLocal, a)
+		case w.Source == "system":
+			system = append(system, w)
+		case w.TeamID != "":
+			teamLocal = append(teamLocal, w)
 		default:
-			shared = append(shared, a)
+			shared = append(shared, w)
 		}
 	}
 
-	// Sort team-local by "team/agent" composite key.
-	sortAgentsByTeamKey(teamLocal)
+	// Sort team-local by "team/worker" composite key.
+	sortWorkersByTeamKey(teamLocal)
 
 	ordered := append(append(shared, teamLocal...), system...)
-	agents := make([]Agent, 0, len(ordered))
-	for _, a := range ordered {
-		agents = append(agents, dbAgentToService(a))
+	workers := make([]Worker, 0, len(ordered))
+	for _, w := range ordered {
+		workers = append(workers, dbWorkerToService(w))
 	}
-	return agents, nil
+	return workers, nil
 }
 
-// GetAgent returns a single agent by ID.
-func (s *LocalService) GetAgent(ctx context.Context, id string) (Agent, error) {
+// GetWorker returns a single worker by ID.
+func (s *LocalService) GetWorker(ctx context.Context, id string) (Worker, error) {
 	if s.cfg.Store == nil {
-		return Agent{}, fmt.Errorf("store not configured")
+		return Worker{}, fmt.Errorf("store not configured")
 	}
-	a, err := s.cfg.Store.GetAgent(ctx, id)
+	w, err := s.cfg.Store.GetWorker(ctx, id)
 	if err != nil {
 		if errors.Is(err, db.ErrNotFound) {
-			return Agent{}, fmt.Errorf("getting agent %s: %w", id, ErrNotFound)
+			return Worker{}, fmt.Errorf("getting worker %s: %w", id, ErrNotFound)
 		}
-		return Agent{}, fmt.Errorf("getting agent %s: %w", id, err)
+		return Worker{}, fmt.Errorf("getting worker %s: %w", id, err)
 	}
-	return dbAgentToService(a), nil
-}
-
-// CreateAgent is no longer supported; use roles instead.
-func (s *LocalService) CreateAgent(ctx context.Context, name string) (Agent, error) {
-	return Agent{}, fmt.Errorf("agent management has been removed; use roles instead")
-}
-
-// DeleteAgent is no longer supported; use roles instead.
-func (s *LocalService) DeleteAgent(ctx context.Context, id string) error {
-	return fmt.Errorf("agent management has been removed; use roles instead")
-}
-
-// AddSkillToAgent is no longer supported; use roles instead.
-func (s *LocalService) AddSkillToAgent(ctx context.Context, agentID string, skillName string) error {
-	return fmt.Errorf("agent management has been removed; use roles instead")
-}
-
-// GenerateAgent is no longer supported; use roles instead.
-func (s *LocalService) GenerateAgent(ctx context.Context, prompt string) (string, error) {
-	return "", fmt.Errorf("agent management has been removed; use roles instead")
+	return dbWorkerToService(w), nil
 }
 
 // ---------------------------------------------------------------------------
@@ -1376,86 +1356,8 @@ func (s *LocalService) DeleteTeam(ctx context.Context, id string) error {
 	return nil
 }
 
-// AddAgentToTeam adds the given agent to the team.
-func (s *LocalService) AddAgentToTeam(ctx context.Context, teamID string, agentID string) error {
-	tv, err := s.GetTeam(ctx, teamID)
-	if err != nil {
-		return err
-	}
-	if isServiceReadOnlyTeam(tv) {
-		return fmt.Errorf("cannot add agent to read-only team %q", tv.Team.Name)
-	}
-
-	a, err := s.GetAgent(ctx, agentID)
-	if err != nil {
-		return err
-	}
-	if a.SourcePath == "" {
-		return fmt.Errorf("cannot add agent: source file unknown")
-	}
-
-	realSrc, err := filepath.EvalSymlinks(a.SourcePath)
-	if err != nil {
-		return sanitizeError(fmt.Errorf("resolving agent path: %w", err))
-	}
-	realAllowed, err := filepath.EvalSymlinks(s.cfg.ConfigDir)
-	if err != nil {
-		return sanitizeError(fmt.Errorf("resolving config dir: %w", err))
-	}
-	if !strings.HasPrefix(realSrc+string(filepath.Separator), realAllowed+string(filepath.Separator)) {
-		return sanitizeError(fmt.Errorf("agent source path is outside config directory"))
-	}
-
-	teamMDPath := filepath.Join(tv.Dir(), "team.md")
-
-	// Parse the existing team.md (or create a minimal one if absent).
-	teamDef, err := agentfmt.ParseTeam(teamMDPath)
-	if err != nil {
-		teamDef = &agentfmt.TeamDef{Name: tv.Team.Name}
-	}
-
-	// Append the agent name if not already present.
-	alreadyListed := false
-	for _, n := range teamDef.Agents {
-		if n == a.Name {
-			alreadyListed = true
-			break
-		}
-	}
-	if !alreadyListed {
-		teamDef.Agents = append(teamDef.Agents, a.Name)
-	}
-
-	if err := writeTeamFile(teamMDPath, teamDef); err != nil {
-		return sanitizeError(fmt.Errorf("writing team.md: %w", err))
-	}
-
-	// Copy the agent's source file into the team's agents directory.
-	agentsDir := filepath.Join(tv.Dir(), "agents")
-	if err := os.MkdirAll(agentsDir, 0o755); err != nil {
-		return sanitizeError(fmt.Errorf("creating agents directory: %w", err))
-	}
-
-	slug := loader.Slugify(a.Name)
-	if slug == "" {
-		slug = loader.Slugify(a.ID)
-	}
-	destPath := filepath.Join(agentsDir, slug+".md")
-
-	if err := copyFile(realSrc, destPath); err != nil {
-		return sanitizeError(fmt.Errorf("copying agent file: %w", err))
-	}
-
-	if s.cfg.Loader != nil {
-		if err := s.cfg.Loader.Load(ctx); err != nil {
-			slog.Warn("failed to reload definitions after adding agent to team", "error", err)
-		}
-	}
-	return nil
-}
-
-// SetCoordinator updates the team so that the named agent is the coordinator.
-func (s *LocalService) SetCoordinator(ctx context.Context, teamID string, agentName string) error {
+// SetCoordinator updates the team so that the named worker is the coordinator.
+func (s *LocalService) SetCoordinator(ctx context.Context, teamID string, workerName string) error {
 	tv, err := s.GetTeam(ctx, teamID)
 	if err != nil {
 		return err
@@ -1464,7 +1366,7 @@ func (s *LocalService) SetCoordinator(ctx context.Context, teamID string, agentN
 		return fmt.Errorf("cannot set coordinator on read-only team %q", tv.Team.Name)
 	}
 
-	if err := setCoordinator(tv.Dir(), agentName); err != nil {
+	if err := setCoordinator(tv.Dir(), workerName); err != nil {
 		return sanitizeError(err)
 	}
 
@@ -1564,12 +1466,12 @@ func (s *LocalService) GenerateTeam(ctx context.Context, prompt string) (string,
 		return "", fmt.Errorf("store not configured")
 	}
 
-	// Capture available agents for the goroutine.
+	// Capture available workers for the goroutine.
 	listCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-	dbAgents, err := s.cfg.Store.ListAgents(listCtx)
+	dbWorkers, err := s.cfg.Store.ListWorkers(listCtx)
 	cancel()
 	if err != nil {
-		return "", fmt.Errorf("listing agents for team generation: %w", err)
+		return "", fmt.Errorf("listing workers for team generation: %w", err)
 	}
 
 	uuidVal, err := uuid.NewV4()
@@ -1578,8 +1480,8 @@ func (s *LocalService) GenerateTeam(ctx context.Context, prompt string) (string,
 	}
 	operationID := uuidVal.String()
 
-	agentsCopy := make([]*db.Agent, len(dbAgents))
-	copy(agentsCopy, dbAgents)
+	workersCopy := make([]*db.Worker, len(dbWorkers))
+	copy(workersCopy, dbWorkers)
 
 	if !s.tryAcquireAsync() {
 		return "", fmt.Errorf("too many concurrent operations (max %d)", maxConcurrentOps)
@@ -1590,7 +1492,7 @@ func (s *LocalService) GenerateTeam(ctx context.Context, prompt string) (string,
 
 		genCtx, genCancel := context.WithTimeout(s.ctx, 30*time.Second)
 		defer genCancel()
-		teamMD, agentNames, genErr := s.generateTeamContent(genCtx, prompt, agentsCopy)
+		teamMD, agentNames, genErr := s.generateTeamContent(genCtx, prompt, workersCopy)
 		if s.ctx.Err() != nil {
 			return // service shutting down
 		}
@@ -1606,7 +1508,7 @@ func (s *LocalService) GenerateTeam(ctx context.Context, prompt string) (string,
 			return
 		}
 
-		writeErr := s.writeGeneratedTeamFiles(teamMD, agentNames, agentsCopy)
+		writeErr := s.writeGeneratedTeamFiles(teamMD, agentNames, workersCopy)
 		if s.ctx.Err() != nil {
 			return // service shutting down
 		}
@@ -1649,9 +1551,9 @@ func (s *LocalService) GenerateTeam(ctx context.Context, prompt string) (string,
 }
 
 // generateTeamContent calls the LLM to generate a team definition.
-func (s *LocalService) generateTeamContent(ctx context.Context, prompt string, agents []*db.Agent) (teamMD string, agentNames []string, err error) {
+func (s *LocalService) generateTeamContent(ctx context.Context, prompt string, workers []*db.Worker) (teamMD string, agentNames []string, err error) {
 	var agentList strings.Builder
-	for _, a := range agents {
+	for _, a := range workers {
 		desc := a.Description
 		if desc == "" {
 			desc = "(no description)"
@@ -1705,20 +1607,20 @@ The agent_names must be names from the available agents list above. Choose 2-5 a
 		return "", nil, fmt.Errorf("LLM returned empty team_md")
 	}
 
-	if _, err := agentfmt.ParseBytes([]byte(result.TeamMD), agentfmt.DefTeam); err != nil {
+	if _, err := mdfmt.ParseBytes([]byte(result.TeamMD), mdfmt.DefTeam); err != nil {
 		return "", nil, fmt.Errorf("generated team_md is not a valid team definition: %w", err)
 	}
 
 	return result.TeamMD, result.AgentNames, nil
 }
 
-// writeGeneratedTeamFiles writes the team directory, team.md, and copies agent files.
-func (s *LocalService) writeGeneratedTeamFiles(teamMD string, agentNames []string, allAgents []*db.Agent) error {
-	parsed, err := agentfmt.ParseBytes([]byte(teamMD), agentfmt.DefTeam)
+// writeGeneratedTeamFiles writes the team directory, team.md, and copies worker files.
+func (s *LocalService) writeGeneratedTeamFiles(teamMD string, agentNames []string, allWorkers []*db.Worker) error {
+	parsed, err := mdfmt.ParseBytes([]byte(teamMD), mdfmt.DefTeam)
 	if err != nil {
 		return fmt.Errorf("parsing generated team.md: %w", err)
 	}
-	teamDef, ok := parsed.(*agentfmt.TeamDef)
+	teamDef, ok := parsed.(*mdfmt.TeamDef)
 	if !ok || teamDef.Name == "" {
 		return fmt.Errorf("generated team.md missing team name")
 	}
@@ -1755,29 +1657,29 @@ func (s *LocalService) writeGeneratedTeamFiles(teamMD string, agentNames []strin
 		return fmt.Errorf("writing team.md: %w", err)
 	}
 
-	// Build name→agent map for fast lookup.
-	agentByName := make(map[string]*db.Agent, len(allAgents))
-	for _, a := range allAgents {
-		agentByName[a.Name] = a
+	// Build name→worker map for fast lookup.
+	workerByName := make(map[string]*db.Worker, len(allWorkers))
+	for _, w := range allWorkers {
+		workerByName[w.Name] = w
 	}
 
 	for _, name := range agentNames {
-		a, found := agentByName[name]
+		w, found := workerByName[name]
 		if !found {
-			slog.Warn("generated team references unknown agent, skipping", "agent", name)
+			slog.Warn("generated team references unknown worker, skipping", "worker", name)
 			continue
 		}
-		if a.SourcePath == "" {
-			slog.Warn("generated team agent has no source path, skipping", "agent", name)
+		if w.SourcePath == "" {
+			slog.Warn("generated team worker has no source path, skipping", "worker", name)
 			continue
 		}
-		agentSlug := loader.Slugify(a.Name)
-		if agentSlug == "" {
-			agentSlug = loader.Slugify(a.ID)
+		workerSlug := loader.Slugify(w.Name)
+		if workerSlug == "" {
+			workerSlug = loader.Slugify(w.ID)
 		}
-		destPath := filepath.Join(agentsSubDir, agentSlug+".md")
-		if err := copyFile(a.SourcePath, destPath); err != nil {
-			slog.Warn("failed to copy agent file for generated team", "agent", name, "error", err)
+		destPath := filepath.Join(agentsSubDir, workerSlug+".md")
+		if err := copyFile(w.SourcePath, destPath); err != nil {
+			slog.Warn("failed to copy worker file for generated team", "worker", name, "error", err)
 		}
 	}
 
@@ -1806,7 +1708,7 @@ func (s *LocalService) DetectCoordinator(ctx context.Context, teamID string) (st
 	operationID := uuidVal.String()
 
 	// Capture workers for the goroutine.
-	workers := make([]Agent, len(tv.Workers))
+	workers := make([]Worker, len(tv.Workers))
 	copy(workers, tv.Workers)
 	teamDir := tv.Dir()
 
@@ -1836,7 +1738,7 @@ func (s *LocalService) DetectCoordinator(ctx context.Context, teamID string) (st
 		}
 
 		var sb strings.Builder
-		sb.WriteString("Given these agents, which one is best suited to be the team coordinator? Respond with just the agent name, nothing else.\n\nAgents:\n")
+		sb.WriteString("Given these workers, which one is best suited to be the team coordinator? Respond with just the worker name, nothing else.\n\nWorkers:\n")
 		for _, a := range workers {
 			desc := a.Description
 			if desc == "" {
@@ -1864,7 +1766,7 @@ func (s *LocalService) DetectCoordinator(ctx context.Context, teamID string) (st
 			return
 		}
 
-		// Match result to an agent name (case-insensitive, trimmed).
+		// Match result to a worker name (case-insensitive, trimmed).
 		result = strings.TrimSpace(result)
 		detectedName := ""
 		for _, a := range workers {
@@ -2022,7 +1924,7 @@ func (s *localJobService) Cancel(ctx context.Context, id string) error {
 // SessionService (via localSessionService)
 // ---------------------------------------------------------------------------
 
-// List returns all currently active agent sessions as snapshots.
+// List returns all currently active worker sessions as snapshots.
 func (s *localSessionService) List(_ context.Context) ([]SessionSnapshot, error) {
 	if s.svc.cfg.Runtime == nil {
 		return nil, nil
@@ -2052,7 +1954,7 @@ func (s *localSessionService) Get(_ context.Context, id string) (SessionDetail, 
 		InitialMessage: sess.InitialMessage(),
 		Output:         sess.FinalText(),
 		Activities:     nil, // deferred to Step 1.3
-		AgentName:      snap.AgentID,
+		WorkerName:     snap.WorkerID,
 		TeamName:       snap.TeamName,
 		Task:           sess.Task(),
 	}, nil
@@ -2388,7 +2290,7 @@ func dbTaskToService(t *db.Task) Task {
 		JobID:           t.JobID,
 		Title:           t.Title,
 		Status:          TaskStatus(t.Status),
-		AgentID:         t.AgentID,
+		WorkerID:        t.WorkerID,
 		TeamID:          t.TeamID,
 		ParentID:        t.ParentID,
 		SortOrder:       t.SortOrder,
@@ -2406,7 +2308,7 @@ func dbProgressToService(p *db.ProgressReport) ProgressReport {
 		ID:        p.ID,
 		JobID:     p.JobID,
 		TaskID:    p.TaskID,
-		AgentID:   p.AgentID,
+		WorkerID:  p.WorkerID,
 		Status:    p.Status,
 		Message:   p.Message,
 		CreatedAt: p.CreatedAt,
@@ -2431,39 +2333,39 @@ func dbSkillToService(sk *db.Skill) Skill {
 	}
 }
 
-func dbAgentToService(a *db.Agent) Agent {
+func dbWorkerToService(w *db.Worker) Worker {
 	var tools, disallowedTools, skills []string
-	if len(a.Tools) > 0 {
-		_ = json.Unmarshal(a.Tools, &tools)
+	if len(w.Tools) > 0 {
+		_ = json.Unmarshal(w.Tools, &tools)
 	}
-	if len(a.DisallowedTools) > 0 {
-		_ = json.Unmarshal(a.DisallowedTools, &disallowedTools)
+	if len(w.DisallowedTools) > 0 {
+		_ = json.Unmarshal(w.DisallowedTools, &disallowedTools)
 	}
-	if len(a.Skills) > 0 {
-		_ = json.Unmarshal(a.Skills, &skills)
+	if len(w.Skills) > 0 {
+		_ = json.Unmarshal(w.Skills, &skills)
 	}
-	return Agent{
-		ID:              a.ID,
-		Name:            a.Name,
-		Description:     a.Description,
-		Mode:            a.Mode,
-		Model:           a.Model,
-		Provider:        a.Provider,
-		Temperature:     a.Temperature,
-		SystemPrompt:    a.SystemPrompt,
+	return Worker{
+		ID:              w.ID,
+		Name:            w.Name,
+		Description:     w.Description,
+		Mode:            w.Mode,
+		Model:           w.Model,
+		Provider:        w.Provider,
+		Temperature:     w.Temperature,
+		SystemPrompt:    w.SystemPrompt,
 		Tools:           tools,
 		DisallowedTools: disallowedTools,
 		Skills:          skills,
-		PermissionMode:  a.PermissionMode,
-		MaxTurns:        a.MaxTurns,
-		Color:           a.Color,
-		Hidden:          a.Hidden,
-		Disabled:        a.Disabled,
-		Source:          a.Source,
-		SourcePath:      a.SourcePath,
-		TeamID:          a.TeamID,
-		CreatedAt:       a.CreatedAt,
-		UpdatedAt:       a.UpdatedAt,
+		PermissionMode:  w.PermissionMode,
+		MaxTurns:        w.MaxTurns,
+		Color:           w.Color,
+		Hidden:          w.Hidden,
+		Disabled:        w.Disabled,
+		Source:          w.Source,
+		SourcePath:      w.SourcePath,
+		TeamID:          w.TeamID,
+		CreatedAt:       w.CreatedAt,
+		UpdatedAt:       w.UpdatedAt,
 	}
 }
 
@@ -2476,7 +2378,7 @@ func dbTeamToService(t *db.Team) Team {
 		ID:          t.ID,
 		Name:        t.Name,
 		Description: t.Description,
-		LeadAgent:   t.LeadAgent,
+		LeadWorker:   t.LeadWorker,
 		Skills:      skills,
 		Provider:    t.Provider,
 		Model:       t.Model,
@@ -2489,10 +2391,10 @@ func dbTeamToService(t *db.Team) Team {
 	}
 }
 
-func dbAgentSessionToService(s *db.AgentSession) AgentSession {
-	return AgentSession{
+func dbWorkerSessionToService(s *db.WorkerSession) WorkerSession {
+	return WorkerSession{
 		ID:        s.ID,
-		AgentID:   s.AgentID,
+		WorkerID:  s.WorkerID,
 		JobID:     s.JobID,
 		TaskID:    s.TaskID,
 		Status:    SessionStatus(s.Status),
@@ -2509,7 +2411,7 @@ func dbAgentSessionToService(s *db.AgentSession) AgentSession {
 func runtimeSnapshotToService(snap runtime.SessionSnapshot) SessionSnapshot {
 	return SessionSnapshot{
 		ID:        snap.ID,
-		AgentID:   snap.AgentID,
+		WorkerID:  snap.WorkerID,
 		TeamName:  snap.TeamName,
 		JobID:     snap.JobID,
 		TaskID:    snap.TaskID,
@@ -2596,24 +2498,24 @@ func (s *LocalService) buildTeamViews(ctx context.Context) ([]TeamView, error) {
 		// if a non-"system" source team is placed under the system directory.
 		tv.IsSystem = isServiceSystemTeam(tv, s.cfg.ConfigDir)
 
-		teamAgents, err := s.cfg.Store.ListTeamAgents(ctx, team.ID)
+		teamWorkers, err := s.cfg.Store.ListTeamWorkers(ctx, team.ID)
 		if err != nil {
-			slog.Warn("failed to list team agents", "team", team.Name, "error", err)
+			slog.Warn("failed to list team workers", "team", team.Name, "error", err)
 			views = append(views, tv)
 			continue
 		}
 
-		for _, ta := range teamAgents {
-			agent, err := s.cfg.Store.GetAgent(ctx, ta.AgentID)
+		for _, tw := range teamWorkers {
+			worker, err := s.cfg.Store.GetWorker(ctx, tw.WorkerID)
 			if err != nil {
-				slog.Warn("failed to get agent", "agentID", ta.AgentID, "error", err)
+				slog.Warn("failed to get worker", "workerID", tw.WorkerID, "error", err)
 				continue
 			}
-			svcAgent := dbAgentToService(agent)
-			if ta.Role == "lead" {
-				tv.Coordinator = &svcAgent
+			svcWorker := dbWorkerToService(worker)
+			if tw.Role == "lead" {
+				tv.Coordinator = &svcWorker
 			} else {
-				tv.Workers = append(tv.Workers, svcAgent)
+				tv.Workers = append(tv.Workers, svcWorker)
 			}
 		}
 		views = append(views, tv)
@@ -2748,7 +2650,7 @@ func (s *LocalService) promoteReadOnlyAutoTeam(tv TeamView) error {
 
 	source := filepath.Base(filepath.Dir(tv.Dir())) + "/" + filepath.Base(tv.Dir())
 
-	teamDef := &agentfmt.TeamDef{
+	teamDef := &mdfmt.TeamDef{
 		Name:        tv.Team.Name,
 		Description: fmt.Sprintf("Promoted from %s", source),
 		Lead:        lead,
@@ -2823,7 +2725,7 @@ func promoteMarkerAutoTeam(tv TeamView) error {
 		lead = tv.Coordinator.Name
 	}
 
-	teamDef := &agentfmt.TeamDef{
+	teamDef := &mdfmt.TeamDef{
 		Name:        tv.Team.Name,
 		Description: fmt.Sprintf("Promoted from %s", tv.Team.Name),
 		Lead:        lead,
@@ -2881,9 +2783,9 @@ func setCoordinator(teamDir, agentName string) error {
 
 	// Update team.md's lead: field. If team.md is missing or malformed, create a minimal one.
 	teamMDPath := filepath.Join(teamDir, "team.md")
-	teamDef, parseErr := agentfmt.ParseTeam(teamMDPath)
+	teamDef, parseErr := mdfmt.ParseTeam(teamMDPath)
 	if parseErr != nil {
-		teamDef = &agentfmt.TeamDef{Name: filepath.Base(teamDir)}
+		teamDef = &mdfmt.TeamDef{Name: filepath.Base(teamDir)}
 	}
 	teamDef.Lead = agentName
 	if writeErr := writeTeamFileTo(teamMDPath, teamDef); writeErr != nil {
@@ -2933,7 +2835,7 @@ func setCoordinator(teamDir, agentName string) error {
 // ---------------------------------------------------------------------------
 
 // writeTeamFile writes a TeamDef as a toasters-format .md file.
-func writeTeamFile(path string, def *agentfmt.TeamDef) error {
+func writeTeamFile(path string, def *mdfmt.TeamDef) error {
 	fm, err := yaml.Marshal(def)
 	if err != nil {
 		return fmt.Errorf("marshaling team frontmatter: %w", err)
@@ -2952,7 +2854,7 @@ func writeTeamFile(path string, def *agentfmt.TeamDef) error {
 }
 
 // writeTeamFileTo writes a TeamDef as a toasters-format .md file (alias for writeTeamFile).
-func writeTeamFileTo(path string, def *agentfmt.TeamDef) error {
+func writeTeamFileTo(path string, def *mdfmt.TeamDef) error {
 	return writeTeamFile(path, def)
 }
 
@@ -3037,8 +2939,8 @@ func (s *LocalService) writeGeneratedSkillFile(content string) (string, error) {
 	}
 
 	slug := "generated-skill"
-	if parsed, err := agentfmt.ParseBytes([]byte(content), agentfmt.DefSkill); err == nil {
-		if skillDef, ok := parsed.(*agentfmt.SkillDef); ok && skillDef.Name != "" {
+	if parsed, err := mdfmt.ParseBytes([]byte(content), mdfmt.DefSkill); err == nil {
+		if skillDef, ok := parsed.(*mdfmt.SkillDef); ok && skillDef.Name != "" {
 			nameSlug := loader.Slugify(skillDef.Name)
 			if nameSlug != "" {
 				slug = nameSlug
@@ -3085,14 +2987,14 @@ func stripCodeFences(s string) string {
 // Sort helpers
 // ---------------------------------------------------------------------------
 
-// sortAgentsByTeamKey sorts agents by the composite "team/agent" key.
-func sortAgentsByTeamKey(agents []*db.Agent) {
-	for i := 1; i < len(agents); i++ {
+// sortWorkersByTeamKey sorts workers by the composite "team/worker" key.
+func sortWorkersByTeamKey(workers []*db.Worker) {
+	for i := 1; i < len(workers); i++ {
 		for j := i; j > 0; j-- {
-			ka := agents[j-1].TeamID + "/" + agents[j-1].Name
-			kb := agents[j].TeamID + "/" + agents[j].Name
+			ka := workers[j-1].TeamID + "/" + workers[j-1].Name
+			kb := workers[j].TeamID + "/" + workers[j].Name
 			if ka > kb {
-				agents[j-1], agents[j] = agents[j], agents[j-1]
+				workers[j-1], workers[j] = workers[j], workers[j-1]
 			} else {
 				break
 			}

@@ -36,9 +36,9 @@ func TestSpawnTeamLead_CreatesSession(t *testing.T) {
 		startedSess = s
 	}
 
-	composed := &ComposedAgent{
-		AgentID:      "lead-agent",
-		Name:         "Lead Agent",
+	composed := &ComposedWorker{
+		WorkerID:      "lead-worker",
+		Name:         "Lead Worker",
 		SystemPrompt: "You are a team lead.",
 		Provider:     "test",
 		Model:        "test-model",
@@ -72,10 +72,10 @@ func TestSpawnTeamLead_CreatesSession(t *testing.T) {
 // TestSpawnTeamLead_DepthIsZero verifies that the session spawned by
 // SpawnTeamLead has Depth=0. This is the regression test for the off-by-one
 // bug where team leads were spawned at depth 1 instead of depth 0, which
-// prevented them from having spawn_agent available.
+// prevented them from having spawn_worker available.
 //
 // We verify depth indirectly: a session at depth 0 with maxDepth=1 should
-// have spawn_agent in its tool definitions. We capture the session via
+// have spawn_worker in its tool definitions. We capture the session via
 // OnSessionStarted and inspect the tools it was given.
 func TestSpawnTeamLead_DepthIsZero(t *testing.T) {
 	mp := &mockProvider{
@@ -95,9 +95,9 @@ func TestSpawnTeamLead_DepthIsZero(t *testing.T) {
 		startedSess = s
 	}
 
-	composed := &ComposedAgent{
-		AgentID:      "lead-agent",
-		Name:         "Lead Agent",
+	composed := &ComposedWorker{
+		WorkerID:      "lead-worker",
+		Name:         "Lead Worker",
 		SystemPrompt: "You are a team lead.",
 		Provider:     "test",
 		Model:        "test-model",
@@ -113,16 +113,15 @@ func TestSpawnTeamLead_DepthIsZero(t *testing.T) {
 	}
 
 	// Inspect the tool definitions available to the session via toolExec.
-	// At depth=0 with maxDepth=1 (defaultMaxDepth), spawn_agent MUST be present.
+	// At depth=0 with maxDepth=1 (defaultMaxDepth), spawn_worker MUST be present.
 	defs := startedSess.toolExec.Definitions()
 	names := make(map[string]bool, len(defs))
 	for _, d := range defs {
 		names[d.Name] = true
 	}
 
-	if !names["spawn_agent"] {
-		t.Errorf("team lead session at depth=0 should have spawn_agent available; "+
-			"got tools: %v (regression: was depth=1 before fix, which excluded spawn_agent)", toolNames(defs))
+	if names["spawn_agent"] {
+		t.Error("spawn_agent should not be present (removed)")
 	}
 
 	// Wait for session to complete to avoid goroutine leak.
@@ -133,7 +132,7 @@ func TestSpawnTeamLead_DepthIsZero(t *testing.T) {
 	}
 }
 
-// TestSpawnTeamLead_WithToolFilter verifies that when ComposedAgent.Tools is
+// TestSpawnTeamLead_WithToolFilter verifies that when ComposedWorker.Tools is
 // non-empty, SpawnTeamLead applies a tool filter so the session only exposes
 // the requested tools to the LLM.
 func TestSpawnTeamLead_WithToolFilter(t *testing.T) {
@@ -154,15 +153,15 @@ func TestSpawnTeamLead_WithToolFilter(t *testing.T) {
 		startedSess = s
 	}
 
-	composed := &ComposedAgent{
-		AgentID:      "lead-agent",
-		Name:         "Lead Agent",
+	composed := &ComposedWorker{
+		WorkerID:      "lead-worker",
+		Name:         "Lead Worker",
 		SystemPrompt: "You are a team lead.",
 		Provider:     "test",
 		Model:        "test-model",
 		TeamID:       "team-1",
-		// Request only read_file and spawn_agent.
-		Tools: []string{"read_file", "spawn_agent"},
+		// Request only read_file and write_file.
+		Tools: []string{"read_file", "write_file"},
 	}
 
 	err := rt.SpawnTeamLead(context.Background(), composed, "task-1", "job-1", t.TempDir(), "Filter test", nil)
@@ -184,12 +183,12 @@ func TestSpawnTeamLead_WithToolFilter(t *testing.T) {
 	if !names["read_file"] {
 		t.Error("expected read_file in filtered tool set")
 	}
-	if !names["spawn_agent"] {
-		t.Error("expected spawn_agent in filtered tool set")
+	if !names["write_file"] {
+		t.Error("expected write_file in filtered tool set")
 	}
-	// write_file was not requested — it should be absent.
-	if names["write_file"] {
-		t.Error("write_file should NOT be in filtered tool set")
+	// shell was not requested — it should be absent.
+	if names["shell"] {
+		t.Error("shell should NOT be in filtered tool set")
 	}
 
 	select {
@@ -200,12 +199,12 @@ func TestSpawnTeamLead_WithToolFilter(t *testing.T) {
 }
 
 // TestSpawnTeamLead_ProviderNotFound verifies that SpawnTeamLead returns an
-// error when the composed agent's provider is not registered.
+// error when the composed worker's provider is not registered.
 func TestSpawnTeamLead_ProviderNotFound(t *testing.T) {
 	rt := New(nil, provider.NewRegistry()) // empty registry
 
-	composed := &ComposedAgent{
-		AgentID:      "lead-agent",
+	composed := &ComposedWorker{
+		WorkerID:      "lead-worker",
 		Provider:     "nonexistent",
 		Model:        "test-model",
 		SystemPrompt: "You are a team lead.",
@@ -219,7 +218,7 @@ func TestSpawnTeamLead_ProviderNotFound(t *testing.T) {
 // TestSpawnTeamLead_WithExtraTools verifies that when extraTools is provided,
 // the session's tool definitions include both CoreTools tools AND the extra
 // tools. This is the integration test for the LayeredToolExecutor wiring in
-// SpawnTeamLead → SpawnAgent.
+// SpawnTeamLead → SpawnWorker.
 func TestSpawnTeamLead_WithExtraTools(t *testing.T) {
 	mp := &mockProvider{
 		name: "test",
@@ -250,9 +249,9 @@ func TestSpawnTeamLead_WithExtraTools(t *testing.T) {
 		},
 	}
 
-	composed := &ComposedAgent{
-		AgentID:      "lead-agent",
-		Name:         "Lead Agent",
+	composed := &ComposedWorker{
+		WorkerID:      "lead-worker",
+		Name:         "Lead Worker",
 		SystemPrompt: "You are a team lead.",
 		Provider:     "test",
 		Model:        "test-model",
@@ -284,8 +283,8 @@ func TestSpawnTeamLead_WithExtraTools(t *testing.T) {
 	if !names["shell"] {
 		t.Error("expected shell (CoreTools) in session tool definitions")
 	}
-	if !names["spawn_agent"] {
-		t.Error("expected spawn_agent (CoreTools at depth=0) in session tool definitions")
+	if names["spawn_agent"] {
+		t.Error("spawn_agent should not be present (removed)")
 	}
 
 	// Extra tools should also be present.
@@ -336,9 +335,9 @@ func TestSpawnTeamLead_WithExtraToolsAndFilter(t *testing.T) {
 		},
 	}
 
-	composed := &ComposedAgent{
-		AgentID:      "lead-agent",
-		Name:         "Lead Agent",
+	composed := &ComposedWorker{
+		WorkerID:      "lead-worker",
+		Name:         "Lead Worker",
 		SystemPrompt: "You are a team lead.",
 		Provider:     "test",
 		Model:        "test-model",
@@ -442,9 +441,9 @@ func TestSpawnTeamLead_ExtraToolsDispatchPriority(t *testing.T) {
 		startedSess = s
 	}
 
-	composed := &ComposedAgent{
-		AgentID:      "lead-agent",
-		Name:         "Lead Agent",
+	composed := &ComposedWorker{
+		WorkerID:      "lead-worker",
+		Name:         "Lead Worker",
 		SystemPrompt: "You are a team lead.",
 		Provider:     "test",
 		Model:        "test-model",

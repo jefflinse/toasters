@@ -167,20 +167,15 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /api/v1/skills/{id}", s.deleteSkill)
 	mux.HandleFunc("POST /api/v1/skills/generate", s.generateSkill)
 
-	// Agents
-	mux.HandleFunc("GET /api/v1/agents", s.listAgents)
-	mux.HandleFunc("GET /api/v1/agents/{id}", s.getAgent)
-	mux.HandleFunc("POST /api/v1/agents", s.createAgent)
-	mux.HandleFunc("DELETE /api/v1/agents/{id}", s.deleteAgent)
-	mux.HandleFunc("POST /api/v1/agents/{id}/skills", s.addSkillToAgent)
-	mux.HandleFunc("POST /api/v1/agents/generate", s.generateAgent)
+	// Workers
+	mux.HandleFunc("GET /api/v1/workers", s.listWorkers)
+	mux.HandleFunc("GET /api/v1/workers/{id}", s.getWorker)
 
 	// Teams
 	mux.HandleFunc("GET /api/v1/teams", s.listTeams)
 	mux.HandleFunc("GET /api/v1/teams/{id}", s.getTeam)
 	mux.HandleFunc("POST /api/v1/teams", s.createTeam)
 	mux.HandleFunc("DELETE /api/v1/teams/{id}", s.deleteTeam)
-	mux.HandleFunc("POST /api/v1/teams/{id}/agents", s.addAgentToTeam)
 	mux.HandleFunc("PUT /api/v1/teams/{id}/coordinator", s.setCoordinator)
 	mux.HandleFunc("POST /api/v1/teams/{id}/promote", s.promoteTeam)
 	mux.HandleFunc("POST /api/v1/teams/generate", s.generateTeam)

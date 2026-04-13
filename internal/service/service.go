@@ -24,14 +24,14 @@ type Service interface {
 	// the operator LLM conversation.
 	Operator() OperatorService
 
-	// Definitions returns the sub-interface for managing skills, agents, and
+	// Definitions returns the sub-interface for managing skills, workers, and
 	// teams (CRUD, generation, promotion, coordinator detection).
 	Definitions() DefinitionService
 
 	// Jobs returns the sub-interface for listing, inspecting, and cancelling jobs.
 	Jobs() JobService
 
-	// Sessions returns the sub-interface for listing and inspecting agent sessions.
+	// Sessions returns the sub-interface for listing and inspecting worker sessions.
 	Sessions() SessionService
 
 	// Events returns the sub-interface for subscribing to the unified event stream.
@@ -80,7 +80,7 @@ type OperatorService interface {
 	// The history is bounded to the most recent maxHistoryEntries entries.
 	History(ctx context.Context) ([]ChatEntry, error)
 
-	// RespondToBlocker submits the user's answers to a blocker reported by an agent.
+	// RespondToBlocker submits the user's answers to a blocker reported by a worker.
 	// The answers are formatted and sent to the operator as a user response event.
 	// jobID and taskID identify the blocked task; answers correspond to the blocker's
 	// Questions in order.
@@ -91,7 +91,7 @@ type OperatorService interface {
 // DefinitionService
 // ---------------------------------------------------------------------------
 
-// DefinitionService manages skills, agents, and teams. It covers all CRUD
+// DefinitionService manages skills, workers, and teams. It covers all CRUD
 // operations, LLM-powered generation, team promotion, and coordinator detection.
 //
 // Generation and promotion operations are async: they return an operationID
@@ -128,47 +128,21 @@ type DefinitionService interface {
 	// On failure, an operation.failed event is pushed with the error message.
 	GenerateSkill(ctx context.Context, prompt string) (operationID string, err error)
 
-	// --- Agents ---
+	// --- Workers (read-only) ---
 
-	// ListAgents returns all agents known to the service. The ordering is:
-	// shared (non-team) agents alphabetically, then team-local agents by
-	// "team/agent", then system agents alphabetically.
-	ListAgents(ctx context.Context) ([]Agent, error)
+	// ListWorkers returns all workers known to the service. The ordering is:
+	// shared (non-team) workers alphabetically, then team-local workers by
+	// "team/worker", then system workers alphabetically.
+	ListWorkers(ctx context.Context) ([]Worker, error)
 
-	// GetAgent returns a single agent by ID. Returns an error wrapping
-	// ErrNotFound if the agent does not exist.
-	GetAgent(ctx context.Context, id string) (Agent, error)
-
-	// CreateAgent creates a new shared agent with the given name. It writes a
-	// template .md file to the user agents directory and triggers a definition
-	// reload. Returns the created agent.
-	CreateAgent(ctx context.Context, name string) (Agent, error)
-
-	// DeleteAgent deletes the agent with the given ID by removing its source
-	// file. Only user-owned shared agents (Source == "user", TeamID == "") can
-	// be deleted; system and team-local agents return an error. Triggers a
-	// definition reload.
-	DeleteAgent(ctx context.Context, id string) error
-
-	// AddSkillToAgent appends the named skill to the agent's .md file.
-	// Returns an error if the agent or skill does not exist, if the agent is
-	// read-only (system), or if the agent has no source path. Triggers a
-	// definition reload.
-	AddSkillToAgent(ctx context.Context, agentID string, skillName string) error
-
-	// GenerateAgent asks the LLM to generate an agent definition for the given
-	// prompt. Returns an operationID immediately. When the generation completes,
-	// an operation.completed event is pushed with Kind == "generate_agent" and
-	// the generated content in Result.Content. The implementation writes the
-	// file and triggers a reload before pushing the event.
-	//
-	// On failure, an operation.failed event is pushed with the error message.
-	GenerateAgent(ctx context.Context, prompt string) (operationID string, err error)
+	// GetWorker returns a single worker by ID. Returns an error wrapping
+	// ErrNotFound if the worker does not exist.
+	GetWorker(ctx context.Context, id string) (Worker, error)
 
 	// --- Teams ---
 
 	// ListTeams returns all non-system teams as TeamView values (team + resolved
-	// coordinator + workers). System teams (Source == "system") are excluded.
+	// coordinator + worker members). System teams (Source == "system") are excluded.
 	ListTeams(ctx context.Context) ([]TeamView, error)
 
 	// GetTeam returns a single team as a TeamView by team ID. Returns an error
@@ -186,19 +160,12 @@ type DefinitionService interface {
 	// Triggers a definition reload.
 	DeleteTeam(ctx context.Context, id string) error
 
-	// AddAgentToTeam adds the given agent to the team by appending the agent
-	// name to the team's team.md agents list and copying the agent's source
-	// .md file into the team's agents/ directory. Returns an error if the team
-	// is read-only or if the agent has no source path. Triggers a definition
-	// reload.
-	AddAgentToTeam(ctx context.Context, teamID string, agentID string) error
-
-	// SetCoordinator updates the team so that the agent with the given name is
+	// SetCoordinator updates the team so that the worker with the given name is
 	// the coordinator. It rewrites team.md's lead: field and updates mode: in
-	// all agent files in the team's agents/ directory. Returns an error if the
-	// team is read-only or if the agent is not found in the team. Triggers a
+	// all worker files in the team's agents/ directory. Returns an error if the
+	// team is read-only or if the worker is not found in the team. Triggers a
 	// definition reload.
-	SetCoordinator(ctx context.Context, teamID string, agentName string) error
+	SetCoordinator(ctx context.Context, teamID string, workerName string) error
 
 	// PromoteTeam promotes an auto-detected team to a fully managed team.
 	// Returns an operationID immediately. When the promotion completes, an
@@ -206,7 +173,7 @@ type DefinitionService interface {
 	// Result.Content set to the team name. Triggers a definition reload.
 	//
 	// Promotion logic branches on team type:
-	//   - Read-only auto-teams (e.g. ~/.claude/agents): copies agent files into
+	//   - Read-only auto-teams (e.g. ~/.claude/agents): copies worker files into
 	//     a new managed team directory under ~/.config/toasters/user/teams/.
 	//   - Bootstrap auto-teams (in user/teams/ with .auto-team marker): replaces
 	//     the agents/ symlink with a real directory and writes team.md.
@@ -215,19 +182,19 @@ type DefinitionService interface {
 	PromoteTeam(ctx context.Context, teamID string) (operationID string, err error)
 
 	// GenerateTeam asks the LLM to generate a team definition for the given
-	// prompt, selecting agents from the available pool. Returns an operationID
+	// prompt, selecting workers from the available pool. Returns an operationID
 	// immediately. When the generation completes, an operation.completed event
 	// is pushed with Kind == "generate_team", Result.Content set to the team.md
-	// content, and Result.AgentNames set to the agent names to assign.
+	// content, and Result.AgentNames set to the worker names to assign.
 	// The implementation writes the team directory and triggers a reload.
 	//
 	// On failure, an operation.failed event is pushed with the error message.
 	GenerateTeam(ctx context.Context, prompt string) (operationID string, err error)
 
 	// DetectCoordinator asks the LLM to pick the best coordinator for the team
-	// from its current worker agents. Returns an operationID immediately. When
+	// from its current workers. Returns an operationID immediately. When
 	// detection completes, an operation.completed event is pushed with
-	// Kind == "detect_coordinator" and Result.Content set to the detected agent
+	// Kind == "detect_coordinator" and Result.Content set to the detected worker
 	// name (empty if no match). The implementation calls SetCoordinator if a
 	// match is found.
 	//
@@ -269,11 +236,11 @@ type JobService interface {
 // SessionService
 // ---------------------------------------------------------------------------
 
-// SessionService provides read-only access to agent sessions plus the ability
+// SessionService provides read-only access to worker sessions plus the ability
 // to cancel them. Session creation is handled by the runtime when the operator
 // assigns tasks to teams.
 type SessionService interface {
-	// List returns all currently active agent sessions as snapshots. Snapshots
+	// List returns all currently active worker sessions as snapshots. Snapshots
 	// carry real-time token counts from the in-process runtime (not the DB
 	// records, which are only written on session completion).
 	List(ctx context.Context) ([]SessionSnapshot, error)

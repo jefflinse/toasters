@@ -4,7 +4,7 @@
 // either in-process (LocalService) or over the network (RemoteClient).
 //
 // All types in this package are service-level DTOs. No raw db.*, provider.*,
-// runtime.*, operator.*, mcp.*, or agentfmt.* types appear here. The TUI
+// runtime.*, operator.*, mcp.*, or mdfmt.* types appear here. The TUI
 // imports only this package plus its rendering libraries.
 package service
 
@@ -78,7 +78,7 @@ type TaskStatus string
 const (
 	// TaskStatusPending means the task has been created but not started.
 	TaskStatusPending TaskStatus = "pending"
-	// TaskStatusInProgress means an agent is actively working on the task.
+	// TaskStatusInProgress means a worker is actively working on the task.
 	TaskStatusInProgress TaskStatus = "in_progress"
 	// TaskStatusCompleted means the task finished successfully.
 	TaskStatusCompleted TaskStatus = "completed"
@@ -96,7 +96,7 @@ type Task struct {
 	JobID           string
 	Title           string
 	Status          TaskStatus
-	AgentID         string // assigned agent (may be empty)
+	WorkerID        string // assigned worker (may be empty)
 	TeamID          string // assigned team (may be empty)
 	ParentID        string // DAG edge; empty for root tasks
 	SortOrder       int
@@ -117,7 +117,7 @@ type ProgressReport struct {
 	ID        int64
 	JobID     string
 	TaskID    string // may be empty (job-level report)
-	AgentID   string // may be empty
+	WorkerID  string // may be empty
 	Status    string // "in_progress", "blocked", "completed", "failed"
 	Message   string
 	CreatedAt time.Time
@@ -127,7 +127,7 @@ type ProgressReport struct {
 // Session types
 // ---------------------------------------------------------------------------
 
-// SessionStatus represents the lifecycle state of an agent session.
+// SessionStatus represents the lifecycle state of a worker session.
 type SessionStatus string
 
 const (
@@ -141,11 +141,11 @@ const (
 	SessionStatusCancelled SessionStatus = "cancelled"
 )
 
-// AgentSession is the service-level representation of a persisted agent session
+// WorkerSession is the service-level representation of a persisted worker session
 // record. It carries the DB-level metadata (token counts, timing, cost).
-type AgentSession struct {
+type WorkerSession struct {
 	ID        string
-	AgentID   string
+	WorkerID  string
 	JobID     string // may be empty
 	TaskID    string // may be empty
 	Status    SessionStatus
@@ -158,13 +158,13 @@ type AgentSession struct {
 	CostUSD   *float64
 }
 
-// SessionEventType identifies the kind of event emitted by a live agent session.
+// SessionEventType identifies the kind of event emitted by a live worker session.
 type SessionEventType string
 
 const (
-	// SessionEventTypeText means the agent produced a text token.
+	// SessionEventTypeText means the worker produced a text token.
 	SessionEventTypeText SessionEventType = "text"
-	// SessionEventTypeToolCall means the agent invoked a tool.
+	// SessionEventTypeToolCall means the worker invoked a tool.
 	SessionEventTypeToolCall SessionEventType = "tool_call"
 	// SessionEventTypeToolResult means a tool returned a result.
 	SessionEventTypeToolResult SessionEventType = "tool_result"
@@ -174,13 +174,13 @@ const (
 	SessionEventTypeError SessionEventType = "error"
 )
 
-// SessionSnapshot is a live, read-only view of an in-process agent session.
-// Unlike AgentSession (which is persisted), a SessionSnapshot carries real-time
+// SessionSnapshot is a live, read-only view of an in-process worker session.
+// Unlike WorkerSession (which is persisted), a SessionSnapshot carries real-time
 // token counts from the runtime before the session completes and writes to DB.
 type SessionSnapshot struct {
 	ID        string
-	AgentID   string
-	TeamName  string // team this agent belongs to; may be empty
+	WorkerID  string
+	TeamName  string // team this worker belongs to; may be empty
 	JobID     string
 	TaskID    string
 	Status    string // "active", "completed", "failed", "cancelled"
@@ -200,12 +200,12 @@ type SessionDetail struct {
 	InitialMessage string         // the initial user message / task description
 	Output         string         // accumulated text output from the session
 	Activities     []ActivityItem // recent tool-call activities; newest last
-	AgentName      string         // human-readable agent name
+	WorkerName     string         // human-readable worker name
 	TeamName       string         // team name; may be empty
 	Task           string         // short human-readable task description
 }
 
-// ActivityItem represents a single tool-call activity for display in an agent card.
+// ActivityItem represents a single tool-call activity for display in a worker card.
 type ActivityItem struct {
 	Label    string // formatted display label, e.g. "write: main.go"
 	ToolName string // raw tool name
@@ -233,7 +233,7 @@ const (
 	FeedEntryTypeTaskCompleted FeedEntryType = "task_completed"
 	// FeedEntryTypeTaskFailed is emitted when a task fails.
 	FeedEntryTypeTaskFailed FeedEntryType = "task_failed"
-	// FeedEntryTypeBlockerReported is emitted when an agent reports a blocker.
+	// FeedEntryTypeBlockerReported is emitted when a worker reports a blocker.
 	FeedEntryTypeBlockerReported FeedEntryType = "blocker_reported"
 	// FeedEntryTypeJobComplete is emitted when an entire job finishes.
 	FeedEntryTypeJobComplete FeedEntryType = "job_complete"
@@ -250,24 +250,24 @@ type FeedEntry struct {
 }
 
 // ---------------------------------------------------------------------------
-// Definition types (Skills, Agents, Teams)
+// Definition types (Skills, Workers, Teams)
 // ---------------------------------------------------------------------------
 
-// Skill is the service-level representation of a reusable agent capability.
+// Skill is the service-level representation of a reusable worker capability.
 type Skill struct {
 	ID          string
 	Name        string
 	Description string
 	Tools       []string // tool names granted by this skill
-	Prompt      string   // the skill's markdown body (injected into agent system prompt)
+	Prompt      string   // the skill's markdown body (injected into worker system prompt)
 	Source      string   // "system", "user", "builtin"
 	SourcePath  string   `json:"-"` // absolute path to the .md file; empty for built-ins
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
 }
 
-// Agent is the service-level representation of a configured LLM agent.
-type Agent struct {
+// Worker is the service-level representation of a configured LLM worker.
+type Worker struct {
 	ID              string
 	Name            string
 	Description     string
@@ -277,7 +277,7 @@ type Agent struct {
 	Temperature     *float64
 	SystemPrompt    string
 	Tools           []string // tool names
-	DisallowedTools []string // tool names blocked for this agent
+	DisallowedTools []string // tool names blocked for this worker
 	Skills          []string // skill name references
 	PermissionMode  string
 	MaxTurns        *int
@@ -286,17 +286,17 @@ type Agent struct {
 	Disabled        bool
 	Source          string // "system", "user", "auto"
 	SourcePath      string `json:"-"` // absolute path to the .md file
-	TeamID          string // empty for shared agents
+	TeamID          string // empty for shared workers
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
 }
 
-// Team is the service-level representation of a group of agents.
+// Team is the service-level representation of a group of workers.
 type Team struct {
 	ID          string
 	Name        string
 	Description string
-	LeadAgent   string   // agent ID reference
+	LeadWorker   string   // worker ID reference
 	Skills      []string // team-wide skill names
 	Provider    string   // team default provider
 	Model       string   // team default model
@@ -308,13 +308,13 @@ type Team struct {
 	UpdatedAt   time.Time
 }
 
-// TeamView bundles a Team with its resolved coordinator and worker agents.
+// TeamView bundles a Team with its resolved coordinator and workers.
 // It replaces the tui.TeamView type and is the canonical view used everywhere
 // a team is displayed with its members.
 type TeamView struct {
 	Team        Team
-	Coordinator *Agent  // nil if no lead agent is set or found
-	Workers     []Agent // all non-coordinator agents
+	Coordinator *Worker  // nil if no lead is set or found
+	Workers     []Worker // all non-coordinator workers
 	IsReadOnly  bool    // true if the team is read-only (e.g. Claude Code auto-discovered teams)
 	IsSystem    bool    // true if the team is a system team (lives under the system config directory)
 }
@@ -502,7 +502,7 @@ type ProgressState struct {
 	Reports map[string][]ProgressReport
 
 	// ActiveSessions is the list of persisted session records with active status.
-	ActiveSessions []AgentSession
+	ActiveSessions []WorkerSession
 
 	// LiveSnapshots is the list of live session snapshots from the in-process
 	// runtime. These carry real-time token counts before the session writes to DB.
@@ -553,7 +553,7 @@ type OperationResult struct {
 	OperationID string
 	// For generation operations, Content holds the generated definition content.
 	Content string
-	// For team generation, AgentNames holds the names of agents to assign.
+	// For team generation, AgentNames holds the names of workers to assign.
 	AgentNames []string
 	// Error is non-empty for operation.failed events.
 	Error string
@@ -574,7 +574,7 @@ type HealthStatus struct {
 // Blocker types (used in the blocker modal)
 // ---------------------------------------------------------------------------
 
-// BlockerQuestion is a single question posed by a blocked agent, optionally
+// BlockerQuestion is a single question posed by a blocked worker, optionally
 // with a set of predefined answer choices. If Options is empty the user
 // provides a free-form text answer.
 type BlockerQuestion struct {
@@ -583,19 +583,19 @@ type BlockerQuestion struct {
 	Answer  string   // the user's answer, populated after submission
 }
 
-// Blocker represents an active blocker reported by an agent that requires
+// Blocker represents an active blocker reported by a worker that requires
 // user input before work can continue. It is the canonical type used by both
 // the service layer and the TUI blocker modal.
 type Blocker struct {
 	JobID          string
 	TaskID         string
 	TeamID         string
-	AgentID        string
+	WorkerID       string
 	Team           string // human-readable team name for display
 	BlockerSummary string // short summary of what is blocked
-	Context        string // additional context from the agent
-	WhatWasTried   string // what the agent already attempted
-	WhatIsNeeded   string // what the agent needs to proceed
+	Context        string // additional context from the worker
+	WhatWasTried   string // what the worker already attempted
+	WhatIsNeeded   string // what the worker needs to proceed
 	Questions      []BlockerQuestion
 	Answered       bool
 	RawBody        string // raw markdown body from the report_blocker tool call

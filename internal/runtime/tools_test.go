@@ -542,24 +542,13 @@ func TestSymlinkEscape(t *testing.T) {
 func TestSpawnDepthPropagation(t *testing.T) {
 	dir := t.TempDir()
 
-	// A spawner at depth 1 with maxDepth 2 should be able to spawn.
+	// spawn_worker at max depth should not even appear in tool definitions.
 	spawner := &mockSpawner{result: "ok"}
-	ct := NewCoreTools(dir, WithSpawner(spawner, 1, 2))
-	result, err := ct.Execute(context.Background(), "spawn_agent", mustJSON(t, map[string]any{
-		"system_prompt": "test",
-		"message":       "hello",
-	}))
-	assertNoError(t, err)
-	assertEqual(t, "ok", result)
-
-	// A spawner at depth 2 with maxDepth 2 should NOT be able to spawn.
-	ct2 := NewCoreTools(dir, WithSpawner(spawner, 2, 2))
-	_, err = ct2.Execute(context.Background(), "spawn_agent", mustJSON(t, map[string]any{
-		"system_prompt": "test",
-		"message":       "hello",
-	}))
-	assertError(t, err)
-	assertContains(t, err.Error(), "max spawn depth")
+	ct := NewCoreTools(dir, WithSpawner(spawner, 2, 2))
+	byName := ct.DefinitionsByName()
+	if _, ok := byName["spawn_worker"]; ok {
+		t.Error("spawn_worker should not be available at max depth")
+	}
 }
 
 func TestUnknownTool(t *testing.T) {
@@ -595,7 +584,7 @@ func TestDefinitions(t *testing.T) {
 		}
 	})
 
-	t.Run("with spawner", func(t *testing.T) {
+	t.Run("spawn_agent removed", func(t *testing.T) {
 		ct := NewCoreTools(dir, WithSpawner(&mockSpawner{}, 0, 3))
 		defs := ct.Definitions()
 
@@ -604,22 +593,8 @@ func TestDefinitions(t *testing.T) {
 			names[d.Name] = true
 		}
 
-		if !names["spawn_agent"] {
-			t.Error("spawn_agent should be present with spawner")
-		}
-	})
-
-	t.Run("spawn_agent excluded at max depth", func(t *testing.T) {
-		ct := NewCoreTools(dir, WithSpawner(&mockSpawner{}, 3, 3))
-		defs := ct.Definitions()
-
-		names := make(map[string]bool)
-		for _, d := range defs {
-			names[d.Name] = true
-		}
-
 		if names["spawn_agent"] {
-			t.Error("spawn_agent should not be present at max depth")
+			t.Error("spawn_agent should not be present (removed)")
 		}
 	})
 }
@@ -641,16 +616,7 @@ func TestDefinitionsByName(t *testing.T) {
 		}
 
 		if _, ok := byName["spawn_agent"]; ok {
-			t.Error("spawn_agent should not be present without spawner")
-		}
-	})
-
-	t.Run("with spawner", func(t *testing.T) {
-		ct := NewCoreTools(dir, WithSpawner(&mockSpawner{}, 0, 3))
-		byName := ct.DefinitionsByName()
-
-		if _, ok := byName["spawn_agent"]; !ok {
-			t.Error("spawn_agent should be present with spawner")
+			t.Error("spawn_agent should not be present (removed)")
 		}
 	})
 
@@ -685,400 +651,6 @@ func TestDefinitionsByName(t *testing.T) {
 	})
 }
 
-func TestSpawnAgent(t *testing.T) {
-	dir := t.TempDir()
-
-	t.Run("no spawner", func(t *testing.T) {
-		ct := NewCoreTools(dir)
-		_, err := ct.Execute(context.Background(), "spawn_agent", mustJSON(t, map[string]any{
-			"system_prompt": "test",
-			"message":       "hello",
-		}))
-		assertError(t, err)
-		assertContains(t, err.Error(), "not available")
-	})
-
-	t.Run("max depth exceeded", func(t *testing.T) {
-		ct := NewCoreTools(dir, WithSpawner(&mockSpawner{}, 3, 3))
-		_, err := ct.Execute(context.Background(), "spawn_agent", mustJSON(t, map[string]any{
-			"system_prompt": "test",
-			"message":       "hello",
-		}))
-		assertError(t, err)
-		assertContains(t, err.Error(), "max spawn depth")
-	})
-
-	t.Run("successful spawn", func(t *testing.T) {
-		spawner := &mockSpawner{result: "child result"}
-		ct := NewCoreTools(dir, WithSpawner(spawner, 0, 3))
-		result, err := ct.Execute(context.Background(), "spawn_agent", mustJSON(t, map[string]any{
-			"system_prompt": "test",
-			"message":       "hello",
-		}))
-		assertNoError(t, err)
-		assertEqual(t, "child result", result)
-	})
-}
-
-// TestSpawnAgentDepth_TeamLeadHasSpawnAgent is a regression test for the
-// off-by-one bug in WithSpawner where team leads were given depth=1 instead of
-// depth=0, causing spawn_agent to be excluded from their tool set.
-//
-// A CoreTools at depth=0 with maxDepth=1 (the team lead configuration) MUST
-// include spawn_agent in Definitions(). Before the fix, SpawnTeamLead called
-// WithSpawner(r, depth+1, maxDepth) which passed depth=1, making depth < maxDepth
-// false and excluding spawn_agent.
-func TestSpawnAgentDepth_TeamLeadHasSpawnAgent(t *testing.T) {
-	dir := t.TempDir()
-	// depth=0, maxDepth=1: team lead — should have spawn_agent.
-	ct := NewCoreTools(dir, WithSpawner(&mockSpawner{}, 0, 1))
-	defs := ct.Definitions()
-
-	names := make(map[string]bool, len(defs))
-	for _, d := range defs {
-		names[d.Name] = true
-	}
-
-	if !names["spawn_agent"] {
-		t.Errorf("CoreTools at depth=0, maxDepth=1 should include spawn_agent "+
-			"(team lead configuration); got tools: %v", toolNames(defs))
-	}
-}
-
-// TestSpawnAgentDepth_WorkerLacksSpawnAgent verifies that a CoreTools at
-// depth=1 with maxDepth=1 (the worker configuration) does NOT include
-// spawn_agent. Workers must not be able to spawn further agents.
-func TestSpawnAgentDepth_WorkerLacksSpawnAgent(t *testing.T) {
-	dir := t.TempDir()
-	// depth=1, maxDepth=1: worker — should NOT have spawn_agent.
-	ct := NewCoreTools(dir, WithSpawner(&mockSpawner{}, 1, 1))
-	defs := ct.Definitions()
-
-	names := make(map[string]bool, len(defs))
-	for _, d := range defs {
-		names[d.Name] = true
-	}
-
-	if names["spawn_agent"] {
-		t.Errorf("CoreTools at depth=1, maxDepth=1 should NOT include spawn_agent "+
-			"(worker configuration); got tools: %v", toolNames(defs))
-	}
-}
-
-// TestSpawnAgentDepth_ChildDepthIncrement is a regression test for the
-// off-by-one bug in spawnAgent where child sessions were spawned at the same
-// depth as the parent (ct.depth) instead of depth+1.
-//
-// When a team lead (depth=0) calls spawn_agent, the child must be spawned at
-// depth=1 so that the child (a worker) cannot itself call spawn_agent.
-// Before the fix, the child was spawned at depth=0, giving it spawn_agent
-// access and allowing unbounded recursion.
-func TestSpawnAgentDepth_ChildDepthIncrement(t *testing.T) {
-	dir := t.TempDir()
-
-	capturing := &capturingSpawner{result: "ok"}
-	// Parent is at depth=0 (team lead), maxDepth=1.
-	ct := NewCoreTools(dir,
-		WithSpawner(capturing, 0, 1),
-		WithProvider("test-provider", "test-model"),
-	)
-
-	_, err := ct.Execute(context.Background(), "spawn_agent", mustJSON(t, map[string]any{
-		"system_prompt": "you are a worker",
-		"message":       "do the work",
-	}))
-	assertNoError(t, err)
-
-	if capturing.received == nil {
-		t.Fatal("SpawnAndWait was never called")
-	}
-
-	got := *capturing.received
-	// Child must be at depth=1 (parent depth 0 + 1).
-	if got.Depth != 1 {
-		t.Errorf("child SpawnOpts.Depth = %d, want 1 (regression: was 0 before fix, "+
-			"which gave workers spawn_agent access)", got.Depth)
-	}
-	// MaxDepth must be propagated unchanged.
-	if got.MaxDepth != 1 {
-		t.Errorf("child SpawnOpts.MaxDepth = %d, want 1", got.MaxDepth)
-	}
-}
-
-// TestSpawnAgentPropagatesProviderAndContext is a regression test for the bug
-// where spawn_agent never passed ProviderName or Model to child SpawnOpts,
-// causing every child spawn to fail with `provider "" not found`.
-//
-// The fix added providerName/model fields to CoreTools and wired them through
-// spawnAgent. This test verifies that all four fields (ProviderName, Model,
-// AgentID, JobID) are propagated from the parent CoreTools to the child
-// SpawnOpts. It will FAIL if ProviderName or Model are removed from the
-// SpawnOpts literal in spawnAgent.
-func TestSpawnAgentPropagatesProviderAndContext(t *testing.T) {
-	dir := t.TempDir()
-
-	capturing := &capturingSpawner{result: "ok"}
-	ct := NewCoreTools(dir,
-		WithSpawner(capturing, 0, 3),
-		WithProvider("test-provider", "test-model"),
-		WithSessionContext("sess-1", "agent-1", "job-1", "task-1"),
-	)
-
-	_, err := ct.Execute(context.Background(), "spawn_agent", mustJSON(t, map[string]any{
-		"system_prompt": "you are a helper",
-		"message":       "do the thing",
-	}))
-	assertNoError(t, err)
-
-	if capturing.received == nil {
-		t.Fatal("SpawnAndWait was never called")
-	}
-
-	got := *capturing.received
-	assertEqual(t, "test-provider", got.ProviderName)
-	assertEqual(t, "test-model", got.Model)
-	// When agent_name is omitted, AgentID falls back to "worker" (anonymous subagent).
-	assertEqual(t, "worker", got.AgentID)
-	assertEqual(t, "job-1", got.JobID)
-	assertEqual(t, "task-1", got.TaskID)
-}
-
-// TestSpawnAgentNameParam verifies that when agent_name is provided in the tool
-// call, SpawnOpts.AgentID is set to that name. When agent_name is omitted, the
-// fallback to "worker" is covered by TestSpawnAgentPropagatesProviderAndContext.
-func TestSpawnAgentNameParam(t *testing.T) {
-	dir := t.TempDir()
-
-	capturing := &capturingSpawner{result: "ok"}
-	ct := NewCoreTools(dir,
-		WithSpawner(capturing, 0, 3),
-		WithProvider("test-provider", "test-model"),
-		WithSessionContext("sess-1", "parent-agent", "job-1", "task-1"),
-	)
-
-	_, err := ct.Execute(context.Background(), "spawn_agent", mustJSON(t, map[string]any{
-		"system_prompt": "you are a specialist",
-		"message":       "do the specialized work",
-		"agent_name":    "tui-engineer",
-	}))
-	assertNoError(t, err)
-
-	if capturing.received == nil {
-		t.Fatal("SpawnAndWait was never called")
-	}
-
-	// agent_name should override the parent's agentID.
-	assertEqual(t, "tui-engineer", capturing.received.AgentID)
-}
-
-// TestSpawnAgentForwardsToolFilter is a regression test for the bug where
-// spawn_agent never forwarded params.Tools to SpawnOpts.Tools, so the child
-// always received a nil tool set regardless of what the caller requested.
-//
-// The fix resolves each requested tool name against the parent's Definitions()
-// and passes the resulting []ToolDef as SpawnOpts.Tools. This test will FAIL
-// if `Tools: toolDefs` is removed from the SpawnOpts literal in spawnAgent.
-func TestSpawnAgentForwardsToolFilter(t *testing.T) {
-	dir := t.TempDir()
-
-	capturing := &capturingSpawner{result: "ok"}
-	ct := NewCoreTools(dir,
-		WithSpawner(capturing, 0, 3),
-		WithProvider("test-provider", "test-model"),
-		WithSessionContext("sess-1", "agent-1", "job-1", "task-1"),
-	)
-
-	_, err := ct.Execute(context.Background(), "spawn_agent", mustJSON(t, map[string]any{
-		"system_prompt": "you are a helper",
-		"message":       "do the thing",
-		"tools":         []string{"read_file", "shell"},
-	}))
-	assertNoError(t, err)
-
-	if capturing.received == nil {
-		t.Fatal("SpawnAndWait was never called")
-	}
-
-	got := capturing.received.Tools
-	if len(got) != 2 {
-		t.Fatalf("want 2 tool defs in SpawnOpts.Tools, got %d (regression: was nil before fix)", len(got))
-	}
-
-	names := make(map[string]bool, len(got))
-	for _, td := range got {
-		names[td.Name] = true
-	}
-	if !names["read_file"] {
-		t.Error("expected read_file in SpawnOpts.Tools")
-	}
-	if !names["shell"] {
-		t.Error("expected shell in SpawnOpts.Tools")
-	}
-}
-
-// TestSpawnAgentEmptyToolsPassesNil verifies that when spawn_agent is called
-// with an empty (or omitted) tools list, SpawnOpts.Tools is nil so the child
-// receives the full tool set rather than an empty one.
-func TestSpawnAgentEmptyToolsPassesNil(t *testing.T) {
-	dir := t.TempDir()
-
-	t.Run("empty tools array", func(t *testing.T) {
-		capturing := &capturingSpawner{result: "ok"}
-		ct := NewCoreTools(dir,
-			WithSpawner(capturing, 0, 3),
-			WithProvider("test-provider", "test-model"),
-		)
-
-		_, err := ct.Execute(context.Background(), "spawn_agent", mustJSON(t, map[string]any{
-			"system_prompt": "you are a helper",
-			"message":       "do the thing",
-			"tools":         []string{},
-		}))
-		assertNoError(t, err)
-
-		if capturing.received == nil {
-			t.Fatal("SpawnAndWait was never called")
-		}
-		if capturing.received.Tools != nil {
-			t.Fatalf("want nil SpawnOpts.Tools for empty tools list, got %v", capturing.received.Tools)
-		}
-	})
-
-	t.Run("omitted tools field", func(t *testing.T) {
-		capturing := &capturingSpawner{result: "ok"}
-		ct := NewCoreTools(dir,
-			WithSpawner(capturing, 0, 3),
-			WithProvider("test-provider", "test-model"),
-		)
-
-		_, err := ct.Execute(context.Background(), "spawn_agent", mustJSON(t, map[string]any{
-			"system_prompt": "you are a helper",
-			"message":       "do the thing",
-			// no "tools" key
-		}))
-		assertNoError(t, err)
-
-		if capturing.received == nil {
-			t.Fatal("SpawnAndWait was never called")
-		}
-		if capturing.received.Tools != nil {
-			t.Fatalf("want nil SpawnOpts.Tools when tools field is omitted, got %v", capturing.received.Tools)
-		}
-	})
-}
-
-// TestSpawnAgentUnknownToolsSkipped verifies that tool names not present in the
-// parent's Definitions() are silently skipped rather than causing an error.
-// Only known tool names should appear in SpawnOpts.Tools.
-//
-// This test will FAIL if `Tools: toolDefs` is removed from the SpawnOpts
-// literal in spawnAgent (because then Tools would be nil instead of containing
-// just "read_file").
-func TestSpawnAgentUnknownToolsSkipped(t *testing.T) {
-	dir := t.TempDir()
-
-	capturing := &capturingSpawner{result: "ok"}
-	ct := NewCoreTools(dir,
-		WithSpawner(capturing, 0, 3),
-		WithProvider("test-provider", "test-model"),
-	)
-
-	_, err := ct.Execute(context.Background(), "spawn_agent", mustJSON(t, map[string]any{
-		"system_prompt": "you are a helper",
-		"message":       "do the thing",
-		"tools":         []string{"read_file", "nonexistent_tool"},
-	}))
-	assertNoError(t, err)
-
-	if capturing.received == nil {
-		t.Fatal("SpawnAndWait was never called")
-	}
-
-	got := capturing.received.Tools
-	if len(got) != 1 {
-		t.Fatalf("want 1 tool def (only read_file), got %d: %v", len(got), got)
-	}
-	if got[0].Name != "read_file" {
-		t.Errorf("want tool name %q, got %q", "read_file", got[0].Name)
-	}
-}
-
-// TestSpawnAgentAllUnknownToolsPassesNil verifies that when every requested
-// tool name is unknown, toolDefs stays nil, so SpawnOpts.Tools is nil and the
-// child gets the full default tool set. Unknown names are silently skipped;
-// this is intentional.
-func TestSpawnAgentAllUnknownToolsPassesNil(t *testing.T) {
-	capturing := &capturingSpawner{result: "ok"}
-	ct := NewCoreTools(t.TempDir(),
-		WithSpawner(capturing, 0, 3),
-		WithProvider("test-provider", "test-model"),
-	)
-
-	_, err := ct.Execute(context.Background(), "spawn_agent", mustJSON(t, map[string]any{
-		"system_prompt": "you are a helper",
-		"message":       "do the thing",
-		"tools":         []string{"nonexistent_a", "nonexistent_b"},
-	}))
-	assertNoError(t, err)
-
-	if capturing.received == nil {
-		t.Fatal("SpawnAndWait was never called")
-	}
-	if capturing.received.Tools != nil {
-		t.Fatalf("want nil SpawnOpts.Tools when all tool names are unknown, got %v", capturing.received.Tools)
-	}
-}
-
-// TestSpawnAgentTaskParam verifies that when spawn_agent is called with a
-// "task" field, SpawnOpts.Task is set to that value and forwarded to the spawner.
-func TestSpawnAgentTaskParam(t *testing.T) {
-	dir := t.TempDir()
-
-	capturing := &capturingSpawner{result: "ok"}
-	ct := NewCoreTools(dir,
-		WithSpawner(capturing, 0, 3),
-		WithProvider("test-provider", "test-model"),
-	)
-
-	_, err := ct.Execute(context.Background(), "spawn_agent", mustJSON(t, map[string]any{
-		"system_prompt": "you are a builder",
-		"message":       "build the models",
-		"task":          "building core data models",
-	}))
-	assertNoError(t, err)
-
-	if capturing.received == nil {
-		t.Fatal("SpawnAndWait was never called")
-	}
-
-	assertEqual(t, "building core data models", capturing.received.Task)
-}
-
-// TestSpawnAgentTaskOmitted verifies that when spawn_agent is called without a
-// "task" field, SpawnOpts.Task is the empty string.
-func TestSpawnAgentTaskOmitted(t *testing.T) {
-	dir := t.TempDir()
-
-	capturing := &capturingSpawner{result: "ok"}
-	ct := NewCoreTools(dir,
-		WithSpawner(capturing, 0, 3),
-		WithProvider("test-provider", "test-model"),
-	)
-
-	_, err := ct.Execute(context.Background(), "spawn_agent", mustJSON(t, map[string]any{
-		"system_prompt": "you are a helper",
-		"message":       "do the thing",
-		// no "task" key
-	}))
-	assertNoError(t, err)
-
-	if capturing.received == nil {
-		t.Fatal("SpawnAndWait was never called")
-	}
-
-	assertEqual(t, "", capturing.received.Task)
-}
-
 // TestSessionTask verifies that Session.Task() returns the task description
 // that was set via SpawnOpts.Task when the session was created.
 func TestSessionTask(t *testing.T) {
@@ -1093,7 +665,7 @@ func TestSessionTask(t *testing.T) {
 	}
 
 	opts := SpawnOpts{
-		AgentID:        "test-agent",
+		WorkerID:       "test-worker",
 		Model:          "test-model",
 		InitialMessage: "do the work",
 		MaxTurns:       10,
@@ -1127,7 +699,7 @@ func TestProgressToolsFillSessionJobAndTaskIDs(t *testing.T) {
 	store := &captureProgressStore{}
 	ct := NewCoreTools(dir,
 		WithStore(store),
-		WithSessionContext("sess-1", "agent-ctx", "job-ctx", "task-ctx"),
+		WithSessionContext("sess-1", "worker-ctx", "job-ctx", "task-ctx"),
 	)
 
 	t.Run("report_task_progress fills missing ids from session", func(t *testing.T) {
@@ -1142,7 +714,7 @@ func TestProgressToolsFillSessionJobAndTaskIDs(t *testing.T) {
 		}
 		assertEqual(t, "job-ctx", store.lastProgress.JobID)
 		assertEqual(t, "task-ctx", store.lastProgress.TaskID)
-		assertEqual(t, "agent-ctx", store.lastProgress.AgentID)
+		assertEqual(t, "worker-ctx", store.lastProgress.WorkerID)
 	})
 
 	t.Run("report_blocker fills missing ids from session", func(t *testing.T) {
@@ -1157,7 +729,7 @@ func TestProgressToolsFillSessionJobAndTaskIDs(t *testing.T) {
 		}
 		assertEqual(t, "job-ctx", store.lastProgress.JobID)
 		assertEqual(t, "task-ctx", store.lastProgress.TaskID)
-		assertEqual(t, "agent-ctx", store.lastProgress.AgentID)
+		assertEqual(t, "worker-ctx", store.lastProgress.WorkerID)
 	})
 
 	t.Run("request_review fills missing ids from session", func(t *testing.T) {
@@ -1178,7 +750,7 @@ func TestProgressToolsFillSessionJobAndTaskIDs(t *testing.T) {
 		assertEqual(t, "task-ctx", store.lastArtifact.TaskID)
 		assertEqual(t, "job-ctx", store.lastProgress.JobID)
 		assertEqual(t, "task-ctx", store.lastProgress.TaskID)
-		assertEqual(t, "agent-ctx", store.lastProgress.AgentID)
+		assertEqual(t, "worker-ctx", store.lastProgress.WorkerID)
 	})
 
 	t.Run("log_artifact fills missing ids from session", func(t *testing.T) {
@@ -1199,11 +771,11 @@ func TestProgressToolsFillSessionJobAndTaskIDs(t *testing.T) {
 	t.Run("explicit mismatched ids are normalized to session context", func(t *testing.T) {
 		store.lastProgress = nil
 		_, err := ct.Execute(context.Background(), "report_task_progress", mustJSON(t, map[string]any{
-			"job_id":   "job-explicit",
-			"task_id":  "task-explicit",
-			"agent_id": "agent-explicit",
-			"status":   "in_progress",
-			"message":  "working",
+			"job_id":    "job-explicit",
+			"task_id":   "task-explicit",
+			"worker_id": "worker-explicit",
+			"status":    "in_progress",
+			"message":   "working",
 		}))
 		assertNoError(t, err)
 		if store.lastProgress == nil {
@@ -1211,7 +783,7 @@ func TestProgressToolsFillSessionJobAndTaskIDs(t *testing.T) {
 		}
 		assertEqual(t, "job-ctx", store.lastProgress.JobID)
 		assertEqual(t, "task-ctx", store.lastProgress.TaskID)
-		assertEqual(t, "agent-explicit", store.lastProgress.AgentID)
+		assertEqual(t, "worker-explicit", store.lastProgress.WorkerID)
 	})
 
 	t.Run("query_job_context normalizes explicit mismatched job id", func(t *testing.T) {
@@ -1237,11 +809,11 @@ func TestProgressToolsPreserveExplicitIDsWithoutSessionContext(t *testing.T) {
 	ct := NewCoreTools(dir, WithStore(store))
 
 	_, err := ct.Execute(context.Background(), "report_task_progress", mustJSON(t, map[string]any{
-		"job_id":   "job-explicit",
-		"task_id":  "task-explicit",
-		"agent_id": "agent-explicit",
-		"status":   "in_progress",
-		"message":  "working",
+		"job_id":    "job-explicit",
+		"task_id":   "task-explicit",
+		"worker_id": "worker-explicit",
+		"status":    "in_progress",
+		"message":   "working",
 	}))
 	assertNoError(t, err)
 	if store.lastProgress == nil {
@@ -1249,7 +821,7 @@ func TestProgressToolsPreserveExplicitIDsWithoutSessionContext(t *testing.T) {
 	}
 	assertEqual(t, "job-explicit", store.lastProgress.JobID)
 	assertEqual(t, "task-explicit", store.lastProgress.TaskID)
-	assertEqual(t, "agent-explicit", store.lastProgress.AgentID)
+	assertEqual(t, "worker-explicit", store.lastProgress.WorkerID)
 }
 
 func TestProgressToolsNormalizeMismatchedIDsToAvoidForeignKeyErrors(t *testing.T) {
@@ -1261,7 +833,7 @@ func TestProgressToolsNormalizeMismatchedIDsToAvoidForeignKeyErrors(t *testing.T
 	}
 	ct := NewCoreTools(dir,
 		WithStore(store),
-		WithSessionContext("sess-1", "agent-ctx", "job-ctx", "task-ctx"),
+		WithSessionContext("sess-1", "worker-ctx", "job-ctx", "task-ctx"),
 	)
 
 	t.Run("wrong explicit non-empty job_id and task_id are both normalized", func(t *testing.T) {
@@ -1363,7 +935,7 @@ func TestDenylist(t *testing.T) {
 			"command": "echo hello",
 		}))
 		assertError(t, err)
-		assertContains(t, err.Error(), `tool "shell" is not allowed for this agent`)
+		assertContains(t, err.Error(), `tool "shell" is not allowed for this worker`)
 	})
 
 	t.Run("execute allows non-denylisted tool", func(t *testing.T) {

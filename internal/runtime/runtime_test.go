@@ -15,7 +15,7 @@ func newTestRegistry(mp *mockProvider) *provider.Registry {
 	return reg
 }
 
-func TestRuntimeSpawnAgent(t *testing.T) {
+func TestRuntimeSpawnWorker(t *testing.T) {
 	mp := &mockProvider{
 		name: "test",
 		responses: []mockResponse{
@@ -28,8 +28,8 @@ func TestRuntimeSpawnAgent(t *testing.T) {
 
 	rt := New(nil, newTestRegistry(mp))
 
-	sess, err := rt.SpawnAgent(context.Background(), SpawnOpts{
-		AgentID:        "agent-1",
+	sess, err := rt.SpawnWorker(context.Background(), SpawnOpts{
+		WorkerID:        "worker-1",
 		ProviderName:   "test",
 		Model:          "test-model",
 		InitialMessage: "Hello",
@@ -50,13 +50,13 @@ func TestRuntimeSpawnAgent(t *testing.T) {
 
 	snap := sess.Snapshot()
 	assertEqual(t, "completed", snap.Status)
-	assertEqual(t, "agent-1", snap.AgentID)
+	assertEqual(t, "worker-1", snap.WorkerID)
 }
 
-func TestRuntimeSpawnAgentProviderNotFound(t *testing.T) {
+func TestRuntimeSpawnWorkerProviderNotFound(t *testing.T) {
 	rt := New(nil, provider.NewRegistry())
 
-	_, err := rt.SpawnAgent(context.Background(), SpawnOpts{
+	_, err := rt.SpawnWorker(context.Background(), SpawnOpts{
 		ProviderName: "nonexistent",
 	})
 	assertError(t, err)
@@ -76,7 +76,7 @@ func TestRuntimeGetSession(t *testing.T) {
 
 	rt := New(nil, newTestRegistry(mp))
 
-	sess, err := rt.SpawnAgent(context.Background(), SpawnOpts{
+	sess, err := rt.SpawnWorker(context.Background(), SpawnOpts{
 		ProviderName:   "test",
 		InitialMessage: "Hello",
 		WorkDir:        t.TempDir(),
@@ -113,7 +113,7 @@ func TestRuntimeCancelSession(t *testing.T) {
 
 	rt := New(nil, newTestRegistry(mp))
 
-	sess, err := rt.SpawnAgent(context.Background(), SpawnOpts{
+	sess, err := rt.SpawnWorker(context.Background(), SpawnOpts{
 		ProviderName:   "test",
 		InitialMessage: "Block",
 		WorkDir:        t.TempDir(),
@@ -162,14 +162,14 @@ func TestRuntimeActiveSessions(t *testing.T) {
 
 	rt := New(nil, newTestRegistry(mp))
 
-	sess1, err := rt.SpawnAgent(context.Background(), SpawnOpts{
+	sess1, err := rt.SpawnWorker(context.Background(), SpawnOpts{
 		ProviderName:   "test",
 		InitialMessage: "Block 1",
 		WorkDir:        t.TempDir(),
 	})
 	assertNoError(t, err)
 
-	sess2, err := rt.SpawnAgent(context.Background(), SpawnOpts{
+	sess2, err := rt.SpawnWorker(context.Background(), SpawnOpts{
 		ProviderName:   "test",
 		InitialMessage: "Block 2",
 		WorkDir:        t.TempDir(),
@@ -277,14 +277,14 @@ func TestRuntimeSpawnAndWaitFailed(t *testing.T) {
 	assertError(t, err)
 }
 
-func TestRuntimeImplementsAgentSpawner(t *testing.T) {
-	// Compile-time check that Runtime implements AgentSpawner.
-	var _ AgentSpawner = (*Runtime)(nil)
+func TestRuntimeImplementsWorkerSpawner(t *testing.T) {
+	// Compile-time check that *Runtime implements WorkerSpawner.
+	var _ WorkerSpawner = (*Runtime)(nil)
 }
 
-// TestSpawnAgent_ExtraToolsMutualExclusion verifies that setting both
+// TestSpawnWorker_ExtraToolsMutualExclusion verifies that setting both
 // ToolExecutor and ExtraTools on SpawnOpts returns an error.
-func TestSpawnAgent_ExtraToolsMutualExclusion(t *testing.T) {
+func TestSpawnWorker_ExtraToolsMutualExclusion(t *testing.T) {
 	mp := &mockProvider{
 		name: "test",
 		responses: []mockResponse{
@@ -297,7 +297,7 @@ func TestSpawnAgent_ExtraToolsMutualExclusion(t *testing.T) {
 
 	rt := New(nil, newTestRegistry(mp))
 
-	_, err := rt.SpawnAgent(context.Background(), SpawnOpts{
+	_, err := rt.SpawnWorker(context.Background(), SpawnOpts{
 		ProviderName: "test",
 		Model:        "test-model",
 		ToolExecutor: &mockToolExecutor{
@@ -313,10 +313,10 @@ func TestSpawnAgent_ExtraToolsMutualExclusion(t *testing.T) {
 	assertContains(t, err.Error(), "mutually exclusive")
 }
 
-// TestSpawnAgent_ExtraToolsLayered verifies that when ExtraTools is set on
+// TestSpawnWorker_ExtraToolsLayered verifies that when ExtraTools is set on
 // SpawnOpts, the session's tool definitions include both CoreTools and the
 // extra tools, with extra tools getting dispatch priority.
-func TestSpawnAgent_ExtraToolsLayered(t *testing.T) {
+func TestSpawnWorker_ExtraToolsLayered(t *testing.T) {
 	mp := &mockProvider{
 		name: "test",
 		responses: []mockResponse{
@@ -345,8 +345,8 @@ func TestSpawnAgent_ExtraToolsLayered(t *testing.T) {
 		},
 	}
 
-	_, err := rt.SpawnAgent(context.Background(), SpawnOpts{
-		AgentID:        "test-agent",
+	_, err := rt.SpawnWorker(context.Background(), SpawnOpts{
+		WorkerID:        "test-worker",
 		ProviderName:   "test",
 		Model:          "test-model",
 		ExtraTools:     extraTools,

@@ -7,12 +7,6 @@ type skillGeneratedMsg struct {
 	err     error
 }
 
-// agentGeneratedMsg is sent when the LLM finishes generating an agent definition.
-type agentGeneratedMsg struct {
-	content string
-	err     error
-}
-
 // teamGeneratedMsg is sent when the LLM finishes generating a team definition.
 type teamGeneratedMsg struct {
 	content    string   // the team.md content

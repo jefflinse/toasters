@@ -110,7 +110,7 @@ type progressState struct {
 	jobs           []service.Job
 	tasks          map[string][]service.Task
 	reports        map[string][]service.ProgressReport
-	activeSessions []service.AgentSession
+	activeSessions []service.WorkerSession
 	feedEntries    []service.FeedEntry       // recent activity feed entries
 	mcpServers     []service.MCPServerStatus // MCP server connection status
 }
@@ -167,8 +167,8 @@ type Model struct {
 	// Skills modal state.
 	skillsModal skillsModalState
 
-	// Agents modal state.
-	agentsModal agentsModalState
+	// Workers modal state.
+	workersModal workersModalState
 
 	// MCP modal state.
 	mcpModal mcpModalState
@@ -355,9 +355,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateSkillsModal(msg)
 		}
 
-		// Agents modal key handling — intercept all keys when modal is open.
-		if m.agentsModal.show {
-			return m.updateAgentsModal(msg)
+		// Workers modal key handling — intercept all keys when modal is open.
+		if m.workersModal.show {
+			return m.updateWorkersModal(msg)
 		}
 
 		// Jobs modal key handling — intercept all keys when modal is open.
@@ -832,11 +832,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.skillsModal = skillsModalState{show: true}
 					m.reloadSkillsForModal()
 					return m, nil
-				case "/agents":
+				case "/workers":
 					m.input.Reset()
 					m.cmdPopup.show = false
-					m.agentsModal = agentsModalState{show: true}
-					m.reloadAgentsForModal()
+					m.workersModal = workersModalState{show: true}
+					m.reloadWorkersForModal()
 					return m, nil
 				case "/jobs":
 					m.input.Reset()
@@ -1185,7 +1185,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case SessionStartedMsg:
 		m.runtimeSessions[msg.SessionID] = &runtimeSlot{
 			sessionID:      msg.SessionID,
-			agentName:      msg.AgentName,
+			agentName:      msg.WorkerName,
 			teamName:       msg.TeamName,
 			task:           msg.Task,
 			jobID:          msg.JobID,
@@ -1195,7 +1195,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			systemPrompt:   msg.SystemPrompt,
 			initialMessage: msg.InitialMessage,
 		}
-		cmds = append(cmds, m.addToast("🤖 "+msg.AgentName+" started", toastInfo))
+		cmds = append(cmds, m.addToast("🤖 "+msg.WorkerName+" started", toastInfo))
 		return m, tea.Batch(cmds...)
 
 	case SessionTextMsg:
@@ -1245,7 +1245,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		slot.status = msg.Status
 		slot.endTime = time.Now()
-		cmds = append(cmds, m.addToast("🍞 "+msg.AgentName+" is done.", toastSuccess))
+		cmds = append(cmds, m.addToast("🍞 "+msg.WorkerName+" is done.", toastSuccess))
 		// Note: agent completion is no longer reported back to the operator from
 		// the TUI. The server is responsible for routing task completion into the
 		// operator's event channel. The TUI is a viewer, not a router.
@@ -1254,7 +1254,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.MouseClickMsg:
 		// Click-to-focus: route clicks to the appropriate panel.
 		// Don't steal clicks when any overlay is active.
-		if !m.teamsModal.show && !m.skillsModal.show && !m.agentsModal.show &&
+		if !m.teamsModal.show && !m.skillsModal.show && !m.workersModal.show &&
 			!m.mcpModal.show && !m.catalogModal.show && !m.operatorModal.show &&
 			!m.blockerModal.show && !m.grid.showGrid &&
 			!m.promptModal.show && !m.outputModal.show && !m.loading {
@@ -1421,8 +1421,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.skillsModal.show {
 			m.reloadSkillsForModal()
 		}
-		if m.agentsModal.show {
-			m.reloadAgentsForModal()
+		if m.workersModal.show {
+			m.reloadWorkersForModal()
 		}
 		return m, nil
 
@@ -1446,27 +1446,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			skillName = "generated skill"
 		}
 		return m, m.addToast("✓ Skill '"+skillName+"' generated", toastSuccess)
-
-	case agentGeneratedMsg:
-		m.agentsModal.generating = false
-		if msg.err != nil {
-			return m, m.addToast("⚠ Generation failed: "+msg.err.Error(), toastWarning)
-		}
-		// The service has already written the file and triggered a reload.
-		// Extract the agent name from the generated content and reload the modal.
-		agentName := extractFrontmatterName(msg.content)
-		m.reloadAgentsForModal()
-		// Select the newly created agent by matching its name.
-		for i, a := range m.agentsModal.agents {
-			if a.Name == agentName {
-				m.agentsModal.agentIdx = i
-				break
-			}
-		}
-		if agentName == "" {
-			agentName = "generated agent"
-		}
-		return m, m.addToast("✓ Agent '"+agentName+"' generated", toastSuccess)
 
 	case DefinitionsReloadedMsg:
 		slog.Info("definitions reloaded from file watcher")

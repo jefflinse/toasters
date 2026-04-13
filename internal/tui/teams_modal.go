@@ -30,14 +30,14 @@ type teamsModalState struct {
 
 	// Picker sub-modal: select an agent to add to the current team.
 	pickerMode   bool            // true when the add-agent picker overlay is active
-	pickerAgents []service.Agent // agents available to add (filtered: not already in team)
+	pickerAgents []service.Worker // agents available to add (filtered: not already in team)
 	pickerIdx    int             // currently highlighted picker item
 
 	// LLM generation state.
 	generateMode   bool            // true when user is typing a generation prompt
 	generateInput  string          // the prompt text being typed
 	generating     bool            // true while LLM call is in flight
-	generateAgents []service.Agent // available agents captured when generateMode was entered
+	generateAgents []service.Worker // available agents captured when generateMode was entered
 }
 
 // teamPromotedMsg is sent when the async auto-team promotion finishes.
@@ -153,26 +153,11 @@ func (m *Model) updateTeamsModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				m.teamsModal.pickerIdx++
 			}
 		case "enter":
-			if len(m.teamsModal.pickerAgents) > 0 && m.teamsModal.pickerIdx < len(m.teamsModal.pickerAgents) {
-				agent := m.teamsModal.pickerAgents[m.teamsModal.pickerIdx]
-				if agent.SourcePath == "" {
-					modalCmds = append(modalCmds, m.addToast("Cannot add agent: source file unknown", toastWarning))
-				} else if len(m.teamsModal.teams) > 0 && m.teamsModal.teamIdx < len(m.teamsModal.teams) {
-					tv := m.teamsModal.teams[m.teamsModal.teamIdx]
-					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-					err := m.svc.Definitions().AddAgentToTeam(ctx, tv.Team.ID, agent.ID)
-					cancel()
-					if err != nil {
-						modalCmds = append(modalCmds, m.addToast("⚠ Add failed: "+err.Error(), toastWarning))
-					} else {
-						m.teamsModal.pickerMode = false
-						m.teamsModal.pickerAgents = nil
-						m.teamsModal.pickerIdx = 0
-						m.reloadTeamsForModal()
-						modalCmds = append(modalCmds, m.addToast("✓ Added '"+agent.Name+"' to team", toastSuccess))
-					}
-				}
-			}
+			// Adding agents to teams has been removed.
+			modalCmds = append(modalCmds, m.addToast("Adding agents to teams has been removed", toastWarning))
+			m.teamsModal.pickerMode = false
+			m.teamsModal.pickerAgents = nil
+			m.teamsModal.pickerIdx = 0
 		}
 		return m, tea.Batch(modalCmds...)
 	}
@@ -280,7 +265,7 @@ func (m *Model) updateTeamsModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			tv := m.teamsModal.teams[m.teamsModal.teamIdx]
 			if !tv.IsReadOnly {
 				// Build the ordered agent list: coordinator first, then workers.
-				var agentList []service.Agent
+				var agentList []service.Worker
 				if tv.Coordinator != nil {
 					agentList = append(agentList, *tv.Coordinator)
 				}
@@ -316,7 +301,7 @@ func (m *Model) updateTeamsModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			tv := m.teamsModal.teams[m.teamsModal.teamIdx]
 			if !tv.IsReadOnly && !tv.IsSystem {
 				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-				allAgents, err := m.svc.Definitions().ListAgents(ctx)
+				allAgents, err := m.svc.Definitions().ListWorkers(ctx)
 				cancel()
 				if err != nil {
 					slog.Error("failed to list agents for picker", "error", err)
@@ -338,7 +323,7 @@ func (m *Model) updateTeamsModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		// Enter LLM generation mode (only when idle and not in any sub-mode).
 		if !m.teamsModal.inputMode && !m.teamsModal.generating && !m.teamsModal.pickerMode {
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-			allAgents, err := m.svc.Definitions().ListAgents(ctx)
+			allAgents, err := m.svc.Definitions().ListWorkers(ctx)
 			cancel()
 			if err != nil {
 				slog.Error("failed to list agents for team generation", "error", err)
@@ -368,7 +353,7 @@ func (m *Model) generateTeamAsync(prompt string) tea.Cmd {
 
 // filterAgentsForTeam returns agents from available that are not already in the
 // team (neither coordinator nor workers). Comparison is by agent name (case-sensitive).
-func filterAgentsForTeam(tv service.TeamView, available []service.Agent) []service.Agent {
+func filterAgentsForTeam(tv service.TeamView, available []service.Worker) []service.Worker {
 	inTeam := make(map[string]bool)
 	if tv.Coordinator != nil {
 		inTeam[tv.Coordinator.Name] = true
@@ -376,7 +361,7 @@ func filterAgentsForTeam(tv service.TeamView, available []service.Agent) []servi
 	for _, w := range tv.Workers {
 		inTeam[w.Name] = true
 	}
-	var result []service.Agent
+	var result []service.Worker
 	for _, a := range available {
 		if !inTeam[a.Name] {
 			result = append(result, a)
@@ -559,7 +544,7 @@ func (m *Model) renderTeamsModal() string {
 	var rightLines []string
 	if m.teamsModal.pickerMode {
 		// Picker overlay: show selectable list of agents to add.
-		rightLines = append(rightLines, HeaderStyle.Render("Select an agent to add:"))
+		rightLines = append(rightLines, HeaderStyle.Render("Select a worker to add:"))
 		rightLines = append(rightLines, DimStyle.Render(strings.Repeat("─", rightInnerW)))
 		rightLines = append(rightLines, "")
 
@@ -668,7 +653,7 @@ func (m *Model) renderTeamsModal() string {
 		rightLines = append(rightLines, "")
 
 		// Build ordered agent list for right panel: coordinator first, then workers.
-		var agentList []service.Agent
+		var agentList []service.Worker
 		if tv.Coordinator != nil {
 			agentList = append(agentList, *tv.Coordinator)
 		}

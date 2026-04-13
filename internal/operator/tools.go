@@ -14,7 +14,7 @@ import (
 )
 
 // operatorTools implements runtime.ToolExecutor for the operator's tool set.
-// It provides consult_agent (spawn a system agent), surface_to_user (relay
+// It provides consult_worker (spawn a system worker), surface_to_user (relay
 // information to the user), query_job, and query_teams.
 type operatorTools struct {
 	rt              *runtime.Runtime
@@ -42,25 +42,25 @@ func newOperatorTools(rt *runtime.Runtime, promptEngine *prompt.Engine, defaultP
 func (ot *operatorTools) Definitions() []runtime.ToolDef {
 	defs := []runtime.ToolDef{
 		{
-			Name:        "consult_agent",
-			Description: "Consult a specialized system agent. Spawns a fresh agent session, blocks until it completes, and returns the agent's response. Use this to delegate analysis, planning, or review tasks.",
+			Name:        "consult_worker",
+			Description: "Consult a specialized system worker. Spawns a fresh worker session, blocks until it completes, and returns the worker's response. Use this to delegate analysis, planning, or review tasks.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
-					"agent_name": {
+					"worker_name": {
 						"type": "string",
-						"description": "Name of the system agent to consult (e.g. 'planner', 'decomposer')"
+						"description": "Name of the system worker to consult (e.g. 'planner', 'decomposer')"
 					},
 					"message": {
 						"type": "string",
-						"description": "The message or task to send to the agent"
+						"description": "The message or task to send to the worker"
 					},
 					"job_id": {
 						"type": "string",
 						"description": "Optional job ID. Required when consulting the decomposer — sets the job status to decomposing."
 					}
 				},
-				"required": ["agent_name", "message"]
+				"required": ["worker_name", "message"]
 			}`),
 		},
 		{
@@ -151,8 +151,8 @@ func (ot *operatorTools) Definitions() []runtime.ToolDef {
 // Execute dispatches a tool call by name.
 func (ot *operatorTools) Execute(ctx context.Context, name string, args json.RawMessage) (string, error) {
 	switch name {
-	case "consult_agent":
-		return ot.consultAgent(ctx, args)
+	case "consult_worker":
+		return ot.consultWorker(ctx, args)
 	case "surface_to_user":
 		return ot.surfaceToUser(ctx, args)
 	case "list_jobs":
@@ -174,36 +174,36 @@ func (ot *operatorTools) Execute(ctx context.Context, name string, args json.Raw
 	}
 }
 
-func (ot *operatorTools) consultAgent(ctx context.Context, args json.RawMessage) (string, error) {
+func (ot *operatorTools) consultWorker(ctx context.Context, args json.RawMessage) (string, error) {
 	var params struct {
-		AgentName string `json:"agent_name"`
-		Message   string `json:"message"`
-		JobID     string `json:"job_id"` // optional; used to update job status for decomposer
+		WorkerName string `json:"worker_name"`
+		Message    string `json:"message"`
+		JobID      string `json:"job_id"` // optional; used to update job status for decomposer
 	}
 	if err := json.Unmarshal(args, &params); err != nil {
-		return "", fmt.Errorf("parsing consult_agent args: %w", err)
+		return "", fmt.Errorf("parsing consult_worker args: %w", err)
 	}
 
-	if params.AgentName == "" {
-		return "", fmt.Errorf("agent_name is required")
+	if params.WorkerName == "" {
+		return "", fmt.Errorf("worker_name is required")
 	}
 	if params.Message == "" {
 		return "", fmt.Errorf("message is required")
 	}
 
-	// Guard against oversized messages. The decomposer (and other system agents)
+	// Guard against oversized messages. The decomposer (and other system workers)
 	// have tools to explore the workspace themselves — the message should be a
 	// brief task description, not embedded file contents.
 	const maxConsultMessageBytes = 32 * 1024 // 32 KB
 	if len(params.Message) > maxConsultMessageBytes {
 		return "", fmt.Errorf(
-			"consult_agent message too large (%d bytes, max %d): provide a brief task description only — the agent has glob/grep/read_file tools to explore the workspace itself",
+			"consult_worker message too large (%d bytes, max %d): provide a brief task description only — the worker has glob/grep/read_file tools to explore the workspace itself",
 			len(params.Message), maxConsultMessageBytes,
 		)
 	}
 
 	// When consulting the decomposer, transition the job to decomposing status.
-	if isDecomposer(params.AgentName) && params.JobID != "" {
+	if isDecomposer(params.WorkerName) && params.JobID != "" {
 		if err := ot.store.UpdateJobStatus(ctx, params.JobID, db.JobStatusDecomposing); err != nil {
 			slog.Warn("failed to set job status to decomposing",
 				"job_id", params.JobID,
@@ -215,47 +215,47 @@ func (ot *operatorTools) consultAgent(ctx context.Context, args json.RawMessage)
 
 	// Verify the role exists in the prompt engine and is a system role.
 	// This prevents user-defined roles from gaining system-level tools
-	// (create_job, assign_task, etc.) via consult_agent.
+	// (create_job, assign_task, etc.) via consult_worker.
 	if ot.promptEngine == nil {
 		return "", fmt.Errorf("prompt engine not configured")
 	}
-	role := ot.promptEngine.Role(params.AgentName)
+	role := ot.promptEngine.Role(params.WorkerName)
 	if role == nil {
-		return "", fmt.Errorf("unknown system agent %q: no role found in prompt engine", params.AgentName)
+		return "", fmt.Errorf("unknown system worker %q: no role found in prompt engine", params.WorkerName)
 	}
 	if role.Source != "system" {
-		return "", fmt.Errorf("role %q is not a system role (source: %s)", params.AgentName, role.Source)
+		return "", fmt.Errorf("role %q is not a system role (source: %s)", params.WorkerName, role.Source)
 	}
 
-	systemPrompt, err := ot.promptEngine.Compose(params.AgentName, nil)
+	systemPrompt, err := ot.promptEngine.Compose(params.WorkerName, nil)
 	if err != nil {
-		return "", fmt.Errorf("composing system agent %q: %w", params.AgentName, err)
+		return "", fmt.Errorf("composing system worker %q: %w", params.WorkerName, err)
 	}
 	declaredTools := role.Tools
-	agentProvider := ot.defaultProvider
-	agentModel := ot.defaultModel
+	workerProvider := ot.defaultProvider
+	workerModel := ot.defaultModel
 
-	slog.Info("consulting system agent",
-		"agent", params.AgentName,
-		"provider", agentProvider,
-		"model", agentModel,
+	slog.Info("consulting system worker",
+		"worker", params.WorkerName,
+		"provider", workerProvider,
+		"model", workerModel,
 	)
 
-	// Select the tool executor for this agent. The decomposer gets a combined
+	// Select the tool executor for this worker. The decomposer gets a combined
 	// executor (read-only CoreTools + query_teams from SystemTools); all other
-	// system agents get SystemTools directly.
+	// system workers get SystemTools directly.
 	var toolExecutor runtime.ToolExecutor
-	if isDecomposer(params.AgentName) {
+	if isDecomposer(params.WorkerName) {
 		toolExecutor = newDecomposerToolExecutor(ot.systemTools, ot.workDir)
 	} else {
 		toolExecutor = ot.systemTools
 	}
 
-	// Build the filtered tool list from the agent's declared tools. This
-	// ensures each system agent only sees the tools it's supposed to have
+	// Build the filtered tool list from the worker's declared tools. This
+	// ensures each system worker only sees the tools it's supposed to have
 	// (e.g. planner gets create_job/create_task/assign_task/query_teams/query_job_context,
 	// not surface_to_user or query_job).
-	var agentTools []runtime.ToolDef
+	var workerTools []runtime.ToolDef
 	if len(declaredTools) > 0 {
 		allDefs := toolExecutor.Definitions()
 		defsByName := make(map[string]runtime.ToolDef, len(allDefs))
@@ -264,25 +264,25 @@ func (ot *operatorTools) consultAgent(ctx context.Context, args json.RawMessage)
 		}
 		for _, name := range declaredTools {
 			if d, ok := defsByName[name]; ok {
-				agentTools = append(agentTools, d)
+				workerTools = append(workerTools, d)
 			} else {
-				slog.Warn("system agent declared unknown tool, skipping",
-					"agent", params.AgentName,
+				slog.Warn("system worker declared unknown tool, skipping",
+					"worker", params.WorkerName,
 					"tool", name,
 				)
 			}
 		}
 	}
 
-	// Build SpawnOpts. System agents get SystemTools as their tool executor
+	// Build SpawnOpts. System workers get SystemTools as their tool executor
 	// (not CoreTools/filesystem tools); the decomposer gets decomposerToolExecutor
 	// which adds read-only filesystem access.
 	opts := runtime.SpawnOpts{
-		AgentID:        params.AgentName,
-		ProviderName:   agentProvider,
-		Model:          agentModel,
+		WorkerID:       params.WorkerName,
+		ProviderName:   workerProvider,
+		Model:          workerModel,
 		SystemPrompt:   systemPrompt,
-		Tools:          agentTools,
+		Tools:          workerTools,
 		ToolExecutor:   toolExecutor,
 		InitialMessage: params.Message,
 		WorkDir:        ot.workDir,
@@ -290,7 +290,7 @@ func (ot *operatorTools) consultAgent(ctx context.Context, args json.RawMessage)
 
 	result, err := ot.rt.SpawnAndWait(ctx, opts)
 	if err != nil {
-		return "", fmt.Errorf("consulting agent %q: %w", params.AgentName, err)
+		return "", fmt.Errorf("consulting worker %q: %w", params.WorkerName, err)
 	}
 
 	return result, nil

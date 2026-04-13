@@ -6,11 +6,10 @@ import (
 	"time"
 )
 
-// ComposedAgent holds the fully resolved agent definition needed to spawn a
-// team lead session. This replaces the old compose.ComposedAgent that was
-// assembled from DB records.
-type ComposedAgent struct {
-	AgentID         string
+// ComposedWorker holds the fully resolved worker definition needed to spawn a
+// team lead session.
+type ComposedWorker struct {
+	WorkerID        string
 	Name            string
 	SystemPrompt    string
 	Tools           []string
@@ -26,7 +25,7 @@ type ComposedAgent struct {
 // creating an import cycle: operator → runtime is fine; runtime → operator
 // would be a cycle.
 type TeamLeadSpawner interface {
-	SpawnTeamLead(ctx context.Context, composed *ComposedAgent, taskID, jobID, workDir, taskDescription string, extraTools ToolExecutor) error
+	SpawnTeamLead(ctx context.Context, composed *ComposedWorker, taskID, jobID, workDir, taskDescription string, extraTools ToolExecutor) error
 }
 
 // TeamLeadCompletionTracker is an optional interface that a team_lead's
@@ -54,9 +53,9 @@ const teamLeadCompletionFallbackTimeout = 5 * time.Second
 
 // watchTeamLeadForCompletion blocks until sess terminates and, if the team
 // lead never invoked a terminal tool (complete_task or report_blocker),
-// force-fails the task so the operator can decide next steps. A session
-// ending without any terminal action typically means the model wrote pushback
-// text or hit a turn limit rather than completing the work.
+// force-fails the task so the operator can decide next steps. A session ending
+// without any terminal action typically means the model wrote pushback text or
+// hit a turn limit rather than completing the work.
 func watchTeamLeadForCompletion(sess *Session, taskID string, tracker TeamLeadCompletionTracker) {
 	<-sess.Done()
 	if tracker.TerminalActionTaken() {
@@ -77,19 +76,19 @@ func watchTeamLeadForCompletion(sess *Session, taskID string, tracker TeamLeadCo
 	}
 }
 
-// SpawnTeamLead implements TeamLeadSpawner. It spawns a team lead agent session
-// from a fully composed agent definition. The session runs fire-and-forget at
-// depth 0 (team leads may spawn workers; workers may not spawn further agents).
+// SpawnTeamLead implements TeamLeadSpawner. It spawns a team lead worker session
+// from a fully composed worker definition. The session runs fire-and-forget at
+// depth 0 (team leads may spawn workers; workers may not spawn further).
 // taskDescription is sent as the initial user message to kick off the conversation.
 // extraTools, if non-nil, are layered on top of CoreTools with dispatch priority.
-func (r *Runtime) SpawnTeamLead(ctx context.Context, composed *ComposedAgent, taskID, jobID, workDir, taskDescription string, extraTools ToolExecutor) error {
+func (r *Runtime) SpawnTeamLead(ctx context.Context, composed *ComposedWorker, taskID, jobID, workDir, taskDescription string, extraTools ToolExecutor) error {
 	// Resolve tool definitions from the composed tool name list. Team leads
 	// receive the full default CoreTools set filtered to the composed tool names.
 	// The actual ToolDef schemas are provided by CoreTools.Definitions() at
 	// session start; here we pass nil Tools so the session builds its own
-	// CoreTools stack (which will include spawn_agent at depth 0).
+	// CoreTools stack (which will include spawn_worker at depth 0).
 	opts := SpawnOpts{
-		AgentID:         composed.AgentID,
+		WorkerID:        composed.WorkerID,
 		ProviderName:    composed.Provider,
 		Model:           composed.Model,
 		SystemPrompt:    composed.SystemPrompt,
@@ -137,7 +136,7 @@ func (r *Runtime) SpawnTeamLead(ctx context.Context, composed *ComposedAgent, ta
 		opts.MaxTurns = *composed.MaxTurns
 	}
 
-	sess, err := r.SpawnAgent(ctx, opts)
+	sess, err := r.SpawnWorker(ctx, opts)
 	if err != nil {
 		return err
 	}

@@ -95,7 +95,7 @@ type progressPollMsg struct {
 	Jobs        []service.Job
 	Tasks       map[string][]service.Task
 	Progress    map[string][]service.ProgressReport
-	Sessions    []service.AgentSession
+	Sessions    []service.WorkerSession
 	FeedEntries []service.FeedEntry       // recent activity feed entries
 	MCPServers  []service.MCPServerStatus // MCP server connection status
 }
@@ -110,13 +110,13 @@ type ModelsMsg struct {
 	Err    error
 }
 
-// SessionStartedMsg is sent when an agent session starts on the server.
+// SessionStartedMsg is sent when a worker session starts on the server.
 // Produced by the event consumer in response to a session.started event.
 type SessionStartedMsg struct {
 	SessionID      string
-	AgentName      string
-	TeamName       string // team this agent belongs to (may be empty)
-	Task           string // short human-readable description of what this agent is doing
+	WorkerName     string
+	TeamName       string // team this worker belongs to (may be empty)
+	Task           string // short human-readable description of what this worker is doing
 	JobID          string
 	TaskID         string
 	SystemPrompt   string
@@ -149,11 +149,11 @@ type SessionToolResultMsg struct {
 	IsError    bool
 }
 
-// SessionDoneMsg is sent when an agent session terminates.
+// SessionDoneMsg is sent when a worker session terminates.
 // Produced by the event consumer in response to a session.done event.
 type SessionDoneMsg struct {
-	SessionID string
-	AgentName string
+	SessionID  string
+	WorkerName string
 	JobID     string
 	TaskID    string
 	FinalText string

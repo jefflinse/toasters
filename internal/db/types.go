@@ -35,7 +35,7 @@ const (
 	TaskStatusCancelled  TaskStatus = "cancelled"
 )
 
-// SessionStatus represents the lifecycle state of an agent session.
+// SessionStatus represents the lifecycle state of a worker session.
 type SessionStatus string
 
 const (
@@ -79,7 +79,7 @@ type Task struct {
 	JobID           string
 	Title           string
 	Status          TaskStatus
-	AgentID         string // assigned agent (may be empty)
+	WorkerID        string // assigned worker (may be empty)
 	TeamID          string // assigned team (may be empty)
 	ParentID        string // DAG edge, empty for root tasks
 	SortOrder       int
@@ -96,13 +96,13 @@ type ProgressReport struct {
 	ID        int64
 	JobID     string
 	TaskID    string // may be empty
-	AgentID   string // may be empty
+	WorkerID  string // may be empty
 	Status    string // in_progress, blocked, completed, failed
 	Message   string
 	CreatedAt time.Time
 }
 
-// Skill represents a reusable capability that can be assigned to agents.
+// Skill represents a reusable capability that can be assigned to workers.
 type Skill struct {
 	ID          string
 	Name        string
@@ -115,8 +115,8 @@ type Skill struct {
 	UpdatedAt   time.Time
 }
 
-// Agent represents a configured LLM agent.
-type Agent struct {
+// Worker represents a configured LLM worker.
+type Worker struct {
 	ID              string
 	Name            string
 	Description     string
@@ -142,12 +142,12 @@ type Agent struct {
 	UpdatedAt       time.Time
 }
 
-// Team represents a group of agents that work together.
+// Team represents a group of workers that work together.
 type Team struct {
 	ID          string
 	Name        string
 	Description string
-	LeadAgent   string          // agent ID reference
+	LeadWorker  string          // worker ID reference
 	Skills      json.RawMessage // JSON array of team-wide skill names
 	Provider    string          // team default
 	Model       string          // team default
@@ -159,11 +159,11 @@ type Team struct {
 	UpdatedAt   time.Time
 }
 
-// TeamAgent represents an agent's membership in a team.
-type TeamAgent struct {
-	TeamID  string
-	AgentID string
-	Role    string // lead, worker
+// TeamWorker represents a worker's membership in a team.
+type TeamWorker struct {
+	TeamID   string
+	WorkerID string
+	Role     string // lead, worker
 }
 
 // FeedEntry represents a single entry in the activity feed.
@@ -176,10 +176,10 @@ type FeedEntry struct {
 	CreatedAt time.Time
 }
 
-// AgentSession tracks a single agent execution session.
-type AgentSession struct {
+// WorkerSession tracks a single worker execution session.
+type WorkerSession struct {
 	ID        string
-	AgentID   string
+	WorkerID  string
 	JobID     string // may be empty
 	TaskID    string // may be empty
 	Status    SessionStatus
@@ -231,7 +231,7 @@ type JobUpdate struct {
 	WorkspaceDir *string
 }
 
-// SessionUpdate specifies fields to update on an agent session.
+// SessionUpdate specifies fields to update on a worker session.
 type SessionUpdate struct {
 	Status    *SessionStatus
 	TokensIn  *int64

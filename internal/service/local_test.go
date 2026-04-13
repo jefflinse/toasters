@@ -31,21 +31,21 @@ type mockStore struct {
 	getSkillResult *db.Skill
 	getSkillErr    error
 
-	// ListAgents
-	listAgentsResult []*db.Agent
-	listAgentsErr    error
+	// ListWorkers
+	listWorkersResult []*db.Worker
+	listWorkersErr    error
 
-	// GetAgent
-	getAgentResult *db.Agent
-	getAgentErr    error
+	// GetWorker
+	getWorkerResult *db.Worker
+	getWorkerErr    error
 
 	// ListTeams
 	listTeamsResult []*db.Team
 	listTeamsErr    error
 
-	// ListTeamAgents
-	listTeamAgentsResult []*db.TeamAgent
-	listTeamAgentsErr    error
+	// ListTeamWorkers
+	listTeamWorkersResult []*db.TeamWorker
+	listTeamWorkersErr    error
 }
 
 // Compile-time assertion that mockStore satisfies db.Store.
@@ -59,20 +59,20 @@ func (m *mockStore) GetSkill(_ context.Context, _ string) (*db.Skill, error) {
 	return m.getSkillResult, m.getSkillErr
 }
 
-func (m *mockStore) ListAgents(_ context.Context) ([]*db.Agent, error) {
-	return m.listAgentsResult, m.listAgentsErr
+func (m *mockStore) ListWorkers(_ context.Context) ([]*db.Worker, error) {
+	return m.listWorkersResult, m.listWorkersErr
 }
 
-func (m *mockStore) GetAgent(_ context.Context, _ string) (*db.Agent, error) {
-	return m.getAgentResult, m.getAgentErr
+func (m *mockStore) GetWorker(_ context.Context, _ string) (*db.Worker, error) {
+	return m.getWorkerResult, m.getWorkerErr
 }
 
 func (m *mockStore) ListTeams(_ context.Context) ([]*db.Team, error) {
 	return m.listTeamsResult, m.listTeamsErr
 }
 
-func (m *mockStore) ListTeamAgents(_ context.Context, _ string) ([]*db.TeamAgent, error) {
-	return m.listTeamAgentsResult, m.listTeamAgentsErr
+func (m *mockStore) ListTeamWorkers(_ context.Context, _ string) ([]*db.TeamWorker, error) {
+	return m.listTeamWorkersResult, m.listTeamWorkersErr
 }
 
 // --- Unimplemented methods ---
@@ -137,10 +137,10 @@ func (m *mockStore) UpsertSkill(_ context.Context, _ *db.Skill) error {
 func (m *mockStore) DeleteAllSkills(_ context.Context) error {
 	return fmt.Errorf("not implemented")
 }
-func (m *mockStore) UpsertAgent(_ context.Context, _ *db.Agent) error {
+func (m *mockStore) UpsertWorker(_ context.Context, _ *db.Worker) error {
 	return fmt.Errorf("not implemented")
 }
-func (m *mockStore) DeleteAllAgents(_ context.Context) error {
+func (m *mockStore) DeleteAllWorkers(_ context.Context) error {
 	return fmt.Errorf("not implemented")
 }
 func (m *mockStore) UpsertTeam(_ context.Context, _ *db.Team) error {
@@ -152,10 +152,10 @@ func (m *mockStore) GetTeam(_ context.Context, _ string) (*db.Team, error) {
 func (m *mockStore) DeleteAllTeams(_ context.Context) error {
 	return fmt.Errorf("not implemented")
 }
-func (m *mockStore) AddTeamAgent(_ context.Context, _ *db.TeamAgent) error {
+func (m *mockStore) AddTeamWorker(_ context.Context, _ *db.TeamWorker) error {
 	return fmt.Errorf("not implemented")
 }
-func (m *mockStore) DeleteAllTeamAgents(_ context.Context) error {
+func (m *mockStore) DeleteAllTeamWorkers(_ context.Context) error {
 	return fmt.Errorf("not implemented")
 }
 func (m *mockStore) CreateFeedEntry(_ context.Context, _ *db.FeedEntry) error {
@@ -167,16 +167,16 @@ func (m *mockStore) ListFeedEntries(_ context.Context, _ string, _ int) ([]*db.F
 func (m *mockStore) ListRecentFeedEntries(_ context.Context, _ int) ([]*db.FeedEntry, error) {
 	return nil, fmt.Errorf("not implemented")
 }
-func (m *mockStore) RebuildDefinitions(_ context.Context, _ []*db.Skill, _ []*db.Agent, _ []*db.Team, _ []*db.TeamAgent) error {
+func (m *mockStore) RebuildDefinitions(_ context.Context, _ []*db.Skill, _ []*db.Worker, _ []*db.Team, _ []*db.TeamWorker) error {
 	return fmt.Errorf("not implemented")
 }
-func (m *mockStore) CreateSession(_ context.Context, _ *db.AgentSession) error {
+func (m *mockStore) CreateSession(_ context.Context, _ *db.WorkerSession) error {
 	return fmt.Errorf("not implemented")
 }
 func (m *mockStore) UpdateSession(_ context.Context, _ string, _ db.SessionUpdate) error {
 	return fmt.Errorf("not implemented")
 }
-func (m *mockStore) GetActiveSessions(_ context.Context) ([]*db.AgentSession, error) {
+func (m *mockStore) GetActiveSessions(_ context.Context) ([]*db.WorkerSession, error) {
 	return nil, fmt.Errorf("not implemented")
 }
 func (m *mockStore) LogArtifact(_ context.Context, _ *db.Artifact) error {
@@ -516,46 +516,46 @@ func TestRewriteMode(t *testing.T) {
 	}
 }
 
-func TestSortAgentsByTeamKey(t *testing.T) {
+func TestSortWorkersByTeamKey(t *testing.T) {
 	t.Parallel()
 
-	agents := []*db.Agent{
-		{TeamID: "team-b", Name: "agent-z"},
-		{TeamID: "team-a", Name: "agent-b"},
-		{TeamID: "team-a", Name: "agent-a"},
-		{TeamID: "team-b", Name: "agent-a"},
+	workers := []*db.Worker{
+		{TeamID: "team-b", Name: "worker-z"},
+		{TeamID: "team-a", Name: "worker-b"},
+		{TeamID: "team-a", Name: "worker-a"},
+		{TeamID: "team-b", Name: "worker-a"},
 	}
 
-	sortAgentsByTeamKey(agents)
+	sortWorkersByTeamKey(workers)
 
-	// Expected order: team-a/agent-a, team-a/agent-b, team-b/agent-a, team-b/agent-z
+	// Expected order: team-a/worker-a, team-a/worker-b, team-b/worker-a, team-b/worker-z
 	expected := []struct{ teamID, name string }{
-		{"team-a", "agent-a"},
-		{"team-a", "agent-b"},
-		{"team-b", "agent-a"},
-		{"team-b", "agent-z"},
+		{"team-a", "worker-a"},
+		{"team-a", "worker-b"},
+		{"team-b", "worker-a"},
+		{"team-b", "worker-z"},
 	}
 
 	for i, e := range expected {
-		if agents[i].TeamID != e.teamID || agents[i].Name != e.name {
-			t.Errorf("agents[%d] = {%s/%s}, want {%s/%s}",
-				i, agents[i].TeamID, agents[i].Name, e.teamID, e.name)
+		if workers[i].TeamID != e.teamID || workers[i].Name != e.name {
+			t.Errorf("workers[%d] = {%s/%s}, want {%s/%s}",
+				i, workers[i].TeamID, workers[i].Name, e.teamID, e.name)
 		}
 	}
 }
 
-func TestSortAgentsByTeamKey_Empty(t *testing.T) {
+func TestSortWorkersByTeamKey_Empty(t *testing.T) {
 	t.Parallel()
 	// Should not panic on empty slice.
-	sortAgentsByTeamKey(nil)
-	sortAgentsByTeamKey([]*db.Agent{})
+	sortWorkersByTeamKey(nil)
+	sortWorkersByTeamKey([]*db.Worker{})
 }
 
-func TestSortAgentsByTeamKey_SingleElement(t *testing.T) {
+func TestSortWorkersByTeamKey_SingleElement(t *testing.T) {
 	t.Parallel()
-	agents := []*db.Agent{{TeamID: "t", Name: "a"}}
-	sortAgentsByTeamKey(agents)
-	if agents[0].Name != "a" {
+	workers := []*db.Worker{{TeamID: "t", Name: "a"}}
+	sortWorkersByTeamKey(workers)
+	if workers[0].Name != "a" {
 		t.Errorf("single element should be unchanged")
 	}
 }
@@ -1256,7 +1256,7 @@ func TestBroadcastOperatorEvent_BlockerReported(t *testing.T) {
 		Payload: operator.BlockerReportedPayload{
 			TaskID:      "task-4",
 			TeamID:      "team-4",
-			AgentID:     "agent-4",
+			WorkerID:    "agent-4",
 			Description: "blocked on X",
 		},
 	})
@@ -1467,71 +1467,71 @@ func TestGetSkill_NotFound(t *testing.T) {
 	}
 }
 
-func TestListAgents_OrderingSharedThenTeamLocalThenSystem(t *testing.T) {
+func TestListWorkers_OrderingSharedThenTeamLocalThenSystem(t *testing.T) {
 	t.Parallel()
 
 	store := &mockStore{
-		listAgentsResult: []*db.Agent{
-			{ID: "sys-1", Name: "System Agent", Source: "system", TeamID: ""},
-			{ID: "team-1", Name: "Team Agent B", Source: "user", TeamID: "team-b"},
-			{ID: "shared-1", Name: "Shared Agent", Source: "user", TeamID: ""},
-			{ID: "team-2", Name: "Team Agent A", Source: "user", TeamID: "team-a"},
+		listWorkersResult: []*db.Worker{
+			{ID: "sys-1", Name: "System Worker", Source: "system", TeamID: ""},
+			{ID: "team-1", Name: "Team Worker B", Source: "user", TeamID: "team-b"},
+			{ID: "shared-1", Name: "Shared Worker", Source: "user", TeamID: ""},
+			{ID: "team-2", Name: "Team Worker A", Source: "user", TeamID: "team-a"},
 		},
 	}
 
 	svc := NewLocal(LocalConfig{Store: store})
-	agents, err := svc.ListAgents(context.Background())
+	workers, err := svc.ListWorkers(context.Background())
 	if err != nil {
-		t.Fatalf("ListAgents() error = %v", err)
+		t.Fatalf("ListWorkers() error = %v", err)
 	}
-	if len(agents) != 4 {
-		t.Fatalf("len(agents) = %d, want 4", len(agents))
+	if len(workers) != 4 {
+		t.Fatalf("len(workers) = %d, want 4", len(workers))
 	}
 
 	// shared first
-	if agents[0].ID != "shared-1" {
-		t.Errorf("agents[0].ID = %q, want %q", agents[0].ID, "shared-1")
+	if workers[0].ID != "shared-1" {
+		t.Errorf("workers[0].ID = %q, want %q", workers[0].ID, "shared-1")
 	}
-	// team-local next (sorted by team/agent key: team-a/Team Agent A < team-b/Team Agent B)
-	if agents[1].ID != "team-2" {
-		t.Errorf("agents[1].ID = %q, want %q (team-a agent)", agents[1].ID, "team-2")
+	// team-local next (sorted by team/worker key: team-a/Team Worker A < team-b/Team Worker B)
+	if workers[1].ID != "team-2" {
+		t.Errorf("workers[1].ID = %q, want %q (team-a worker)", workers[1].ID, "team-2")
 	}
-	if agents[2].ID != "team-1" {
-		t.Errorf("agents[2].ID = %q, want %q (team-b agent)", agents[2].ID, "team-1")
+	if workers[2].ID != "team-1" {
+		t.Errorf("workers[2].ID = %q, want %q (team-b worker)", workers[2].ID, "team-1")
 	}
 	// system last
-	if agents[3].ID != "sys-1" {
-		t.Errorf("agents[3].ID = %q, want %q", agents[3].ID, "sys-1")
+	if workers[3].ID != "sys-1" {
+		t.Errorf("workers[3].ID = %q, want %q", workers[3].ID, "sys-1")
 	}
 }
 
-func TestGetAgent_Found(t *testing.T) {
+func TestGetWorker_Found(t *testing.T) {
 	t.Parallel()
 
 	store := &mockStore{
-		getAgentResult: &db.Agent{
-			ID:   "agent-1",
-			Name: "My Agent",
+		getWorkerResult: &db.Worker{
+			ID:   "worker-1",
+			Name: "My Worker",
 		},
 	}
 	svc := NewLocal(LocalConfig{Store: store})
 
-	a, err := svc.GetAgent(context.Background(), "agent-1")
+	w, err := svc.GetWorker(context.Background(), "worker-1")
 	if err != nil {
-		t.Fatalf("GetAgent() error = %v", err)
+		t.Fatalf("GetWorker() error = %v", err)
 	}
-	if a.ID != "agent-1" {
-		t.Errorf("ID = %q, want %q", a.ID, "agent-1")
+	if w.ID != "worker-1" {
+		t.Errorf("ID = %q, want %q", w.ID, "worker-1")
 	}
 }
 
-func TestGetAgent_NotFound(t *testing.T) {
+func TestGetWorker_NotFound(t *testing.T) {
 	t.Parallel()
 
-	store := &mockStore{getAgentErr: db.ErrNotFound}
+	store := &mockStore{getWorkerErr: db.ErrNotFound}
 	svc := NewLocal(LocalConfig{Store: store})
 
-	_, err := svc.GetAgent(context.Background(), "missing")
+	_, err := svc.GetWorker(context.Background(), "missing")
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -1548,7 +1548,7 @@ func TestListTeams_ExcludesSystemTeams(t *testing.T) {
 			{ID: "sys-team", Name: "System Team", Source: "system"},
 			{ID: "user-team", Name: "User Team", Source: "user"},
 		},
-		listTeamAgentsResult: []*db.TeamAgent{},
+		listTeamWorkersResult: []*db.TeamWorker{},
 	}
 
 	svc := NewLocal(LocalConfig{Store: store})
@@ -1577,7 +1577,7 @@ func TestGetTeam_Found(t *testing.T) {
 		listTeamsResult: []*db.Team{
 			{ID: "team-1", Name: "My Team", Source: "user"},
 		},
-		listTeamAgentsResult: []*db.TeamAgent{},
+		listTeamWorkersResult: []*db.TeamWorker{},
 	}
 
 	svc := NewLocal(LocalConfig{Store: store})
@@ -1594,8 +1594,8 @@ func TestGetTeam_NotFound(t *testing.T) {
 	t.Parallel()
 
 	store := &mockStore{
-		listTeamsResult:      []*db.Team{},
-		listTeamAgentsResult: []*db.TeamAgent{},
+		listTeamsResult:       []*db.Team{},
+		listTeamWorkersResult: []*db.TeamWorker{},
 	}
 
 	svc := NewLocal(LocalConfig{Store: store})

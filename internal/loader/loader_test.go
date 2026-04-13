@@ -286,8 +286,8 @@ agents:
 	if len(teams) != 1 {
 		t.Fatalf("expected 1 team, got %d", len(teams))
 	}
-	if teams[0].LeadAgent != "" {
-		t.Errorf("expected empty lead (unresolved), got %q", teams[0].LeadAgent)
+	if teams[0].LeadWorker != "" {
+		t.Errorf("expected empty lead (unresolved), got %q", teams[0].LeadWorker)
 	}
 }
 
@@ -344,7 +344,7 @@ func TestLoad_EmptyDirs(t *testing.T) {
 	if len(skills) != 0 {
 		t.Errorf("expected 0 skills, got %d", len(skills))
 	}
-	agents, _ := store.ListAgents(ctx)
+	agents, _ := store.ListWorkers(ctx)
 	if len(agents) != 0 {
 		t.Errorf("expected 0 agents, got %d", len(agents))
 	}

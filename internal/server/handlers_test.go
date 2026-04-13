@@ -108,21 +108,11 @@ func (m *mockDefinitionService) DeleteSkill(_ context.Context, _ string) error {
 func (m *mockDefinitionService) GenerateSkill(_ context.Context, _ string) (string, error) {
 	return "", nil
 }
-func (m *mockDefinitionService) ListAgents(_ context.Context) ([]service.Agent, error) {
+func (m *mockDefinitionService) ListWorkers(_ context.Context) ([]service.Worker, error) {
 	return nil, nil
 }
-func (m *mockDefinitionService) GetAgent(_ context.Context, _ string) (service.Agent, error) {
-	return service.Agent{}, nil
-}
-func (m *mockDefinitionService) CreateAgent(_ context.Context, _ string) (service.Agent, error) {
-	return service.Agent{}, nil
-}
-func (m *mockDefinitionService) DeleteAgent(_ context.Context, _ string) error { return nil }
-func (m *mockDefinitionService) AddSkillToAgent(_ context.Context, _, _ string) error {
-	return nil
-}
-func (m *mockDefinitionService) GenerateAgent(_ context.Context, _ string) (string, error) {
-	return "", nil
+func (m *mockDefinitionService) GetWorker(_ context.Context, _ string) (service.Worker, error) {
+	return service.Worker{}, nil
 }
 func (m *mockDefinitionService) ListTeams(_ context.Context) ([]service.TeamView, error) {
 	return nil, nil
@@ -134,9 +124,6 @@ func (m *mockDefinitionService) CreateTeam(_ context.Context, _ string) (service
 	return service.TeamView{}, nil
 }
 func (m *mockDefinitionService) DeleteTeam(_ context.Context, _ string) error { return nil }
-func (m *mockDefinitionService) AddAgentToTeam(_ context.Context, _, _ string) error {
-	return nil
-}
 func (m *mockDefinitionService) SetCoordinator(_ context.Context, _, _ string) error {
 	return nil
 }

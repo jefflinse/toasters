@@ -255,23 +255,11 @@ func (m *mockDefinitionService) DeleteSkill(ctx context.Context, id string) erro
 func (m *mockDefinitionService) GenerateSkill(ctx context.Context, prompt string) (string, error) {
 	return "op-123", nil
 }
-func (m *mockDefinitionService) ListAgents(ctx context.Context) ([]service.Agent, error) {
+func (m *mockDefinitionService) ListWorkers(ctx context.Context) ([]service.Worker, error) {
 	return nil, nil
 }
-func (m *mockDefinitionService) GetAgent(ctx context.Context, id string) (service.Agent, error) {
-	return service.Agent{}, service.ErrNotFound
-}
-func (m *mockDefinitionService) CreateAgent(ctx context.Context, name string) (service.Agent, error) {
-	return service.Agent{}, nil
-}
-func (m *mockDefinitionService) DeleteAgent(ctx context.Context, id string) error {
-	return nil
-}
-func (m *mockDefinitionService) AddSkillToAgent(ctx context.Context, agentID, skillName string) error {
-	return nil
-}
-func (m *mockDefinitionService) GenerateAgent(ctx context.Context, prompt string) (string, error) {
-	return "op-123", nil
+func (m *mockDefinitionService) GetWorker(ctx context.Context, id string) (service.Worker, error) {
+	return service.Worker{}, service.ErrNotFound
 }
 func (m *mockDefinitionService) ListTeams(ctx context.Context) ([]service.TeamView, error) {
 	return nil, nil
@@ -283,9 +271,6 @@ func (m *mockDefinitionService) CreateTeam(ctx context.Context, name string) (se
 	return service.TeamView{}, nil
 }
 func (m *mockDefinitionService) DeleteTeam(ctx context.Context, id string) error {
-	return nil
-}
-func (m *mockDefinitionService) AddAgentToTeam(ctx context.Context, teamID, agentID string) error {
 	return nil
 }
 func (m *mockDefinitionService) SetCoordinator(ctx context.Context, teamID, agentName string) error {

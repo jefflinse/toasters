@@ -99,9 +99,9 @@ func TestSessionSimpleTextResponse(t *testing.T) {
 	}
 
 	opts := SpawnOpts{
-		AgentID:        "test-agent",
+		WorkerID:        "test-worker",
 		Model:          "test-model",
-		SystemPrompt:   "You are a test agent.",
+		SystemPrompt:   "You are a test worker.",
 		InitialMessage: "Say hello",
 		MaxTurns:       10,
 	}
@@ -114,7 +114,7 @@ func TestSessionSimpleTextResponse(t *testing.T) {
 	snap := sess.Snapshot()
 	assertEqual(t, "completed", snap.Status)
 	assertEqual(t, "sess-1", snap.ID)
-	assertEqual(t, "test-agent", snap.AgentID)
+	assertEqual(t, "test-worker", snap.WorkerID)
 	assertEqual(t, "test-model", snap.Model)
 	assertEqual(t, "test", snap.Provider)
 
@@ -162,7 +162,7 @@ func TestSessionToolCallLoop(t *testing.T) {
 	}
 
 	opts := SpawnOpts{
-		AgentID:        "test-agent",
+		WorkerID:        "test-worker",
 		Model:          "test-model",
 		InitialMessage: "Read test.txt",
 		MaxTurns:       10,

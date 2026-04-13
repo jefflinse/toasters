@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/jefflinse/toasters/defaults"
-	"github.com/jefflinse/toasters/internal/agentfmt"
+	"github.com/jefflinse/toasters/internal/mdfmt"
 )
 
 func TestSystemFilesParseCorrectly(t *testing.T) {
@@ -34,17 +34,17 @@ func TestSystemFilesParseCorrectly(t *testing.T) {
 
 	tests := []struct {
 		path    string
-		wantDef agentfmt.DefType
+		wantDef mdfmt.DefType
 		name    string
 	}{
-		{"system/team.md", agentfmt.DefTeam, "System"},
-		{"system/skills/orchestration.md", agentfmt.DefSkill, "Orchestration"},
+		{"system/team.md", mdfmt.DefTeam, "System"},
+		{"system/skills/orchestration.md", mdfmt.DefSkill, "Orchestration"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.path, func(t *testing.T) {
 			fullPath := filepath.Join(tmpDir, tt.path)
-			defType, def, err := agentfmt.ParseFile(fullPath)
+			defType, def, err := mdfmt.ParseFile(fullPath)
 			if err != nil {
 				t.Fatalf("ParseFile(%s): %v", tt.path, err)
 			}
@@ -54,7 +54,7 @@ func TestSystemFilesParseCorrectly(t *testing.T) {
 
 			// Verify name matches.
 			switch d := def.(type) {
-			case *agentfmt.TeamDef:
+			case *mdfmt.TeamDef:
 				if d.Name != tt.name {
 					t.Errorf("Name = %q, want %q", d.Name, tt.name)
 				}
@@ -64,7 +64,7 @@ func TestSystemFilesParseCorrectly(t *testing.T) {
 				if d.Body == "" {
 					t.Error("Body is empty")
 				}
-			case *agentfmt.SkillDef:
+			case *mdfmt.SkillDef:
 				if d.Name != tt.name {
 					t.Errorf("Name = %q, want %q", d.Name, tt.name)
 				}

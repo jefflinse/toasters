@@ -14,12 +14,12 @@ import (
 
 const subscriberBufSize = 64
 
-// Session represents a running agent conversation.
+// Session represents a running worker conversation.
 type Session struct {
 	id           string
-	agentID      string
-	teamName     string // team this agent belongs to (may be empty)
-	task         string // short human-readable description of what this agent is doing
+	workerID     string
+	teamName     string // team this worker belongs to (may be empty)
+	task         string // short human-readable description of what this worker is doing
 	jobID        string
 	taskID       string
 	prov         provider.Provider
@@ -69,7 +69,7 @@ func newSession(id string, p provider.Provider, opts SpawnOpts, toolExec ToolExe
 
 	s := &Session{
 		id:           id,
-		agentID:      opts.AgentID,
+		workerID:     opts.WorkerID,
 		teamName:     opts.TeamName,
 		task:         opts.Task,
 		jobID:        opts.JobID,
@@ -200,12 +200,12 @@ func (s *Session) Run(ctx context.Context) (retErr error) {
 			// listings. 8KB per result keeps the conversation manageable while
 			// still providing meaningful content to the LLM.
 			//
-			// spawn_agent is exempt: its result is the synthesized output of an
-			// entire child agent session, which is typically a concise summary
+			// spawn_worker is exempt: its result is the synthesized output of an
+			// entire child worker session, which is typically a concise summary
 			// but can legitimately exceed 8KB. Truncating it causes the parent
 			// to misinterpret the child's work as incomplete and retry in a loop.
 			const maxToolResultBytes = 8 * 1024
-			if tc.Name != "spawn_agent" && len(result) > maxToolResultBytes {
+			if tc.Name != "spawn_worker" && len(result) > maxToolResultBytes {
 				result = result[:maxToolResultBytes] + "\n[... truncated: result exceeded 8KB ...]"
 			}
 
@@ -304,7 +304,7 @@ func (s *Session) Snapshot() SessionSnapshot {
 
 	return SessionSnapshot{
 		ID:        s.id,
-		AgentID:   s.agentID,
+		WorkerID:  s.workerID,
 		TeamName:  s.teamName,
 		JobID:     s.jobID,
 		TaskID:    s.taskID,
@@ -317,7 +317,7 @@ func (s *Session) Snapshot() SessionSnapshot {
 	}
 }
 
-// FinalText returns the last assistant message text (for spawn_agent results).
+// FinalText returns the last assistant message text (for spawn_worker results).
 // Safe to call at any time (acquires mu), but the result is only meaningful
 // after <-Done() closes, since Run() may still be appending messages.
 func (s *Session) FinalText() string {
@@ -370,7 +370,7 @@ func (s *Session) InitialMessage() string {
 	return ""
 }
 
-// Task returns the short human-readable description of what this agent is doing.
+// Task returns the short human-readable description of what this worker is doing.
 // task is set once at construction and never mutated; no lock is needed.
 func (s *Session) Task() string { return s.task }
 

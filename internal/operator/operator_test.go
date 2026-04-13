@@ -151,14 +151,14 @@ func testPromptEngine(t *testing.T, roles map[string]string) *prompt.Engine {
 }
 
 // newTestOperatorTools creates an operatorTools with a real store and prompt engine.
-func newTestOperatorTools(t *testing.T, agents []*db.Agent) *operatorTools {
+func newTestOperatorTools(t *testing.T, workers []*db.Worker) *operatorTools {
 	t.Helper()
 	store := newOperatorTestStore(t)
 	ctx := context.Background()
 
-	for _, a := range agents {
-		if err := store.UpsertAgent(ctx, a); err != nil {
-			t.Fatalf("upserting agent: %v", err)
+	for _, w := range workers {
+		if err := store.UpsertWorker(ctx, w); err != nil {
+			t.Fatalf("upserting worker: %v", err)
 		}
 	}
 
@@ -329,29 +329,29 @@ func TestOperatorLongLivedSession(t *testing.T) {
 	}
 }
 
-func TestOperatorConsultAgent(t *testing.T) {
-	// The operator calls consult_agent("planner", "..."), which spawns a
-	// fresh session via runtime.SpawnAndWait. We need the planner agent
+func TestOperatorConsultWorker(t *testing.T) {
+	// The operator calls consult_worker("planner", "..."), which spawns a
+	// fresh session via runtime.SpawnAndWait. We need the planner worker
 	// in the DB so the composer can look it up.
 	//
 	// Since both the operator and the planner use the same provider registry,
 	// we use a single mock provider that handles multiple ChatStream calls:
-	//   1. Operator's first response: tool call to consult_agent
-	//   2. Planner agent's response: "Here is the plan: ..."
+	//   1. Operator's first response: tool call to consult_worker
+	//   2. Planner worker's response: "Here is the plan: ..."
 	//   3. Operator's second response (after seeing tool result): final text
 	mp := &mockProvider{
 		name: "test",
 		responses: []mockResponse{
-			// 1. Operator calls consult_agent.
+			// 1. Operator calls consult_worker.
 			{events: []provider.StreamEvent{
 				{Type: provider.EventToolCall, ToolCall: &provider.ToolCall{
 					ID:        "call-1",
-					Name:      "consult_agent",
-					Arguments: json.RawMessage(`{"agent_name": "planner", "message": "Plan a web app"}`),
+					Name:      "consult_worker",
+					Arguments: json.RawMessage(`{"worker_name": "planner", "message": "Plan a web app"}`),
 				}},
 				{Type: provider.EventDone},
 			}},
-			// 2. Planner agent responds.
+			// 2. Planner worker responds.
 			{events: []provider.StreamEvent{
 				{Type: provider.EventText, Text: "Plan: 1) Setup 2) Build 3) Deploy"},
 				{Type: provider.EventDone},
@@ -533,7 +533,7 @@ func TestOperatorMechanicalEvents(t *testing.T) {
 		Type: EventProgressUpdate,
 		Payload: ProgressUpdatePayload{
 			TaskID:  "task-1",
-			AgentID: "agent-2",
+			WorkerID: "agent-2",
 			Message: "50% complete",
 		},
 	})
@@ -622,7 +622,7 @@ func TestEventLoop_TaskCompleted_AssignsNextTask(t *testing.T) {
 	store := newOperatorTestStore(t)
 	ctx := context.Background()
 
-	// Seed a team with a lead agent.
+	// Seed a team with a lead worker.
 	seedTeam(t, ctx, store, "backend", "Backend Team", "lead-agent")
 
 	// Create a job.
@@ -653,11 +653,11 @@ func TestEventLoop_TaskCompleted_AssignsNextTask(t *testing.T) {
 	}
 	assertNoError(t, store.CreateTask(ctx, task2))
 
-	// The mock provider needs to handle the spawned agent's ChatStream call.
+	// The mock provider needs to handle the spawned worker's ChatStream call.
 	mp := &mockProvider{
 		name: "test-provider",
 		responses: []mockResponse{
-			// Spawned team lead agent responds.
+			// Spawned team lead worker responds.
 			{events: []provider.StreamEvent{
 				{Type: provider.EventText, Text: "Working on second task"},
 				{Type: provider.EventDone},
@@ -1052,7 +1052,7 @@ func TestEventLoop_BlockerReported_RoutesToLLM(t *testing.T) {
 		Payload: BlockerReportedPayload{
 			TaskID:      "task-1",
 			TeamID:      "backend",
-			AgentID:     "worker-1",
+			WorkerID:    "worker-1",
 			Description: "Cannot access production database",
 		},
 	})
@@ -1125,7 +1125,7 @@ func TestEventLoop_ProgressUpdate_NoFeedEntry(t *testing.T) {
 		Type: EventProgressUpdate,
 		Payload: ProgressUpdatePayload{
 			TaskID:  "task-1",
-			AgentID: "agent-1",
+			WorkerID: "agent-1",
 			Message: "50% complete",
 		},
 	})
@@ -1527,9 +1527,9 @@ func TestOperatorSurfaceToUser(t *testing.T) {
 	}, 2*time.Second)
 }
 
-func TestConsultAgent_ComposedAgent(t *testing.T) {
-	// Verify that consult_agent uses the composer to look up and compose the
-	// agent from the DB, including the agent's system prompt and resolved
+func TestConsultWorker_ComposedWorker(t *testing.T) {
+	// Verify that consult_worker uses the composer to look up and compose the
+	// worker from the DB, including the worker's system prompt and resolved
 	// provider/model.
 	store := newOperatorTestStore(t)
 
@@ -1540,16 +1540,16 @@ func TestConsultAgent_ComposedAgent(t *testing.T) {
 	mp := &mockProvider{
 		name: "custom-provider",
 		responses: []mockResponse{
-			// 1. Operator calls consult_agent.
+			// 1. Operator calls consult_worker.
 			{events: []provider.StreamEvent{
 				{Type: provider.EventToolCall, ToolCall: &provider.ToolCall{
 					ID:        "call-1",
-					Name:      "consult_agent",
-					Arguments: json.RawMessage(`{"agent_name": "planner", "message": "Plan a migration"}`),
+					Name:      "consult_worker",
+					Arguments: json.RawMessage(`{"worker_name": "planner", "message": "Plan a migration"}`),
 				}},
 				{Type: provider.EventDone},
 			}},
-			// 2. Planner agent responds (uses custom-provider).
+			// 2. Planner worker responds (uses custom-provider).
 			{events: []provider.StreamEvent{
 				{Type: provider.EventText, Text: "Migration plan: step 1, step 2"},
 				{Type: provider.EventDone},
@@ -1618,7 +1618,7 @@ func TestConsultAgent_ComposedAgent(t *testing.T) {
 		t.Fatalf("want at least 2 ChatStream calls, got %d", len(reqs))
 	}
 
-	// The second call is the planner agent's session.
+	// The second call is the planner worker's session.
 	plannerReq := reqs[1]
 	assertEqual(t, "default-model", plannerReq.Model)
 
@@ -1626,30 +1626,30 @@ func TestConsultAgent_ComposedAgent(t *testing.T) {
 	assertContains(t, plannerReq.System, "You are a planning agent")
 }
 
-func TestConsultAgent_UnknownAgent(t *testing.T) {
-	// Verify that consult_agent returns an error when the agent is not found
-	// in the DB.
-	tools := newTestOperatorTools(t, nil) // no agents seeded
+func TestConsultWorker_UnknownWorker(t *testing.T) {
+	// Verify that consult_worker returns an error when the worker is not found
+	// in the prompt engine.
+	tools := newTestOperatorTools(t, nil) // no workers seeded
 
-	_, err := tools.Execute(context.Background(), "consult_agent",
-		json.RawMessage(`{"agent_name": "nonexistent", "message": "hello"}`))
+	_, err := tools.Execute(context.Background(), "consult_worker",
+		json.RawMessage(`{"worker_name": "nonexistent", "message": "hello"}`))
 	assertError(t, err)
-	assertContains(t, err.Error(), "unknown system agent")
+	assertContains(t, err.Error(), "unknown system worker")
 	assertContains(t, err.Error(), "nonexistent")
 }
 
-func TestConsultAgentMissingParams(t *testing.T) {
+func TestConsultWorkerMissingParams(t *testing.T) {
 	tools := newTestOperatorTools(t, nil)
 
-	// Missing agent_name.
-	_, err := tools.Execute(context.Background(), "consult_agent",
+	// Missing worker_name.
+	_, err := tools.Execute(context.Background(), "consult_worker",
 		json.RawMessage(`{"message": "hello"}`))
 	assertError(t, err)
-	assertContains(t, err.Error(), "agent_name is required")
+	assertContains(t, err.Error(), "worker_name is required")
 
 	// Missing message.
-	_, err = tools.Execute(context.Background(), "consult_agent",
-		json.RawMessage(`{"agent_name": "planner"}`))
+	_, err = tools.Execute(context.Background(), "consult_worker",
+		json.RawMessage(`{"worker_name": "planner"}`))
 	assertError(t, err)
 	assertContains(t, err.Error(), "message is required")
 }
@@ -1717,7 +1717,7 @@ func TestOperatorToolDefinitions(t *testing.T) {
 		names[d.Name] = true
 	}
 
-	for _, expected := range []string{"consult_agent", "surface_to_user", "list_jobs", "query_job", "query_teams", "setup_workspace", "create_job", "create_task", "assign_task"} {
+	for _, expected := range []string{"consult_worker", "surface_to_user", "list_jobs", "query_job", "query_teams", "setup_workspace", "create_job", "create_task", "assign_task"} {
 		if !names[expected] {
 			t.Errorf("expected %s in definitions", expected)
 		}
@@ -1765,11 +1765,11 @@ func TestQueryTeamsDelegatesToSystemTools(t *testing.T) {
 	assertContains(t, result, "Alpha Team")
 }
 
-// --- Regression tests for Bug 1: consultAgent tool filtering ---
+// --- Regression tests for Bug 1: consultWorker tool filtering ---
 
-// TestConsultAgent_ToolFiltering is a regression test for the bug where
-// consultAgent built SpawnOpts without passing composed.Tools, so the spawned
-// system agent always saw ALL system tools instead of only its declared tools.
+// TestConsultWorker_ToolFiltering is a regression test for the bug where
+// consultWorker built SpawnOpts without passing composed.Tools, so the spawned
+// system worker always saw ALL system tools instead of only its declared tools.
 //
 // The fix converts composed.Tools ([]string) to []runtime.ToolDef by looking
 // up names in ot.systemTools.Definitions(), then passes them as SpawnOpts.Tools.
@@ -1777,7 +1777,7 @@ func TestQueryTeamsDelegatesToSystemTools(t *testing.T) {
 // Without the fix, the planner's ChatStream request would contain all 7 system
 // tools (create_job, create_task, assign_task, query_teams, query_job,
 // query_job_context, surface_to_user) instead of only the 2 declared ones.
-func TestConsultAgent_ToolFiltering(t *testing.T) {
+func TestConsultWorker_ToolFiltering(t *testing.T) {
 	store := newOperatorTestStore(t)
 
 	// Create a prompt engine role with only two tools declared.
@@ -1798,16 +1798,16 @@ func TestConsultAgent_ToolFiltering(t *testing.T) {
 	mp := &mockProvider{
 		name: "test",
 		responses: []mockResponse{
-			// 1. Operator calls consult_agent.
+			// 1. Operator calls consult_worker.
 			{events: []provider.StreamEvent{
 				{Type: provider.EventToolCall, ToolCall: &provider.ToolCall{
 					ID:        "call-1",
-					Name:      "consult_agent",
-					Arguments: json.RawMessage(`{"agent_name": "planner", "message": "Plan something"}`),
+					Name:      "consult_worker",
+					Arguments: json.RawMessage(`{"worker_name": "planner", "message": "Plan something"}`),
 				}},
 				{Type: provider.EventDone},
 			}},
-			// 2. Planner agent responds (only sees its declared tools).
+			// 2. Planner worker responds (only sees its declared tools).
 			{events: []provider.StreamEvent{
 				{Type: provider.EventText, Text: "Here is the plan."},
 				{Type: provider.EventDone},
@@ -1864,7 +1864,7 @@ func TestConsultAgent_ToolFiltering(t *testing.T) {
 		return strings.Contains(textBuf.String(), "Plan received")
 	}, 5*time.Second)
 
-	// The second ChatStream call is the planner agent's session.
+	// The second ChatStream call is the planner worker's session.
 	// Its Tools list must contain ONLY the two declared tools, not all system tools.
 	reqs := mp.getRequests()
 	if len(reqs) < 2 {
@@ -1890,7 +1890,7 @@ func TestConsultAgent_ToolFiltering(t *testing.T) {
 	undeclaredTools := []string{"assign_task", "query_teams", "query_job", "query_job_context", "surface_to_user"}
 	for _, undeclared := range undeclaredTools {
 		if plannerToolNames[undeclared] {
-			t.Errorf("planner session has undeclared tool %q — regression: consultAgent not filtering tools to agent's declared set", undeclared)
+			t.Errorf("planner session has undeclared tool %q — regression: consultWorker not filtering tools to worker's declared set", undeclared)
 		}
 	}
 

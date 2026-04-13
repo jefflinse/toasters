@@ -247,11 +247,11 @@ func (s *SQLiteStore) CreateTask(ctx context.Context, task *Task) error {
 	}
 
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO tasks (id, job_id, title, status, agent_id, team_id, parent_id, sort_order,
+		`INSERT INTO tasks (id, job_id, title, status, worker_id, team_id, parent_id, sort_order,
 		                     created_at, updated_at, summary, metadata)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		task.ID, task.JobID, task.Title, string(task.Status),
-		task.AgentID, task.TeamID, task.ParentID, task.SortOrder,
+		task.WorkerID, task.TeamID, task.ParentID, task.SortOrder,
 		task.CreatedAt.Format(time.RFC3339), task.UpdatedAt.Format(time.RFC3339),
 		task.Summary, nullableJSON(task.Metadata),
 	)
@@ -263,7 +263,7 @@ func (s *SQLiteStore) CreateTask(ctx context.Context, task *Task) error {
 
 func (s *SQLiteStore) GetTask(ctx context.Context, id string) (*Task, error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT id, job_id, title, status, agent_id, team_id, parent_id, sort_order,
+		`SELECT id, job_id, title, status, worker_id, team_id, parent_id, sort_order,
 		        created_at, updated_at, summary, metadata, result_summary, recommendations
 		 FROM tasks WHERE id = ?`, id)
 
@@ -272,7 +272,7 @@ func (s *SQLiteStore) GetTask(ctx context.Context, id string) (*Task, error) {
 
 func (s *SQLiteStore) ListTasksForJob(ctx context.Context, jobID string) ([]*Task, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, job_id, title, status, agent_id, team_id, parent_id, sort_order,
+		`SELECT id, job_id, title, status, worker_id, team_id, parent_id, sort_order,
 		        created_at, updated_at, summary, metadata, result_summary, recommendations
 		 FROM tasks WHERE job_id = ? ORDER BY sort_order, created_at`, jobID)
 	if err != nil {
@@ -361,7 +361,7 @@ func (s *SQLiteStore) AddTaskDependency(ctx context.Context, taskID, dependsOn s
 // GetReadyTasks returns tasks that are pending and have all dependencies completed.
 func (s *SQLiteStore) GetReadyTasks(ctx context.Context, jobID string) ([]*Task, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT t.id, t.job_id, t.title, t.status, t.agent_id, t.team_id, t.parent_id, t.sort_order,
+		`SELECT t.id, t.job_id, t.title, t.status, t.worker_id, t.team_id, t.parent_id, t.sort_order,
 		        t.created_at, t.updated_at, t.summary, t.metadata, t.result_summary, t.recommendations
 		 FROM tasks t
 		 WHERE t.job_id = ?
@@ -397,9 +397,9 @@ func (s *SQLiteStore) ReportProgress(ctx context.Context, report *ProgressReport
 	}
 
 	result, err := s.db.ExecContext(ctx,
-		`INSERT INTO progress_reports (job_id, task_id, agent_id, status, message, created_at)
+		`INSERT INTO progress_reports (job_id, task_id, worker_id, status, message, created_at)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
-		report.JobID, report.TaskID, report.AgentID,
+		report.JobID, report.TaskID, report.WorkerID,
 		report.Status, report.Message,
 		report.CreatedAt.Format(time.RFC3339),
 	)
@@ -421,7 +421,7 @@ func (s *SQLiteStore) GetRecentProgress(ctx context.Context, jobID string, limit
 	}
 
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, job_id, task_id, agent_id, status, message, created_at
+		`SELECT id, job_id, task_id, worker_id, status, message, created_at
 		 FROM progress_reports
 		 WHERE job_id = ?
 		 ORDER BY created_at DESC
@@ -435,7 +435,7 @@ func (s *SQLiteStore) GetRecentProgress(ctx context.Context, jobID string, limit
 	for rows.Next() {
 		r := &ProgressReport{}
 		var createdAt string
-		if err := rows.Scan(&r.ID, &r.JobID, &r.TaskID, &r.AgentID,
+		if err := rows.Scan(&r.ID, &r.JobID, &r.TaskID, &r.WorkerID,
 			&r.Status, &r.Message, &createdAt); err != nil {
 			return nil, fmt.Errorf("scanning progress report: %w", err)
 		}
@@ -516,27 +516,27 @@ func (s *SQLiteStore) DeleteAllSkills(ctx context.Context) error {
 	return nil
 }
 
-// --- Agents ---
+// --- Workers ---
 
-func (s *SQLiteStore) UpsertAgent(ctx context.Context, agent *Agent) error {
+func (s *SQLiteStore) UpsertWorker(ctx context.Context, worker *Worker) error {
 	now := time.Now().UTC()
-	if agent.CreatedAt.IsZero() {
-		agent.CreatedAt = now
+	if worker.CreatedAt.IsZero() {
+		worker.CreatedAt = now
 	}
-	if agent.UpdatedAt.IsZero() {
-		agent.UpdatedAt = now
+	if worker.UpdatedAt.IsZero() {
+		worker.UpdatedAt = now
 	}
 
 	var hidden, disabled int
-	if agent.Hidden {
+	if worker.Hidden {
 		hidden = 1
 	}
-	if agent.Disabled {
+	if worker.Disabled {
 		disabled = 1
 	}
 
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO agents (id, name, description, mode, model, provider, temperature,
+		`INSERT INTO workers (id, name, description, mode, model, provider, temperature,
 		                      system_prompt, tools, disallowed_tools, skills,
 		                      permission_mode, permissions, mcp_servers, max_turns,
 		                      color, hidden, disabled, source, source_path, team_id,
@@ -564,69 +564,69 @@ func (s *SQLiteStore) UpsertAgent(ctx context.Context, agent *Agent) error {
 		     source_path = excluded.source_path,
 		     team_id = excluded.team_id,
 		     updated_at = excluded.updated_at`,
-		agent.ID, agent.Name, agent.Description, agent.Mode,
-		agent.Model, agent.Provider, agent.Temperature,
-		agent.SystemPrompt, nullableJSON(agent.Tools),
-		nullableJSON(agent.DisallowedTools), nullableJSON(agent.Skills),
-		agent.PermissionMode, nullableJSON(agent.Permissions),
-		nullableJSON(agent.MCPServers), agent.MaxTurns,
-		agent.Color, hidden, disabled,
-		agent.Source, agent.SourcePath, agent.TeamID,
-		agent.CreatedAt.Format(time.RFC3339), agent.UpdatedAt.Format(time.RFC3339),
+		worker.ID, worker.Name, worker.Description, worker.Mode,
+		worker.Model, worker.Provider, worker.Temperature,
+		worker.SystemPrompt, nullableJSON(worker.Tools),
+		nullableJSON(worker.DisallowedTools), nullableJSON(worker.Skills),
+		worker.PermissionMode, nullableJSON(worker.Permissions),
+		nullableJSON(worker.MCPServers), worker.MaxTurns,
+		worker.Color, hidden, disabled,
+		worker.Source, worker.SourcePath, worker.TeamID,
+		worker.CreatedAt.Format(time.RFC3339), worker.UpdatedAt.Format(time.RFC3339),
 	)
 	if err != nil {
-		return fmt.Errorf("upserting agent: %w", err)
+		return fmt.Errorf("upserting worker: %w", err)
 	}
 	return nil
 }
 
-func (s *SQLiteStore) GetAgent(ctx context.Context, id string) (*Agent, error) {
+func (s *SQLiteStore) GetWorker(ctx context.Context, id string) (*Worker, error) {
 	row := s.db.QueryRowContext(ctx,
 		`SELECT id, name, description, mode, model, provider, temperature,
 		        system_prompt, tools, disallowed_tools, skills,
 		        permission_mode, permissions, mcp_servers, max_turns,
 		        color, hidden, disabled, source, source_path, team_id,
 		        created_at, updated_at
-		 FROM agents WHERE id = ?`, id)
+		 FROM workers WHERE id = ?`, id)
 
-	a, err := scanAgent(row)
+	w, err := scanWorker(row)
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
-			return nil, fmt.Errorf("agent %q: %w", id, ErrNotFound)
+			return nil, fmt.Errorf("worker %q: %w", id, ErrNotFound)
 		}
 		return nil, err
 	}
-	return a, nil
+	return w, nil
 }
 
-func (s *SQLiteStore) ListAgents(ctx context.Context) ([]*Agent, error) {
+func (s *SQLiteStore) ListWorkers(ctx context.Context) ([]*Worker, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, name, description, mode, model, provider, temperature,
 		        system_prompt, tools, disallowed_tools, skills,
 		        permission_mode, permissions, mcp_servers, max_turns,
 		        color, hidden, disabled, source, source_path, team_id,
 		        created_at, updated_at
-		 FROM agents ORDER BY name`)
+		 FROM workers ORDER BY name`)
 	if err != nil {
-		return nil, fmt.Errorf("listing agents: %w", err)
+		return nil, fmt.Errorf("listing workers: %w", err)
 	}
 	defer rows.Close() //nolint:errcheck
 
-	var agents []*Agent
+	var workers []*Worker
 	for rows.Next() {
-		a, err := scanAgent(rows)
+		w, err := scanWorker(rows)
 		if err != nil {
 			return nil, err
 		}
-		agents = append(agents, a)
+		workers = append(workers, w)
 	}
-	return agents, rows.Err()
+	return workers, rows.Err()
 }
 
-func (s *SQLiteStore) DeleteAllAgents(ctx context.Context) error {
-	_, err := s.db.ExecContext(ctx, "DELETE FROM agents")
+func (s *SQLiteStore) DeleteAllWorkers(ctx context.Context) error {
+	_, err := s.db.ExecContext(ctx, "DELETE FROM workers")
 	if err != nil {
-		return fmt.Errorf("deleting all agents: %w", err)
+		return fmt.Errorf("deleting all workers: %w", err)
 	}
 	return nil
 }
@@ -648,13 +648,13 @@ func (s *SQLiteStore) UpsertTeam(ctx context.Context, team *Team) error {
 	}
 
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO teams (id, name, description, lead_agent, skills, provider, model,
+		`INSERT INTO teams (id, name, description, lead_worker, skills, provider, model,
 		                     culture, source, source_path, is_auto, created_at, updated_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(id) DO UPDATE SET
 		     name = excluded.name,
 		     description = excluded.description,
-		     lead_agent = excluded.lead_agent,
+		     lead_worker = excluded.lead_worker,
 		     skills = excluded.skills,
 		     provider = excluded.provider,
 		     model = excluded.model,
@@ -663,7 +663,7 @@ func (s *SQLiteStore) UpsertTeam(ctx context.Context, team *Team) error {
 		     source_path = excluded.source_path,
 		     is_auto = excluded.is_auto,
 		     updated_at = excluded.updated_at`,
-		team.ID, team.Name, team.Description, team.LeadAgent,
+		team.ID, team.Name, team.Description, team.LeadWorker,
 		nullableJSON(team.Skills), team.Provider, team.Model,
 		team.Culture, team.Source, team.SourcePath, isAuto,
 		team.CreatedAt.Format(time.RFC3339), team.UpdatedAt.Format(time.RFC3339),
@@ -676,7 +676,7 @@ func (s *SQLiteStore) UpsertTeam(ctx context.Context, team *Team) error {
 
 func (s *SQLiteStore) GetTeam(ctx context.Context, id string) (*Team, error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT id, name, description, lead_agent, skills, provider, model,
+		`SELECT id, name, description, lead_worker, skills, provider, model,
 		        culture, source, source_path, is_auto, created_at, updated_at
 		 FROM teams WHERE id = ?`, id)
 
@@ -692,7 +692,7 @@ func (s *SQLiteStore) GetTeam(ctx context.Context, id string) (*Team, error) {
 
 func (s *SQLiteStore) ListTeams(ctx context.Context) ([]*Team, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, name, description, lead_agent, skills, provider, model,
+		`SELECT id, name, description, lead_worker, skills, provider, model,
 		        culture, source, source_path, is_auto, created_at, updated_at
 		 FROM teams ORDER BY name`)
 	if err != nil {
@@ -719,42 +719,42 @@ func (s *SQLiteStore) DeleteAllTeams(ctx context.Context) error {
 	return nil
 }
 
-// --- Team Agents ---
+// --- Team Workers ---
 
-func (s *SQLiteStore) AddTeamAgent(ctx context.Context, ta *TeamAgent) error {
+func (s *SQLiteStore) AddTeamWorker(ctx context.Context, tw *TeamWorker) error {
 	_, err := s.db.ExecContext(ctx,
-		"INSERT INTO team_agents (team_id, agent_id, role) VALUES (?, ?, ?)",
-		ta.TeamID, ta.AgentID, ta.Role)
+		"INSERT INTO team_workers (team_id, worker_id, role) VALUES (?, ?, ?)",
+		tw.TeamID, tw.WorkerID, tw.Role)
 	if err != nil {
-		return fmt.Errorf("adding team agent: %w", err)
+		return fmt.Errorf("adding team worker: %w", err)
 	}
 	return nil
 }
 
-func (s *SQLiteStore) ListTeamAgents(ctx context.Context, teamID string) ([]*TeamAgent, error) {
+func (s *SQLiteStore) ListTeamWorkers(ctx context.Context, teamID string) ([]*TeamWorker, error) {
 	rows, err := s.db.QueryContext(ctx,
-		"SELECT team_id, agent_id, role FROM team_agents WHERE team_id = ? ORDER BY role, agent_id",
+		"SELECT team_id, worker_id, role FROM team_workers WHERE team_id = ? ORDER BY role, worker_id",
 		teamID)
 	if err != nil {
-		return nil, fmt.Errorf("listing team agents: %w", err)
+		return nil, fmt.Errorf("listing team workers: %w", err)
 	}
 	defer rows.Close() //nolint:errcheck
 
-	var teamAgents []*TeamAgent
+	var teamWorkers []*TeamWorker
 	for rows.Next() {
-		ta := &TeamAgent{}
-		if err := rows.Scan(&ta.TeamID, &ta.AgentID, &ta.Role); err != nil {
-			return nil, fmt.Errorf("scanning team agent: %w", err)
+		tw := &TeamWorker{}
+		if err := rows.Scan(&tw.TeamID, &tw.WorkerID, &tw.Role); err != nil {
+			return nil, fmt.Errorf("scanning team worker: %w", err)
 		}
-		teamAgents = append(teamAgents, ta)
+		teamWorkers = append(teamWorkers, tw)
 	}
-	return teamAgents, rows.Err()
+	return teamWorkers, rows.Err()
 }
 
-func (s *SQLiteStore) DeleteAllTeamAgents(ctx context.Context) error {
-	_, err := s.db.ExecContext(ctx, "DELETE FROM team_agents")
+func (s *SQLiteStore) DeleteAllTeamWorkers(ctx context.Context) error {
+	_, err := s.db.ExecContext(ctx, "DELETE FROM team_workers")
 	if err != nil {
-		return fmt.Errorf("deleting all team agents: %w", err)
+		return fmt.Errorf("deleting all team workers: %w", err)
 	}
 	return nil
 }
@@ -895,15 +895,15 @@ func (s *SQLiteStore) ListRecentChatEntries(ctx context.Context, limit int) ([]*
 
 // --- Rebuild ---
 
-func (s *SQLiteStore) RebuildDefinitions(ctx context.Context, skills []*Skill, agents []*Agent, teams []*Team, teamAgents []*TeamAgent) error {
+func (s *SQLiteStore) RebuildDefinitions(ctx context.Context, skills []*Skill, workers []*Worker, teams []*Team, teamWorkers []*TeamWorker) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("beginning rebuild transaction: %w", err)
 	}
 	defer tx.Rollback() //nolint:errcheck
 
-	// Delete in dependency order: team_agents first (references teams and agents).
-	for _, table := range []string{"team_agents", "agents", "teams", "skills"} {
+	// Delete in dependency order: team_workers first (references teams and workers).
+	for _, table := range []string{"team_workers", "workers", "teams", "skills"} {
 		if _, err := tx.ExecContext(ctx, "DELETE FROM "+table); err != nil {
 			return fmt.Errorf("clearing %s: %w", table, err)
 		}
@@ -930,40 +930,40 @@ func (s *SQLiteStore) RebuildDefinitions(ctx context.Context, skills []*Skill, a
 		}
 	}
 
-	// Insert agents.
-	for _, a := range agents {
+	// Insert workers.
+	for _, w := range workers {
 		now := time.Now().UTC()
-		if a.CreatedAt.IsZero() {
-			a.CreatedAt = now
+		if w.CreatedAt.IsZero() {
+			w.CreatedAt = now
 		}
-		if a.UpdatedAt.IsZero() {
-			a.UpdatedAt = now
+		if w.UpdatedAt.IsZero() {
+			w.UpdatedAt = now
 		}
 		var hidden, disabled int
-		if a.Hidden {
+		if w.Hidden {
 			hidden = 1
 		}
-		if a.Disabled {
+		if w.Disabled {
 			disabled = 1
 		}
 		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO agents (id, name, description, mode, model, provider, temperature,
+			`INSERT INTO workers (id, name, description, mode, model, provider, temperature,
 			                      system_prompt, tools, disallowed_tools, skills,
 			                      permission_mode, permissions, mcp_servers, max_turns,
 			                      color, hidden, disabled, source, source_path, team_id,
 			                      created_at, updated_at)
 			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			a.ID, a.Name, a.Description, a.Mode,
-			a.Model, a.Provider, a.Temperature,
-			a.SystemPrompt, nullableJSON(a.Tools),
-			nullableJSON(a.DisallowedTools), nullableJSON(a.Skills),
-			a.PermissionMode, nullableJSON(a.Permissions),
-			nullableJSON(a.MCPServers), a.MaxTurns,
-			a.Color, hidden, disabled,
-			a.Source, a.SourcePath, a.TeamID,
-			a.CreatedAt.Format(time.RFC3339), a.UpdatedAt.Format(time.RFC3339),
+			w.ID, w.Name, w.Description, w.Mode,
+			w.Model, w.Provider, w.Temperature,
+			w.SystemPrompt, nullableJSON(w.Tools),
+			nullableJSON(w.DisallowedTools), nullableJSON(w.Skills),
+			w.PermissionMode, nullableJSON(w.Permissions),
+			nullableJSON(w.MCPServers), w.MaxTurns,
+			w.Color, hidden, disabled,
+			w.Source, w.SourcePath, w.TeamID,
+			w.CreatedAt.Format(time.RFC3339), w.UpdatedAt.Format(time.RFC3339),
 		); err != nil {
-			return fmt.Errorf("inserting agent %q: %w", a.ID, err)
+			return fmt.Errorf("inserting worker %q: %w", w.ID, err)
 		}
 	}
 
@@ -981,10 +981,10 @@ func (s *SQLiteStore) RebuildDefinitions(ctx context.Context, skills []*Skill, a
 			isAuto = 1
 		}
 		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO teams (id, name, description, lead_agent, skills, provider, model,
+			`INSERT INTO teams (id, name, description, lead_worker, skills, provider, model,
 			                     culture, source, source_path, is_auto, created_at, updated_at)
 			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			t.ID, t.Name, t.Description, t.LeadAgent,
+			t.ID, t.Name, t.Description, t.LeadWorker,
 			nullableJSON(t.Skills), t.Provider, t.Model,
 			t.Culture, t.Source, t.SourcePath, isAuto,
 			t.CreatedAt.Format(time.RFC3339), t.UpdatedAt.Format(time.RFC3339),
@@ -993,13 +993,13 @@ func (s *SQLiteStore) RebuildDefinitions(ctx context.Context, skills []*Skill, a
 		}
 	}
 
-	// Insert team agents.
-	for _, ta := range teamAgents {
+	// Insert team workers.
+	for _, tw := range teamWorkers {
 		if _, err := tx.ExecContext(ctx,
-			"INSERT INTO team_agents (team_id, agent_id, role) VALUES (?, ?, ?)",
-			ta.TeamID, ta.AgentID, ta.Role,
+			"INSERT INTO team_workers (team_id, worker_id, role) VALUES (?, ?, ?)",
+			tw.TeamID, tw.WorkerID, tw.Role,
 		); err != nil {
-			return fmt.Errorf("inserting team agent %s/%s: %w", ta.TeamID, ta.AgentID, err)
+			return fmt.Errorf("inserting team worker %s/%s: %w", tw.TeamID, tw.WorkerID, err)
 		}
 	}
 
@@ -1011,7 +1011,7 @@ func (s *SQLiteStore) RebuildDefinitions(ctx context.Context, skills []*Skill, a
 
 // --- Sessions ---
 
-func (s *SQLiteStore) CreateSession(ctx context.Context, session *AgentSession) error {
+func (s *SQLiteStore) CreateSession(ctx context.Context, session *WorkerSession) error {
 	now := time.Now().UTC()
 	if session.StartedAt.IsZero() {
 		session.StartedAt = now
@@ -1024,10 +1024,10 @@ func (s *SQLiteStore) CreateSession(ctx context.Context, session *AgentSession) 
 	}
 
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO agent_sessions (id, agent_id, job_id, task_id, status, model, provider,
+		`INSERT INTO worker_sessions (id, worker_id, job_id, task_id, status, model, provider,
 		                              tokens_in, tokens_out, started_at, ended_at, cost_usd)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		session.ID, session.AgentID, session.JobID, session.TaskID,
+		session.ID, session.WorkerID, session.JobID, session.TaskID,
 		string(session.Status), session.Model, session.Provider,
 		session.TokensIn, session.TokensOut,
 		session.StartedAt.Format(time.RFC3339), endedAt, session.CostUSD,
@@ -1068,7 +1068,7 @@ func (s *SQLiteStore) UpdateSession(ctx context.Context, id string, update Sessi
 	}
 
 	args = append(args, id)
-	query := "UPDATE agent_sessions SET " + strings.Join(sets, ", ") + " WHERE id = ?"
+	query := "UPDATE worker_sessions SET " + strings.Join(sets, ", ") + " WHERE id = ?"
 
 	result, err := s.db.ExecContext(ctx, query, args...)
 	if err != nil {
@@ -1077,11 +1077,11 @@ func (s *SQLiteStore) UpdateSession(ctx context.Context, id string, update Sessi
 	return checkRowsAffected(result, "session", id)
 }
 
-func (s *SQLiteStore) GetActiveSessions(ctx context.Context) ([]*AgentSession, error) {
+func (s *SQLiteStore) GetActiveSessions(ctx context.Context) ([]*WorkerSession, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, agent_id, job_id, task_id, status, model, provider,
+		`SELECT id, worker_id, job_id, task_id, status, model, provider,
 		        tokens_in, tokens_out, started_at, ended_at, cost_usd
-		 FROM agent_sessions
+		 FROM worker_sessions
 		 WHERE status = 'active'
 		 ORDER BY started_at DESC`)
 	if err != nil {
@@ -1089,7 +1089,7 @@ func (s *SQLiteStore) GetActiveSessions(ctx context.Context) ([]*AgentSession, e
 	}
 	defer rows.Close() //nolint:errcheck
 
-	var sessions []*AgentSession
+	var sessions []*WorkerSession
 	for rows.Next() {
 		sess, err := scanSession(rows)
 		if err != nil {
@@ -1166,7 +1166,7 @@ func scanTask(s scanner) (*Task, error) {
 	var metadata sql.NullString
 
 	if err := s.Scan(&t.ID, &t.JobID, &t.Title, &status,
-		&t.AgentID, &t.TeamID, &t.ParentID, &t.SortOrder,
+		&t.WorkerID, &t.TeamID, &t.ParentID, &t.SortOrder,
 		&createdAt, &updatedAt, &t.Summary, &metadata,
 		&t.ResultSummary, &t.Recommendations); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -1206,53 +1206,53 @@ func scanSkill(s scanner) (*Skill, error) {
 	return sk, nil
 }
 
-func scanAgent(s scanner) (*Agent, error) {
-	a := &Agent{}
+func scanWorker(s scanner) (*Worker, error) {
+	w := &Worker{}
 	var createdAt, updatedAt string
 	var temperature sql.NullFloat64
 	var maxTurns sql.NullInt64
 	var tools, disallowedTools, skills, permissions, mcpServers sql.NullString
 	var hidden, disabled int
 
-	if err := s.Scan(&a.ID, &a.Name, &a.Description, &a.Mode,
-		&a.Model, &a.Provider, &temperature,
-		&a.SystemPrompt, &tools, &disallowedTools, &skills,
-		&a.PermissionMode, &permissions, &mcpServers, &maxTurns,
-		&a.Color, &hidden, &disabled, &a.Source, &a.SourcePath, &a.TeamID,
+	if err := s.Scan(&w.ID, &w.Name, &w.Description, &w.Mode,
+		&w.Model, &w.Provider, &temperature,
+		&w.SystemPrompt, &tools, &disallowedTools, &skills,
+		&w.PermissionMode, &permissions, &mcpServers, &maxTurns,
+		&w.Color, &hidden, &disabled, &w.Source, &w.SourcePath, &w.TeamID,
 		&createdAt, &updatedAt); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrNotFound
 		}
-		return nil, fmt.Errorf("scanning agent: %w", err)
+		return nil, fmt.Errorf("scanning worker: %w", err)
 	}
 
 	if temperature.Valid {
-		a.Temperature = &temperature.Float64
+		w.Temperature = &temperature.Float64
 	}
 	if maxTurns.Valid {
 		v := int(maxTurns.Int64)
-		a.MaxTurns = &v
+		w.MaxTurns = &v
 	}
 	if tools.Valid {
-		a.Tools = json.RawMessage(tools.String)
+		w.Tools = json.RawMessage(tools.String)
 	}
 	if disallowedTools.Valid {
-		a.DisallowedTools = json.RawMessage(disallowedTools.String)
+		w.DisallowedTools = json.RawMessage(disallowedTools.String)
 	}
 	if skills.Valid {
-		a.Skills = json.RawMessage(skills.String)
+		w.Skills = json.RawMessage(skills.String)
 	}
 	if permissions.Valid {
-		a.Permissions = json.RawMessage(permissions.String)
+		w.Permissions = json.RawMessage(permissions.String)
 	}
 	if mcpServers.Valid {
-		a.MCPServers = json.RawMessage(mcpServers.String)
+		w.MCPServers = json.RawMessage(mcpServers.String)
 	}
-	a.Hidden = hidden != 0
-	a.Disabled = disabled != 0
-	a.CreatedAt = parseTime(createdAt)
-	a.UpdatedAt = parseTime(updatedAt)
-	return a, nil
+	w.Hidden = hidden != 0
+	w.Disabled = disabled != 0
+	w.CreatedAt = parseTime(createdAt)
+	w.UpdatedAt = parseTime(updatedAt)
+	return w, nil
 }
 
 func scanTeam(s scanner) (*Team, error) {
@@ -1261,7 +1261,7 @@ func scanTeam(s scanner) (*Team, error) {
 	var skills sql.NullString
 	var isAuto int
 
-	if err := s.Scan(&t.ID, &t.Name, &t.Description, &t.LeadAgent,
+	if err := s.Scan(&t.ID, &t.Name, &t.Description, &t.LeadWorker,
 		&skills, &t.Provider, &t.Model,
 		&t.Culture, &t.Source, &t.SourcePath, &isAuto,
 		&createdAt, &updatedAt); err != nil {
@@ -1299,14 +1299,14 @@ func scanFeedEntries(rows *sql.Rows) ([]*FeedEntry, error) {
 	return entries, rows.Err()
 }
 
-func scanSession(s scanner) (*AgentSession, error) {
-	sess := &AgentSession{}
+func scanSession(s scanner) (*WorkerSession, error) {
+	sess := &WorkerSession{}
 	var status string
 	var startedAt string
 	var endedAt sql.NullString
 	var costUSD sql.NullFloat64
 
-	if err := s.Scan(&sess.ID, &sess.AgentID, &sess.JobID, &sess.TaskID,
+	if err := s.Scan(&sess.ID, &sess.WorkerID, &sess.JobID, &sess.TaskID,
 		&status, &sess.Model, &sess.Provider,
 		&sess.TokensIn, &sess.TokensOut,
 		&startedAt, &endedAt, &costUSD); err != nil {

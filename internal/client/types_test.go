@@ -76,7 +76,7 @@ func TestWireTaskToService(t *testing.T) {
 		JobID:           "job-1",
 		Title:           "Write tests",
 		Status:          "in_progress",
-		AgentID:         "agent-1",
+		WorkerID:         "agent-1",
 		TeamID:          "team-1",
 		ParentID:        "task-0",
 		SortOrder:       3,
@@ -109,8 +109,8 @@ func TestWireTaskToService(t *testing.T) {
 	if got.Status != service.TaskStatus("in_progress") {
 		t.Errorf("Status = %q, want %q", got.Status, "in_progress")
 	}
-	if got.AgentID != "agent-1" {
-		t.Errorf("AgentID = %q, want %q", got.AgentID, "agent-1")
+	if got.WorkerID != "agent-1" {
+		t.Errorf("WorkerID = %q, want %q", got.WorkerID, "agent-1")
 	}
 	if got.TeamID != "team-1" {
 		t.Errorf("TeamID = %q, want %q", got.TeamID, "team-1")
@@ -149,8 +149,8 @@ func TestWireTaskToService_OptionalFieldsEmpty(t *testing.T) {
 
 	got := wireTaskToService(w)
 
-	if got.AgentID != "" {
-		t.Errorf("AgentID = %q, want empty", got.AgentID)
+	if got.WorkerID != "" {
+		t.Errorf("WorkerID = %q, want empty", got.WorkerID)
 	}
 	if got.TeamID != "" {
 		t.Errorf("TeamID = %q, want empty", got.TeamID)
@@ -206,12 +206,12 @@ func TestWireSkillToService(t *testing.T) {
 	}
 }
 
-func TestWireAgentToService(t *testing.T) {
+func TestWireWorkerToService(t *testing.T) {
 	t.Parallel()
 
 	temp := 0.7
 	maxTurns := 25
-	w := wireAgent{
+	w := wireWorker{
 		ID:              "agent-1",
 		Name:            "test-writer",
 		Description:     "Writes tests",
@@ -239,12 +239,12 @@ func TestWireAgentToService(t *testing.T) {
 		t.Fatalf("marshal: %v", err)
 	}
 
-	var decoded wireAgent
+	var decoded wireWorker
 	if err := json.Unmarshal(data, &decoded); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
 
-	got := wireAgentToService(decoded)
+	got := wireWorkerToService(decoded)
 
 	if got.ID != "agent-1" {
 		t.Errorf("ID = %q, want %q", got.ID, "agent-1")
@@ -290,10 +290,10 @@ func TestWireAgentToService(t *testing.T) {
 	}
 }
 
-func TestWireAgentToService_NilOptionalFields(t *testing.T) {
+func TestWireWorkerToService_NilOptionalFields(t *testing.T) {
 	t.Parallel()
 
-	w := wireAgent{
+	w := wireWorker{
 		ID:        "agent-2",
 		Name:      "minimal",
 		Source:    "system",
@@ -301,7 +301,7 @@ func TestWireAgentToService_NilOptionalFields(t *testing.T) {
 		UpdatedAt: testTime,
 	}
 
-	got := wireAgentToService(w)
+	got := wireWorkerToService(w)
 
 	if got.Temperature != nil {
 		t.Errorf("Temperature = %v, want nil", got.Temperature)
@@ -324,7 +324,7 @@ func TestWireTeamToService(t *testing.T) {
 		ID:          "team-1",
 		Name:        "backend",
 		Description: "Backend team",
-		LeadAgent:   "agent-1",
+		LeadWorker:   "agent-1",
 		Skills:      []string{"testing", "code-review"},
 		Provider:    "anthropic",
 		Model:       "claude-sonnet-4-6",
@@ -359,8 +359,8 @@ func TestWireTeamToService(t *testing.T) {
 	if len(got.Skills) != 2 || got.Skills[0] != "testing" || got.Skills[1] != "code-review" {
 		t.Errorf("Skills = %v, want [testing code-review]", got.Skills)
 	}
-	if got.LeadAgent != "agent-1" {
-		t.Errorf("LeadAgent = %q, want %q", got.LeadAgent, "agent-1")
+	if got.LeadWorker != "agent-1" {
+		t.Errorf("LeadWorker = %q, want %q", got.LeadWorker, "agent-1")
 	}
 	if got.Culture != "We write clean code." {
 		t.Errorf("Culture = %q, want %q", got.Culture, "We write clean code.")
@@ -376,7 +376,7 @@ func TestWireTeamToService(t *testing.T) {
 func TestWireTeamViewToService_WithCoordinator(t *testing.T) {
 	t.Parallel()
 
-	coord := wireAgent{
+	coord := wireWorker{
 		ID:        "agent-lead",
 		Name:      "lead",
 		Mode:      "lead",
@@ -393,7 +393,7 @@ func TestWireTeamViewToService_WithCoordinator(t *testing.T) {
 			UpdatedAt: testTime,
 		},
 		Coordinator: &coord,
-		Workers: []wireAgent{
+		Workers: []wireWorker{
 			{
 				ID:        "agent-w1",
 				Name:      "worker-1",
@@ -450,7 +450,7 @@ func TestWireTeamViewToService_NilCoordinator(t *testing.T) {
 			UpdatedAt: testTime,
 		},
 		Coordinator: nil,
-		Workers:     []wireAgent{},
+		Workers:     []wireWorker{},
 	}
 
 	got := wireTeamViewToService(w)
@@ -480,7 +480,7 @@ func TestWireTeamViewToService_ReadOnlyAndSystemFlags(t *testing.T) {
 			UpdatedAt: testTime,
 		},
 		Coordinator: nil,
-		Workers:     []wireAgent{},
+		Workers:     []wireWorker{},
 		IsReadOnly:  true,
 		IsSystem:    false,
 	}
@@ -515,7 +515,7 @@ func TestWireTeamViewToService_ReadOnlyAndSystemFlags(t *testing.T) {
 			UpdatedAt: testTime,
 		},
 		Coordinator: nil,
-		Workers:     []wireAgent{},
+		Workers:     []wireWorker{},
 		IsReadOnly:  false,
 		IsSystem:    false,
 	}
@@ -550,7 +550,7 @@ func TestWireTeamViewToService_ReadOnlyAndSystemFlags(t *testing.T) {
 			UpdatedAt: testTime,
 		},
 		Coordinator: nil,
-		Workers:     []wireAgent{},
+		Workers:     []wireWorker{},
 		IsReadOnly:  false,
 		IsSystem:    true,
 	}
@@ -580,7 +580,7 @@ func TestWireSessionSnapshotToService(t *testing.T) {
 
 	w := wireSessionSnapshot{
 		ID:        "sess-1",
-		AgentID:   "agent-1",
+		WorkerID:   "agent-1",
 		TeamName:  "backend",
 		JobID:     "job-1",
 		TaskID:    "task-1",
@@ -607,8 +607,8 @@ func TestWireSessionSnapshotToService(t *testing.T) {
 	if got.ID != "sess-1" {
 		t.Errorf("ID = %q, want %q", got.ID, "sess-1")
 	}
-	if got.AgentID != "agent-1" {
-		t.Errorf("AgentID = %q, want %q", got.AgentID, "agent-1")
+	if got.WorkerID != "agent-1" {
+		t.Errorf("WorkerID = %q, want %q", got.WorkerID, "agent-1")
 	}
 	if got.TeamName != "backend" {
 		t.Errorf("TeamName = %q, want %q", got.TeamName, "backend")
@@ -633,7 +633,7 @@ func TestWireSessionDetailToService(t *testing.T) {
 	w := wireSessionDetail{
 		Snapshot: wireSessionSnapshot{
 			ID:        "sess-1",
-			AgentID:   "agent-1",
+			WorkerID:   "agent-1",
 			Status:    "completed",
 			StartTime: testTime,
 			TokensIn:  100,
@@ -646,7 +646,7 @@ func TestWireSessionDetailToService(t *testing.T) {
 			{Label: "read: foo.go", ToolName: "read_file"},
 			{Label: "write: foo_test.go", ToolName: "write_file"},
 		},
-		AgentName: "test-writer",
+		WorkerName: "test-writer",
 		TeamName:  "backend",
 		Task:      "Write unit tests",
 	}
@@ -687,8 +687,8 @@ func TestWireSessionDetailToService(t *testing.T) {
 	if got.Activities[1].Label != "write: foo_test.go" {
 		t.Errorf("Activities[1].Label = %q, want %q", got.Activities[1].Label, "write: foo_test.go")
 	}
-	if got.AgentName != "test-writer" {
-		t.Errorf("AgentName = %q, want %q", got.AgentName, "test-writer")
+	if got.WorkerName != "test-writer" {
+		t.Errorf("WorkerName = %q, want %q", got.WorkerName, "test-writer")
 	}
 	if got.TeamName != "backend" {
 		t.Errorf("TeamName = %q, want %q", got.TeamName, "backend")
@@ -892,11 +892,11 @@ func TestWireProgressStateToService(t *testing.T) {
 				{ID: 1, JobID: "job-1", Status: "in_progress", Message: "Working on it", CreatedAt: testTime},
 			},
 		},
-		ActiveSessions: []wireAgentSession{
-			{ID: "sess-1", AgentID: "agent-1", Status: "active", StartedAt: testTime, TokensIn: 100, TokensOut: 200},
+		ActiveSessions: []wireWorkerSession{
+			{ID: "sess-1", WorkerID: "agent-1", Status: "active", StartedAt: testTime, TokensIn: 100, TokensOut: 200},
 		},
 		LiveSnapshots: []wireSessionSnapshot{
-			{ID: "snap-1", AgentID: "agent-1", Status: "active", StartTime: testTime, TokensIn: 50, TokensOut: 75},
+			{ID: "snap-1", WorkerID: "agent-1", Status: "active", StartTime: testTime, TokensIn: 50, TokensOut: 75},
 		},
 		FeedEntries: []wireFeedEntry{
 			{ID: 1, EntryType: "system_event", Content: "Job started", CreatedAt: testTime},
@@ -972,14 +972,14 @@ func TestWireProgressStateToService_EmptyMaps(t *testing.T) {
 	}
 }
 
-func TestWireAgentSessionToService(t *testing.T) {
+func TestWireWorkerSessionToService(t *testing.T) {
 	t.Parallel()
 
 	endedAt := testTime.Add(5 * time.Minute)
 	cost := 0.0042
-	w := wireAgentSession{
+	w := wireWorkerSession{
 		ID:        "sess-1",
-		AgentID:   "agent-1",
+		WorkerID:   "agent-1",
 		JobID:     "job-1",
 		TaskID:    "task-1",
 		Status:    "completed",
@@ -997,12 +997,12 @@ func TestWireAgentSessionToService(t *testing.T) {
 		t.Fatalf("marshal: %v", err)
 	}
 
-	var decoded wireAgentSession
+	var decoded wireWorkerSession
 	if err := json.Unmarshal(data, &decoded); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
 
-	got := wireAgentSessionToService(decoded)
+	got := wireWorkerSessionToService(decoded)
 
 	if got.ID != "sess-1" {
 		t.Errorf("ID = %q, want %q", got.ID, "sess-1")
@@ -1033,17 +1033,17 @@ func TestWireAgentSessionToService(t *testing.T) {
 	}
 }
 
-func TestWireAgentSessionToService_NilOptionalFields(t *testing.T) {
+func TestWireWorkerSessionToService_NilOptionalFields(t *testing.T) {
 	t.Parallel()
 
-	w := wireAgentSession{
+	w := wireWorkerSession{
 		ID:        "sess-2",
-		AgentID:   "agent-2",
+		WorkerID:   "agent-2",
 		Status:    "active",
 		StartedAt: testTime,
 	}
 
-	got := wireAgentSessionToService(w)
+	got := wireWorkerSessionToService(w)
 
 	if got.EndedAt != nil {
 		t.Errorf("EndedAt = %v, want nil", got.EndedAt)
@@ -1321,7 +1321,7 @@ func TestParseSSEPayload_TaskFailed(t *testing.T) {
 func TestParseSSEPayload_BlockerReported(t *testing.T) {
 	t.Parallel()
 
-	raw := json.RawMessage(`{"task_id":"task-1","team_id":"team-1","agent_id":"agent-1","description":"Need credentials","questions":["What is the API key?","Which environment?"]}`)
+	raw := json.RawMessage(`{"task_id":"task-1","team_id":"team-1","worker_id":"agent-1","description":"Need credentials","questions":["What is the API key?","Which environment?"]}`)
 	payload, err := parseSSEPayload("blocker.reported", raw)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -1337,8 +1337,8 @@ func TestParseSSEPayload_BlockerReported(t *testing.T) {
 	if p.TeamID != "team-1" {
 		t.Errorf("TeamID = %q, want %q", p.TeamID, "team-1")
 	}
-	if p.AgentID != "agent-1" {
-		t.Errorf("AgentID = %q, want %q", p.AgentID, "agent-1")
+	if p.WorkerID != "agent-1" {
+		t.Errorf("WorkerID = %q, want %q", p.WorkerID, "agent-1")
 	}
 	if p.Description != "Need credentials" {
 		t.Errorf("Description = %q, want %q", p.Description, "Need credentials")
@@ -1413,7 +1413,7 @@ func TestParseSSEPayload_SessionStarted(t *testing.T) {
 
 	raw := json.RawMessage(`{
 		"session_id":"sess-1",
-		"agent_name":"test-writer",
+		"worker_name":"test-writer",
 		"team_name":"backend",
 		"task":"Write unit tests",
 		"job_id":"job-1",
@@ -1433,8 +1433,8 @@ func TestParseSSEPayload_SessionStarted(t *testing.T) {
 	if p.SessionID != "sess-1" {
 		t.Errorf("SessionID = %q, want %q", p.SessionID, "sess-1")
 	}
-	if p.AgentName != "test-writer" {
-		t.Errorf("AgentName = %q, want %q", p.AgentName, "test-writer")
+	if p.WorkerName != "test-writer" {
+		t.Errorf("WorkerName = %q, want %q", p.WorkerName, "test-writer")
 	}
 	if p.TeamName != "backend" {
 		t.Errorf("TeamName = %q, want %q", p.TeamName, "backend")
@@ -1519,7 +1519,7 @@ func TestParseSSEPayload_SessionToolResult(t *testing.T) {
 func TestParseSSEPayload_SessionDone(t *testing.T) {
 	t.Parallel()
 
-	raw := json.RawMessage(`{"agent_name":"test-writer","job_id":"job-1","task_id":"task-1","status":"completed","final_text":"All tests pass."}`)
+	raw := json.RawMessage(`{"worker_name":"test-writer","job_id":"job-1","task_id":"task-1","status":"completed","final_text":"All tests pass."}`)
 	payload, err := parseSSEPayload("session.done", raw)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -1529,8 +1529,8 @@ func TestParseSSEPayload_SessionDone(t *testing.T) {
 	if !ok {
 		t.Fatalf("payload type = %T, want SessionDonePayload", payload)
 	}
-	if p.AgentName != "test-writer" {
-		t.Errorf("AgentName = %q, want %q", p.AgentName, "test-writer")
+	if p.WorkerName != "test-writer" {
+		t.Errorf("WorkerName = %q, want %q", p.WorkerName, "test-writer")
 	}
 	if p.JobID != "job-1" {
 		t.Errorf("JobID = %q, want %q", p.JobID, "job-1")
@@ -1767,7 +1767,7 @@ func TestParseSSEPayload_AllEventTypes(t *testing.T) {
 		{
 			name:      "blocker.reported",
 			eventType: "blocker.reported",
-			raw:       json.RawMessage(`{"task_id":"t","team_id":"tm","agent_id":"a","description":"d"}`),
+			raw:       json.RawMessage(`{"task_id":"t","team_id":"tm","worker_id":"a","description":"d"}`),
 			wantType:  "service.BlockerReportedPayload",
 		},
 		{
@@ -1785,7 +1785,7 @@ func TestParseSSEPayload_AllEventTypes(t *testing.T) {
 		{
 			name:      "session.started",
 			eventType: "session.started",
-			raw:       json.RawMessage(`{"session_id":"s","agent_name":"a"}`),
+			raw:       json.RawMessage(`{"session_id":"s","worker_name":"a"}`),
 			wantType:  "service.SessionStartedPayload",
 		},
 		{
@@ -1809,7 +1809,7 @@ func TestParseSSEPayload_AllEventTypes(t *testing.T) {
 		{
 			name:      "session.done",
 			eventType: "session.done",
-			raw:       json.RawMessage(`{"agent_name":"a","status":"completed"}`),
+			raw:       json.RawMessage(`{"worker_name":"a","status":"completed"}`),
 			wantType:  "service.SessionDonePayload",
 		},
 		{

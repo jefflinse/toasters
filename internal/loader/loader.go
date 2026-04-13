@@ -1,5 +1,5 @@
 // Package loader walks config directories, parses definition files with
-// agentfmt, resolves cross-references, and rebuilds the database via
+// mdfmt, resolves cross-references, and rebuilds the database via
 // db.Store.RebuildDefinitions.
 package loader
 
@@ -14,7 +14,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/jefflinse/toasters/internal/agentfmt"
+	"github.com/jefflinse/toasters/internal/mdfmt"
 	"github.com/jefflinse/toasters/internal/db"
 	"github.com/jefflinse/toasters/internal/prompt"
 	"github.com/jefflinse/toasters/internal/provider"
@@ -55,9 +55,9 @@ func (l *Loader) Providers() []provider.ProviderConfig {
 // and rebuilds the database. It is idempotent.
 func (l *Loader) Load(ctx context.Context) error {
 	var (
-		skills     []*db.Skill
-		teams      []*db.Team
-		teamAgents []*db.TeamAgent
+		skills      []*db.Skill
+		teams       []*db.Team
+		teamWorkers []*db.TeamWorker
 	)
 
 	// 1. Walk system/ directory.
@@ -68,10 +68,10 @@ func (l *Loader) Load(ctx context.Context) error {
 	skills = append(skills, systemSkills...)
 
 	// System team (single team.md at system/ root).
-	sysTeam, sysTeamAgents := l.loadSystemTeam(systemDir)
+	sysTeam, sysTeamWorkers := l.loadSystemTeam(systemDir)
 	if sysTeam != nil {
 		teams = append(teams, sysTeam)
-		teamAgents = append(teamAgents, sysTeamAgents...)
+		teamWorkers = append(teamWorkers, sysTeamWorkers...)
 	}
 
 	// 2. Walk user/skills/.
@@ -91,9 +91,9 @@ func (l *Loader) Load(ctx context.Context) error {
 
 	// 3. Walk user/teams/.
 	teamsDir := filepath.Join(l.configDir, "user", "teams")
-	uTeams, uAgents, uTeamAgents := l.loadUserTeams(teamsDir)
+	uTeams, uWorkers, uTeamWorkers := l.loadUserTeams(teamsDir)
 	teams = append(teams, uTeams...)
-	teamAgents = append(teamAgents, uTeamAgents...)
+	teamWorkers = append(teamWorkers, uTeamWorkers...)
 
 	// 4. Load providers from providers/*.yaml.
 	provs := l.loadProviders()
@@ -102,7 +102,7 @@ func (l *Loader) Load(ctx context.Context) error {
 	l.provMu.Unlock()
 
 	// 5. Rebuild database.
-	if err := l.store.RebuildDefinitions(ctx, skills, uAgents, teams, teamAgents); err != nil {
+	if err := l.store.RebuildDefinitions(ctx, skills, uWorkers, teams, teamWorkers); err != nil {
 		return fmt.Errorf("rebuilding definitions: %w", err)
 	}
 
@@ -175,7 +175,7 @@ func (l *Loader) loadSkills(dir, source string) []*db.Skill {
 			slog.Warn("skipping oversized definition file", "path", path, "size", info.Size())
 			continue
 		}
-		sd, err := agentfmt.ParseSkill(path)
+		sd, err := mdfmt.ParseSkill(path)
 		if err != nil {
 			slog.Warn("skipping unparseable skill file", "path", path, "error", err)
 			continue
@@ -186,9 +186,9 @@ func (l *Loader) loadSkills(dir, source string) []*db.Skill {
 }
 
 // loadSystemTeam loads the system team from system/team.md.
-func (l *Loader) loadSystemTeam(systemDir string) (*db.Team, []*db.TeamAgent) {
+func (l *Loader) loadSystemTeam(systemDir string) (*db.Team, []*db.TeamWorker) {
 	teamPath := filepath.Join(systemDir, "team.md")
-	td, err := agentfmt.ParseTeam(teamPath)
+	td, err := mdfmt.ParseTeam(teamPath)
 	if err != nil {
 		// No system team file — skip silently.
 		return nil, nil
@@ -197,16 +197,16 @@ func (l *Loader) loadSystemTeam(systemDir string) (*db.Team, []*db.TeamAgent) {
 }
 
 // loadUserTeams walks user/teams/ and loads each team directory.
-func (l *Loader) loadUserTeams(teamsDir string) ([]*db.Team, []*db.Agent, []*db.TeamAgent) {
+func (l *Loader) loadUserTeams(teamsDir string) ([]*db.Team, []*db.Worker, []*db.TeamWorker) {
 	entries, err := os.ReadDir(teamsDir)
 	if err != nil {
 		return nil, nil, nil
 	}
 
 	var (
-		teams      []*db.Team
-		agents     []*db.Agent
-		teamAgents []*db.TeamAgent
+		teams       []*db.Team
+		workers     []*db.Worker
+		teamWorkers []*db.TeamWorker
 	)
 
 	for _, e := range entries {
@@ -231,14 +231,14 @@ func (l *Loader) loadUserTeams(teamsDir string) ([]*db.Team, []*db.Agent, []*db.
 		teamPath := filepath.Join(teamDir, "team.md")
 
 		// Check for role-based team format first.
-		if t, a, ta, ok := l.tryLoadRoleBasedTeam(teamPath, teamID, teamDir, source); ok {
+		if t, w, tw, ok := l.tryLoadRoleBasedTeam(teamPath, teamID, teamDir, source); ok {
 			teams = append(teams, t)
-			agents = append(agents, a...)
-			teamAgents = append(teamAgents, ta...)
+			workers = append(workers, w...)
+			teamWorkers = append(teamWorkers, tw...)
 			continue
 		}
 
-		td, err := agentfmt.ParseTeam(teamPath)
+		td, err := mdfmt.ParseTeam(teamPath)
 		if err != nil {
 			if isAuto {
 				// Auto-teams without team.md get a synthetic TeamDef.
@@ -260,7 +260,7 @@ func (l *Loader) loadUserTeams(teamsDir string) ([]*db.Team, []*db.Agent, []*db.
 		teams = append(teams, team)
 	}
 
-	return teams, agents, teamAgents
+	return teams, workers, teamWorkers
 }
 
 // roleTeamDef is the YAML frontmatter format for role-based teams.
@@ -272,8 +272,8 @@ type roleTeamDef struct {
 }
 
 // tryLoadRoleBasedTeam attempts to parse a team.md as a role-based team.
-// Returns the team, synthetic agents, and team-agent mappings if successful.
-func (l *Loader) tryLoadRoleBasedTeam(teamPath, teamID, teamDir, source string) (*db.Team, []*db.Agent, []*db.TeamAgent, bool) {
+// Returns the team, synthetic workers, and team-worker mappings if successful.
+func (l *Loader) tryLoadRoleBasedTeam(teamPath, teamID, teamDir, source string) (*db.Team, []*db.Worker, []*db.TeamWorker, bool) {
 	data, err := os.ReadFile(teamPath)
 	if err != nil {
 		return nil, nil, nil, false
@@ -309,48 +309,48 @@ func (l *Loader) tryLoadRoleBasedTeam(teamPath, teamID, teamDir, source string) 
 		SourcePath:  teamDir,
 	}
 
-	var agents []*db.Agent
-	var teamAgents []*db.TeamAgent
+	var workers []*db.Worker
+	var teamWorkers []*db.TeamWorker
 
-	// Create a synthetic agent for the lead role.
+	// Create a synthetic worker for the lead role.
 	if def.Lead != "" {
-		leadAgentID := teamID + "/" + def.Lead
-		team.LeadAgent = leadAgentID
+		leadWorkerID := teamID + "/" + def.Lead
+		team.LeadWorker = leadWorkerID
 
-		leadAgent := l.syntheticAgentFromRole(def.Lead, leadAgentID, teamID, source)
-		agents = append(agents, leadAgent)
-		teamAgents = append(teamAgents, &db.TeamAgent{
-			TeamID:  teamID,
-			AgentID: leadAgentID,
-			Role:    "lead",
+		leadWorker := l.syntheticWorkerFromRole(def.Lead, leadWorkerID, teamID, source)
+		workers = append(workers, leadWorker)
+		teamWorkers = append(teamWorkers, &db.TeamWorker{
+			TeamID:   teamID,
+			WorkerID: leadWorkerID,
+			Role:     "lead",
 		})
 	}
 
-	// Create synthetic agents for each worker role.
+	// Create synthetic workers for each worker role.
 	// Skip any role that matches the lead — it's already registered above.
 	for _, roleName := range def.Roles {
 		if roleName == def.Lead {
 			continue
 		}
-		agentID := teamID + "/" + roleName
-		agent := l.syntheticAgentFromRole(roleName, agentID, teamID, source)
-		agents = append(agents, agent)
-		teamAgents = append(teamAgents, &db.TeamAgent{
-			TeamID:  teamID,
-			AgentID: agentID,
-			Role:    "worker",
+		workerID := teamID + "/" + roleName
+		worker := l.syntheticWorkerFromRole(roleName, workerID, teamID, source)
+		workers = append(workers, worker)
+		teamWorkers = append(teamWorkers, &db.TeamWorker{
+			TeamID:   teamID,
+			WorkerID: workerID,
+			Role:     "worker",
 		})
 	}
 
-	return team, agents, teamAgents, true
+	return team, workers, teamWorkers, true
 }
 
-// syntheticAgentFromRole creates a db.Agent from a prompt engine role.
-// The agent's system prompt is left empty — it will be composed by the
+// syntheticWorkerFromRole creates a db.Worker from a prompt engine role.
+// The worker's system prompt is left empty — it will be composed by the
 // prompt engine at spawn time.
-func (l *Loader) syntheticAgentFromRole(roleName, agentID, teamID, source string) *db.Agent {
-	agent := &db.Agent{
-		ID:     agentID,
+func (l *Loader) syntheticWorkerFromRole(roleName, workerID, teamID, source string) *db.Worker {
+	worker := &db.Worker{
+		ID:     workerID,
 		Name:   roleName,
 		Mode:   "worker",
 		Source: source,
@@ -360,21 +360,21 @@ func (l *Loader) syntheticAgentFromRole(roleName, agentID, teamID, source string
 	// If the prompt engine is available, populate metadata from the role.
 	if l.promptEngine != nil {
 		if role := l.promptEngine.Role(roleName); role != nil {
-			agent.Name = role.Name
-			agent.Description = role.Description
-			agent.Mode = role.Mode
-			if agent.Mode == "" {
-				agent.Mode = "worker"
+			worker.Name = role.Name
+			worker.Description = role.Description
+			worker.Mode = role.Mode
+			if worker.Mode == "" {
+				worker.Mode = "worker"
 			}
 		}
 	}
 
-	return agent
+	return worker
 }
 
 // --- Conversion helpers ---
 
-func convertSkill(sd *agentfmt.SkillDef, source, path string) *db.Skill {
+func convertSkill(sd *mdfmt.SkillDef, source, path string) *db.Skill {
 	return &db.Skill{
 		ID:          Slugify(sd.Name),
 		Name:        sd.Name,
@@ -386,7 +386,7 @@ func convertSkill(sd *agentfmt.SkillDef, source, path string) *db.Skill {
 	}
 }
 
-func convertTeam(td *agentfmt.TeamDef, teamID, source, path string, isAuto bool) *db.Team {
+func convertTeam(td *mdfmt.TeamDef, teamID, source, path string, isAuto bool) *db.Team {
 	return &db.Team{
 		ID:          teamID,
 		Name:        td.Name,

@@ -131,7 +131,7 @@ func TestReportTaskProgress_Success(t *testing.T) {
 	params := ReportTaskProgressParams{
 		JobID:   "job-1",
 		TaskID:  "task-1",
-		AgentID: "agent-1",
+		WorkerID: "agent-1",
 		Status:  "in_progress",
 		Message: "working on it",
 	}
@@ -159,8 +159,8 @@ func TestReportTaskProgress_Success(t *testing.T) {
 	if r.TaskID != "task-1" {
 		t.Errorf("TaskID = %q, want %q", r.TaskID, "task-1")
 	}
-	if r.AgentID != "agent-1" {
-		t.Errorf("AgentID = %q, want %q", r.AgentID, "agent-1")
+	if r.WorkerID != "agent-1" {
+		t.Errorf("WorkerID = %q, want %q", r.WorkerID, "agent-1")
 	}
 	if r.Status != "in_progress" {
 		t.Errorf("Status = %q, want %q", r.Status, "in_progress")
@@ -200,7 +200,7 @@ func TestReportTaskProgress_EmptyOptionalFields(t *testing.T) {
 
 	createTestJob(t, ctx, store, "job-empty")
 
-	// TaskID and AgentID are optional — should succeed with empty strings.
+	// TaskID and WorkerID are optional — should succeed with empty strings.
 	params := ReportTaskProgressParams{
 		JobID:   "job-empty",
 		Status:  "completed",
@@ -245,7 +245,7 @@ func TestReportBlocker_Success(t *testing.T) {
 	params := ReportBlockerParams{
 		JobID:       "job-blocker",
 		TaskID:      "task-1",
-		AgentID:     "agent-1",
+		WorkerID:     "agent-1",
 		Description: "cannot access the database",
 		Severity:    "high",
 	}
@@ -512,7 +512,7 @@ func TestRequestReview_Success(t *testing.T) {
 	params := RequestReviewParams{
 		JobID:        "job-rr",
 		TaskID:       "task-rr",
-		AgentID:      "agent-rr",
+		WorkerID:      "agent-rr",
 		ArtifactPath: "/path/to/artifact.go",
 		Notes:        "please review this carefully",
 	}
@@ -810,7 +810,7 @@ func TestQueryJobContext_RecentProgressLimit(t *testing.T) {
 			JobID:   "job-limit",
 			Status:  "in_progress",
 			Message: "step",
-			AgentID: string(rune('a' + i)),
+			WorkerID: string(rune('a' + i)),
 		}); err != nil {
 			t.Fatalf("ReportProgress(%d): %v", i, err)
 		}

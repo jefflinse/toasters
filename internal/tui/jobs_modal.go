@@ -398,7 +398,7 @@ func (m *Model) renderJobsModal() string {
 		}
 
 		// Panel title.
-		panelTitle := "Agents"
+		panelTitle := "Workers"
 		if selectedTask != nil {
 			panelTitle = truncateStr(selectedTask.Title, rightInnerW)
 		}
@@ -418,13 +418,13 @@ func (m *Model) renderJobsModal() string {
 				var placeholder string
 				switch selectedTask.Status {
 				case service.TaskStatusPending:
-					placeholder = "No agents assigned"
+					placeholder = "No workers assigned"
 				case service.TaskStatusInProgress:
-					placeholder = "Waiting for agents..."
+					placeholder = "Waiting for workers..."
 				case service.TaskStatusCompleted:
 					placeholder = "Task completed"
 				default:
-					placeholder = "No agents assigned"
+					placeholder = "No workers assigned"
 				}
 				rightLines = append(rightLines, "")
 				rightLines = append(rightLines, lipgloss.PlaceHorizontal(rightInnerW, lipgloss.Center, DimStyle.Render(placeholder)))
@@ -501,7 +501,7 @@ func (m *Model) renderJobsModal() string {
 	if !canCancel {
 		cancelHint = DimStyle.Render(cancelHint)
 	}
-	enterHint := DimStyle.Render("[Enter] View Agents")
+	enterHint := DimStyle.Render("[Enter] View Workers")
 	if m.jobsModal.focus != 1 {
 		enterHint = ""
 	}

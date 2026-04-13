@@ -58,7 +58,7 @@ const (
 	// Payload: TaskFailedPayload.
 	EventTypeTaskFailed EventType = "task.failed"
 
-	// EventTypeBlockerReported is sent when an agent reports a blocker.
+	// EventTypeBlockerReported is sent when a worker reports a blocker.
 	// Payload: BlockerReportedPayload.
 	EventTypeBlockerReported EventType = "blocker.reported"
 
@@ -72,15 +72,15 @@ const (
 	// The TUI updates its local ProgressState from this event.
 	EventTypeProgressUpdate EventType = "progress.update"
 
-	// EventTypeSessionStarted is sent when a new agent session begins.
+	// EventTypeSessionStarted is sent when a new worker session begins.
 	// Payload: SessionStartedPayload. Carries SessionID.
 	EventTypeSessionStarted EventType = "session.started"
 
-	// EventTypeSessionText carries streamed text from an agent session.
+	// EventTypeSessionText carries streamed text from a worker session.
 	// Payload: SessionTextPayload. Carries SessionID.
 	EventTypeSessionText EventType = "session.text"
 
-	// EventTypeSessionToolCall is sent when an agent invokes a tool.
+	// EventTypeSessionToolCall is sent when a worker invokes a tool.
 	// Payload: SessionToolCallPayload. Carries SessionID.
 	EventTypeSessionToolCall EventType = "session.tool_call"
 
@@ -88,13 +88,13 @@ const (
 	// Payload: SessionToolResultPayload. Carries SessionID.
 	EventTypeSessionToolResult EventType = "session.tool_result"
 
-	// EventTypeSessionDone is sent when an agent session completes.
+	// EventTypeSessionDone is sent when a worker session completes.
 	// Payload: SessionDonePayload. Carries SessionID.
 	EventTypeSessionDone EventType = "session.done"
 
 	// EventTypeDefinitionsReloaded is sent when definition files change and are
 	// reloaded by the fsnotify watcher. The TUI should refresh its local copies
-	// of skills, agents, and teams. Payload: nil (no payload needed).
+	// of skills, workers, and teams. Payload: nil (no payload needed).
 	EventTypeDefinitionsReloaded EventType = "definitions.reloaded"
 
 	// EventTypeOperationCompleted is sent when an async operation finishes
@@ -150,7 +150,7 @@ type Event struct {
 	// SendMessage call that initiated the turn. Empty for non-operator events.
 	TurnID string
 
-	// SessionID correlates session.* events to a specific agent session.
+	// SessionID correlates session.* events to a specific worker session.
 	// Empty for non-session events.
 	SessionID string
 
@@ -267,7 +267,7 @@ type TaskFailedPayload struct {
 type BlockerReportedPayload struct {
 	TaskID      string
 	TeamID      string
-	AgentID     string
+	WorkerID    string
 	Description string
 	Questions   []string // clarifying questions for the user
 }
@@ -289,7 +289,7 @@ type ProgressUpdatePayload struct {
 // SessionStartedPayload is the payload for EventTypeSessionStarted events.
 type SessionStartedPayload struct {
 	SessionID      string
-	AgentName      string
+	WorkerName     string
 	TeamName       string // may be empty
 	Task           string // short human-readable task description
 	JobID          string
@@ -299,7 +299,7 @@ type SessionStartedPayload struct {
 }
 
 // SessionTextPayload is the payload for EventTypeSessionText events.
-// Text tokens from an agent session are delivered here (not batched — the TUI
+// Text tokens from a worker session are delivered here (not batched — the TUI
 // accumulates them into the session's output buffer).
 type SessionTextPayload struct {
 	Text string
@@ -317,7 +317,7 @@ type SessionToolResultPayload struct {
 
 // SessionDonePayload is the payload for EventTypeSessionDone events.
 type SessionDonePayload struct {
-	AgentName string
+	WorkerName string
 	JobID     string
 	TaskID    string
 	Status    string // "completed", "failed", "cancelled"

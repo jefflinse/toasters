@@ -104,19 +104,19 @@ func (s *noopStore) UpsertSkill(_ context.Context, _ *db.Skill) error        { r
 func (s *noopStore) GetSkill(_ context.Context, _ string) (*db.Skill, error) { return nil, nil }
 func (s *noopStore) ListSkills(_ context.Context) ([]*db.Skill, error)       { return nil, nil }
 func (s *noopStore) DeleteAllSkills(_ context.Context) error                 { return nil }
-func (s *noopStore) UpsertAgent(_ context.Context, _ *db.Agent) error        { return nil }
-func (s *noopStore) GetAgent(_ context.Context, _ string) (*db.Agent, error) { return nil, nil }
-func (s *noopStore) ListAgents(_ context.Context) ([]*db.Agent, error)       { return nil, nil }
-func (s *noopStore) DeleteAllAgents(_ context.Context) error                 { return nil }
-func (s *noopStore) UpsertTeam(_ context.Context, _ *db.Team) error          { return nil }
-func (s *noopStore) GetTeam(_ context.Context, _ string) (*db.Team, error)   { return nil, nil }
-func (s *noopStore) ListTeams(_ context.Context) ([]*db.Team, error)         { return nil, nil }
-func (s *noopStore) DeleteAllTeams(_ context.Context) error                  { return nil }
-func (s *noopStore) AddTeamAgent(_ context.Context, _ *db.TeamAgent) error   { return nil }
-func (s *noopStore) ListTeamAgents(_ context.Context, _ string) ([]*db.TeamAgent, error) {
+func (s *noopStore) UpsertWorker(_ context.Context, _ *db.Worker) error        { return nil }
+func (s *noopStore) GetWorker(_ context.Context, _ string) (*db.Worker, error) { return nil, nil }
+func (s *noopStore) ListWorkers(_ context.Context) ([]*db.Worker, error)       { return nil, nil }
+func (s *noopStore) DeleteAllWorkers(_ context.Context) error                  { return nil }
+func (s *noopStore) UpsertTeam(_ context.Context, _ *db.Team) error            { return nil }
+func (s *noopStore) GetTeam(_ context.Context, _ string) (*db.Team, error)     { return nil, nil }
+func (s *noopStore) ListTeams(_ context.Context) ([]*db.Team, error)           { return nil, nil }
+func (s *noopStore) DeleteAllTeams(_ context.Context) error                    { return nil }
+func (s *noopStore) AddTeamWorker(_ context.Context, _ *db.TeamWorker) error   { return nil }
+func (s *noopStore) ListTeamWorkers(_ context.Context, _ string) ([]*db.TeamWorker, error) {
 	return nil, nil
 }
-func (s *noopStore) DeleteAllTeamAgents(_ context.Context) error              { return nil }
+func (s *noopStore) DeleteAllTeamWorkers(_ context.Context) error              { return nil }
 func (s *noopStore) CreateFeedEntry(_ context.Context, _ *db.FeedEntry) error { return nil }
 func (s *noopStore) ListFeedEntries(_ context.Context, _ string, _ int) ([]*db.FeedEntry, error) {
 	return nil, nil
@@ -124,14 +124,14 @@ func (s *noopStore) ListFeedEntries(_ context.Context, _ string, _ int) ([]*db.F
 func (s *noopStore) ListRecentFeedEntries(_ context.Context, _ int) ([]*db.FeedEntry, error) {
 	return nil, nil
 }
-func (s *noopStore) RebuildDefinitions(_ context.Context, _ []*db.Skill, _ []*db.Agent, _ []*db.Team, _ []*db.TeamAgent) error {
+func (s *noopStore) RebuildDefinitions(_ context.Context, _ []*db.Skill, _ []*db.Worker, _ []*db.Team, _ []*db.TeamWorker) error {
 	return nil
 }
-func (s *noopStore) CreateSession(_ context.Context, _ *db.AgentSession) error { return nil }
+func (s *noopStore) CreateSession(_ context.Context, _ *db.WorkerSession) error { return nil }
 func (s *noopStore) UpdateSession(_ context.Context, _ string, _ db.SessionUpdate) error {
 	return nil
 }
-func (s *noopStore) GetActiveSessions(_ context.Context) ([]*db.AgentSession, error) {
+func (s *noopStore) GetActiveSessions(_ context.Context) ([]*db.WorkerSession, error) {
 	return nil, nil
 }
 func (s *noopStore) LogArtifact(_ context.Context, _ *db.Artifact) error { return nil }

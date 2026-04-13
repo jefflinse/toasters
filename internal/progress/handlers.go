@@ -12,8 +12,8 @@ import (
 type ReportTaskProgressParams struct {
 	JobID   string `json:"job_id"`
 	TaskID  string `json:"task_id"`
-	AgentID string `json:"agent_id"`
-	Status  string `json:"status"`
+	WorkerID string `json:"worker_id"`
+	Status   string `json:"status"`
 	Message string `json:"message"`
 }
 
@@ -21,7 +21,7 @@ type ReportTaskProgressParams struct {
 type ReportBlockerParams struct {
 	JobID       string `json:"job_id"`
 	TaskID      string `json:"task_id"`
-	AgentID     string `json:"agent_id"`
+	WorkerID    string `json:"worker_id"`
 	Description string `json:"description"`
 	Severity    string `json:"severity"` // "low", "medium", "high"
 }
@@ -38,7 +38,7 @@ type UpdateTaskStatusParams struct {
 type RequestReviewParams struct {
 	JobID        string `json:"job_id"`
 	TaskID       string `json:"task_id"`
-	AgentID      string `json:"agent_id"`
+	WorkerID     string `json:"worker_id"`
 	ArtifactPath string `json:"artifact_path"`
 	Notes        string `json:"notes"`
 }
@@ -77,7 +77,7 @@ func ReportTaskProgress(ctx context.Context, store db.Store, params ReportTaskPr
 	report := &db.ProgressReport{
 		JobID:   params.JobID,
 		TaskID:  params.TaskID,
-		AgentID: params.AgentID,
+		WorkerID: params.WorkerID,
 		Status:  params.Status,
 		Message: params.Message,
 	}
@@ -90,7 +90,7 @@ func ReportTaskProgress(ctx context.Context, store db.Store, params ReportTaskPr
 // validSeverities is the set of accepted severity values for report_blocker.
 var validSeverities = map[string]bool{"low": true, "medium": true, "high": true}
 
-// ReportBlocker records a blocker that prevents an agent from proceeding.
+// ReportBlocker records a blocker that prevents a worker from proceeding.
 func ReportBlocker(ctx context.Context, store db.Store, params ReportBlockerParams) (string, error) {
 	if params.JobID == "" {
 		return "", fmt.Errorf("job_id is required")
@@ -101,7 +101,7 @@ func ReportBlocker(ctx context.Context, store db.Store, params ReportBlockerPara
 	report := &db.ProgressReport{
 		JobID:   params.JobID,
 		TaskID:  params.TaskID,
-		AgentID: params.AgentID,
+		WorkerID: params.WorkerID,
 		Status:  "blocked",
 		Message: fmt.Sprintf("[%s] %s", params.Severity, params.Description),
 	}
@@ -151,7 +151,7 @@ func RequestReview(ctx context.Context, store db.Store, params RequestReviewPara
 	report := &db.ProgressReport{
 		JobID:   params.JobID,
 		TaskID:  params.TaskID,
-		AgentID: params.AgentID,
+		WorkerID: params.WorkerID,
 		Status:  "review_requested",
 		Message: "Review requested for " + params.ArtifactPath,
 	}

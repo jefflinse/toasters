@@ -299,23 +299,11 @@ func (m *shutdownTestDefinitions) DeleteSkill(ctx context.Context, id string) er
 func (m *shutdownTestDefinitions) GenerateSkill(ctx context.Context, prompt string) (string, error) {
 	return "", nil
 }
-func (m *shutdownTestDefinitions) ListAgents(ctx context.Context) ([]service.Agent, error) {
+func (m *shutdownTestDefinitions) ListWorkers(ctx context.Context) ([]service.Worker, error) {
 	return nil, nil
 }
-func (m *shutdownTestDefinitions) GetAgent(ctx context.Context, id string) (service.Agent, error) {
-	return service.Agent{}, nil
-}
-func (m *shutdownTestDefinitions) CreateAgent(ctx context.Context, name string) (service.Agent, error) {
-	return service.Agent{}, nil
-}
-func (m *shutdownTestDefinitions) DeleteAgent(ctx context.Context, id string) error {
-	return nil
-}
-func (m *shutdownTestDefinitions) AddSkillToAgent(ctx context.Context, agentID, skillName string) error {
-	return nil
-}
-func (m *shutdownTestDefinitions) GenerateAgent(ctx context.Context, prompt string) (string, error) {
-	return "", nil
+func (m *shutdownTestDefinitions) GetWorker(ctx context.Context, id string) (service.Worker, error) {
+	return service.Worker{}, nil
 }
 func (m *shutdownTestDefinitions) ListTeams(ctx context.Context) ([]service.TeamView, error) {
 	return nil, nil
@@ -327,9 +315,6 @@ func (m *shutdownTestDefinitions) CreateTeam(ctx context.Context, name string) (
 	return service.TeamView{}, nil
 }
 func (m *shutdownTestDefinitions) DeleteTeam(ctx context.Context, id string) error {
-	return nil
-}
-func (m *shutdownTestDefinitions) AddAgentToTeam(ctx context.Context, teamID, agentID string) error {
 	return nil
 }
 func (m *shutdownTestDefinitions) SetCoordinator(ctx context.Context, teamID, agentName string) error {

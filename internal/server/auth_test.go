@@ -245,7 +245,7 @@ func TestAuth_AllProtectedEndpoints_RequireAuth(t *testing.T) {
 		{"operator status", http.MethodGet, "/api/v1/operator/status"},
 		{"list skills", http.MethodGet, "/api/v1/skills"},
 		{"list jobs", http.MethodGet, "/api/v1/jobs"},
-		{"list agents", http.MethodGet, "/api/v1/agents"},
+		{"list workers", http.MethodGet, "/api/v1/workers"},
 		{"list teams", http.MethodGet, "/api/v1/teams"},
 		{"list sessions", http.MethodGet, "/api/v1/sessions"},
 		{"list models", http.MethodGet, "/api/v1/models"},

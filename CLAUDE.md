@@ -47,30 +47,30 @@ The codebase is a layered hub-and-spoke around `internal/service`. Read this sec
 
 - **`internal/service`** is the central hub. The `Service` interface composes 5 sub-interfaces: `OperatorService`, `DefinitionService`, `JobService`, `SessionService`, `SystemService`. `LocalService` in `internal/service/local.go` is the in-process implementation. **All state mutation and queries go through this interface** — the TUI and the HTTP server never touch the DB directly. The service emits a unified event stream that both the local TUI and SSE clients subscribe to. Event types live in `internal/service/events.go`.
 
-- **`internal/runtime`** spawns and manages agent sessions as goroutines. `runtime.go` is the spawner; `session.go` is one agent's conversation loop; `tools.go` is the built-in tool set (file I/O, shell, web, subagents, MCP routing); `team_lead.go` is the coordinator agent for team dispatch; `layered_tools.go` handles tool access scoping.
+- **`internal/runtime`** spawns and manages worker sessions as goroutines. `runtime.go` is the spawner; `session.go` is one worker's conversation loop; `tools.go` is the built-in tool set (file I/O, shell, web, spawn_worker, MCP routing); `team_lead.go` is the coordinator worker for team dispatch; `layered_tools.go` handles tool access scoping.
 
 - **`internal/operator`** is the operator LLM coordination layer — a special "session" with its own tool set (`createJob`, `assignTask`, `reportBlocker`, team queries, decomposer tools). It drives the top-level state machine.
 
-- **`internal/tui`** is a thin Bubble Tea client. `event_consumer.go` translates service events into Bubble Tea messages; `update.go` / `view.go` / `model.go` are the standard Bubble Tea triplet. **The TUI is fully decoupled from DB and runtime internals — don't reintroduce direct access.** It is also a *viewer*, not a *router*: don't add code that pushes state back into the operator from the TUI (an old `notifyOperator` hack tried this and was deleted; agent completion is reported to the operator via team_lead's `complete_task` tool, not via the TUI).
+- **`internal/tui`** is a thin Bubble Tea client. `event_consumer.go` translates service events into Bubble Tea messages; `update.go` / `view.go` / `model.go` are the standard Bubble Tea triplet. **The TUI is fully decoupled from DB and runtime internals — don't reintroduce direct access.** It is also a *viewer*, not a *router*: don't add code that pushes state back into the operator from the TUI (an old `notifyOperator` hack tried this and was deleted; worker completion is reported to the operator via team_lead's `complete_task` tool, not via the TUI).
 
 - **`internal/server`** + **`internal/client`** + **`internal/sse`** — REST/SSE server, HTTP client used in remote-client mode, and SSE protocol utilities.
 
-- **`internal/provider`** — multi-provider LLM client. Provider config was recently restructured (commit `12de16d`) with stable IDs and nested agent defaults, and API keys are required (no OS keychain — see commit `79906ec`).
+- **`internal/provider`** — multi-provider LLM client. Provider config was recently restructured (commit `12de16d`) with stable IDs and nested worker defaults, and API keys are required (no OS keychain — see commit `79906ec`).
 
 - **`internal/db`** — SQLite (`modernc.org/sqlite`) schema and queries. **Only `internal/service` should call into this package.**
 
-- **`internal/loader`** — loads skills/agents/teams from disk (`~/.config/toasters/`, plus `~/.opencode/agents/` for auto-team detection); uses fsnotify to watch for changes.
+- **`internal/loader`** — loads skills/workers/teams from disk (`~/.config/toasters/`, plus `~/.opencode/agents/` for auto-team detection); uses fsnotify to watch for changes.
 
-- **`internal/mcp`** is the MCP client manager (consumes external tools). **`internal/progress`** is the MCP server side that exposes progress-reporting tools back to agents.
+- **`internal/mcp`** is the MCP client manager (consumes external tools). **`internal/progress`** is the MCP server side that exposes progress-reporting tools back to workers.
 
-- Supporting packages: `internal/auth`, `internal/bootstrap`, `internal/compose`, `internal/agentfmt`, `internal/tooldef`, `internal/httputil`, `internal/config`.
+- Supporting packages: `internal/auth`, `internal/bootstrap`, `internal/compose`, `internal/mdfmt`, `internal/tooldef`, `internal/httputil`, `internal/config`.
 
 ## Conventions worth knowing
 
 - **TUI never accesses state directly.** All reads return service DTOs; all updates come through the service event stream. When adding a new event type, emit it through the service — not via a side channel — so SSE clients receive it for free.
 - **Concurrency.** Sessions use atomic counters for token counts (lock-free reads); event subscriptions are buffered channels (size 64); per-session state is mutex-protected.
 - **Tests are co-located** (`*_test.go` next to source). Integration tests live in `cmd/integration_test.go`. The race detector is expected to stay clean across all packages.
-- **Definitions** (skills, agents, teams) are markdown files with YAML front matter, parsed by `internal/agentfmt` and `internal/tooldef`.
+- **Definitions** (skills, workers, teams) are markdown files with YAML front matter, parsed by `internal/mdfmt` and `internal/tooldef`.
 - **Errors**: package-level sentinels in `internal/service/errors.go` (`ErrNotFound`, `ErrConflict`, …); HTTP status mapping lives in `internal/server/server.go`.
 
 ## Where the deeper docs live

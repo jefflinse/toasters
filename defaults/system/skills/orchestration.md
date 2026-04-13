@@ -21,7 +21,7 @@ Tasks move through these statuses:
 
 System agents use these tools to coordinate work:
 
-- **consult_agent**: Spawn a system agent session for planning, scheduling, or blocker triage. The agent runs to completion and returns its result.
+- **consult_worker**: Spawn a system worker session for planning, scheduling, or blocker triage. The worker runs to completion and returns its result.
 - **create_job**: Create a new top-level job with a description and workspace directory.
 - **create_task**: Add a task to a job. Tasks have descriptions and are assigned to teams.
 - **assign_task**: Route a task to a specific team for execution.

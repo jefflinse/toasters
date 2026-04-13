@@ -72,7 +72,7 @@ func (m Model) renderLeftPanel(panelWidth, panelHeight int) string {
 	agentCount := len(sortedRT)
 	middleContentH := 1 + agentCount // "Agents" header + one line per agent
 	if agentCount == 0 {
-		middleContentH = 2 // header + "No agents running"
+		middleContentH = 2 // header + "No workers running"
 	}
 	if m.focused == focusAgents {
 		middleContentH++ // hint line
@@ -180,9 +180,9 @@ func (m Model) renderLeftPanel(panelWidth, panelHeight int) string {
 
 	// --- Middle pane: Agents ---
 	var agentLines []string
-	agentsTitle := gradientText("Agents", [3]uint8{50, 130, 255}, [3]uint8{0, 200, 200})
+	agentsTitle := gradientText("Workers", [3]uint8{50, 130, 255}, [3]uint8{0, 200, 200})
 	if m.focused == focusAgents && m.focusAnimFrames > 0 {
-		agentsTitle = rainbowText("Agents", m.spinnerFrame)
+		agentsTitle = rainbowText("Workers", m.spinnerFrame)
 	}
 	agentLines = append(agentLines, agentsTitle)
 
@@ -209,7 +209,7 @@ func (m Model) renderLeftPanel(panelWidth, panelHeight int) string {
 	}
 
 	if !hasAnyRuntime {
-		agentLines = append(agentLines, DimStyle.Italic(true).Render("No agents running"))
+		agentLines = append(agentLines, DimStyle.Italic(true).Render("No workers running"))
 	}
 	if m.focused == focusAgents {
 		agentLines = append(agentLines, DimStyle.Render("Enter → grid view"))

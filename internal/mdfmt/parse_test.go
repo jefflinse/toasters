@@ -1,4 +1,4 @@
-package agentfmt_test
+package mdfmt_test
 
 import (
 	"os"
@@ -6,7 +6,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/jefflinse/toasters/internal/agentfmt"
+	"github.com/jefflinse/toasters/internal/mdfmt"
 )
 
 // writeTestFile creates a temporary .md file with the given content and returns its path.
@@ -33,7 +33,7 @@ tools:
 You are a code review specialist. Review the provided code carefully.`
 
 	path := writeTestFile(t, dir, "code-review.md", content)
-	def, err := agentfmt.ParseSkill(path)
+	def, err := mdfmt.ParseSkill(path)
 	if err != nil {
 		t.Fatalf("ParseSkill: %v", err)
 	}
@@ -72,7 +72,7 @@ model: claude-sonnet-4-20250514
 We value clean code, thorough testing, and clear communication.`
 
 	path := writeTestFile(t, dir, "coding.md", content)
-	def, err := agentfmt.ParseTeam(path)
+	def, err := mdfmt.ParseTeam(path)
 	if err != nil {
 		t.Fatalf("ParseTeam: %v", err)
 	}
@@ -114,14 +114,14 @@ description: A simple skill
 Do the thing.`
 
 	path := writeTestFile(t, dir, "my-skill.md", content)
-	defType, def, err := agentfmt.ParseFile(path)
+	defType, def, err := mdfmt.ParseFile(path)
 	if err != nil {
 		t.Fatalf("ParseFile: %v", err)
 	}
-	if defType != agentfmt.DefSkill {
-		t.Errorf("DefType = %q, want %q", defType, agentfmt.DefSkill)
+	if defType != mdfmt.DefSkill {
+		t.Errorf("DefType = %q, want %q", defType, mdfmt.DefSkill)
 	}
-	skill, ok := def.(*agentfmt.SkillDef)
+	skill, ok := def.(*mdfmt.SkillDef)
 	if !ok {
 		t.Fatalf("def is %T, want *SkillDef", def)
 	}
@@ -145,14 +145,14 @@ agents:
 Team culture doc.`
 
 	path := writeTestFile(t, dir, "my-team.md", content)
-	defType, def, err := agentfmt.ParseFile(path)
+	defType, def, err := mdfmt.ParseFile(path)
 	if err != nil {
 		t.Fatalf("ParseFile: %v", err)
 	}
-	if defType != agentfmt.DefTeam {
-		t.Errorf("DefType = %q, want %q", defType, agentfmt.DefTeam)
+	if defType != mdfmt.DefTeam {
+		t.Errorf("DefType = %q, want %q", defType, mdfmt.DefTeam)
 	}
-	team, ok := def.(*agentfmt.TeamDef)
+	team, ok := def.(*mdfmt.TeamDef)
 	if !ok {
 		t.Fatalf("def is %T, want *TeamDef", def)
 	}
@@ -175,12 +175,12 @@ agents:
 Body.`
 
 	path := writeTestFile(t, dir, "headless-team.md", content)
-	defType, _, err := agentfmt.ParseFile(path)
+	defType, _, err := mdfmt.ParseFile(path)
 	if err != nil {
 		t.Fatalf("ParseFile: %v", err)
 	}
-	if defType != agentfmt.DefTeam {
-		t.Errorf("DefType = %q, want %q", defType, agentfmt.DefTeam)
+	if defType != mdfmt.DefTeam {
+		t.Errorf("DefType = %q, want %q", defType, mdfmt.DefTeam)
 	}
 }
 
@@ -195,14 +195,14 @@ description: A nameless skill
 Do stuff.`
 
 	path := writeTestFile(t, dir, "my-cool-skill.md", content)
-	defType, def, err := agentfmt.ParseFile(path)
+	defType, def, err := mdfmt.ParseFile(path)
 	if err != nil {
 		t.Fatalf("ParseFile: %v", err)
 	}
-	if defType != agentfmt.DefSkill {
-		t.Errorf("DefType = %q, want %q", defType, agentfmt.DefSkill)
+	if defType != mdfmt.DefSkill {
+		t.Errorf("DefType = %q, want %q", defType, mdfmt.DefSkill)
 	}
-	skill := def.(*agentfmt.SkillDef)
+	skill := def.(*mdfmt.SkillDef)
 	if skill.Name != "my-cool-skill" {
 		t.Errorf("Name = %q, want %q", skill.Name, "my-cool-skill")
 	}
@@ -219,11 +219,11 @@ lead: boss
 Culture.`
 
 	path := writeTestFile(t, dir, "unnamed-team.md", content)
-	_, def, err := agentfmt.ParseFile(path)
+	_, def, err := mdfmt.ParseFile(path)
 	if err != nil {
 		t.Fatalf("ParseFile: %v", err)
 	}
-	team := def.(*agentfmt.TeamDef)
+	team := def.(*mdfmt.TeamDef)
 	if team.Name != "unnamed-team" {
 		t.Errorf("Name = %q, want %q", team.Name, "unnamed-team")
 	}
@@ -238,14 +238,14 @@ func TestParseFile_EmptyFrontmatter(t *testing.T) {
 Just a body with empty frontmatter.`
 
 	path := writeTestFile(t, dir, "empty-fm.md", content)
-	defType, def, err := agentfmt.ParseFile(path)
+	defType, def, err := mdfmt.ParseFile(path)
 	if err != nil {
 		t.Fatalf("ParseFile: %v", err)
 	}
-	if defType != agentfmt.DefSkill {
-		t.Errorf("DefType = %q, want %q", defType, agentfmt.DefSkill)
+	if defType != mdfmt.DefSkill {
+		t.Errorf("DefType = %q, want %q", defType, mdfmt.DefSkill)
 	}
-	skill := def.(*agentfmt.SkillDef)
+	skill := def.(*mdfmt.SkillDef)
 	if skill.Name != "empty-fm" {
 		t.Errorf("Name = %q, want %q", skill.Name, "empty-fm")
 	}
@@ -261,7 +261,7 @@ func TestParseFile_MissingFrontmatter(t *testing.T) {
 	content := `No frontmatter here, just text.`
 
 	path := writeTestFile(t, dir, "no-fm.md", content)
-	_, _, err := agentfmt.ParseFile(path)
+	_, _, err := mdfmt.ParseFile(path)
 	if err == nil {
 		t.Fatal("expected error for missing frontmatter, got nil")
 	}
@@ -269,7 +269,7 @@ func TestParseFile_MissingFrontmatter(t *testing.T) {
 
 func TestParseFile_NonexistentFile(t *testing.T) {
 	t.Parallel()
-	_, _, err := agentfmt.ParseFile("/nonexistent/path/agent.md")
+	_, _, err := mdfmt.ParseFile("/nonexistent/path/agent.md")
 	if err == nil {
 		t.Fatal("expected error for nonexistent file, got nil")
 	}
@@ -286,7 +286,7 @@ name: [invalid yaml
 Body.`
 
 	path := writeTestFile(t, dir, "bad-yaml.md", content)
-	_, _, err := agentfmt.ParseFile(path)
+	_, _, err := mdfmt.ParseFile(path)
 	if err == nil {
 		t.Fatal("expected error for invalid YAML, got nil")
 	}
@@ -298,11 +298,11 @@ func TestParseBytes(t *testing.T) {
 	t.Run("skill", func(t *testing.T) {
 		t.Parallel()
 		data := []byte("---\nname: test-skill\ndescription: A skill\n---\nSkill body.")
-		result, err := agentfmt.ParseBytes(data, agentfmt.DefSkill)
+		result, err := mdfmt.ParseBytes(data, mdfmt.DefSkill)
 		if err != nil {
 			t.Fatalf("ParseBytes: %v", err)
 		}
-		skill, ok := result.(*agentfmt.SkillDef)
+		skill, ok := result.(*mdfmt.SkillDef)
 		if !ok {
 			t.Fatalf("result is %T, want *SkillDef", result)
 		}
@@ -317,11 +317,11 @@ func TestParseBytes(t *testing.T) {
 	t.Run("team", func(t *testing.T) {
 		t.Parallel()
 		data := []byte("---\nname: test-team\ndescription: A team\nlead: boss\n---\nTeam body.")
-		result, err := agentfmt.ParseBytes(data, agentfmt.DefTeam)
+		result, err := mdfmt.ParseBytes(data, mdfmt.DefTeam)
 		if err != nil {
 			t.Fatalf("ParseBytes: %v", err)
 		}
-		team, ok := result.(*agentfmt.TeamDef)
+		team, ok := result.(*mdfmt.TeamDef)
 		if !ok {
 			t.Fatalf("result is %T, want *TeamDef", result)
 		}
@@ -333,7 +333,7 @@ func TestParseBytes(t *testing.T) {
 	t.Run("unknown type", func(t *testing.T) {
 		t.Parallel()
 		data := []byte("---\nname: test\n---\nBody.")
-		_, err := agentfmt.ParseBytes(data, "unknown")
+		_, err := mdfmt.ParseBytes(data, "unknown")
 		if err == nil {
 			t.Fatal("expected error for unknown type, got nil")
 		}
@@ -342,7 +342,7 @@ func TestParseBytes(t *testing.T) {
 	t.Run("missing frontmatter", func(t *testing.T) {
 		t.Parallel()
 		data := []byte("No frontmatter here.")
-		_, err := agentfmt.ParseBytes(data, agentfmt.DefSkill)
+		_, err := mdfmt.ParseBytes(data, mdfmt.DefSkill)
 		if err == nil {
 			t.Fatal("expected error for missing frontmatter, got nil")
 		}
@@ -351,11 +351,11 @@ func TestParseBytes(t *testing.T) {
 	t.Run("name defaults to empty for bytes", func(t *testing.T) {
 		t.Parallel()
 		data := []byte("---\ndescription: No name\n---\nBody.")
-		result, err := agentfmt.ParseBytes(data, agentfmt.DefSkill)
+		result, err := mdfmt.ParseBytes(data, mdfmt.DefSkill)
 		if err != nil {
 			t.Fatalf("ParseBytes: %v", err)
 		}
-		skill := result.(*agentfmt.SkillDef)
+		skill := result.(*mdfmt.SkillDef)
 		// No filename to derive from, so name should be empty.
 		if skill.Name != "" {
 			t.Errorf("Name = %q, want empty", skill.Name)
@@ -378,12 +378,12 @@ tools:
 Prompt.`
 
 	path := writeTestFile(t, dir, "tools-only.md", content)
-	defType, _, err := agentfmt.ParseFile(path)
+	defType, _, err := mdfmt.ParseFile(path)
 	if err != nil {
 		t.Fatalf("ParseFile: %v", err)
 	}
-	if defType != agentfmt.DefSkill {
-		t.Errorf("DefType = %q, want %q", defType, agentfmt.DefSkill)
+	if defType != mdfmt.DefSkill {
+		t.Errorf("DefType = %q, want %q", defType, mdfmt.DefSkill)
 	}
 }
 
@@ -403,14 +403,14 @@ tools:
 Review the code carefully.`
 
 	path := writeTestFile(t, dir, "code-review.md", content)
-	defType, def, err := agentfmt.ParseFile(path)
+	defType, def, err := mdfmt.ParseFile(path)
 	if err != nil {
 		t.Fatalf("ParseFile: %v", err)
 	}
-	if defType != agentfmt.DefSkill {
-		t.Errorf("DefType = %q, want %q", defType, agentfmt.DefSkill)
+	if defType != mdfmt.DefSkill {
+		t.Errorf("DefType = %q, want %q", defType, mdfmt.DefSkill)
 	}
-	skill, ok := def.(*agentfmt.SkillDef)
+	skill, ok := def.(*mdfmt.SkillDef)
 	if !ok {
 		t.Fatalf("def is %T, want *SkillDef", def)
 	}
@@ -433,11 +433,11 @@ tools: []
 A skill with no tools.`
 
 	path := writeTestFile(t, dir, "empty-tools.md", content)
-	defType, _, err := agentfmt.ParseFile(path)
+	defType, _, err := mdfmt.ParseFile(path)
 	if err != nil {
 		t.Fatalf("ParseFile: %v", err)
 	}
-	if defType != agentfmt.DefSkill {
-		t.Errorf("DefType = %q, want %q", defType, agentfmt.DefSkill)
+	if defType != mdfmt.DefSkill {
+		t.Errorf("DefType = %q, want %q", defType, mdfmt.DefSkill)
 	}
 }

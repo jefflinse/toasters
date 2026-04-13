@@ -77,19 +77,19 @@ type TaskFailedPayload struct {
 	Error  string
 }
 
-// BlockerReportedPayload carries a blocker report from an agent.
+// BlockerReportedPayload carries a blocker report from a worker.
 type BlockerReportedPayload struct {
 	TaskID      string
 	TeamID      string
-	AgentID     string
+	WorkerID    string
 	Description string
 }
 
 // ProgressUpdatePayload carries a progress report from a team.
 type ProgressUpdatePayload struct {
-	TaskID  string
-	AgentID string
-	Message string
+	TaskID   string
+	WorkerID string
+	Message  string
 }
 
 // JobCompletePayload carries info about a completed job.

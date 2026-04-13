@@ -7,9 +7,9 @@ import (
 	"github.com/jefflinse/toasters/internal/tooldef"
 )
 
-// SpawnOpts configures a new agent session.
+// SpawnOpts configures a new worker session.
 type SpawnOpts struct {
-	AgentID         string
+	WorkerID        string
 	ProviderName    string
 	Model           string
 	SystemPrompt    string
@@ -19,8 +19,8 @@ type SpawnOpts struct {
 	ExtraTools      ToolExecutor // optional; layered on top of CoreTools (overlay with dispatch priority)
 	JobID           string
 	TaskID          string
-	TeamName        string // team this agent belongs to (may be empty)
-	Task            string // short human-readable description of what this agent is doing (≤60 chars)
+	TeamName        string // team this worker belongs to (may be empty)
+	Task            string // short human-readable description of what this worker is doing (≤60 chars)
 	InitialMessage  string
 	WorkDir         string
 	MaxTurns        int  // 0 = use default (50)
@@ -43,8 +43,8 @@ type MCPCaller = tooldef.MCPCaller
 // SessionSnapshot is a read-only view of a session's state.
 type SessionSnapshot struct {
 	ID        string
-	AgentID   string
-	TeamName  string // team this agent belongs to (may be empty)
+	WorkerID  string
+	TeamName  string // team this worker belongs to (may be empty)
 	JobID     string
 	TaskID    string
 	Status    string

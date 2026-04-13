@@ -212,7 +212,7 @@ func (o *Operator) handleEvent(ctx context.Context, ev Event) {
 		}
 		content := fmt.Sprintf("🚫 %s reported blocker: %s", payload.TeamID, payload.Description)
 		o.postFeedEntry(ctx, db.FeedEntryBlockerReported, content, "")
-		slog.Warn("blocker reported", "task_id", payload.TaskID, "team_id", payload.TeamID, "agent_id", payload.AgentID, "description", payload.Description)
+		slog.Warn("blocker reported", "task_id", payload.TaskID, "team_id", payload.TeamID, "worker_id", payload.WorkerID, "description", payload.Description)
 
 		msg := fmt.Sprintf("Team %s (task %q) reported a blocker: %s\n\nPlease triage this blocker and decide how to resolve it. Consider consulting the blocker-handler agent.",
 			payload.TeamID, payload.TaskID, payload.Description)
@@ -225,7 +225,7 @@ func (o *Operator) handleEvent(ctx context.Context, ev Event) {
 			slog.Error("invalid payload for progress_update event", "payload", ev.Payload)
 			return
 		}
-		slog.Debug("progress update", "task_id", payload.TaskID, "agent_id", payload.AgentID, "message", payload.Message)
+		slog.Debug("progress update", "task_id", payload.TaskID, "worker_id", payload.WorkerID, "message", payload.Message)
 
 	case EventJobComplete:
 		// Mechanical: mark job done, post feed entry, notify user.

@@ -230,7 +230,7 @@ func TestMCPServer_ReportTaskProgress(t *testing.T) {
 	text, isError := callTool(t, send, 2, "report_task_progress", map[string]any{
 		"job_id":   "job-mcp-rp",
 		"task_id":  "task-1",
-		"agent_id": "agent-1",
+		"worker_id": "agent-1",
 		"status":   "in_progress",
 		"message":  "making progress",
 	})

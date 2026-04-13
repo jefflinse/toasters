@@ -14,7 +14,7 @@ import (
 	"github.com/jefflinse/toasters/internal/provider"
 )
 
-// Runtime manages agent sessions.
+// Runtime manages worker sessions.
 type Runtime struct {
 	mu               sync.Mutex
 	wg               sync.WaitGroup
@@ -24,7 +24,7 @@ type Runtime struct {
 	promptEngine     *prompt.Engine // may be nil; for spawn_worker role-based composition
 	mcpCaller        MCPCaller      // may be nil
 	mcpDefs          []ToolDef      // pre-converted MCP tool definitions
-	OnSessionStarted func(*Session) // called after each SpawnAgent; may be nil
+	OnSessionStarted func(*Session) // called after each SpawnWorker; may be nil
 }
 
 // New creates a new Runtime. store may be nil for in-memory only operation.
@@ -44,9 +44,9 @@ func (r *Runtime) SetPromptEngine(e *prompt.Engine) {
 	r.promptEngine = e
 }
 
-// SetMCPCaller wires an MCP caller into the runtime for agent tool dispatch.
+// SetMCPCaller wires an MCP caller into the runtime for worker tool dispatch.
 // mcpDefs are the pre-converted tool definitions in runtime.ToolDef format.
-// Safe to call concurrently with SpawnAgent.
+// Safe to call concurrently with SpawnWorker.
 func (r *Runtime) SetMCPCaller(caller MCPCaller, defs []ToolDef) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -54,8 +54,8 @@ func (r *Runtime) SetMCPCaller(caller MCPCaller, defs []ToolDef) {
 	r.mcpDefs = defs
 }
 
-// SpawnAgent creates and starts a new agent session.
-func (r *Runtime) SpawnAgent(ctx context.Context, opts SpawnOpts) (*Session, error) {
+// SpawnWorker creates and starts a new worker session.
+func (r *Runtime) SpawnWorker(ctx context.Context, opts SpawnOpts) (*Session, error) {
 	// Validate mutually exclusive options.
 	if opts.ToolExecutor != nil && opts.ExtraTools != nil {
 		return nil, fmt.Errorf("SpawnOpts.ToolExecutor and SpawnOpts.ExtraTools are mutually exclusive")
@@ -98,7 +98,7 @@ func (r *Runtime) SpawnAgent(ctx context.Context, opts SpawnOpts) (*Session, err
 			WithShell(true),
 			WithSpawner(r, depth, maxDepth),
 			WithStore(r.store),
-			WithSessionContext(id, opts.AgentID, opts.JobID, opts.TaskID),
+			WithSessionContext(id, opts.WorkerID, opts.JobID, opts.TaskID),
 			WithProvider(opts.ProviderName, opts.Model),
 		}
 		if promptEng != nil {
@@ -138,9 +138,9 @@ func (r *Runtime) SpawnAgent(ctx context.Context, opts SpawnOpts) (*Session, err
 
 	// Persist to SQLite if store is available.
 	if r.store != nil {
-		dbSession := &db.AgentSession{
+		dbSession := &db.WorkerSession{
 			ID:        id,
-			AgentID:   opts.AgentID,
+			WorkerID:  opts.WorkerID,
 			JobID:     opts.JobID,
 			TaskID:    opts.TaskID,
 			Status:    db.SessionStatusActive,
@@ -154,8 +154,8 @@ func (r *Runtime) SpawnAgent(ctx context.Context, opts SpawnOpts) (*Session, err
 	}
 
 	// Notify observer before starting the goroutine so the subscriber is set up
-	// before events start flowing. Hidden sessions (e.g. internal system agent
-	// calls via consult_agent) skip this to avoid appearing in the TUI.
+	// before events start flowing. Hidden sessions (e.g. internal system
+	// calls) skip this to avoid appearing in the TUI.
 	if r.OnSessionStarted != nil && !opts.Hidden {
 		r.OnSessionStarted(sess)
 	}
@@ -203,11 +203,11 @@ func (r *Runtime) SpawnAgent(ctx context.Context, opts SpawnOpts) (*Session, err
 }
 
 // SpawnAndWait creates a session and blocks until it completes. Returns final text.
-// Used by spawn_agent tool.
+// Used by spawn_worker tool.
 func (r *Runtime) SpawnAndWait(ctx context.Context, opts SpawnOpts) (string, error) {
-	sess, err := r.SpawnAgent(ctx, opts)
+	sess, err := r.SpawnWorker(ctx, opts)
 	if err != nil {
-		return "", fmt.Errorf("spawning agent: %w", err)
+		return "", fmt.Errorf("spawning worker: %w", err)
 	}
 
 	// Wait for session to complete.
