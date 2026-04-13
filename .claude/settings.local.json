@@ -19,7 +19,14 @@
       "Bash(git branch:*)",
       "Bash(git reset:*)",
       "Bash(git checkout:*)",
-      "Bash(find:*)"
+      "Bash(find:*)",
+      "Bash(git -C /Users/jefflinse/dev/toasters log --oneline -1 -- '*.yaml')",
+      "Bash(sqlite3 ~/toasters/toasters.db \".tables\")",
+      "Bash(sqlite3 ~/toasters/toasters.db \"SELECT id, name, source FROM agents LIMIT 10;\")",
+      "Bash(sqlite3:*)",
+      "Bash(curl -s http://127.0.0.1:1234/v1/models)",
+      "Bash(go vet:*)",
+      "Bash(git:*)"
     ]
   }
 }
