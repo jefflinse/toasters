@@ -88,7 +88,7 @@ func New(cfg Config) (*Operator, error) {
 		}
 	}
 
-	tools := newOperatorTools(cfg.Runtime, cfg.Composer, cfg.Store, systemTools, cfg.WorkDir)
+	tools := newOperatorTools(cfg.Runtime, cfg.Composer, cfg.PromptEngine, cfg.Store, systemTools, cfg.WorkDir)
 	provTools := operatorToolsToProviderTools(tools.Definitions())
 
 	return &Operator{

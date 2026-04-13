@@ -142,7 +142,7 @@ func newTestOperatorTools(t *testing.T, agents []*db.Agent) *operatorTools {
 	eventCh := make(chan Event, 64)
 	systemTools := NewSystemTools(store, composer, eventCh, nil, t.TempDir(), nil)
 
-	return newOperatorTools(nil, composer, store, systemTools, t.TempDir())
+	return newOperatorTools(nil, composer, nil, store, systemTools, t.TempDir())
 }
 
 // --- Tests ---
@@ -650,7 +650,7 @@ func TestEventLoop_TaskCompleted_AssignsNextTask(t *testing.T) {
 	// Create operator with SystemTools that have a spawner.
 	eventCh := make(chan Event, eventChSize)
 	systemTools := NewSystemTools(store, composer, eventCh, spawner, t.TempDir(), nil)
-	tools := newOperatorTools(rt, composer, store, systemTools, t.TempDir())
+	tools := newOperatorTools(rt, composer, nil, store, systemTools, t.TempDir())
 	provTools := operatorToolsToProviderTools(tools.Definitions())
 
 	var events []Event
@@ -1651,7 +1651,7 @@ func TestSurfaceToUserCreatesFeedEntry(t *testing.T) {
 	composer := compose.New(store, "test-provider", "test-model")
 	eventCh := make(chan Event, 64)
 	systemTools := NewSystemTools(store, composer, eventCh, nil, t.TempDir(), nil)
-	tools := newOperatorTools(nil, composer, store, systemTools, t.TempDir())
+	tools := newOperatorTools(nil, composer, nil, store, systemTools, t.TempDir())
 
 	result, err := tools.Execute(context.Background(), "surface_to_user",
 		json.RawMessage(`{"text": "Important update"}`))
@@ -1670,7 +1670,7 @@ func TestSurfaceToUserCreatesFeedEntry(t *testing.T) {
 
 func TestSurfaceToUserWithoutSystemTools(t *testing.T) {
 	// surface_to_user should return an error when no system tools are configured.
-	tools := newOperatorTools(nil, nil, nil, nil, t.TempDir())
+	tools := newOperatorTools(nil, nil, nil, nil, nil, t.TempDir())
 
 	_, err := tools.Execute(context.Background(), "surface_to_user",
 		json.RawMessage(`{"text": "No store available"}`))
@@ -1725,7 +1725,7 @@ func TestQueryJobDelegatesToSystemTools(t *testing.T) {
 	composer := compose.New(store, "test-provider", "test-model")
 	eventCh := make(chan Event, 64)
 	systemTools := NewSystemTools(store, composer, eventCh, nil, t.TempDir(), nil)
-	tools := newOperatorTools(nil, composer, store, systemTools, t.TempDir())
+	tools := newOperatorTools(nil, composer, nil, store, systemTools, t.TempDir())
 
 	result, err := tools.Execute(ctx, "query_job",
 		json.RawMessage(`{"job_id": "job-1"}`))
@@ -1744,7 +1744,7 @@ func TestQueryTeamsDelegatesToSystemTools(t *testing.T) {
 	composer := compose.New(store, "test-provider", "test-model")
 	eventCh := make(chan Event, 64)
 	systemTools := NewSystemTools(store, composer, eventCh, nil, t.TempDir(), nil)
-	tools := newOperatorTools(nil, composer, store, systemTools, t.TempDir())
+	tools := newOperatorTools(nil, composer, nil, store, systemTools, t.TempDir())
 
 	result, err := tools.Execute(ctx, "query_teams", json.RawMessage(`{}`))
 	assertNoError(t, err)

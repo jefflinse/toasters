@@ -59,9 +59,12 @@ func Run(configDir string, systemFS embed.FS, defaultConfig []byte) error {
 	return nil
 }
 
-// firstRun copies embedded system files and creates the user directory structure
-// when the system/ directory doesn't exist yet. If defaultConfig is non-nil and
-// config.yaml does not already exist, it is written as the initial configuration.
+// firstRun copies embedded system files and creates the user directory structure.
+// System files are synced on every startup so that binary upgrades deploy new
+// definitions (roles, instructions) without requiring users to delete system/.
+// User files are only written on first run to avoid overwriting customizations.
+// If defaultConfig is non-nil and config.yaml does not already exist, it is
+// written as the initial configuration.
 func firstRun(configDir string, systemFS embed.FS, defaultConfig []byte) error {
 	// Write default config.yaml if it doesn't exist yet (regardless of whether
 	// this is a true first run — safe to do on every startup).
@@ -78,33 +81,37 @@ func firstRun(configDir string, systemFS embed.FS, defaultConfig []byte) error {
 		}
 	}
 
+	isFirstRun := false
 	systemDir := filepath.Join(configDir, "system")
-	if dirExists(systemDir) {
-		return nil
+	if !dirExists(systemDir) {
+		isFirstRun = true
 	}
 
-	// Copy all files from the embedded FS to configDir/system/.
-	if err := copyEmbeddedFS(systemFS, "system", systemDir); err != nil {
-		return fmt.Errorf("copying system files: %w", err)
+	// Always sync system files — these are managed by toasters, not the user.
+	// New binary versions may add roles/, instructions/, or update agent prompts.
+	if err := syncEmbeddedFS(systemFS, "system", systemDir); err != nil {
+		return fmt.Errorf("syncing system files: %w", err)
 	}
 
-	// Copy default user files (roles, toolchains, instructions, teams).
-	userDir := filepath.Join(configDir, "user")
-	if UserFS != (embed.FS{}) {
-		if err := copyEmbeddedFS(UserFS, "user", userDir); err != nil {
-			return fmt.Errorf("copying default user files: %w", err)
-		}
-		slog.Info("Wrote default user files", "dir", userDir)
-	} else {
-		// No user files embedded — just create empty directories.
-		for _, dir := range userDirs(configDir) {
-			if err := os.MkdirAll(dir, 0o755); err != nil {
-				return fmt.Errorf("creating %s: %w", dir, err)
+	// User files are only written on first run to avoid overwriting customizations.
+	if isFirstRun {
+		userDir := filepath.Join(configDir, "user")
+		if UserFS != (embed.FS{}) {
+			if err := copyEmbeddedFS(UserFS, "user", userDir); err != nil {
+				return fmt.Errorf("copying default user files: %w", err)
+			}
+			slog.Info("Wrote default user files", "dir", userDir)
+		} else {
+			// No user files embedded — just create empty directories.
+			for _, dir := range userDirs(configDir) {
+				if err := os.MkdirAll(dir, 0o755); err != nil {
+					return fmt.Errorf("creating %s: %w", dir, err)
+				}
 			}
 		}
+		slog.Info("Initialized toasters config", "dir", configDir)
 	}
 
-	slog.Info("Initialized toasters config", "dir", configDir)
 	return nil
 }
 
@@ -537,6 +544,39 @@ func userDirs(configDir string) []string {
 		filepath.Join(configDir, "user", "toolchains"),
 		filepath.Join(configDir, "user", "instructions"),
 	}
+}
+
+// syncEmbeddedFS ensures all files from an embedded filesystem subtree exist
+// on disk. Directories are always created; files are only written when they
+// don't already exist. This lets binary upgrades deploy new definitions (e.g.
+// system/roles/) without overwriting files the user may have customized.
+func syncEmbeddedFS(fsys embed.FS, root, destDir string) error {
+	return fs.WalkDir(fsys, root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return fmt.Errorf("computing relative path: %w", err)
+		}
+		target := filepath.Join(destDir, rel)
+
+		if d.IsDir() {
+			return os.MkdirAll(target, 0o755)
+		}
+
+		// Skip files that already exist — don't overwrite user customizations.
+		if fileExists(target) {
+			return nil
+		}
+
+		data, err := fs.ReadFile(fsys, path)
+		if err != nil {
+			return fmt.Errorf("reading embedded %s: %w", path, err)
+		}
+		return os.WriteFile(target, data, 0o644)
+	})
 }
 
 // copyEmbeddedFS copies all files from an embedded filesystem subtree to a

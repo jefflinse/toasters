@@ -9,6 +9,7 @@ import (
 
 	"github.com/jefflinse/toasters/internal/compose"
 	"github.com/jefflinse/toasters/internal/db"
+	"github.com/jefflinse/toasters/internal/prompt"
 	"github.com/jefflinse/toasters/internal/provider"
 	"github.com/jefflinse/toasters/internal/runtime"
 )
@@ -17,20 +18,22 @@ import (
 // It provides consult_agent (spawn a system agent), surface_to_user (relay
 // information to the user), query_job, and query_teams.
 type operatorTools struct {
-	rt          *runtime.Runtime
-	composer    *compose.Composer
-	store       db.Store
-	systemTools *SystemTools
-	workDir     string
+	rt           *runtime.Runtime
+	composer     *compose.Composer
+	promptEngine *prompt.Engine
+	store        db.Store
+	systemTools  *SystemTools
+	workDir      string
 }
 
-func newOperatorTools(rt *runtime.Runtime, composer *compose.Composer, store db.Store, systemTools *SystemTools, workDir string) *operatorTools {
+func newOperatorTools(rt *runtime.Runtime, composer *compose.Composer, promptEngine *prompt.Engine, store db.Store, systemTools *SystemTools, workDir string) *operatorTools {
 	return &operatorTools{
-		rt:          rt,
-		composer:    composer,
-		store:       store,
-		systemTools: systemTools,
-		workDir:     workDir,
+		rt:           rt,
+		composer:     composer,
+		promptEngine: promptEngine,
+		store:        store,
+		systemTools:  systemTools,
+		workDir:      workDir,
 	}
 }
 
@@ -220,16 +223,49 @@ func (ot *operatorTools) consultAgent(ctx context.Context, args json.RawMessage)
 		return "", fmt.Errorf("agent %q is not a system agent (source: %s)", params.AgentName, agent.Source)
 	}
 
-	// Compose the agent with teamID="system" for role-based tool injection.
-	composed, err := ot.composer.Compose(ctx, params.AgentName, "system")
-	if err != nil {
-		return "", fmt.Errorf("composing agent %q: %w", params.AgentName, err)
+	// Try prompt engine first for template-based composition. Falls back to
+	// legacy composer if the engine doesn't have this role.
+	var systemPrompt string
+	var declaredTools []string
+	var agentProvider, agentModel string
+	var maxTurns int
+
+	if ot.promptEngine != nil {
+		if role := ot.promptEngine.Role(params.AgentName); role != nil {
+			composed, composeErr := ot.promptEngine.Compose(params.AgentName, nil)
+			if composeErr != nil {
+				slog.Warn("prompt engine compose failed, falling back to legacy composer",
+					"agent", params.AgentName, "error", composeErr)
+			} else {
+				systemPrompt = composed
+				declaredTools = role.Tools
+				// System agents use the global default provider/model from the composer.
+				agentProvider = ot.composer.DefaultProvider()
+				agentModel = ot.composer.DefaultModel()
+				slog.Info("composed system agent via prompt engine", "agent", params.AgentName)
+			}
+		}
+	}
+
+	// Fall back to legacy composer if prompt engine didn't produce a prompt.
+	if systemPrompt == "" {
+		composed, err := ot.composer.Compose(ctx, params.AgentName, "system")
+		if err != nil {
+			return "", fmt.Errorf("composing agent %q: %w", params.AgentName, err)
+		}
+		systemPrompt = composed.SystemPrompt
+		declaredTools = composed.Tools
+		agentProvider = composed.Provider
+		agentModel = composed.Model
+		if composed.MaxTurns != nil {
+			maxTurns = *composed.MaxTurns
+		}
 	}
 
 	slog.Info("consulting system agent",
 		"agent", params.AgentName,
-		"provider", composed.Provider,
-		"model", composed.Model,
+		"provider", agentProvider,
+		"model", agentModel,
 	)
 
 	// Select the tool executor for this agent. The decomposer gets a combined
@@ -247,13 +283,13 @@ func (ot *operatorTools) consultAgent(ctx context.Context, args json.RawMessage)
 	// (e.g. planner gets create_job/create_task/assign_task/query_teams/query_job_context,
 	// not surface_to_user or query_job).
 	var agentTools []runtime.ToolDef
-	if len(composed.Tools) > 0 {
+	if len(declaredTools) > 0 {
 		allDefs := toolExecutor.Definitions()
 		defsByName := make(map[string]runtime.ToolDef, len(allDefs))
 		for _, d := range allDefs {
 			defsByName[d.Name] = d
 		}
-		for _, name := range composed.Tools {
+		for _, name := range declaredTools {
 			if d, ok := defsByName[name]; ok {
 				agentTools = append(agentTools, d)
 			} else {
@@ -265,23 +301,19 @@ func (ot *operatorTools) consultAgent(ctx context.Context, args json.RawMessage)
 		}
 	}
 
-	// Build SpawnOpts from the composed agent. System agents get SystemTools
-	// as their tool executor (not CoreTools/filesystem tools); the decomposer
-	// gets decomposerToolExecutor which adds read-only filesystem access.
-	// Hidden=false so system agent sessions appear in the TUI Agents panel and grid.
+	// Build SpawnOpts. System agents get SystemTools as their tool executor
+	// (not CoreTools/filesystem tools); the decomposer gets decomposerToolExecutor
+	// which adds read-only filesystem access.
 	opts := runtime.SpawnOpts{
-		AgentID:        composed.AgentID,
-		ProviderName:   composed.Provider,
-		Model:          composed.Model,
-		SystemPrompt:   composed.SystemPrompt,
+		AgentID:        params.AgentName,
+		ProviderName:   agentProvider,
+		Model:          agentModel,
+		SystemPrompt:   systemPrompt,
 		Tools:          agentTools,
 		ToolExecutor:   toolExecutor,
 		InitialMessage: params.Message,
 		WorkDir:        ot.workDir,
-	}
-
-	if composed.MaxTurns != nil {
-		opts.MaxTurns = *composed.MaxTurns
+		MaxTurns:       maxTurns,
 	}
 
 	result, err := ot.rt.SpawnAndWait(ctx, opts)

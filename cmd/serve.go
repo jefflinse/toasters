@@ -117,13 +117,17 @@ func runServe(cmd *cobra.Command, args []string) error {
 
 	// Create prompt engine for role-based prompt composition.
 	// Must be created before the loader so role-based teams can resolve.
+	// System roles load first so user definitions can override them.
 	promptEngine := prompt.NewEngine()
+	systemPromptDir := filepath.Join(configDir, "system")
+	if err := promptEngine.LoadDir(systemPromptDir); err != nil {
+		slog.Warn("failed to load system prompt definitions", "dir", systemPromptDir, "error", err)
+	}
 	userDir := filepath.Join(configDir, "user")
 	if err := promptEngine.LoadDir(userDir); err != nil {
-		slog.Warn("failed to load prompt definitions", "dir", userDir, "error", err)
-	} else {
-		slog.Info("loaded prompt definitions", "roles", len(promptEngine.Roles()))
+		slog.Warn("failed to load user prompt definitions", "dir", userDir, "error", err)
 	}
+	slog.Info("loaded prompt definitions", "roles", len(promptEngine.Roles()))
 
 	// Load definitions from files into DB.
 	var ldr *loader.Loader
@@ -193,9 +197,19 @@ func runServe(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Compose the operator agent from its .md file definition.
+	// Compose the operator agent's system prompt. Try prompt engine first
+	// (template-based with globals/instructions), fall back to legacy composer.
 	var operatorPrompt string
-	if composer != nil {
+	if role := promptEngine.Role("operator"); role != nil {
+		composed, composeErr := promptEngine.Compose("operator", nil)
+		if composeErr != nil {
+			slog.Warn("prompt engine failed for operator, falling back to composer", "error", composeErr)
+		} else {
+			operatorPrompt = composed
+			slog.Info("composed operator prompt via prompt engine")
+		}
+	}
+	if operatorPrompt == "" && composer != nil {
 		composedOperator, composeErr := composer.Compose(context.Background(), "operator", "system")
 		if composeErr != nil {
 			slog.Warn("failed to compose operator agent, using empty prompt", "error", composeErr)

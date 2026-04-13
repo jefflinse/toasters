@@ -39,10 +39,11 @@ type Engine struct {
 
 // Role is a worker definition with template references.
 type Role struct {
-	Name        string `yaml:"name"`
-	Description string `yaml:"description"`
-	Mode        string `yaml:"mode"`
-	Body        string `yaml:"-"` // template text after frontmatter
+	Name        string   `yaml:"name"`
+	Description string   `yaml:"description"`
+	Mode        string   `yaml:"mode"`
+	Tools       []string `yaml:"tools"`
+	Body        string   `yaml:"-"` // template text after frontmatter
 }
 
 // Toolchain is language/framework knowledge with typed variables.
