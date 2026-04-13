@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jefflinse/toasters/internal/compose"
 	"github.com/jefflinse/toasters/internal/provider"
 )
 
@@ -37,7 +36,7 @@ func TestSpawnTeamLead_CreatesSession(t *testing.T) {
 		startedSess = s
 	}
 
-	composed := &compose.ComposedAgent{
+	composed := &ComposedAgent{
 		AgentID:      "lead-agent",
 		Name:         "Lead Agent",
 		SystemPrompt: "You are a team lead.",
@@ -96,7 +95,7 @@ func TestSpawnTeamLead_DepthIsZero(t *testing.T) {
 		startedSess = s
 	}
 
-	composed := &compose.ComposedAgent{
+	composed := &ComposedAgent{
 		AgentID:      "lead-agent",
 		Name:         "Lead Agent",
 		SystemPrompt: "You are a team lead.",
@@ -155,7 +154,7 @@ func TestSpawnTeamLead_WithToolFilter(t *testing.T) {
 		startedSess = s
 	}
 
-	composed := &compose.ComposedAgent{
+	composed := &ComposedAgent{
 		AgentID:      "lead-agent",
 		Name:         "Lead Agent",
 		SystemPrompt: "You are a team lead.",
@@ -205,7 +204,7 @@ func TestSpawnTeamLead_WithToolFilter(t *testing.T) {
 func TestSpawnTeamLead_ProviderNotFound(t *testing.T) {
 	rt := New(nil, provider.NewRegistry()) // empty registry
 
-	composed := &compose.ComposedAgent{
+	composed := &ComposedAgent{
 		AgentID:      "lead-agent",
 		Provider:     "nonexistent",
 		Model:        "test-model",
@@ -251,7 +250,7 @@ func TestSpawnTeamLead_WithExtraTools(t *testing.T) {
 		},
 	}
 
-	composed := &compose.ComposedAgent{
+	composed := &ComposedAgent{
 		AgentID:      "lead-agent",
 		Name:         "Lead Agent",
 		SystemPrompt: "You are a team lead.",
@@ -337,7 +336,7 @@ func TestSpawnTeamLead_WithExtraToolsAndFilter(t *testing.T) {
 		},
 	}
 
-	composed := &compose.ComposedAgent{
+	composed := &ComposedAgent{
 		AgentID:      "lead-agent",
 		Name:         "Lead Agent",
 		SystemPrompt: "You are a team lead.",
@@ -443,7 +442,7 @@ func TestSpawnTeamLead_ExtraToolsDispatchPriority(t *testing.T) {
 		startedSess = s
 	}
 
-	composed := &compose.ComposedAgent{
+	composed := &ComposedAgent{
 		AgentID:      "lead-agent",
 		Name:         "Lead Agent",
 		SystemPrompt: "You are a team lead.",

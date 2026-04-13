@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"strings"
 
-	"github.com/jefflinse/toasters/internal/compose"
 	"github.com/jefflinse/toasters/internal/db"
 	"github.com/jefflinse/toasters/internal/prompt"
 	"github.com/jefflinse/toasters/internal/provider"
@@ -18,22 +17,24 @@ import (
 // It provides consult_agent (spawn a system agent), surface_to_user (relay
 // information to the user), query_job, and query_teams.
 type operatorTools struct {
-	rt           *runtime.Runtime
-	composer     *compose.Composer
-	promptEngine *prompt.Engine
-	store        db.Store
-	systemTools  *SystemTools
-	workDir      string
+	rt              *runtime.Runtime
+	promptEngine    *prompt.Engine
+	defaultProvider string
+	defaultModel    string
+	store           db.Store
+	systemTools     *SystemTools
+	workDir         string
 }
 
-func newOperatorTools(rt *runtime.Runtime, composer *compose.Composer, promptEngine *prompt.Engine, store db.Store, systemTools *SystemTools, workDir string) *operatorTools {
+func newOperatorTools(rt *runtime.Runtime, promptEngine *prompt.Engine, defaultProvider, defaultModel string, store db.Store, systemTools *SystemTools, workDir string) *operatorTools {
 	return &operatorTools{
-		rt:           rt,
-		composer:     composer,
-		promptEngine: promptEngine,
-		store:        store,
-		systemTools:  systemTools,
-		workDir:      workDir,
+		rt:              rt,
+		promptEngine:    promptEngine,
+		defaultProvider: defaultProvider,
+		defaultModel:    defaultModel,
+		store:           store,
+		systemTools:     systemTools,
+		workDir:         workDir,
 	}
 }
 
@@ -212,55 +213,27 @@ func (ot *operatorTools) consultAgent(ctx context.Context, args json.RawMessage)
 		}
 	}
 
-	// Verify the agent exists and is a system agent before composing.
-	// This prevents user-defined or auto-detected agents from gaining
-	// system-level tools (create_job, assign_task, etc.) via consult_agent.
-	agent, err := ot.store.GetAgent(ctx, params.AgentName)
+	// Verify the role exists in the prompt engine and is a system role.
+	// This prevents user-defined roles from gaining system-level tools
+	// (create_job, assign_task, etc.) via consult_agent.
+	if ot.promptEngine == nil {
+		return "", fmt.Errorf("prompt engine not configured")
+	}
+	role := ot.promptEngine.Role(params.AgentName)
+	if role == nil {
+		return "", fmt.Errorf("unknown system agent %q: no role found in prompt engine", params.AgentName)
+	}
+	if role.Source != "system" {
+		return "", fmt.Errorf("role %q is not a system role (source: %s)", params.AgentName, role.Source)
+	}
+
+	systemPrompt, err := ot.promptEngine.Compose(params.AgentName, nil)
 	if err != nil {
-		return "", fmt.Errorf("unknown agent %q: %w", params.AgentName, err)
+		return "", fmt.Errorf("composing system agent %q: %w", params.AgentName, err)
 	}
-	if agent.Source != "system" {
-		return "", fmt.Errorf("agent %q is not a system agent (source: %s)", params.AgentName, agent.Source)
-	}
-
-	// Try prompt engine first for template-based composition. Falls back to
-	// legacy composer if the engine doesn't have this role.
-	var systemPrompt string
-	var declaredTools []string
-	var agentProvider, agentModel string
-	var maxTurns int
-
-	if ot.promptEngine != nil {
-		if role := ot.promptEngine.Role(params.AgentName); role != nil {
-			composed, composeErr := ot.promptEngine.Compose(params.AgentName, nil)
-			if composeErr != nil {
-				slog.Warn("prompt engine compose failed, falling back to legacy composer",
-					"agent", params.AgentName, "error", composeErr)
-			} else {
-				systemPrompt = composed
-				declaredTools = role.Tools
-				// System agents use the global default provider/model from the composer.
-				agentProvider = ot.composer.DefaultProvider()
-				agentModel = ot.composer.DefaultModel()
-				slog.Info("composed system agent via prompt engine", "agent", params.AgentName)
-			}
-		}
-	}
-
-	// Fall back to legacy composer if prompt engine didn't produce a prompt.
-	if systemPrompt == "" {
-		composed, err := ot.composer.Compose(ctx, params.AgentName, "system")
-		if err != nil {
-			return "", fmt.Errorf("composing agent %q: %w", params.AgentName, err)
-		}
-		systemPrompt = composed.SystemPrompt
-		declaredTools = composed.Tools
-		agentProvider = composed.Provider
-		agentModel = composed.Model
-		if composed.MaxTurns != nil {
-			maxTurns = *composed.MaxTurns
-		}
-	}
+	declaredTools := role.Tools
+	agentProvider := ot.defaultProvider
+	agentModel := ot.defaultModel
 
 	slog.Info("consulting system agent",
 		"agent", params.AgentName,
@@ -313,7 +286,6 @@ func (ot *operatorTools) consultAgent(ctx context.Context, args json.RawMessage)
 		ToolExecutor:   toolExecutor,
 		InitialMessage: params.Message,
 		WorkDir:        ot.workDir,
-		MaxTurns:       maxTurns,
 	}
 
 	result, err := ot.rt.SpawnAndWait(ctx, opts)

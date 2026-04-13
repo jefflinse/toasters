@@ -12,8 +12,8 @@ import (
 
 	"github.com/gofrs/uuid/v5"
 
-	"github.com/jefflinse/toasters/internal/compose"
 	"github.com/jefflinse/toasters/internal/db"
+	"github.com/jefflinse/toasters/internal/prompt"
 	"github.com/jefflinse/toasters/internal/runtime"
 )
 
@@ -26,7 +26,7 @@ type mockSpawner struct {
 }
 
 type spawnCall struct {
-	Composed        *compose.ComposedAgent
+	Composed        *runtime.ComposedAgent
 	TaskID          string
 	JobID           string
 	WorkDir         string
@@ -34,7 +34,7 @@ type spawnCall struct {
 	ExtraTools      runtime.ToolExecutor
 }
 
-func (m *mockSpawner) SpawnTeamLead(_ context.Context, composed *compose.ComposedAgent, taskID string, jobID string, workDir string, taskDescription string, extraTools runtime.ToolExecutor) error {
+func (m *mockSpawner) SpawnTeamLead(_ context.Context, composed *runtime.ComposedAgent, taskID string, jobID string, workDir string, taskDescription string, extraTools runtime.ToolExecutor) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.calls = append(m.calls, spawnCall{Composed: composed, TaskID: taskID, JobID: jobID, WorkDir: workDir, TaskDescription: taskDescription, ExtraTools: extraTools})
@@ -69,12 +69,26 @@ func newTestSystemTools(t *testing.T) (*SystemTools, db.Store, *mockSpawner, cha
 	spawner := &mockSpawner{}
 	eventCh := make(chan Event, 64)
 
-	// Create a composer with the real store.
-	composer := compose.New(store, "test-provider", "test-model")
+	// Create a prompt engine with a generic coordinator role for team lead composition.
+	dir := t.TempDir()
+	rolesDir := filepath.Join(dir, "roles")
+	if err := os.MkdirAll(rolesDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	roleContent := "---\nname: Coordinator\nmode: lead\n---\nYou are a test coordinator."
+	for _, name := range []string{"lead-agent", "lead-1", "backend-lead"} {
+		if err := os.WriteFile(filepath.Join(rolesDir, name+".md"), []byte(roleContent), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	engine := prompt.NewEngine()
+	if err := engine.LoadDir(dir, "test"); err != nil {
+		t.Fatal(err)
+	}
 
 	workDir := t.TempDir()
 	t.Setenv("HOME", workDir) // Ensure workDir passes home-directory validation
-	st := NewSystemTools(store, composer, eventCh, spawner, workDir, nil)
+	st := NewSystemTools(store, engine, "test-provider", "test-model", eventCh, spawner, workDir, nil)
 	return st, store, spawner, eventCh, workDir
 }
 
@@ -879,14 +893,12 @@ func TestCreateJob_RejectsWorkDirOutsideHome(t *testing.T) {
 	store := newTestStore(t)
 	spawner := &mockSpawner{}
 	eventCh := make(chan Event, 64)
-	composer := compose.New(store, "test-provider", "test-model")
-
 	// Set HOME to a temp dir, then use a workDir outside of it.
 	fakeHome := t.TempDir()
 	t.Setenv("HOME", fakeHome)
 
 	outsideDir := t.TempDir() // A different temp dir, not under fakeHome.
-	st := NewSystemTools(store, composer, eventCh, spawner, outsideDir, nil)
+	st := NewSystemTools(store, nil, "test-provider", "test-model", eventCh, spawner, outsideDir, nil)
 
 	ctx := context.Background()
 	args, _ := json.Marshal(map[string]string{
@@ -902,8 +914,6 @@ func TestCreateJob_AcceptsWorkDirUnderHome(t *testing.T) {
 	store := newTestStore(t)
 	spawner := &mockSpawner{}
 	eventCh := make(chan Event, 64)
-	composer := compose.New(store, "test-provider", "test-model")
-
 	// Set HOME to a temp dir, then create workDir under it.
 	fakeHome := t.TempDir()
 	t.Setenv("HOME", fakeHome)
@@ -913,7 +923,7 @@ func TestCreateJob_AcceptsWorkDirUnderHome(t *testing.T) {
 		t.Fatalf("creating workDir: %v", err)
 	}
 
-	st := NewSystemTools(store, composer, eventCh, spawner, workDir, nil)
+	st := NewSystemTools(store, nil, "test-provider", "test-model", eventCh, spawner, workDir, nil)
 
 	ctx := context.Background()
 	args, _ := json.Marshal(map[string]string{

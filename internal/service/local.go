@@ -20,7 +20,6 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/jefflinse/toasters/internal/agentfmt"
-	"github.com/jefflinse/toasters/internal/compose"
 	"github.com/jefflinse/toasters/internal/config"
 	"github.com/jefflinse/toasters/internal/db"
 	"github.com/jefflinse/toasters/internal/loader"
@@ -89,7 +88,8 @@ type LocalConfig struct {
 	Operator         *operator.Operator
 	MCPManager       *mcp.Manager
 	Provider         provider.Provider // operator's LLM provider (for ListModels, generation)
-	Composer         *compose.Composer
+	DefaultProvider  string            // default provider for system agents and team leads
+	DefaultModel     string            // default model for system agents and team leads
 	Loader           *loader.Loader
 	ConfigDir        string
 	WorkspaceDir     string
@@ -1234,261 +1234,24 @@ func (s *LocalService) GetAgent(ctx context.Context, id string) (Agent, error) {
 	return dbAgentToService(a), nil
 }
 
-// CreateAgent writes a template .md file to the user agents directory and
-// triggers a reload. Returns the created agent.
+// CreateAgent is no longer supported; use roles instead.
 func (s *LocalService) CreateAgent(ctx context.Context, name string) (Agent, error) {
-	name = sanitizeName(name)
-	agentsDir := filepath.Join(s.cfg.ConfigDir, "user", "agents")
-	if err := os.MkdirAll(agentsDir, 0o755); err != nil {
-		return Agent{}, sanitizeError(fmt.Errorf("creating agents dir: %w", err))
-	}
-
-	filename := loader.Slugify(name) + ".md"
-	if filename == ".md" {
-		return Agent{}, fmt.Errorf("invalid agent name: produces empty filename")
-	}
-	path := filepath.Join(agentsDir, filename)
-
-	if _, err := os.Stat(path); err == nil {
-		return Agent{}, fmt.Errorf("agent file %q already exists", filename)
-	}
-
-	template := fmt.Sprintf(`---
-name: %s
-description: A brief description of what this agent does
-mode: worker
-skills: []
----
-
-Your agent system prompt goes here.
-`, name)
-
-	if err := os.WriteFile(path, []byte(template), 0o644); err != nil {
-		return Agent{}, sanitizeError(fmt.Errorf("writing agent file: %w", err))
-	}
-
-	if s.cfg.Loader != nil {
-		if err := s.cfg.Loader.Load(ctx); err != nil {
-			slog.Warn("failed to reload definitions after agent creation", "error", err)
-		}
-	}
-
-	// Find the created agent by name.
-	agents, err := s.ListAgents(ctx)
-	if err != nil {
-		return Agent{}, sanitizeError(fmt.Errorf("listing agents after creation: %w", err))
-	}
-	for _, a := range agents {
-		if a.Name == name {
-			return a, nil
-		}
-	}
-	return Agent{}, fmt.Errorf("agent %q not found after creation", name)
+	return Agent{}, fmt.Errorf("agent management has been removed; use roles instead")
 }
 
-// DeleteAgent removes the agent's source file and triggers a reload.
-// Only user-owned shared agents (Source == "user", TeamID == "") can be deleted.
+// DeleteAgent is no longer supported; use roles instead.
 func (s *LocalService) DeleteAgent(ctx context.Context, id string) error {
-	a, err := s.GetAgent(ctx, id)
-	if err != nil {
-		return err
-	}
-	if a.Source != "user" || a.TeamID != "" {
-		return fmt.Errorf("cannot delete agent %q: only user-owned shared agents can be deleted", a.Name)
-	}
-	if a.SourcePath == "" {
-		return fmt.Errorf("agent %q has no source path", a.Name)
-	}
-	allowedDir := filepath.Join(s.cfg.ConfigDir, "user")
-	realAgentPath, err := filepath.EvalSymlinks(a.SourcePath)
-	if err != nil {
-		return sanitizeError(fmt.Errorf("resolving agent path: %w", err))
-	}
-	realAllowedDir, err := filepath.EvalSymlinks(allowedDir)
-	if err != nil {
-		return sanitizeError(fmt.Errorf("resolving allowed dir: %w", err))
-	}
-	if !strings.HasPrefix(realAgentPath+string(filepath.Separator), realAllowedDir+string(filepath.Separator)) {
-		return sanitizeError(fmt.Errorf("agent source path is outside user directory"))
-	}
-	if err := os.Remove(realAgentPath); err != nil {
-		return sanitizeError(fmt.Errorf("removing agent file: %w", err))
-	}
-	if s.cfg.Loader != nil {
-		if err := s.cfg.Loader.Load(ctx); err != nil {
-			slog.Warn("failed to reload definitions after agent deletion", "error", err)
-		}
-	}
-	return nil
+	return fmt.Errorf("agent management has been removed; use roles instead")
 }
 
-// AddSkillToAgent appends the named skill to the agent's .md file.
+// AddSkillToAgent is no longer supported; use roles instead.
 func (s *LocalService) AddSkillToAgent(ctx context.Context, agentID string, skillName string) error {
-	a, err := s.GetAgent(ctx, agentID)
-	if err != nil {
-		return err
-	}
-	if a.SourcePath == "" {
-		return fmt.Errorf("cannot add skill: agent source file unknown")
-	}
-	if a.Source == "system" {
-		return fmt.Errorf("cannot add skill to system agent %q", a.Name)
-	}
-
-	realSrc, err := filepath.EvalSymlinks(a.SourcePath)
-	if err != nil {
-		return sanitizeError(fmt.Errorf("resolving agent path: %w", err))
-	}
-	realAllowed, err := filepath.EvalSymlinks(s.cfg.ConfigDir)
-	if err != nil {
-		return sanitizeError(fmt.Errorf("resolving config dir: %w", err))
-	}
-	if !strings.HasPrefix(realSrc+string(filepath.Separator), realAllowed+string(filepath.Separator)) {
-		return sanitizeError(fmt.Errorf("agent source path is outside config directory"))
-	}
-
-	def, err := agentfmt.ParseAgent(realSrc)
-	if err != nil {
-		return sanitizeError(fmt.Errorf("parsing agent file: %w", err))
-	}
-
-	def.Skills = append(def.Skills, skillName)
-
-	if err := writeAgentFile(realSrc, def); err != nil {
-		return sanitizeError(fmt.Errorf("writing agent file: %w", err))
-	}
-
-	if s.cfg.Loader != nil {
-		if err := s.cfg.Loader.Load(ctx); err != nil {
-			slog.Warn("failed to reload definitions after adding skill to agent", "error", err)
-		}
-	}
-	return nil
+	return fmt.Errorf("agent management has been removed; use roles instead")
 }
 
-// GenerateAgent asks the LLM to generate an agent definition. Returns an
-// operationID immediately; pushes operation.completed or operation.failed when done.
+// GenerateAgent is no longer supported; use roles instead.
 func (s *LocalService) GenerateAgent(ctx context.Context, prompt string) (string, error) {
-	if s.cfg.Provider == nil {
-		return "", fmt.Errorf("LLM provider not configured")
-	}
-	if len(prompt) > maxPromptLen {
-		return "", fmt.Errorf("prompt too large: %d bytes exceeds maximum %d", len(prompt), maxPromptLen)
-	}
-
-	uuidVal, err := uuid.NewV4()
-	if err != nil {
-		return "", fmt.Errorf("generating operation ID: %w", err)
-	}
-	operationID := uuidVal.String()
-
-	if !s.tryAcquireAsync() {
-		return "", fmt.Errorf("too many concurrent operations (max %d)", maxConcurrentOps)
-	}
-
-	s.safeGo(operationID, "generate_agent", func() {
-		defer s.releaseAsync()
-
-		genCtx, genCancel := context.WithTimeout(s.ctx, 30*time.Second)
-		defer genCancel()
-		content, genErr := s.generateAgentContent(genCtx, prompt)
-		if s.ctx.Err() != nil {
-			return // service shutting down
-		}
-		if genErr != nil {
-			s.broadcast(Event{
-				Type:        EventTypeOperationFailed,
-				OperationID: operationID,
-				Payload: OperationFailedPayload{
-					Kind:  "generate_agent",
-					Error: sanitizeErrorString(genErr),
-				},
-			})
-			return
-		}
-
-		_, _, writeErr := s.writeGeneratedAgentFile(content)
-		if s.ctx.Err() != nil {
-			return // service shutting down
-		}
-		if writeErr != nil {
-			s.broadcast(Event{
-				Type:        EventTypeOperationFailed,
-				OperationID: operationID,
-				Payload: OperationFailedPayload{
-					Kind:  "generate_agent",
-					Error: sanitizeErrorString(writeErr),
-				},
-			})
-			return
-		}
-
-		if s.cfg.Loader != nil {
-			if err := s.cfg.Loader.Load(s.ctx); err != nil {
-				slog.Warn("failed to reload definitions after agent generation", "error", err)
-			}
-		}
-
-		if s.ctx.Err() != nil {
-			return // service shutting down
-		}
-		s.broadcast(Event{
-			Type:        EventTypeOperationCompleted,
-			OperationID: operationID,
-			Payload: OperationCompletedPayload{
-				Kind: "generate_agent",
-				Result: OperationResult{
-					OperationID: operationID,
-					Content:     content,
-				},
-			},
-		})
-	})
-
-	return operationID, nil
-}
-
-// generateAgentContent calls the LLM to generate an agent definition.
-func (s *LocalService) generateAgentContent(ctx context.Context, prompt string) (string, error) {
-	systemPrompt := `You are generating a Toasters agent definition file. Output ONLY the raw .md file content with no explanation, preamble, or code fences.
-
-A Toasters agent file has this format:
----
-name: agent-name
-description: What this agent does
-mode: worker
-model: claude-sonnet-4-5
-skills:
-  - skill-name
-tools:
-  - Read
-  - Write
-  - Bash
----
-
-# Agent Name
-
-Detailed system prompt for this agent. Describe its persona, responsibilities, and how it should behave.`
-
-	userMsg := fmt.Sprintf("The user wants an agent for: %s\n\nOutput ONLY the .md file content starting with ---.", prompt)
-
-	msgs := []provider.Message{
-		{Role: "system", Content: systemPrompt},
-		{Role: "user", Content: userMsg},
-	}
-
-	content, err := provider.ChatCompletion(ctx, s.cfg.Provider, msgs)
-	if err != nil {
-		return "", fmt.Errorf("LLM call failed: %w", err)
-	}
-
-	content = stripCodeFences(content)
-
-	if _, err := agentfmt.ParseBytes([]byte(content), agentfmt.DefAgent); err != nil {
-		return "", fmt.Errorf("generated content is not a valid agent definition: %w", err)
-	}
-
-	return content, nil
+	return "", fmt.Errorf("agent management has been removed; use roles instead")
 }
 
 // ---------------------------------------------------------------------------
@@ -2482,11 +2245,10 @@ func (s *LocalService) SetOperatorProvider(_ context.Context, providerID string,
 		return err
 	}
 
-	// Update composer defaults so team leads spawned after this change
+	// Update default provider/model so team leads spawned after this change
 	// inherit the operator's provider.
-	if s.cfg.Composer != nil {
-		s.cfg.Composer.SetDefaults(providerID, model)
-	}
+	s.cfg.DefaultProvider = providerID
+	s.cfg.DefaultModel = model
 
 	// Attempt live activation.
 	if s.cfg.Registry == nil {
@@ -2532,14 +2294,14 @@ func (s *LocalService) startOperator(p provider.Provider, providerID, model stri
 		s.opCancel = nil
 	}
 
-	// Compose the operator system prompt.
+	// Compose the operator system prompt via the prompt engine.
 	var systemPrompt string
-	if s.cfg.Composer != nil {
-		composed, err := s.cfg.Composer.Compose(context.Background(), "operator", "system")
+	if s.cfg.PromptEngine != nil {
+		composed, err := s.cfg.PromptEngine.Compose("operator", nil)
 		if err != nil {
 			slog.Warn("failed to compose operator for live activation", "error", err)
 		} else {
-			systemPrompt = composed.SystemPrompt
+			systemPrompt = composed
 		}
 	}
 	if systemPrompt == "" {
@@ -2557,11 +2319,12 @@ func (s *LocalService) startOperator(p provider.Provider, providerID, model stri
 		Model:                  model,
 		WorkDir:                s.cfg.WorkspaceDir,
 		Store:                  s.cfg.Store,
-		Composer:               s.cfg.Composer,
 		Spawner:                s.cfg.Runtime,
 		SystemPrompt:           systemPrompt,
 		SystemEventBroadcaster: s,
 		PromptEngine:           s.cfg.PromptEngine,
+		DefaultProvider:        s.cfg.DefaultProvider,
+		DefaultModel:           s.cfg.DefaultModel,
 		OnText: func(text string) {
 			batcher.Add(text)
 		},
@@ -2954,53 +2717,28 @@ func (s *LocalService) promoteReadOnlyAutoTeam(tv TeamView) error {
 		return fmt.Errorf("no agent files found in %s", agentsSourceDir)
 	}
 
-	type parsedAgent struct {
-		stem string
-		def  *agentfmt.AgentDef
-	}
-	var parsed []parsedAgent
-	for _, path := range matches {
-		defType, def, err := agentfmt.ParseFile(path)
-		if err != nil {
-			slog.Warn("skipping unparseable agent during promotion", "path", path, "error", err)
-			continue
-		}
-		if defType != agentfmt.DefAgent {
-			slog.Warn("skipping non-agent file during promotion", "path", path, "type", defType)
-			continue
-		}
-		agentDef, ok := def.(*agentfmt.AgentDef)
-		if !ok {
-			slog.Warn("unexpected type for agent definition", "path", path)
-			continue
-		}
-		stem := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
-		parsed = append(parsed, parsedAgent{stem: stem, def: agentDef})
-	}
-	if len(parsed) == 0 {
-		return fmt.Errorf("no valid agent definitions found in %s", agentsSourceDir)
-	}
-
 	if err := os.MkdirAll(targetAgentsDir, 0o755); err != nil {
 		return fmt.Errorf("creating target directory %s: %w", targetAgentsDir, err)
 	}
 
 	var agentNames []string
-	for _, pa := range parsed {
-		safeFilename := loader.Slugify(pa.stem)
+	for _, path := range matches {
+		stem := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+		safeFilename := loader.Slugify(stem)
 		if safeFilename == "" {
-			safeFilename = loader.Slugify(pa.def.Name)
-		}
-		if safeFilename == "" {
-			slog.Warn("skipping agent with unsluggable filename", "stem", pa.stem)
+			slog.Warn("skipping agent with unsluggable filename", "stem", stem)
 			continue
 		}
-		agentPath := filepath.Join(targetAgentsDir, safeFilename+".md")
-		if err := writeAgentFile(agentPath, pa.def); err != nil {
+		destPath := filepath.Join(targetAgentsDir, safeFilename+".md")
+		if err := copyFile(path, destPath); err != nil {
 			_ = os.RemoveAll(targetDir)
-			return fmt.Errorf("writing agent file %s: %w", agentPath, err)
+			return fmt.Errorf("copying agent file %s: %w", path, err)
 		}
-		agentNames = append(agentNames, pa.def.Name)
+		agentNames = append(agentNames, stem)
+	}
+	if len(agentNames) == 0 {
+		_ = os.RemoveAll(targetDir)
+		return fmt.Errorf("no agent files could be copied from %s", agentsSourceDir)
 	}
 
 	lead := ""
@@ -3022,7 +2760,7 @@ func (s *LocalService) promoteReadOnlyAutoTeam(tv TeamView) error {
 		return fmt.Errorf("writing team.md: %w", err)
 	}
 
-	slog.Info("promoted read-only auto-team to managed team", "team", tv.Team.Name, "target", targetDir, "agents", len(parsed))
+	slog.Info("promoted read-only auto-team to managed team", "team", tv.Team.Name, "target", targetDir, "agents", len(agentNames))
 	return nil
 }
 
@@ -3038,31 +2776,24 @@ func promoteMarkerAutoTeam(tv TeamView) error {
 		return fmt.Errorf("no agent files found in %s", agentsSymlink)
 	}
 
-	type parsedAgent struct {
-		stem string
-		def  *agentfmt.AgentDef
+	// Read file contents before removing the symlink.
+	type agentContent struct {
+		filename string
+		data     []byte
+		stem     string
 	}
-	var parsed []parsedAgent
+	var contents []agentContent
 	for _, path := range matches {
-		defType, def, err := agentfmt.ParseFile(path)
-		if err != nil {
-			slog.Warn("skipping unparseable agent during promotion", "path", path, "error", err)
-			continue
-		}
-		if defType != agentfmt.DefAgent {
-			slog.Warn("skipping non-agent file during promotion", "path", path, "type", defType)
-			continue
-		}
-		agentDef, ok := def.(*agentfmt.AgentDef)
-		if !ok {
-			slog.Warn("unexpected type for agent definition", "path", path)
-			continue
-		}
 		stem := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
-		parsed = append(parsed, parsedAgent{stem: stem, def: agentDef})
+		data, err := os.ReadFile(path)
+		if err != nil {
+			slog.Warn("skipping unreadable agent during promotion", "path", path, "error", err)
+			continue
+		}
+		contents = append(contents, agentContent{filename: filepath.Base(path), data: data, stem: stem})
 	}
-	if len(parsed) == 0 {
-		return fmt.Errorf("no valid agent definitions found in %s", agentsSymlink)
+	if len(contents) == 0 {
+		return fmt.Errorf("no readable agent files found in %s", agentsSymlink)
 	}
 
 	if err := os.Remove(agentsSymlink); err != nil {
@@ -3073,21 +2804,18 @@ func promoteMarkerAutoTeam(tv TeamView) error {
 	}
 
 	var agentNames []string
-	for _, pa := range parsed {
-		safeFilename := loader.Slugify(pa.stem)
+	for _, ac := range contents {
+		safeFilename := loader.Slugify(ac.stem)
 		if safeFilename == "" {
-			safeFilename = loader.Slugify(pa.def.Name)
-		}
-		if safeFilename == "" {
-			slog.Warn("skipping agent with unsluggable filename", "stem", pa.stem)
+			slog.Warn("skipping agent with unsluggable filename", "stem", ac.stem)
 			continue
 		}
 		agentPath := filepath.Join(agentsSymlink, safeFilename+".md")
-		if err := writeAgentFile(agentPath, pa.def); err != nil {
+		if err := os.WriteFile(agentPath, ac.data, 0o644); err != nil {
 			_ = os.RemoveAll(agentsSymlink)
 			return fmt.Errorf("writing agent file %s: %w", agentPath, err)
 		}
-		agentNames = append(agentNames, pa.def.Name)
+		agentNames = append(agentNames, ac.stem)
 	}
 
 	lead := ""
@@ -3110,7 +2838,7 @@ func promoteMarkerAutoTeam(tv TeamView) error {
 		slog.Warn("failed to remove .auto-team marker", "dir", tv.Dir(), "error", err)
 	}
 
-	slog.Info("promoted bootstrap auto-team in-place", "team", tv.Team.Name, "dir", tv.Dir(), "agents", len(parsed))
+	slog.Info("promoted bootstrap auto-team in-place", "team", tv.Team.Name, "dir", tv.Dir(), "agents", len(agentNames))
 	return nil
 }
 
@@ -3137,13 +2865,7 @@ func setCoordinator(teamDir, agentName string) error {
 	var agentFiles []agentFile
 	for _, p := range matches {
 		stem := strings.TrimSuffix(filepath.Base(p), ".md")
-		name := stem
-		if defType, def, parseErr := agentfmt.ParseFile(p); parseErr == nil && defType == agentfmt.DefAgent {
-			if agentDef, ok := def.(*agentfmt.AgentDef); ok && agentDef.Name != "" {
-				name = agentDef.Name
-			}
-		}
-		agentFiles = append(agentFiles, agentFile{path: p, name: name})
+		agentFiles = append(agentFiles, agentFile{path: p, name: stem})
 	}
 
 	found := false
@@ -3209,25 +2931,6 @@ func setCoordinator(teamDir, agentName string) error {
 // ---------------------------------------------------------------------------
 // File-writing helpers (adapted from tui/teams_modal.go and tui/agents_modal.go)
 // ---------------------------------------------------------------------------
-
-// writeAgentFile writes an AgentDef as a toasters-format .md file.
-func writeAgentFile(path string, def *agentfmt.AgentDef) error {
-	fm, err := yaml.Marshal(def)
-	if err != nil {
-		return fmt.Errorf("marshaling agent frontmatter: %w", err)
-	}
-
-	var sb strings.Builder
-	sb.WriteString("---\n")
-	sb.Write(bytes.TrimRight(fm, "\n"))
-	sb.WriteString("\n---\n")
-	if def.Body != "" {
-		sb.WriteString(def.Body)
-		sb.WriteString("\n")
-	}
-
-	return os.WriteFile(path, []byte(sb.String()), 0o644)
-}
 
 // writeTeamFile writes a TeamDef as a toasters-format .md file.
 func writeTeamFile(path string, def *agentfmt.TeamDef) error {
@@ -3363,50 +3066,6 @@ func (s *LocalService) writeGeneratedSkillFile(content string) (string, error) {
 		return "", fmt.Errorf("writing skill file: %w", err)
 	}
 	return path, nil
-}
-
-// writeGeneratedAgentFile writes LLM-generated agent content to the user agents directory.
-func (s *LocalService) writeGeneratedAgentFile(content string) (string, string, error) {
-	agentsDir := filepath.Join(s.cfg.ConfigDir, "user", "agents")
-	if err := os.MkdirAll(agentsDir, 0o755); err != nil {
-		return "", "", fmt.Errorf("creating agents dir: %w", err)
-	}
-
-	slug := "generated-agent"
-	agentName := ""
-	if parsed, err := agentfmt.ParseBytes([]byte(content), agentfmt.DefAgent); err == nil {
-		if agentDef, ok := parsed.(*agentfmt.AgentDef); ok && agentDef.Name != "" {
-			agentName = agentDef.Name
-			nameSlug := loader.Slugify(agentDef.Name)
-			if nameSlug != "" {
-				slug = nameSlug
-			}
-		}
-	}
-	if agentName == "" {
-		agentName = slug
-	}
-
-	path := filepath.Join(agentsDir, slug+".md")
-	if _, err := os.Stat(path); err == nil {
-		found := false
-		for i := 2; i < 1000; i++ {
-			candidate := filepath.Join(agentsDir, fmt.Sprintf("%s-%d.md", slug, i))
-			if _, err := os.Stat(candidate); os.IsNotExist(err) {
-				path = candidate
-				found = true
-				break
-			}
-		}
-		if !found {
-			return "", "", fmt.Errorf("too many agent files with slug %q", slug)
-		}
-	}
-
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-		return "", "", fmt.Errorf("writing agent file: %w", err)
-	}
-	return path, agentName, nil
 }
 
 // stripCodeFences removes markdown code fences from LLM output.

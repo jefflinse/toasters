@@ -44,6 +44,7 @@ type Role struct {
 	Mode        string   `yaml:"mode"`
 	Tools       []string `yaml:"tools"`
 	Body        string   `yaml:"-"` // template text after frontmatter
+	Source      string   `yaml:"-"` // "system" or "user" — set by LoadDir caller
 }
 
 // Toolchain is language/framework knowledge with typed variables.
@@ -75,8 +76,9 @@ func NewEngine() *Engine {
 
 // LoadDir loads all definitions from a directory containing roles/, toolchains/,
 // and instructions/ subdirectories. Missing subdirectories are silently skipped.
-func (e *Engine) LoadDir(dir string) error {
-	if err := e.loadRoles(filepath.Join(dir, "roles")); err != nil {
+// The source tag ("system" or "user") is set on all loaded roles for access control.
+func (e *Engine) LoadDir(dir, source string) error {
+	if err := e.loadRoles(filepath.Join(dir, "roles"), source); err != nil {
 		return fmt.Errorf("loading roles: %w", err)
 	}
 	if err := e.loadToolchains(filepath.Join(dir, "toolchains")); err != nil {
@@ -195,7 +197,7 @@ func (e *Engine) resolveToolchain(tc *Toolchain, overrides map[string]string) (s
 }
 
 // loadRoles loads all .md files from the roles directory.
-func (e *Engine) loadRoles(dir string) error {
+func (e *Engine) loadRoles(dir, source string) error {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -222,6 +224,7 @@ func (e *Engine) loadRoles(dir string) error {
 			continue
 		}
 		role.Body = body
+		role.Source = source
 
 		// Use filename stem as key if no name in frontmatter.
 		key := strings.TrimSuffix(entry.Name(), ".md")

@@ -23,8 +23,8 @@ func TestWatcher_FileChange(t *testing.T) {
 	store := openTestStore(t)
 	configDir := t.TempDir()
 
-	// Set up a user agent file.
-	writeFile(t, filepath.Join(configDir, "user", "agents", "dev.md"), seniorGoDevMD)
+	// Set up a user skill file.
+	writeFile(t, filepath.Join(configDir, "user", "skills", "dev.md"), goDevSkillMD)
 
 	l := New(store, configDir)
 
@@ -48,11 +48,9 @@ func TestWatcher_FileChange(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 
 	// Modify the .md file.
-	writeFile(t, filepath.Join(configDir, "user", "agents", "dev.md"), `---
-name: Updated Dev
+	writeFile(t, filepath.Join(configDir, "user", "skills", "dev.md"), `---
+name: Updated Dev Skill
 description: Updated description
-mode: worker
-model: claude-sonnet-4-20250514
 ---
 Updated prompt.
 `)
@@ -71,7 +69,7 @@ func TestWatcher_Debounce(t *testing.T) {
 	store := openTestStore(t)
 	configDir := t.TempDir()
 
-	writeFile(t, filepath.Join(configDir, "user", "agents", "dev.md"), seniorGoDevMD)
+	writeFile(t, filepath.Join(configDir, "user", "skills", "dev.md"), goDevSkillMD)
 
 	l := New(store, configDir)
 
@@ -95,9 +93,9 @@ func TestWatcher_Debounce(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 
 	// Rapid-fire 5 changes within the debounce window.
-	agentPath := filepath.Join(configDir, "user", "agents", "dev.md")
+	skillPath := filepath.Join(configDir, "user", "skills", "dev.md")
 	for i := range 5 {
-		writeFile(t, agentPath, seniorGoDevMD+"\n"+string(rune('a'+i)))
+		writeFile(t, skillPath, goDevSkillMD+"\n"+string(rune('a'+i)))
 		time.Sleep(20 * time.Millisecond) // well within 200ms debounce
 	}
 
@@ -124,10 +122,10 @@ func TestWatcher_IgnoresNonMD(t *testing.T) {
 	store := openTestStore(t)
 	configDir := t.TempDir()
 
-	// Create the user/agents directory so the watcher can watch it.
-	agentsDir := filepath.Join(configDir, "user", "agents")
-	if err := os.MkdirAll(agentsDir, 0o755); err != nil {
-		t.Fatalf("creating agents dir: %v", err)
+	// Create the user/skills directory so the watcher can watch it.
+	skillsDir := filepath.Join(configDir, "user", "skills")
+	if err := os.MkdirAll(skillsDir, 0o755); err != nil {
+		t.Fatalf("creating skills dir: %v", err)
 	}
 
 	l := New(store, configDir)
@@ -150,10 +148,10 @@ func TestWatcher_IgnoresNonMD(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 
 	// Write a .txt file — should be ignored.
-	writeFile(t, filepath.Join(agentsDir, "notes.txt"), "not a definition file")
+	writeFile(t, filepath.Join(skillsDir, "notes.txt"), "not a definition file")
 
 	// Write a .yaml file — should also be ignored.
-	writeFile(t, filepath.Join(agentsDir, "config.yaml"), "key: value")
+	writeFile(t, filepath.Join(skillsDir, "config.yaml"), "key: value")
 
 	// Wait long enough for a debounce cycle to pass.
 	if waitForChan(changed, 500*time.Millisecond) {
@@ -170,7 +168,7 @@ func TestWatcher_StopCleanup(t *testing.T) {
 	store := openTestStore(t)
 	configDir := t.TempDir()
 
-	writeFile(t, filepath.Join(configDir, "user", "agents", "dev.md"), seniorGoDevMD)
+	writeFile(t, filepath.Join(configDir, "user", "skills", "dev.md"), goDevSkillMD)
 
 	l := New(store, configDir)
 

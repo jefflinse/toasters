@@ -17,7 +17,6 @@ import (
 	"github.com/jefflinse/toasters/defaults"
 	"github.com/jefflinse/toasters/internal/auth"
 	"github.com/jefflinse/toasters/internal/bootstrap"
-	"github.com/jefflinse/toasters/internal/compose"
 	"github.com/jefflinse/toasters/internal/config"
 	"github.com/jefflinse/toasters/internal/db"
 	"github.com/jefflinse/toasters/internal/loader"
@@ -120,11 +119,11 @@ func runServe(cmd *cobra.Command, args []string) error {
 	// System roles load first so user definitions can override them.
 	promptEngine := prompt.NewEngine()
 	systemPromptDir := filepath.Join(configDir, "system")
-	if err := promptEngine.LoadDir(systemPromptDir); err != nil {
+	if err := promptEngine.LoadDir(systemPromptDir, "system"); err != nil {
 		slog.Warn("failed to load system prompt definitions", "dir", systemPromptDir, "error", err)
 	}
 	userDir := filepath.Join(configDir, "user")
-	if err := promptEngine.LoadDir(userDir); err != nil {
+	if err := promptEngine.LoadDir(userDir, "user"); err != nil {
 		slog.Warn("failed to load user prompt definitions", "dir", userDir, "error", err)
 	}
 	slog.Info("loaded prompt definitions", "roles", len(promptEngine.Roles()))
@@ -139,20 +138,15 @@ func runServe(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Create composer for runtime agent composition.
-	// Fall back to the operator's provider/model when agents.defaults is empty,
-	// so team leads inherit the operator's provider by default.
-	var composer *compose.Composer
-	if store != nil {
-		defaultProvider := cfg.Agents.Defaults.Provider
-		if defaultProvider == "" {
-			defaultProvider = cfg.Operator.Provider
-		}
-		defaultModel := cfg.Agents.Defaults.Model
-		if defaultModel == "" {
-			defaultModel = cfg.Operator.Model
-		}
-		composer = compose.New(store, defaultProvider, defaultModel)
+	// Resolve default provider/model for agent sessions.
+	// Fall back to the operator's provider/model when agents.defaults is empty.
+	defaultProvider := cfg.Agents.Defaults.Provider
+	if defaultProvider == "" {
+		defaultProvider = cfg.Operator.Provider
+	}
+	defaultModel := cfg.Agents.Defaults.Model
+	if defaultModel == "" {
+		defaultModel = cfg.Operator.Model
 	}
 
 	// Create provider registry and register providers from providers/*.yaml.
@@ -197,25 +191,12 @@ func runServe(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Compose the operator agent's system prompt. Try prompt engine first
-	// (template-based with globals/instructions), fall back to legacy composer.
+	// Compose the operator agent's system prompt via the prompt engine.
 	var operatorPrompt string
-	if role := promptEngine.Role("operator"); role != nil {
-		composed, composeErr := promptEngine.Compose("operator", nil)
-		if composeErr != nil {
-			slog.Warn("prompt engine failed for operator, falling back to composer", "error", composeErr)
-		} else {
-			operatorPrompt = composed
-			slog.Info("composed operator prompt via prompt engine")
-		}
-	}
-	if operatorPrompt == "" && composer != nil {
-		composedOperator, composeErr := composer.Compose(context.Background(), "operator", "system")
-		if composeErr != nil {
-			slog.Warn("failed to compose operator agent, using empty prompt", "error", composeErr)
-		} else {
-			operatorPrompt = composedOperator.SystemPrompt
-		}
+	if composed, err := promptEngine.Compose("operator", nil); err != nil {
+		slog.Warn("failed to compose operator prompt", "error", err)
+	} else {
+		operatorPrompt = composed
 	}
 
 	// Initialize the models.dev catalog client for the provider/model browser.
@@ -227,7 +208,6 @@ func runServe(cmd *cobra.Command, args []string) error {
 		Runtime:          rt,
 		MCPManager:       mcpManager,
 		Provider:         client,
-		Composer:         composer,
 		Loader:           ldr,
 		ConfigDir:        configDir,
 		WorkspaceDir:     workspaceDir,
@@ -238,6 +218,8 @@ func runServe(cmd *cobra.Command, args []string) error {
 		Catalog:          catalog,
 		Registry:         registry,
 		PromptEngine:     promptEngine,
+		DefaultProvider:  defaultProvider,
+		DefaultModel:     defaultModel,
 	})
 	defer svc.Shutdown()
 
@@ -264,11 +246,12 @@ func runServe(cmd *cobra.Command, args []string) error {
 			Model:                  cfg.Operator.Model,
 			WorkDir:                workspaceDir,
 			Store:                  store,
-			Composer:               composer,
 			Spawner:                rt,
 			SystemPrompt:           operatorPrompt,
 			SystemEventBroadcaster: svc,
 			PromptEngine:           promptEngine,
+			DefaultProvider:        defaultProvider,
+			DefaultModel:           defaultModel,
 			OnText: func(text string) {
 				batcher.Add(text)
 			},

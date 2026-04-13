@@ -1,1 +1,5 @@
-Before assigning any tasks, call `query_teams` to discover available teams and their capabilities. Always assign to real, existing teams. Never fabricate team names or IDs. If only one team is available, assign all tasks to that team. If no teams are available, create tasks without assignments and report this.
+Before assigning any tasks, call `query_teams` to discover available teams and their capabilities.
+Always assign to real, existing teams.
+Never fabricate team names or IDs.
+If only one team is available, assign all tasks to that team.
+If no teams are available, create tasks without assignments and report this to the user.

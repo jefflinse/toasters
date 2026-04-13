@@ -58,7 +58,7 @@ Write clean Go code.
 
 	// Load and compose.
 	engine := NewEngine()
-	if err := engine.LoadDir(dir); err != nil {
+	if err := engine.LoadDir(dir, "test"); err != nil {
 		t.Fatalf("LoadDir: %v", err)
 	}
 
@@ -124,7 +124,7 @@ name: Test Role
 `)
 
 	engine := NewEngine()
-	if err := engine.LoadDir(dir); err != nil {
+	if err := engine.LoadDir(dir, "test"); err != nil {
 		t.Fatalf("LoadDir: %v", err)
 	}
 
@@ -155,7 +155,7 @@ func TestEngine_Compose_MissingRole(t *testing.T) {
 func TestEngine_Compose_MissingDir(t *testing.T) {
 	engine := NewEngine()
 	// Loading a nonexistent directory should not error (empty engine).
-	if err := engine.LoadDir("/nonexistent/path"); err != nil {
+	if err := engine.LoadDir("/nonexistent/path", "test"); err != nil {
 		t.Fatalf("LoadDir should not error for missing dir: %v", err)
 	}
 }
@@ -168,7 +168,7 @@ func TestEngine_Compose_WithActualDefaults(t *testing.T) {
 	}
 
 	engine := NewEngine()
-	if err := engine.LoadDir(defaultsDir); err != nil {
+	if err := engine.LoadDir(defaultsDir, "test"); err != nil {
 		t.Fatalf("LoadDir: %v", err)
 	}
 
@@ -208,7 +208,7 @@ func TestEngine_Compose_AllRoles(t *testing.T) {
 	}
 
 	engine := NewEngine()
-	if err := engine.LoadDir(defaultsDir); err != nil {
+	if err := engine.LoadDir(defaultsDir, "test"); err != nil {
 		t.Fatalf("LoadDir: %v", err)
 	}
 

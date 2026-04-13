@@ -38,10 +38,6 @@ func TestSystemFilesParseCorrectly(t *testing.T) {
 		name    string
 	}{
 		{"system/team.md", agentfmt.DefTeam, "System"},
-		{"system/agents/operator.md", agentfmt.DefAgent, "Operator"},
-		{"system/agents/planner.md", agentfmt.DefAgent, "Planner"},
-		{"system/agents/scheduler.md", agentfmt.DefAgent, "Scheduler"},
-		{"system/agents/blocker-handler.md", agentfmt.DefAgent, "Blocker Handler"},
 		{"system/skills/orchestration.md", agentfmt.DefSkill, "Orchestration"},
 	}
 
@@ -64,22 +60,6 @@ func TestSystemFilesParseCorrectly(t *testing.T) {
 				}
 				if d.Lead == "" {
 					t.Error("Lead is empty")
-				}
-				if len(d.Agents) == 0 {
-					t.Error("Agents is empty")
-				}
-				if d.Body == "" {
-					t.Error("Body is empty")
-				}
-			case *agentfmt.AgentDef:
-				if d.Name != tt.name {
-					t.Errorf("Name = %q, want %q", d.Name, tt.name)
-				}
-				if d.Mode == "" {
-					t.Error("Mode is empty")
-				}
-				if len(d.Tools) == 0 {
-					t.Error("Tools is empty")
 				}
 				if d.Body == "" {
 					t.Error("Body is empty")

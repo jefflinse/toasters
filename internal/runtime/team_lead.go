@@ -4,16 +4,29 @@ import (
 	"context"
 	"log/slog"
 	"time"
-
-	"github.com/jefflinse/toasters/internal/compose"
 )
+
+// ComposedAgent holds the fully resolved agent definition needed to spawn a
+// team lead session. This replaces the old compose.ComposedAgent that was
+// assembled from DB records.
+type ComposedAgent struct {
+	AgentID         string
+	Name            string
+	SystemPrompt    string
+	Tools           []string
+	DisallowedTools []string
+	Provider        string
+	Model           string
+	TeamID          string
+	MaxTurns        *int
+}
 
 // TeamLeadSpawner is the interface for spawning team lead sessions.
 // It is defined here (in runtime) so that *Runtime can implement it without
 // creating an import cycle: operator → runtime is fine; runtime → operator
 // would be a cycle.
 type TeamLeadSpawner interface {
-	SpawnTeamLead(ctx context.Context, composed *compose.ComposedAgent, taskID, jobID, workDir, taskDescription string, extraTools ToolExecutor) error
+	SpawnTeamLead(ctx context.Context, composed *ComposedAgent, taskID, jobID, workDir, taskDescription string, extraTools ToolExecutor) error
 }
 
 // TeamLeadCompletionTracker is an optional interface that a team_lead's
@@ -69,7 +82,7 @@ func watchTeamLeadForCompletion(sess *Session, taskID string, tracker TeamLeadCo
 // depth 0 (team leads may spawn workers; workers may not spawn further agents).
 // taskDescription is sent as the initial user message to kick off the conversation.
 // extraTools, if non-nil, are layered on top of CoreTools with dispatch priority.
-func (r *Runtime) SpawnTeamLead(ctx context.Context, composed *compose.ComposedAgent, taskID, jobID, workDir, taskDescription string, extraTools ToolExecutor) error {
+func (r *Runtime) SpawnTeamLead(ctx context.Context, composed *ComposedAgent, taskID, jobID, workDir, taskDescription string, extraTools ToolExecutor) error {
 	// Resolve tool definitions from the composed tool name list. Team leads
 	// receive the full default CoreTools set filtered to the composed tool names.
 	// The actual ToolDef schemas are provided by CoreTools.Definitions() at

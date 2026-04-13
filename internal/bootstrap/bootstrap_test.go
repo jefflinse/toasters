@@ -29,13 +29,13 @@ func TestRun_FirstRun(t *testing.T) {
 
 	// Verify system/ was created with expected files.
 	assertDirExists(t, filepath.Join(configDir, "system"))
-	assertDirExists(t, filepath.Join(configDir, "system", "agents"))
+	assertDirExists(t, filepath.Join(configDir, "system", "roles"))
 	assertDirExists(t, filepath.Join(configDir, "system", "skills"))
 	assertFileExists(t, filepath.Join(configDir, "system", "team.md"))
-	assertFileExists(t, filepath.Join(configDir, "system", "agents", "operator.md"))
-	assertFileExists(t, filepath.Join(configDir, "system", "agents", "planner.md"))
-	assertFileExists(t, filepath.Join(configDir, "system", "agents", "scheduler.md"))
-	assertFileExists(t, filepath.Join(configDir, "system", "agents", "blocker-handler.md"))
+	assertFileExists(t, filepath.Join(configDir, "system", "roles", "operator.md"))
+	assertFileExists(t, filepath.Join(configDir, "system", "roles", "planner.md"))
+	assertFileExists(t, filepath.Join(configDir, "system", "roles", "scheduler.md"))
+	assertFileExists(t, filepath.Join(configDir, "system", "roles", "blocker-handler.md"))
 	assertFileExists(t, filepath.Join(configDir, "system", "skills", "orchestration.md"))
 
 	// Verify user/ structure was created.
@@ -465,7 +465,7 @@ func TestRun_AlreadySetUp(t *testing.T) {
 
 	// Verify all directories still exist.
 	assertDirExists(t, filepath.Join(configDir, "system"))
-	assertDirExists(t, filepath.Join(configDir, "system", "agents"))
+	assertDirExists(t, filepath.Join(configDir, "system", "roles"))
 	assertDirExists(t, filepath.Join(configDir, "system", "skills"))
 	assertDirExists(t, filepath.Join(configDir, "user", "skills"))
 	assertDirExists(t, filepath.Join(configDir, "user", "agents"))

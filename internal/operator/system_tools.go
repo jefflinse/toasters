@@ -12,7 +12,6 @@ import (
 
 	"github.com/gofrs/uuid/v5"
 
-	"github.com/jefflinse/toasters/internal/compose"
 	"github.com/jefflinse/toasters/internal/db"
 	"github.com/jefflinse/toasters/internal/prompt"
 	"github.com/jefflinse/toasters/internal/runtime"
@@ -47,33 +46,30 @@ type SystemEventBroadcaster interface {
 // tools — system agents use them to create/query jobs and tasks, assign
 // work to teams, and communicate with users.
 type SystemTools struct {
-	store        db.Store
-	composer     *compose.Composer
-	promptEngine *prompt.Engine // optional; when set, used for role-based prompt composition
-	eventCh      chan<- Event
-	spawner      TeamLeadSpawner
-	workDir      string                 // global workspace directory; per-job subdirs are created under this
-	broadcaster  SystemEventBroadcaster // optional; nil means no service event broadcast
+	store           db.Store
+	promptEngine    *prompt.Engine
+	defaultProvider string
+	defaultModel    string
+	eventCh         chan<- Event
+	spawner         TeamLeadSpawner
+	workDir         string                 // global workspace directory; per-job subdirs are created under this
+	broadcaster     SystemEventBroadcaster // optional; nil means no service event broadcast
 }
 
 // NewSystemTools creates a new SystemTools instance.
-func NewSystemTools(store db.Store, composer *compose.Composer, eventCh chan<- Event, spawner TeamLeadSpawner, workDir string, broadcaster SystemEventBroadcaster) *SystemTools {
+func NewSystemTools(store db.Store, promptEngine *prompt.Engine, defaultProvider, defaultModel string, eventCh chan<- Event, spawner TeamLeadSpawner, workDir string, broadcaster SystemEventBroadcaster) *SystemTools {
 	return &SystemTools{
-		store:       store,
-		composer:    composer,
-		eventCh:     eventCh,
-		spawner:     spawner,
-		workDir:     workDir,
-		broadcaster: broadcaster,
+		store:           store,
+		promptEngine:    promptEngine,
+		defaultProvider: defaultProvider,
+		defaultModel:    defaultModel,
+		eventCh:         eventCh,
+		spawner:         spawner,
+		workDir:         workDir,
+		broadcaster:     broadcaster,
 	}
 }
 
-// SetPromptEngine sets the prompt engine for role-based prompt composition.
-// When set, assignTask will try to compose team lead prompts from role
-// definitions before falling back to the legacy Composer.
-func (st *SystemTools) SetPromptEngine(e *prompt.Engine) {
-	st.promptEngine = e
-}
 
 // Definitions returns the tool definitions available to system agents.
 func (st *SystemTools) Definitions() []runtime.ToolDef {
@@ -435,54 +431,44 @@ func (st *SystemTools) assignTask(ctx context.Context, args json.RawMessage) (st
 		return "", fmt.Errorf("assigning task: %w", err)
 	}
 
-	// 6. Compose the team lead agent.
-	// Try the prompt engine first (role-based composition), then fall back
-	// to the legacy Composer. The engine stores roles by filename stem
-	// (e.g. "coordinator"), but team.LeadAgent is the qualified DB agent ID
-	// (e.g. "the-kitchen/coordinator"), so extract the role name.
-	var composed *compose.ComposedAgent
-	if st.promptEngine != nil {
-		roleName := team.LeadAgent
-		if idx := strings.LastIndex(roleName, "/"); idx >= 0 {
-			roleName = roleName[idx+1:]
-		}
-		if role := st.promptEngine.Role(roleName); role != nil {
-			prompt, promptErr := st.promptEngine.Compose(roleName, nil)
-			if promptErr != nil {
-				slog.Warn("prompt engine failed, falling back to legacy composer",
-					"role", team.LeadAgent, "error", promptErr)
-			} else {
-				// Resolve provider/model: team → global default (same cascade
-				// as the legacy composer, minus the agent level since role-based
-				// agents don't have per-agent provider config).
-				prov := team.Provider
-				if prov == "" {
-					prov = st.composer.DefaultProvider()
-				}
-				mod := team.Model
-				if mod == "" {
-					mod = st.composer.DefaultModel()
-				}
-				composed = &compose.ComposedAgent{
-					AgentID:      team.LeadAgent,
-					Name:         role.Name,
-					SystemPrompt: prompt,
-					Provider:     prov,
-					Model:        mod,
-					TeamID:       params.TeamID,
-				}
-				slog.Info("composed team lead from prompt engine",
-					"role", team.LeadAgent, "team", params.TeamID, "prompt_len", len(prompt))
-			}
-		}
+	// 6. Compose the team lead agent via the prompt engine.
+	// The engine stores roles by filename stem (e.g. "coordinator"), but
+	// team.LeadAgent is the qualified agent ID (e.g. "the-kitchen/coordinator"),
+	// so extract the role name.
+	roleName := team.LeadAgent
+	if idx := strings.LastIndex(roleName, "/"); idx >= 0 {
+		roleName = roleName[idx+1:]
 	}
-	if composed == nil {
-		var err error
-		composed, err = st.composer.Compose(ctx, team.LeadAgent, params.TeamID)
-		if err != nil {
-			return "", fmt.Errorf("composing team lead: %w", err)
-		}
+	if st.promptEngine == nil {
+		return "", fmt.Errorf("prompt engine not configured")
 	}
+	role := st.promptEngine.Role(roleName)
+	if role == nil {
+		return "", fmt.Errorf("no role %q found for team lead %q", roleName, team.LeadAgent)
+	}
+	leadPrompt, promptErr := st.promptEngine.Compose(roleName, nil)
+	if promptErr != nil {
+		return "", fmt.Errorf("composing team lead %q: %w", team.LeadAgent, promptErr)
+	}
+	// Resolve provider/model: team → global default.
+	prov := team.Provider
+	if prov == "" {
+		prov = st.defaultProvider
+	}
+	mod := team.Model
+	if mod == "" {
+		mod = st.defaultModel
+	}
+	composed := &runtime.ComposedAgent{
+		AgentID:      team.LeadAgent,
+		Name:         role.Name,
+		SystemPrompt: leadPrompt,
+		Provider:     prov,
+		Model:        mod,
+		TeamID:       params.TeamID,
+	}
+	slog.Info("composed team lead from prompt engine",
+		"role", team.LeadAgent, "team", params.TeamID, "prompt_len", len(leadPrompt))
 
 	// 7. Spawn team lead goroutine (fire-and-forget) with the job's workspace dir.
 	if st.spawner == nil {

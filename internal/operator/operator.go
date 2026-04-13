@@ -13,7 +13,6 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/jefflinse/toasters/internal/compose"
 	"github.com/jefflinse/toasters/internal/prompt"
 	"github.com/jefflinse/toasters/internal/db"
 	"github.com/jefflinse/toasters/internal/provider"
@@ -56,10 +55,11 @@ type Config struct {
 	WorkDir                string
 	SystemPrompt           string // required; system prompt for the operator LLM session
 	Store                  db.Store
-	Composer               *compose.Composer
 	Spawner                runtime.TeamLeadSpawner // spawns team lead sessions on task assignment; may be nil
 	SystemEventBroadcaster SystemEventBroadcaster  // optional; for broadcasting service events from system tools
-	PromptEngine           *prompt.Engine          // optional; for role-based prompt composition
+	PromptEngine           *prompt.Engine          // prompt engine for role-based prompt composition
+	DefaultProvider        string                  // default provider for system agents and team leads
+	DefaultModel           string                  // default model for system agents and team leads
 	OnText                 func(text string)       // called with streamed text from the operator LLM
 	OnEvent                func(event Event)       // called when the event loop processes an event
 	// OnTurnDone is called when the operator finishes processing a user
@@ -81,14 +81,11 @@ func New(cfg Config) (*Operator, error) {
 	// back through the operator event loop.
 	eventCh := make(chan Event, eventChSize)
 	var systemTools *SystemTools
-	if cfg.Store != nil && cfg.Composer != nil {
-		systemTools = NewSystemTools(cfg.Store, cfg.Composer, eventCh, cfg.Spawner, cfg.WorkDir, cfg.SystemEventBroadcaster)
-		if cfg.PromptEngine != nil {
-			systemTools.SetPromptEngine(cfg.PromptEngine)
-		}
+	if cfg.Store != nil {
+		systemTools = NewSystemTools(cfg.Store, cfg.PromptEngine, cfg.DefaultProvider, cfg.DefaultModel, eventCh, cfg.Spawner, cfg.WorkDir, cfg.SystemEventBroadcaster)
 	}
 
-	tools := newOperatorTools(cfg.Runtime, cfg.Composer, cfg.PromptEngine, cfg.Store, systemTools, cfg.WorkDir)
+	tools := newOperatorTools(cfg.Runtime, cfg.PromptEngine, cfg.DefaultProvider, cfg.DefaultModel, cfg.Store, systemTools, cfg.WorkDir)
 	provTools := operatorToolsToProviderTools(tools.Definitions())
 
 	return &Operator{

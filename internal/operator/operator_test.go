@@ -11,8 +11,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jefflinse/toasters/internal/compose"
+	"os"
+
 	"github.com/jefflinse/toasters/internal/db"
+	"github.com/jefflinse/toasters/internal/prompt"
 	"github.com/jefflinse/toasters/internal/provider"
 	"github.com/jefflinse/toasters/internal/runtime"
 )
@@ -125,8 +127,30 @@ func newOperatorTestStore(t *testing.T) db.Store {
 	return store
 }
 
-// newTestOperatorTools creates an operatorTools with a real store and composer.
-// The store is seeded with the given agents.
+// testPromptEngine creates a prompt engine with system roles in a temp directory.
+// Roles are specified as name→body pairs.
+func testPromptEngine(t *testing.T, roles map[string]string) *prompt.Engine {
+	t.Helper()
+	dir := t.TempDir()
+	rolesDir := filepath.Join(dir, "roles")
+	if err := os.MkdirAll(rolesDir, 0o755); err != nil {
+		t.Fatalf("creating roles dir: %v", err)
+	}
+	for name, body := range roles {
+		path := filepath.Join(rolesDir, name+".md")
+		content := fmt.Sprintf("---\nname: %s\nmode: worker\ntools:\n  - query_teams\n  - create_job\n  - create_task\n  - assign_task\n  - query_job_context\n---\n%s", name, body)
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatalf("writing role %s: %v", name, err)
+		}
+	}
+	engine := prompt.NewEngine()
+	if err := engine.LoadDir(dir, "system"); err != nil {
+		t.Fatalf("loading prompt engine: %v", err)
+	}
+	return engine
+}
+
+// newTestOperatorTools creates an operatorTools with a real store and prompt engine.
 func newTestOperatorTools(t *testing.T, agents []*db.Agent) *operatorTools {
 	t.Helper()
 	store := newOperatorTestStore(t)
@@ -138,11 +162,15 @@ func newTestOperatorTools(t *testing.T, agents []*db.Agent) *operatorTools {
 		}
 	}
 
-	composer := compose.New(store, "test-provider", "test-model")
-	eventCh := make(chan Event, 64)
-	systemTools := NewSystemTools(store, composer, eventCh, nil, t.TempDir(), nil)
+	engine := testPromptEngine(t, map[string]string{
+		"planner":  "You are a planning agent.",
+		"decomposer": "You are the decomposer.",
+	})
 
-	return newOperatorTools(nil, composer, nil, store, systemTools, t.TempDir())
+	eventCh := make(chan Event, 64)
+	systemTools := NewSystemTools(store, engine, "test-provider", "test-model", eventCh, nil, t.TempDir(), nil)
+
+	return newOperatorTools(nil, engine, "test-provider", "test-model", store, systemTools, t.TempDir())
 }
 
 // --- Tests ---
@@ -339,30 +367,25 @@ func TestOperatorConsultAgent(t *testing.T) {
 	store := newOperatorTestStore(t)
 	ctx := context.Background()
 
-	// Seed the planner agent in the DB (must be source=system for consult_agent).
-	if err := store.UpsertAgent(ctx, &db.Agent{
-		ID:           "planner",
-		Name:         "Planner",
-		Source:       "system",
-		SystemPrompt: "You are a planning agent. Analyze requests and create plans.",
-	}); err != nil {
-		t.Fatalf("upserting planner agent: %v", err)
-	}
+	engine := testPromptEngine(t, map[string]string{
+		"planner": "You are a planning agent. Analyze requests and create plans.",
+	})
 
-	composer := compose.New(store, "test", "test-model")
 	rt := runtime.New(store, newTestRegistry(mp))
 
 	var textBuf strings.Builder
 	var mu sync.Mutex
 
 	op, err := New(Config{
-		Runtime:      rt,
-		Provider:     mp,
-		Model:        "test-model",
-		WorkDir:      t.TempDir(),
-		Store:        store,
-		Composer:     composer,
-		SystemPrompt: "You are the operator.",
+		Runtime:         rt,
+		Provider:        mp,
+		Model:           "test-model",
+		WorkDir:         t.TempDir(),
+		Store:           store,
+		PromptEngine:    engine,
+		DefaultProvider: "test",
+		DefaultModel:    "test-model",
+		SystemPrompt:    "You are the operator.",
 		OnText: func(text string) {
 			mu.Lock()
 			textBuf.WriteString(text)
@@ -643,14 +666,16 @@ func TestEventLoop_TaskCompleted_AssignsNextTask(t *testing.T) {
 	}
 
 	reg := newTestRegistry(mp)
-	composer := compose.New(store, "test-provider", "test-model")
 	rt := runtime.New(store, reg)
 	spawner := &mockSpawner{}
 
-	// Create operator with SystemTools that have a spawner.
+	// Create operator with SystemTools that have a spawner and prompt engine.
+	engine := testPromptEngine(t, map[string]string{
+		"lead-agent": "You are a test lead.",
+	})
 	eventCh := make(chan Event, eventChSize)
-	systemTools := NewSystemTools(store, composer, eventCh, spawner, t.TempDir(), nil)
-	tools := newOperatorTools(rt, composer, nil, store, systemTools, t.TempDir())
+	systemTools := NewSystemTools(store, engine, "test-provider", "test-model", eventCh, spawner, t.TempDir(), nil)
+	tools := newOperatorTools(rt, engine, "test-provider", "test-model", store, systemTools, t.TempDir())
 	provTools := operatorToolsToProviderTools(tools.Definitions())
 
 	var events []Event
@@ -1507,19 +1532,10 @@ func TestConsultAgent_ComposedAgent(t *testing.T) {
 	// agent from the DB, including the agent's system prompt and resolved
 	// provider/model.
 	store := newOperatorTestStore(t)
-	ctx := context.Background()
 
-	// Seed a planner agent with a specific system prompt (must be source=system).
-	if err := store.UpsertAgent(ctx, &db.Agent{
-		ID:           "planner",
-		Name:         "Planner",
-		Source:       "system",
-		SystemPrompt: "You are a planning agent. Create detailed plans.",
-		Provider:     "custom-provider",
-		Model:        "custom-model",
-	}); err != nil {
-		t.Fatalf("upserting agent: %v", err)
-	}
+	engine := testPromptEngine(t, map[string]string{
+		"planner": "You are a planning agent. Create detailed plans.",
+	})
 
 	mp := &mockProvider{
 		name: "custom-provider",
@@ -1549,20 +1565,21 @@ func TestConsultAgent_ComposedAgent(t *testing.T) {
 	reg := provider.NewRegistry()
 	reg.Register("custom-provider", mp)
 
-	composer := compose.New(store, "custom-provider", "default-model")
 	rt := runtime.New(store, reg)
 
 	var textBuf strings.Builder
 	var mu sync.Mutex
 
 	op, err := New(Config{
-		Runtime:      rt,
-		Provider:     mp,
-		Model:        "default-model",
-		WorkDir:      t.TempDir(),
-		Store:        store,
-		Composer:     composer,
-		SystemPrompt: "You are the operator.",
+		Runtime:         rt,
+		Provider:        mp,
+		Model:           "default-model",
+		WorkDir:         t.TempDir(),
+		Store:           store,
+		PromptEngine:    engine,
+		DefaultProvider: "custom-provider",
+		DefaultModel:    "default-model",
+		SystemPrompt:    "You are the operator.",
 		OnText: func(text string) {
 			mu.Lock()
 			textBuf.WriteString(text)
@@ -1573,7 +1590,7 @@ func TestConsultAgent_ComposedAgent(t *testing.T) {
 		t.Fatalf("creating operator: %v", err)
 	}
 
-	ctx, cancel := context.WithCancel(ctx)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	op.Start(ctx)
@@ -1595,7 +1612,7 @@ func TestConsultAgent_ComposedAgent(t *testing.T) {
 
 	assertContains(t, got, "migration plan")
 
-	// Verify the planner's ChatStream call used the agent's custom model.
+	// Verify the planner's ChatStream call used the default provider/model.
 	reqs := mp.getRequests()
 	if len(reqs) < 2 {
 		t.Fatalf("want at least 2 ChatStream calls, got %d", len(reqs))
@@ -1603,9 +1620,9 @@ func TestConsultAgent_ComposedAgent(t *testing.T) {
 
 	// The second call is the planner agent's session.
 	plannerReq := reqs[1]
-	assertEqual(t, "custom-model", plannerReq.Model)
+	assertEqual(t, "default-model", plannerReq.Model)
 
-	// Verify the planner's system prompt came from the DB.
+	// Verify the planner's system prompt came from the prompt engine.
 	assertContains(t, plannerReq.System, "You are a planning agent")
 }
 
@@ -1617,7 +1634,7 @@ func TestConsultAgent_UnknownAgent(t *testing.T) {
 	_, err := tools.Execute(context.Background(), "consult_agent",
 		json.RawMessage(`{"agent_name": "nonexistent", "message": "hello"}`))
 	assertError(t, err)
-	assertContains(t, err.Error(), "unknown agent")
+	assertContains(t, err.Error(), "unknown system agent")
 	assertContains(t, err.Error(), "nonexistent")
 }
 
@@ -1648,10 +1665,9 @@ func TestSurfaceToUserMissingText(t *testing.T) {
 
 func TestSurfaceToUserCreatesFeedEntry(t *testing.T) {
 	store := newOperatorTestStore(t)
-	composer := compose.New(store, "test-provider", "test-model")
 	eventCh := make(chan Event, 64)
-	systemTools := NewSystemTools(store, composer, eventCh, nil, t.TempDir(), nil)
-	tools := newOperatorTools(nil, composer, nil, store, systemTools, t.TempDir())
+	systemTools := NewSystemTools(store, nil, "test-provider", "test-model", eventCh, nil, t.TempDir(), nil)
+	tools := newOperatorTools(nil, nil, "test-provider", "test-model", store, systemTools, t.TempDir())
 
 	result, err := tools.Execute(context.Background(), "surface_to_user",
 		json.RawMessage(`{"text": "Important update"}`))
@@ -1670,7 +1686,7 @@ func TestSurfaceToUserCreatesFeedEntry(t *testing.T) {
 
 func TestSurfaceToUserWithoutSystemTools(t *testing.T) {
 	// surface_to_user should return an error when no system tools are configured.
-	tools := newOperatorTools(nil, nil, nil, nil, nil, t.TempDir())
+	tools := newOperatorTools(nil, nil, "test-provider", "test-model", nil, nil, t.TempDir())
 
 	_, err := tools.Execute(context.Background(), "surface_to_user",
 		json.RawMessage(`{"text": "No store available"}`))
@@ -1722,10 +1738,9 @@ func TestQueryJobDelegatesToSystemTools(t *testing.T) {
 		t.Fatalf("creating job: %v", err)
 	}
 
-	composer := compose.New(store, "test-provider", "test-model")
 	eventCh := make(chan Event, 64)
-	systemTools := NewSystemTools(store, composer, eventCh, nil, t.TempDir(), nil)
-	tools := newOperatorTools(nil, composer, nil, store, systemTools, t.TempDir())
+	systemTools := NewSystemTools(store, nil, "test-provider", "test-model", eventCh, nil, t.TempDir(), nil)
+	tools := newOperatorTools(nil, nil, "test-provider", "test-model", store, systemTools, t.TempDir())
 
 	result, err := tools.Execute(ctx, "query_job",
 		json.RawMessage(`{"job_id": "job-1"}`))
@@ -1741,10 +1756,9 @@ func TestQueryTeamsDelegatesToSystemTools(t *testing.T) {
 	// Seed a team.
 	seedTeam(t, ctx, store, "team-1", "Alpha Team", "lead-1")
 
-	composer := compose.New(store, "test-provider", "test-model")
 	eventCh := make(chan Event, 64)
-	systemTools := NewSystemTools(store, composer, eventCh, nil, t.TempDir(), nil)
-	tools := newOperatorTools(nil, composer, nil, store, systemTools, t.TempDir())
+	systemTools := NewSystemTools(store, nil, "test-provider", "test-model", eventCh, nil, t.TempDir(), nil)
+	tools := newOperatorTools(nil, nil, "test-provider", "test-model", store, systemTools, t.TempDir())
 
 	result, err := tools.Execute(ctx, "query_teams", json.RawMessage(`{}`))
 	assertNoError(t, err)
@@ -1765,20 +1779,20 @@ func TestQueryTeamsDelegatesToSystemTools(t *testing.T) {
 // query_job_context, surface_to_user) instead of only the 2 declared ones.
 func TestConsultAgent_ToolFiltering(t *testing.T) {
 	store := newOperatorTestStore(t)
-	ctx := context.Background()
 
-	// Seed a planner agent that declares only two tools.
-	// The agent must be source=system for consult_agent to accept it.
-	plannerTools := []string{"create_job", "create_task"}
-	plannerToolsJSON, _ := json.Marshal(plannerTools)
-	if err := store.UpsertAgent(ctx, &db.Agent{
-		ID:           "planner",
-		Name:         "Planner",
-		Source:       "system",
-		SystemPrompt: "You are a planning agent.",
-		Tools:        json.RawMessage(plannerToolsJSON),
-	}); err != nil {
-		t.Fatalf("upserting planner agent: %v", err)
+	// Create a prompt engine role with only two tools declared.
+	dir := t.TempDir()
+	rolesDir := filepath.Join(dir, "roles")
+	if err := os.MkdirAll(rolesDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	plannerRole := "---\nname: Planner\nmode: worker\ntools:\n  - create_job\n  - create_task\n---\nYou are a planning agent."
+	if err := os.WriteFile(filepath.Join(rolesDir, "planner.md"), []byte(plannerRole), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	engine := prompt.NewEngine()
+	if err := engine.LoadDir(dir, "system"); err != nil {
+		t.Fatal(err)
 	}
 
 	mp := &mockProvider{
@@ -1809,20 +1823,21 @@ func TestConsultAgent_ToolFiltering(t *testing.T) {
 	reg := provider.NewRegistry()
 	reg.Register("test", mp)
 
-	composer := compose.New(store, "test", "test-model")
 	rt := runtime.New(store, reg)
 
 	var textBuf strings.Builder
 	var mu sync.Mutex
 
 	op, err := New(Config{
-		Runtime:      rt,
-		Provider:     mp,
-		Model:        "test-model",
-		WorkDir:      t.TempDir(),
-		Store:        store,
-		Composer:     composer,
-		SystemPrompt: "You are the operator.",
+		Runtime:         rt,
+		Provider:        mp,
+		Model:           "test-model",
+		WorkDir:         t.TempDir(),
+		Store:           store,
+		PromptEngine:    engine,
+		DefaultProvider: "test",
+		DefaultModel:    "test-model",
+		SystemPrompt:    "You are the operator.",
 		OnText: func(text string) {
 			mu.Lock()
 			textBuf.WriteString(text)
@@ -1833,7 +1848,7 @@ func TestConsultAgent_ToolFiltering(t *testing.T) {
 		t.Fatalf("creating operator: %v", err)
 	}
 
-	ctx, cancel := context.WithCancel(ctx)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	op.Start(ctx)
@@ -1864,7 +1879,7 @@ func TestConsultAgent_ToolFiltering(t *testing.T) {
 		plannerToolNames[tool.Name] = true
 	}
 
-	// The planner must see its declared tools.
+	// The planner must see its declared tools (create_job, create_task).
 	for _, expected := range []string{"create_job", "create_task"} {
 		if !plannerToolNames[expected] {
 			t.Errorf("planner session missing declared tool %q — regression: tool filtering not applied", expected)
@@ -1872,7 +1887,6 @@ func TestConsultAgent_ToolFiltering(t *testing.T) {
 	}
 
 	// The planner must NOT see tools it did not declare.
-	// Before the fix, all system tools were visible because SpawnOpts.Tools was nil.
 	undeclaredTools := []string{"assign_task", "query_teams", "query_job", "query_job_context", "surface_to_user"}
 	for _, undeclared := range undeclaredTools {
 		if plannerToolNames[undeclared] {
@@ -1880,11 +1894,9 @@ func TestConsultAgent_ToolFiltering(t *testing.T) {
 		}
 	}
 
-	// The planner was seeded with exactly these tools; count must match the declaration.
-	wantCount := len(plannerTools)
-	if len(plannerReq.Tools) != wantCount {
-		t.Errorf("planner session has %d tools, want %d (matching declared tools %v); got: %v",
-			len(plannerReq.Tools), wantCount, plannerTools, plannerReq.Tools)
+	if len(plannerReq.Tools) != 2 {
+		t.Errorf("planner session has %d tools, want 2; got: %v",
+			len(plannerReq.Tools), plannerReq.Tools)
 	}
 }
 
