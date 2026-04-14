@@ -118,6 +118,10 @@ func (e *Engine) Compose(roleName string, overrides map[string]string) (string, 
 	globals["now.month"] = now.Format("January")
 	globals["now.year"] = fmt.Sprintf("%d", now.Year())
 	globals["now.date"] = now.Format("2006-01-02")
+	// Per-call overrides take highest precedence (also used for toolchain vars).
+	for k, v := range overrides {
+		globals[k] = v
+	}
 
 	// Pre-resolve all toolchain bodies with their vars.
 	resolvedToolchains := make(map[string]string, len(e.toolchains))

@@ -482,7 +482,38 @@ func (st *SystemTools) assignTask(ctx context.Context, args json.RawMessage) (st
 	if role == nil {
 		return "", fmt.Errorf("no role %q found for team lead %q", roleName, team.LeadWorker)
 	}
-	leadPrompt, promptErr := st.promptEngine.Compose(roleName, nil)
+	// Build the dynamic worker list for the coordinator prompt.
+	var overrides map[string]string
+	members, membersErr := st.store.ListTeamWorkers(ctx, params.TeamID)
+	if membersErr != nil {
+		slog.Warn("failed to list team workers for prompt injection", "team_id", params.TeamID, "error", membersErr)
+	} else {
+		var workerLines []string
+		for _, tw := range members {
+			if tw.Role == "lead" {
+				continue
+			}
+			memberRole := tw.WorkerID
+			if idx := strings.LastIndex(memberRole, "/"); idx >= 0 {
+				memberRole = memberRole[idx+1:]
+			}
+			desc := ""
+			if r := st.promptEngine.Role(memberRole); r != nil {
+				desc = r.Description
+			}
+			if desc != "" {
+				workerLines = append(workerLines, fmt.Sprintf("- **%s**: %s", memberRole, desc))
+			} else {
+				workerLines = append(workerLines, fmt.Sprintf("- **%s**", memberRole))
+			}
+		}
+		if len(workerLines) > 0 {
+			overrides = map[string]string{
+				"team.workers": strings.Join(workerLines, "\n"),
+			}
+		}
+	}
+	leadPrompt, promptErr := st.promptEngine.Compose(roleName, overrides)
 	if promptErr != nil {
 		return "", fmt.Errorf("composing team lead %q: %w", team.LeadWorker, promptErr)
 	}

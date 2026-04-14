@@ -159,6 +159,71 @@ Year is {{ globals.now.year }}.
 	}
 }
 
+func TestEngine_Compose_OverridesAsGlobals(t *testing.T) {
+	dir := t.TempDir()
+	mkdirAll(t, filepath.Join(dir, "roles"))
+
+	writeFile(t, filepath.Join(dir, "roles", "lead.md"), `---
+name: Lead
+mode: lead
+---
+Workers:
+{{ globals.team.workers }}
+Done.
+`)
+
+	engine := NewEngine()
+	if err := engine.LoadDir(dir, "test"); err != nil {
+		t.Fatalf("LoadDir: %v", err)
+	}
+
+	workers := "- **go-coder**: Implements Go code.\n- **go-tester**: Writes Go tests."
+	result, err := engine.Compose("lead", map[string]string{
+		"team.workers": workers,
+	})
+	if err != nil {
+		t.Fatalf("Compose: %v", err)
+	}
+
+	if !strings.Contains(result, "**go-coder**: Implements Go code.") {
+		t.Errorf("expected worker list in output, got:\n%s", result)
+	}
+	if !strings.Contains(result, "**go-tester**: Writes Go tests.") {
+		t.Errorf("expected worker list in output, got:\n%s", result)
+	}
+	if strings.Contains(result, "{{ ") {
+		t.Errorf("unresolved references in output:\n%s", result)
+	}
+}
+
+func TestEngine_Compose_OverridesTakePrecedence(t *testing.T) {
+	dir := t.TempDir()
+	mkdirAll(t, filepath.Join(dir, "roles"))
+
+	writeFile(t, filepath.Join(dir, "roles", "test.md"), `---
+name: Test
+---
+Value is {{ globals.my.key }}.
+`)
+
+	engine := NewEngine()
+	engine.SetGlobal("my.key", "engine-value")
+	if err := engine.LoadDir(dir, "test"); err != nil {
+		t.Fatalf("LoadDir: %v", err)
+	}
+
+	result, err := engine.Compose("test", map[string]string{
+		"my.key": "override-value",
+	})
+	if err != nil {
+		t.Fatalf("Compose: %v", err)
+	}
+
+	if !strings.Contains(result, "Value is override-value.") {
+		t.Errorf("override should win over engine global, got:\n%s", result)
+	}
+}
+
 func TestEngine_Compose_VarOverrides(t *testing.T) {
 	dir := t.TempDir()
 	mkdirAll(t, filepath.Join(dir, "roles"))
@@ -284,7 +349,15 @@ func TestEngine_Compose_AllRoles(t *testing.T) {
 
 	for _, name := range engine.Roles() {
 		t.Run(name, func(t *testing.T) {
-			result, err := engine.Compose(name, nil)
+			// Lead roles require per-call overrides (team.workers is injected
+			// at spawn time by system_tools.go).
+			var overrides map[string]string
+			if role := engine.Role(name); role != nil && role.Mode == "lead" {
+				overrides = map[string]string{
+					"team.workers": "- **test-worker**: A test worker.",
+				}
+			}
+			result, err := engine.Compose(name, overrides)
 			if err != nil {
 				t.Fatalf("Compose(%q): %v", name, err)
 			}

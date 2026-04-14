@@ -1,6 +1,6 @@
 ---
-name: The Kitchen
-description: The Toasters development team.
+name: Go Development
+description: General-purpose Go development team.
 lead: coordinator
 roles:
   - coordinator

@@ -631,18 +631,35 @@ func (m *Model) renderScrollableModal(title, content string, scroll int) (string
 	}
 	visibleLines := allLines[start:end]
 
-	// Truncate each line to modal inner width.
+	// Wrap long lines to modal inner width instead of truncating.
 	innerW := modalW - 4
-	truncated := make([]string, len(visibleLines))
-	for i, l := range visibleLines {
-		if len(l) > innerW {
-			truncated[i] = l[:innerW]
+	var wrapped []string
+	for _, l := range visibleLines {
+		if innerW > 0 && len(l) > innerW {
+			for len(l) > innerW {
+				// Try to break at a space.
+				breakAt := innerW
+				for breakAt > 0 && l[breakAt] != ' ' {
+					breakAt--
+				}
+				if breakAt == 0 {
+					breakAt = innerW // no space found, hard break
+				}
+				wrapped = append(wrapped, l[:breakAt])
+				l = l[breakAt:]
+				if len(l) > 0 && l[0] == ' ' {
+					l = l[1:] // skip the space we broke at
+				}
+			}
+			if len(l) > 0 {
+				wrapped = append(wrapped, l)
+			}
 		} else {
-			truncated[i] = l
+			wrapped = append(wrapped, l)
 		}
 	}
 
-	body := strings.Join(truncated, "\n")
+	body := strings.Join(wrapped, "\n")
 	scrollInfo := fmt.Sprintf("line %d/%d", scroll+1, len(allLines))
 	footer := DimStyle.Render("↑↓/jk scroll · ctrl+u/d page · Esc to close · " + scrollInfo)
 

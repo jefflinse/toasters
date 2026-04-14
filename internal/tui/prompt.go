@@ -14,6 +14,28 @@ import (
 func (m *Model) updatePromptMode(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 	allOptions := append(m.prompt.promptOptions, "Custom response...")
+
+	// When typing a custom response, delegate most keys to the textarea
+	// so characters like 'j' and 'k' aren't swallowed by navigation.
+	if m.prompt.promptCustom {
+		switch msg.String() {
+		case "enter":
+			result := strings.TrimSpace(m.input.Value())
+			if result == "" {
+				result = "User provided no response."
+			}
+			cmds = append(cmds, m.submitPromptResponse(result))
+		case "esc":
+			m.prompt.promptCustom = false
+			m.input.Reset()
+		default:
+			var inputCmd tea.Cmd
+			m.input, inputCmd = m.input.Update(msg)
+			cmds = append(cmds, inputCmd)
+		}
+		return m, tea.Batch(cmds...)
+	}
+
 	switch msg.String() {
 	case "up", "k":
 		if m.prompt.promptSelected > 0 {
@@ -24,40 +46,17 @@ func (m *Model) updatePromptMode(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.prompt.promptSelected++
 		}
 	case "enter":
-		if !m.prompt.promptCustom {
-			if m.prompt.promptSelected == len(allOptions)-1 {
-				// Selected "Custom response..."
-				m.prompt.promptCustom = true
-				m.input.Reset()
-				cmds = append(cmds, m.input.Focus())
-			} else {
-				// Selected a pre-defined option — send the response.
-				cmds = append(cmds, m.submitPromptResponse(allOptions[m.prompt.promptSelected]))
-			}
+		if m.prompt.promptSelected == len(allOptions)-1 {
+			// Selected "Custom response..."
+			m.prompt.promptCustom = true
+			m.input.Reset()
+			cmds = append(cmds, m.input.Focus())
 		} else {
-			// Custom text submitted — send the response.
-			result := strings.TrimSpace(m.input.Value())
-			if result == "" {
-				result = "User provided no response."
-			}
-			cmds = append(cmds, m.submitPromptResponse(result))
+			// Selected a pre-defined option — send the response.
+			cmds = append(cmds, m.submitPromptResponse(allOptions[m.prompt.promptSelected]))
 		}
 	case "esc":
-		if m.prompt.promptCustom {
-			// Go back to option selection.
-			m.prompt.promptCustom = false
-			m.input.Reset()
-		} else {
-			// Cancel entirely.
-			cmds = append(cmds, m.submitPromptResponse("User cancelled."))
-		}
-	default:
-		if m.prompt.promptCustom {
-			// Delegate to textarea.
-			var inputCmd tea.Cmd
-			m.input, inputCmd = m.input.Update(msg)
-			cmds = append(cmds, inputCmd)
-		}
+		cmds = append(cmds, m.submitPromptResponse("User cancelled."))
 	}
 	return m, tea.Batch(cmds...)
 }

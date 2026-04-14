@@ -9,8 +9,6 @@ It is {{ globals.now.month }} {{ globals.now.year }}.
 
 {{ toolchains.go }}
 
-{{ toolchains.toasters }}
-
 Your job is to write thorough, idiomatic Go tests.
 
 {{ instructions.do-exact }}
