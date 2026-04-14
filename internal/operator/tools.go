@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/jefflinse/toasters/internal/db"
 	"github.com/jefflinse/toasters/internal/prompt"
@@ -24,6 +25,7 @@ type operatorTools struct {
 	store           db.Store
 	systemTools     *SystemTools
 	workDir         string
+	promptUser      func(ctx context.Context, requestID, question string, options []string) (string, error) // set by Operator after construction
 }
 
 func newOperatorTools(rt *runtime.Runtime, promptEngine *prompt.Engine, defaultProvider, defaultModel string, store db.Store, systemTools *SystemTools, workDir string) *operatorTools {
@@ -49,7 +51,7 @@ func (ot *operatorTools) Definitions() []runtime.ToolDef {
 				"properties": {
 					"worker_name": {
 						"type": "string",
-						"description": "Name of the system worker to consult (e.g. 'planner', 'decomposer')"
+						"description": "Name of the system worker to consult (e.g. 'decomposer', 'scheduler', 'blocker-handler')"
 					},
 					"message": {
 						"type": "string",
@@ -135,10 +137,30 @@ func (ot *operatorTools) Definitions() []runtime.ToolDef {
 		},
 	}
 
-	// Append create_job, create_task, and assign_task from SystemTools so the
-	// operator can create jobs and act directly on decomposer output without
-	// routing through the planner.
-	wantFromSystem := map[string]bool{"create_job": true, "create_task": true, "assign_task": true}
+	defs = append(defs, runtime.ToolDef{
+		Name:        "ask_user",
+		Description: "Ask the user a question and wait for their response. Use this when you need clarification, confirmation, or a decision from the user. Provide suggested options when possible to make it easier for the user to respond.",
+		Parameters: json.RawMessage(`{
+			"type": "object",
+			"properties": {
+				"question": {
+					"type": "string",
+					"description": "The question to ask the user"
+				},
+				"options": {
+					"type": "array",
+					"items": {"type": "string"},
+					"description": "Optional list of suggested answers. The user can also type a custom response."
+				}
+			},
+			"required": ["question"]
+		}`),
+	})
+
+	// Append create_job, create_task, assign_task, save_work_request, and
+	// start_job from SystemTools so the operator can create jobs, persist
+	// work requests, and act directly on decomposer output.
+	wantFromSystem := map[string]bool{"create_job": true, "create_task": true, "assign_task": true, "save_work_request": true, "start_job": true}
 	for _, td := range ot.systemTools.Definitions() {
 		if wantFromSystem[td.Name] {
 			defs = append(defs, td)
@@ -169,6 +191,12 @@ func (ot *operatorTools) Execute(ctx context.Context, name string, args json.Raw
 		return ot.systemTools.Execute(ctx, "create_task", args)
 	case "assign_task":
 		return ot.systemTools.Execute(ctx, "assign_task", args)
+	case "save_work_request":
+		return ot.systemTools.Execute(ctx, "save_work_request", args)
+	case "start_job":
+		return ot.systemTools.Execute(ctx, "start_job", args)
+	case "ask_user":
+		return ot.askUser(ctx, args)
 	default:
 		return "", fmt.Errorf("%w: %s", runtime.ErrUnknownTool, name)
 	}
@@ -191,13 +219,13 @@ func (ot *operatorTools) consultWorker(ctx context.Context, args json.RawMessage
 		return "", fmt.Errorf("message is required")
 	}
 
-	// Guard against oversized messages. The decomposer (and other system workers)
-	// have tools to explore the workspace themselves — the message should be a
-	// brief task description, not embedded file contents.
+	// Guard against oversized messages. System workers have their own tools
+	// to explore workspaces — the message should be a brief task description
+	// or work request, not embedded file contents.
 	const maxConsultMessageBytes = 32 * 1024 // 32 KB
 	if len(params.Message) > maxConsultMessageBytes {
 		return "", fmt.Errorf(
-			"consult_worker message too large (%d bytes, max %d): provide a brief task description only — the worker has glob/grep/read_file tools to explore the workspace itself",
+			"consult_worker message too large (%d bytes, max %d): provide a brief task description only — the worker has tools to explore the workspace itself",
 			len(params.Message), maxConsultMessageBytes,
 		)
 	}
@@ -241,22 +269,48 @@ func (ot *operatorTools) consultWorker(ctx context.Context, args json.RawMessage
 		"model", workerModel,
 	)
 
-	// Select the tool executor for this worker. The decomposer gets a combined
-	// executor (read-only CoreTools + query_teams from SystemTools); all other
-	// system workers get SystemTools directly.
+	// Determine tool executor and work directory. The decomposer uses CoreTools
+	// (built by the runtime, which includes spawn_worker) with query_teams as
+	// an extra-tools overlay. All other system workers get SystemTools directly.
 	var toolExecutor runtime.ToolExecutor
+	var extraTools runtime.ToolExecutor
+	workDir := ot.workDir
+
 	if isDecomposer(params.WorkerName) {
-		toolExecutor = newDecomposerToolExecutor(ot.systemTools, ot.workDir)
+		// Decomposer: don't set toolExecutor so the runtime builds CoreTools
+		// (including spawn_worker). Layer query_teams on top as ExtraTools.
+		extraTools = &queryTeamsExecutor{systemTools: ot.systemTools}
+
+		// Use the job's workspace directory so spawned explorers operate
+		// in the right location.
+		if params.JobID != "" {
+			job, jobErr := ot.store.GetJob(ctx, params.JobID)
+			if jobErr == nil && job.WorkspaceDir != "" {
+				workDir = job.WorkspaceDir
+			}
+		}
 	} else {
 		toolExecutor = ot.systemTools
 	}
 
 	// Build the filtered tool list from the worker's declared tools. This
-	// ensures each system worker only sees the tools it's supposed to have
-	// (e.g. planner gets create_job/create_task/assign_task/query_teams/query_job_context,
-	// not surface_to_user or query_job).
+	// ensures each system worker only sees the tools it's supposed to have.
+	//
+	// For the decomposer, we use DisallowedTools instead of Tools because
+	// spawn_worker comes from CoreTools (built by the runtime), and its
+	// definition isn't available yet. We deny everything except spawn_worker
+	// so the decomposer sees only spawn_worker + query_teams (from ExtraTools).
 	var workerTools []runtime.ToolDef
-	if len(declaredTools) > 0 {
+	var disallowedTools []string
+
+	if isDecomposer(params.WorkerName) {
+		// Block file and shell tools — the decomposer delegates exploration
+		// to Explorer workers via spawn_worker.
+		disallowedTools = []string{
+			"read_file", "write_file", "edit_file", "glob", "grep",
+			"shell", "web_fetch", "report_task_progress",
+		}
+	} else if len(declaredTools) > 0 {
 		allDefs := toolExecutor.Definitions()
 		defsByName := make(map[string]runtime.ToolDef, len(allDefs))
 		for _, d := range allDefs {
@@ -274,18 +328,17 @@ func (ot *operatorTools) consultWorker(ctx context.Context, args json.RawMessage
 		}
 	}
 
-	// Build SpawnOpts. System workers get SystemTools as their tool executor
-	// (not CoreTools/filesystem tools); the decomposer gets decomposerToolExecutor
-	// which adds read-only filesystem access.
 	opts := runtime.SpawnOpts{
-		WorkerID:       params.WorkerName,
-		ProviderName:   workerProvider,
-		Model:          workerModel,
-		SystemPrompt:   systemPrompt,
-		Tools:          workerTools,
-		ToolExecutor:   toolExecutor,
-		InitialMessage: params.Message,
-		WorkDir:        ot.workDir,
+		WorkerID:        params.WorkerName,
+		ProviderName:    workerProvider,
+		Model:           workerModel,
+		SystemPrompt:    systemPrompt,
+		Tools:           workerTools,
+		DisallowedTools: disallowedTools,
+		ToolExecutor:    toolExecutor,
+		ExtraTools:      extraTools,
+		InitialMessage:  params.Message,
+		WorkDir:         workDir,
 	}
 
 	result, err := ot.rt.SpawnAndWait(ctx, opts)
@@ -341,6 +394,25 @@ func (ot *operatorTools) queryTeams(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("query_teams unavailable: no system tools configured")
 	}
 	return ot.systemTools.Execute(ctx, "query_teams", json.RawMessage(`{}`))
+}
+
+func (ot *operatorTools) askUser(ctx context.Context, args json.RawMessage) (string, error) {
+	var params struct {
+		Question string   `json:"question"`
+		Options  []string `json:"options"`
+	}
+	if err := json.Unmarshal(args, &params); err != nil {
+		return "", fmt.Errorf("parsing ask_user args: %w", err)
+	}
+	if params.Question == "" {
+		return "", fmt.Errorf("question is required")
+	}
+	if ot.promptUser == nil {
+		return "", fmt.Errorf("ask_user is not available: no prompt handler configured")
+	}
+
+	requestID := fmt.Sprintf("ask-%d", time.Now().UnixNano())
+	return ot.promptUser(ctx, requestID, params.Question, params.Options)
 }
 
 // operatorToolsToProviderTools converts operator tool definitions to provider.Tool format.

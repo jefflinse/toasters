@@ -117,6 +117,14 @@ func (m *mockStore) ListArtifactsForJob(ctx context.Context, jobID string) ([]*d
 	return nil, nil
 }
 
+func (m *mockStore) AppendSessionMessage(_ context.Context, _ *db.SessionMessage) error {
+	return nil
+}
+
+func (m *mockStore) ListSessionMessages(_ context.Context, _ string) ([]*db.SessionMessage, error) {
+	return nil, nil
+}
+
 func (m *mockStore) Close() error { return nil }
 
 // --- ReportTaskProgress tests ---

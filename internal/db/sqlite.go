@@ -1025,12 +1025,14 @@ func (s *SQLiteStore) CreateSession(ctx context.Context, session *WorkerSession)
 
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO worker_sessions (id, worker_id, job_id, task_id, status, model, provider,
-		                              tokens_in, tokens_out, started_at, ended_at, cost_usd)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		                              tokens_in, tokens_out, started_at, ended_at, cost_usd,
+		                              system_prompt, tools_json)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		session.ID, session.WorkerID, session.JobID, session.TaskID,
 		string(session.Status), session.Model, session.Provider,
 		session.TokensIn, session.TokensOut,
 		session.StartedAt.Format(time.RFC3339), endedAt, session.CostUSD,
+		session.SystemPrompt, session.ToolsJSON,
 	)
 	if err != nil {
 		return fmt.Errorf("inserting session: %w", err)
@@ -1098,6 +1100,47 @@ func (s *SQLiteStore) GetActiveSessions(ctx context.Context) ([]*WorkerSession, 
 		sessions = append(sessions, sess)
 	}
 	return sessions, rows.Err()
+}
+
+// --- Session Transcripts ---
+
+func (s *SQLiteStore) AppendSessionMessage(ctx context.Context, msg *SessionMessage) error {
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO session_messages (session_id, seq, role, content, tool_calls, tool_call_id)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		msg.SessionID, msg.Seq, msg.Role, msg.Content, msg.ToolCalls, msg.ToolCallID,
+	)
+	if err != nil {
+		return fmt.Errorf("inserting session message: %w", err)
+	}
+	return nil
+}
+
+func (s *SQLiteStore) ListSessionMessages(ctx context.Context, sessionID string) ([]*SessionMessage, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, session_id, seq, role, content, tool_calls, tool_call_id, created_at
+		 FROM session_messages
+		 WHERE session_id = ?
+		 ORDER BY seq`,
+		sessionID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("listing session messages: %w", err)
+	}
+	defer rows.Close() //nolint:errcheck
+
+	var msgs []*SessionMessage
+	for rows.Next() {
+		var m SessionMessage
+		var createdAt string
+		if err := rows.Scan(&m.ID, &m.SessionID, &m.Seq, &m.Role, &m.Content,
+			&m.ToolCalls, &m.ToolCallID, &createdAt); err != nil {
+			return nil, fmt.Errorf("scanning session message: %w", err)
+		}
+		m.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
+		msgs = append(msgs, &m)
+	}
+	return msgs, rows.Err()
 }
 
 // --- Artifacts ---

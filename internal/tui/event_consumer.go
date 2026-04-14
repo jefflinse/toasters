@@ -188,6 +188,17 @@ func translateEvent(ev service.Event) tea.Msg {
 		}
 		return handleOperationFailed(p)
 
+	case service.EventTypeOperatorPrompt:
+		p, ok := ev.Payload.(service.OperatorPromptPayload)
+		if !ok {
+			return nil
+		}
+		return OperatorPromptMsg{
+			RequestID: p.RequestID,
+			Question:  p.Question,
+			Options:   p.Options,
+		}
+
 	case service.EventTypeJobCreated,
 		service.EventTypeTaskCreated,
 		service.EventTypeTaskAssigned,

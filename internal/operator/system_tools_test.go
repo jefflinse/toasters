@@ -611,6 +611,8 @@ func TestSystemToolDefinitions(t *testing.T) {
 		"query_job",
 		"query_job_context",
 		"surface_to_user",
+		"save_work_request",
+		"start_job",
 	}
 
 	if len(defs) != len(expectedTools) {
@@ -709,6 +711,14 @@ func (f *failingUpdateJobStatusStore) UpdateJobStatus(_ context.Context, _ strin
 	return f.updateJobStatusErr
 }
 
+func (f *failingUpdateJobStatusStore) AppendSessionMessage(_ context.Context, _ *db.SessionMessage) error {
+	return nil
+}
+
+func (f *failingUpdateJobStatusStore) ListSessionMessages(_ context.Context, _ string) ([]*db.SessionMessage, error) {
+	return nil, nil
+}
+
 // TestAssignTask_UpdateJobStatusFailureIsNonFatal verifies that when
 // UpdateJobStatus fails, assignTask still returns success and the task is
 // still assigned. This makes the non-fatal intent explicit and prevents a
@@ -791,7 +801,7 @@ func TestQueryJobContext_InDefinitions(t *testing.T) {
 		}
 	}
 	if found == nil {
-		t.Fatal("query_job_context not found in SystemTools.Definitions() — regression: planner/scheduler agents would never see this tool")
+		t.Fatal("query_job_context not found in SystemTools.Definitions() — regression: scheduler/blocker-handler workers would never see this tool")
 	}
 
 	// Verify the definition has a non-empty description.

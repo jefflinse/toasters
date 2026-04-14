@@ -33,7 +33,7 @@ func TestRun_FirstRun(t *testing.T) {
 	assertDirExists(t, filepath.Join(configDir, "system", "skills"))
 	assertFileExists(t, filepath.Join(configDir, "system", "team.md"))
 	assertFileExists(t, filepath.Join(configDir, "system", "roles", "operator.md"))
-	assertFileExists(t, filepath.Join(configDir, "system", "roles", "planner.md"))
+	assertFileExists(t, filepath.Join(configDir, "system", "roles", "decomposer.md"))
 	assertFileExists(t, filepath.Join(configDir, "system", "roles", "scheduler.md"))
 	assertFileExists(t, filepath.Join(configDir, "system", "roles", "blocker-handler.md"))
 	assertFileExists(t, filepath.Join(configDir, "system", "skills", "orchestration.md"))

@@ -60,6 +60,7 @@ type promptModeState struct {
 	promptOptions  []string // LLM-provided options; "Custom response..." appended at render time
 	promptSelected int      // cursor index
 	promptCustom   bool     // true when user selected "Custom response..." and is typing
+	requestID      string   // correlates with ask_user request for RespondToPrompt
 
 	confirmDispatch bool             // true when promptMode is a dispatch confirmation
 	changingTeam    bool             // true when promptMode is the "change team" sub-prompt
@@ -1523,10 +1524,34 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, m.input.Focus())
 		return m, tea.Batch(cmds...)
 
+	case OperatorPromptMsg:
+		slog.Debug("operator prompt", "question", msg.Question, "options", msg.Options)
+		// Show the question in the chat feed.
+		m.appendEntry(service.ChatEntry{
+			Message: service.ChatMessage{
+				Role:    service.MessageRoleAssistant,
+				Content: HeaderStyle.Render("? " + msg.Question),
+			},
+			Timestamp:  time.Now(),
+			ClaudeMeta: "ask-user-prompt",
+		})
+		m.updateViewportContent()
+		if !m.scroll.userScrolled {
+			m.chatViewport.GotoBottom()
+		}
+		// Enter prompt mode so the user can select an option or type a response.
+		m.prompt.promptMode = true
+		m.prompt.promptQuestion = msg.Question
+		m.prompt.promptOptions = msg.Options
+		m.prompt.promptSelected = 0
+		m.prompt.promptCustom = false
+		m.prompt.requestID = msg.RequestID
+		return m, nil
+
 	case OperatorEventMsg:
 		slog.Debug("operator event", "type", msg.Event.Type)
 		// Render visible operator events as styled system entries in the chat.
-		if line := formatServiceEvent(msg.Event); line != "" {
+		if line := formatServiceEvent(msg.Event, m.chatViewport.Width()); line != "" {
 			m.appendEntry(service.ChatEntry{
 				Message: service.ChatMessage{
 					Role:    service.MessageRoleAssistant,
@@ -1617,10 +1642,11 @@ func extractFrontmatterName(content string) string {
 	return ""
 }
 
-// formatServiceEvent returns a styled single-line string for a service.Event,
+// formatServiceEvent returns a styled string for a service.Event,
 // or empty string if the event type should not be displayed in the feed.
+// maxWidth is used to word-wrap long content (e.g. blocker descriptions).
 // This is the service-layer equivalent of formatOperatorEvent (defined in helpers.go).
-func formatServiceEvent(ev service.Event) string {
+func formatServiceEvent(ev service.Event, maxWidth int) string {
 	switch ev.Type {
 	case service.EventTypeJobCreated:
 		if p, ok := ev.Payload.(service.JobCreatedPayload); ok {
@@ -1660,7 +1686,11 @@ func formatServiceEvent(ev service.Event) string {
 
 	case service.EventTypeBlockerReported:
 		if p, ok := ev.Payload.(service.BlockerReportedPayload); ok {
-			return FeedBlockerReportedStyle.Render(fmt.Sprintf("🚫 %s reported blocker: %s", p.TeamID, p.Description))
+			text := fmt.Sprintf("🚫 %s reported blocker: %s", p.TeamID, p.Description)
+			if maxWidth > 4 {
+				text = wrapText(text, maxWidth-4) // account for indent
+			}
+			return FeedBlockerReportedStyle.Render(text)
 		}
 		return FeedBlockerReportedStyle.Render("🚫 blocker reported")
 

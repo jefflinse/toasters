@@ -142,4 +142,10 @@ func (s *noopStore) AppendChatEntry(_ context.Context, _ *db.ChatEntry) error { 
 func (s *noopStore) ListRecentChatEntries(_ context.Context, _ int) ([]*db.ChatEntry, error) {
 	return nil, nil
 }
+func (s *noopStore) AppendSessionMessage(_ context.Context, _ *db.SessionMessage) error {
+	return nil
+}
+func (s *noopStore) ListSessionMessages(_ context.Context, _ string) ([]*db.SessionMessage, error) {
+	return nil, nil
+}
 func (s *noopStore) Close() error { return nil }

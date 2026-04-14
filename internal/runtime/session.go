@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -9,6 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/jefflinse/toasters/internal/db"
 	"github.com/jefflinse/toasters/internal/provider"
 )
 
@@ -39,9 +41,13 @@ type Session struct {
 	toolExec ToolExecutor
 	maxTurns int
 
+	// Transcript persistence — store may be nil (no persistence).
+	store db.Store
+	seq   int // message sequence counter for session_messages
+
 	// State — tokensIn/tokensOut use atomic for lock-free reads.
-	status    string // "active", "completed", "failed", "cancelled"
-	termErr   error  // terminal error from Run(), set under mu before return
+	status  string // "active", "completed", "failed", "cancelled"
+	termErr error  // terminal error from Run(), set under mu before return
 	tokensIn  atomic.Int64
 	tokensOut atomic.Int64
 	startTime time.Time
@@ -133,6 +139,11 @@ func (s *Session) Run(ctx context.Context) (retErr error) {
 		}
 	}()
 
+	// Persist the initial user message (seeded in newSession).
+	if len(s.messages) > 0 {
+		s.persistMessage(s.messages[0])
+	}
+
 	for turn := 0; turn < s.maxTurns; turn++ {
 		if ctx.Err() != nil {
 			s.setStatus("cancelled")
@@ -165,6 +176,7 @@ func (s *Session) Run(ctx context.Context) (retErr error) {
 			return fmt.Errorf("collecting response: %w", err)
 		}
 		s.messages = append(s.messages, assistantMsg)
+		s.persistMessage(assistantMsg)
 
 		// 3. If no tool calls, we're done.
 		if len(toolCalls) == 0 {
@@ -209,11 +221,13 @@ func (s *Session) Run(ctx context.Context) (retErr error) {
 				result = result[:maxToolResultBytes] + "\n[... truncated: result exceeded 8KB ...]"
 			}
 
-			s.messages = append(s.messages, provider.Message{
+			toolMsg := provider.Message{
 				Role:       "tool",
 				Content:    result,
 				ToolCallID: tc.ID,
-			})
+			}
+			s.messages = append(s.messages, toolMsg)
+			s.persistMessage(toolMsg)
 		}
 
 		// 5. Loop — send tool results back to LLM.
@@ -223,6 +237,30 @@ func (s *Session) Run(ctx context.Context) (retErr error) {
 	err := fmt.Errorf("max turns (%d) exceeded", s.maxTurns)
 	s.emit(SessionEvent{SessionID: s.id, Type: SessionEventError, Error: err})
 	return err
+}
+
+// persistMessage writes a message to the session_messages table.
+// Non-fatal: logs a warning on failure.
+func (s *Session) persistMessage(msg provider.Message) {
+	if s.store == nil {
+		return
+	}
+	s.seq++
+	sm := &db.SessionMessage{
+		SessionID:  s.id,
+		Seq:        s.seq,
+		Role:       msg.Role,
+		Content:    msg.Content,
+		ToolCallID: msg.ToolCallID,
+	}
+	if len(msg.ToolCalls) > 0 {
+		if data, err := json.Marshal(msg.ToolCalls); err == nil {
+			sm.ToolCalls = string(data)
+		}
+	}
+	if err := s.store.AppendSessionMessage(context.Background(), sm); err != nil {
+		slog.Warn("failed to persist session message", "session", s.id, "seq", s.seq, "error", err)
+	}
 }
 
 // collectResponse reads from the event channel, accumulates text and tool calls,

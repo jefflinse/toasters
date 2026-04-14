@@ -26,12 +26,6 @@ const (
 	// needs a response from the human. Payload: OperatorPromptPayload.
 	// The client must call Operator().RespondToPrompt() to unblock the
 	// operator.
-	//
-	// NOT YET FUNCTIONAL: there is no ask_user tool defined in the operator,
-	// so this event type, its payload, the wire serialization, the client
-	// stubs, and the RespondToPrompt service method are all reserved for a
-	// future bidirectional-prompt feature but are not exercised today. Do
-	// not rely on this in client code.
 	EventTypeOperatorPrompt EventType = "operator.prompt"
 
 	// EventTypeJobCreated is sent when the operator creates a new job via

@@ -43,7 +43,7 @@ name: System Team
 description: The core system team
 lead: Operator
 agents:
-  - Planner
+  - Decomposer
 ---
 System team culture document.
 `

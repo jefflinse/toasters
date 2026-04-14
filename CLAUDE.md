@@ -73,6 +73,27 @@ The codebase is a layered hub-and-spoke around `internal/service`. Read this sec
 - **Definitions** (skills, workers, teams) are markdown files with YAML front matter, parsed by `internal/mdfmt` and `internal/tooldef`.
 - **Errors**: package-level sentinels in `internal/service/errors.go` (`ErrNotFound`, `ErrConflict`, …); HTTP status mapping lives in `internal/server/server.go`.
 
+## Debugging with session transcripts
+
+Every LLM session (worker and operator) is captured for debugging.
+
+**Worker sessions** — stored in SQLite (`toasters.db` in the workspace dir):
+```bash
+# List recent sessions with their system prompts and tools
+sqlite3 toasters.db "SELECT id, worker_id, status, tools_json FROM worker_sessions ORDER BY started_at DESC LIMIT 10"
+
+# Get the full message transcript for a session
+sqlite3 toasters.db "SELECT seq, role, content, tool_calls, tool_call_id FROM session_messages WHERE session_id = '<id>' ORDER BY seq"
+
+# Find sessions for a specific job
+sqlite3 toasters.db "SELECT id, worker_id, status FROM worker_sessions WHERE job_id = '<job-id>'"
+
+# Read a session's system prompt
+sqlite3 toasters.db "SELECT system_prompt FROM worker_sessions WHERE id = '<id>'"
+```
+
+**Operator session** — persisted to `~/.config/toasters/sessions/operator.json` after every message. Contains the full conversation (system prompt, tools, all messages with tool calls/results). Useful for debugging why the operator did or didn't call a specific tool.
+
 ## Where the deeper docs live
 
 The repo has no README; design intent is captured in root-level markdown files. Reach for these only when you need them:

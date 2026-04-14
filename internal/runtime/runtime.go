@@ -130,6 +130,7 @@ func (r *Runtime) SpawnWorker(ctx context.Context, opts SpawnOpts) (*Session, er
 	}
 
 	sess := newSession(id, p, opts, tools)
+	sess.store = r.store // may be nil; enables message persistence in Run()
 
 	// Register in sessions map.
 	r.mu.Lock()
@@ -138,15 +139,26 @@ func (r *Runtime) SpawnWorker(ctx context.Context, opts SpawnOpts) (*Session, er
 
 	// Persist to SQLite if store is available.
 	if r.store != nil {
+		// Build tool names JSON for observability.
+		var toolNames []string
+		if tools != nil {
+			for _, td := range tools.Definitions() {
+				toolNames = append(toolNames, td.Name)
+			}
+		}
+		toolsJSON, _ := json.Marshal(toolNames)
+
 		dbSession := &db.WorkerSession{
-			ID:        id,
-			WorkerID:  opts.WorkerID,
-			JobID:     opts.JobID,
-			TaskID:    opts.TaskID,
-			Status:    db.SessionStatusActive,
-			Model:     opts.Model,
-			Provider:  opts.ProviderName,
-			StartedAt: sess.startTime,
+			ID:           id,
+			WorkerID:     opts.WorkerID,
+			JobID:        opts.JobID,
+			TaskID:       opts.TaskID,
+			Status:       db.SessionStatusActive,
+			Model:        opts.Model,
+			Provider:     opts.ProviderName,
+			StartedAt:    sess.startTime,
+			SystemPrompt: opts.SystemPrompt,
+			ToolsJSON:    string(toolsJSON),
 		}
 		if err := r.store.CreateSession(ctx, dbSession); err != nil {
 			slog.Warn("failed to persist session", "session", id, "error", err)

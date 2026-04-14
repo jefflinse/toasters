@@ -1149,7 +1149,7 @@ func (m *Model) updateViewportContent() {
 	// (operator events are already rendered via OperatorEventMsg as chat entries).
 	if len(m.progress.feedEntries) > 0 && m.svc == nil {
 		for _, entry := range m.progress.feedEntries {
-			line := formatFeedEntry(entry)
+			line := formatFeedEntry(entry, contentWidth)
 			if line != "" {
 				sb.WriteString(line + "\n")
 			}

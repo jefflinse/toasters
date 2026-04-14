@@ -10,11 +10,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
-	"github.com/jefflinse/toasters/internal/prompt"
 	"github.com/jefflinse/toasters/internal/db"
+	"github.com/jefflinse/toasters/internal/prompt"
 	"github.com/jefflinse/toasters/internal/provider"
 	"github.com/jefflinse/toasters/internal/runtime"
 )
@@ -26,13 +29,14 @@ const (
 
 // Operator manages the event loop and long-lived operator LLM session.
 type Operator struct {
-	rt      *runtime.Runtime
-	prov    provider.Provider
-	model   string
-	tools   *operatorTools
-	store   db.Store
-	eventCh chan Event
-	workDir string
+	rt          *runtime.Runtime
+	prov        provider.Provider
+	model       string
+	tools       *operatorTools
+	store       db.Store
+	eventCh     chan Event
+	workDir     string
+	sessionFile string // path for persisting the operator conversation (may be empty)
 
 	// Long-lived conversation state. Protected by mu for concurrent access
 	// from the event loop goroutine and external callers (e.g. MessageCount).
@@ -41,10 +45,16 @@ type Operator struct {
 	messages     []provider.Message
 	provTools    []provider.Tool
 
+	// Pending ask_user prompts. Protected by promptMu.
+	// Key = requestID, value = channel that receives the user's response.
+	promptMu       sync.Mutex
+	pendingPrompts map[string]chan string
+
 	// Callbacks — set at construction time via Config, immutable after New().
-	onText     func(text string)                                    // called with streamed text from the operator LLM
-	onEvent    func(event Event)                                    // called when the event loop processes an event
-	onTurnDone func(tokensIn, tokensOut, reasoningTokens int)       // called when the operator finishes processing a user message turn
+	onText     func(text string)                                              // called with streamed text from the operator LLM
+	onEvent    func(event Event)                                              // called when the event loop processes an event
+	onTurnDone func(tokensIn, tokensOut, reasoningTokens int)                 // called when the operator finishes processing a user message turn
+	onPrompt   func(requestID, question string, options []string)             // called when the operator calls ask_user
 }
 
 // Config holds configuration for creating an Operator.
@@ -67,7 +77,9 @@ type Config struct {
 	// across all LLM round-trips that occurred during the turn (the operator
 	// may make several when tool calls are involved). reasoningTokens is 0
 	// for providers that don't surface them.
-	OnTurnDone func(tokensIn, tokensOut, reasoningTokens int)
+	OnTurnDone  func(tokensIn, tokensOut, reasoningTokens int)
+	OnPrompt    func(requestID, question string, options []string) // called when the operator calls ask_user
+	SessionFile string                                             // path to persist the operator conversation (e.g. ~/.config/toasters/sessions/operator.json)
 }
 
 // New creates a new Operator. Call Start to begin processing events.
@@ -88,20 +100,28 @@ func New(cfg Config) (*Operator, error) {
 	tools := newOperatorTools(cfg.Runtime, cfg.PromptEngine, cfg.DefaultProvider, cfg.DefaultModel, cfg.Store, systemTools, cfg.WorkDir)
 	provTools := operatorToolsToProviderTools(tools.Definitions())
 
-	return &Operator{
-		rt:           cfg.Runtime,
-		prov:         cfg.Provider,
-		model:        cfg.Model,
-		tools:        tools,
-		store:        cfg.Store,
-		eventCh:      eventCh,
-		workDir:      cfg.WorkDir,
-		systemPrompt: cfg.SystemPrompt,
-		provTools:    provTools,
-		onText:       cfg.OnText,
-		onEvent:      cfg.OnEvent,
-		onTurnDone:   cfg.OnTurnDone,
-	}, nil
+	op := &Operator{
+		rt:             cfg.Runtime,
+		prov:           cfg.Provider,
+		model:          cfg.Model,
+		tools:          tools,
+		store:          cfg.Store,
+		eventCh:        eventCh,
+		workDir:        cfg.WorkDir,
+		sessionFile:    cfg.SessionFile,
+		systemPrompt:   cfg.SystemPrompt,
+		provTools:      provTools,
+		pendingPrompts: make(map[string]chan string),
+		onText:         cfg.OnText,
+		onEvent:        cfg.OnEvent,
+		onTurnDone:     cfg.OnTurnDone,
+		onPrompt:       cfg.OnPrompt,
+	}
+
+	// Wire the ask_user prompt function into the tool executor.
+	tools.promptUser = op.promptUser
+
+	return op, nil
 }
 
 // Send pushes an event into the operator's event channel. It blocks until the
@@ -204,7 +224,7 @@ func (o *Operator) handleEvent(ctx context.Context, ev Event) {
 		o.sendToLLM(ctx, msg)
 
 	case EventBlockerReported:
-		// LLM: need to triage the blocker.
+		// Surface the blocker to the user and send to LLM for triage.
 		payload, ok := ev.Payload.(BlockerReportedPayload)
 		if !ok {
 			slog.Error("invalid payload for blocker_reported event", "payload", ev.Payload)
@@ -213,6 +233,14 @@ func (o *Operator) handleEvent(ctx context.Context, ev Event) {
 		content := fmt.Sprintf("🚫 %s reported blocker: %s", payload.TeamID, payload.Description)
 		o.postFeedEntry(ctx, db.FeedEntryBlockerReported, content, "")
 		slog.Warn("blocker reported", "task_id", payload.TaskID, "team_id", payload.TeamID, "worker_id", payload.WorkerID, "description", payload.Description)
+
+		// Surface directly to the user so they see it immediately.
+		if o.tools != nil && o.tools.systemTools != nil {
+			surfaceMsg := fmt.Sprintf("⚠️ **Blocker reported by %s:**\n\n%s\n\nPlease respond with guidance on how to proceed, or I will consult the blocker-handler to attempt resolution.",
+				payload.TeamID, payload.Description)
+			surfaceArgs, _ := json.Marshal(map[string]string{"text": surfaceMsg})
+			_, _ = o.tools.systemTools.Execute(ctx, "surface_to_user", surfaceArgs)
+		}
 
 		msg := fmt.Sprintf("Team %s (task %q) reported a blocker: %s\n\nPlease triage this blocker and decide how to resolve it. Consider consulting the blocker-handler agent.",
 			payload.TeamID, payload.TaskID, payload.Description)
@@ -476,12 +504,133 @@ func (o *Operator) handleUserMessage(ctx context.Context, payload UserMessagePay
 	}
 }
 
-// appendMessage adds a message to the conversation history under lock.
+// promptUser implements the ask_user tool. It broadcasts a prompt event,
+// then blocks until the user responds via RespondToPrompt.
+// Called from the event loop goroutine — the response arrives on a separate
+// goroutine (HTTP handler), so there's no deadlock.
+func (o *Operator) promptUser(ctx context.Context, requestID, question string, options []string) (string, error) {
+	ch := make(chan string, 1)
+
+	o.promptMu.Lock()
+	o.pendingPrompts[requestID] = ch
+	o.promptMu.Unlock()
+
+	// Broadcast the prompt to TUI/SSE clients.
+	if o.onPrompt != nil {
+		o.onPrompt(requestID, question, options)
+	}
+
+	// Block until the user responds or context is cancelled.
+	select {
+	case response := <-ch:
+		return response, nil
+	case <-ctx.Done():
+		o.promptMu.Lock()
+		delete(o.pendingPrompts, requestID)
+		o.promptMu.Unlock()
+		return "", ctx.Err()
+	}
+}
+
+// RespondToPrompt delivers the user's answer to a pending ask_user prompt.
+// Called from the service layer (HTTP handler goroutine), not the event loop.
+func (o *Operator) RespondToPrompt(requestID, text string) error {
+	o.promptMu.Lock()
+	ch, ok := o.pendingPrompts[requestID]
+	if ok {
+		delete(o.pendingPrompts, requestID)
+	}
+	o.promptMu.Unlock()
+
+	if !ok {
+		return fmt.Errorf("no pending prompt with request ID %q", requestID)
+	}
+
+	ch <- text
+	return nil
+}
+
+// appendMessage adds a message to the conversation history under lock
+// and persists the full session to disk.
 func (o *Operator) appendMessage(msg provider.Message) {
 	o.mu.Lock()
 	o.messages = append(o.messages, msg)
 	o.messages = truncateMessages(o.messages, maxMessages)
 	o.mu.Unlock()
+
+	o.persistSession()
+}
+
+// operatorSession is the JSON structure written to the session file.
+type operatorSession struct {
+	SystemPrompt string             `json:"system_prompt"`
+	Model        string             `json:"model"`
+	Provider     string             `json:"provider"`
+	Tools        []string           `json:"tools"`
+	Messages     []operatorMessage  `json:"messages"`
+	UpdatedAt    time.Time          `json:"updated_at"`
+}
+
+type operatorMessage struct {
+	Role       string              `json:"role"`
+	Content    string              `json:"content"`
+	ToolCalls  []provider.ToolCall `json:"tool_calls,omitempty"`
+	ToolCallID string              `json:"tool_call_id,omitempty"`
+}
+
+// persistSession writes the full operator conversation to the session file.
+// Non-fatal: logs a warning on failure.
+func (o *Operator) persistSession() {
+	if o.sessionFile == "" {
+		return
+	}
+
+	o.mu.Lock()
+	msgs := make([]provider.Message, len(o.messages))
+	copy(msgs, o.messages)
+	o.mu.Unlock()
+
+	var toolNames []string
+	for _, t := range o.provTools {
+		toolNames = append(toolNames, t.Name)
+	}
+
+	session := operatorSession{
+		SystemPrompt: o.systemPrompt,
+		Model:        o.model,
+		Provider:     o.prov.Name(),
+		Tools:        toolNames,
+		UpdatedAt:    time.Now(),
+	}
+	for _, m := range msgs {
+		session.Messages = append(session.Messages, operatorMessage{
+			Role:       m.Role,
+			Content:    m.Content,
+			ToolCalls:  m.ToolCalls,
+			ToolCallID: m.ToolCallID,
+		})
+	}
+
+	data, err := json.MarshalIndent(session, "", "  ")
+	if err != nil {
+		slog.Warn("failed to marshal operator session", "error", err)
+		return
+	}
+
+	// Atomic write: write to temp file, then rename.
+	dir := filepath.Dir(o.sessionFile)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		slog.Warn("failed to create session directory", "dir", dir, "error", err)
+		return
+	}
+	tmp := o.sessionFile + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+		slog.Warn("failed to write operator session", "path", tmp, "error", err)
+		return
+	}
+	if err := os.Rename(tmp, o.sessionFile); err != nil {
+		slog.Warn("failed to rename operator session file", "error", err)
+	}
 }
 
 // truncateMessages trims the conversation history to at most maxMessages,

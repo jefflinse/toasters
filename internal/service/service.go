@@ -60,13 +60,8 @@ type OperatorService interface {
 
 	// RespondToPrompt sends the user's answer to an active ask_user prompt.
 	// requestID must match the RequestID from the OperatorPromptPayload that
-	// triggered the prompt.
-	//
-	// NOT YET FUNCTIONAL: there is no ask_user tool defined in the operator,
-	// so this method, EventTypeOperatorPrompt, and OperatorPromptPayload are
-	// all reserved for a future bidirectional-prompt feature but are not
-	// exercised today. Calling this method just routes through to the
-	// operator event loop with no recipient.
+	// triggered the prompt. The response is delivered directly to the operator
+	// (not via the event channel) to avoid deadlocking the event loop.
 	RespondToPrompt(ctx context.Context, requestID string, response string) error
 
 	// Status returns the current state of the operator (idle, streaming,

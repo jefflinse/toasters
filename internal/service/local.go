@@ -813,7 +813,7 @@ func (s *LocalService) SendMessage(ctx context.Context, message string) (string,
 }
 
 // RespondToPrompt sends the user's answer to an active ask_user prompt.
-func (s *LocalService) RespondToPrompt(ctx context.Context, requestID string, response string) error {
+func (s *LocalService) RespondToPrompt(_ context.Context, requestID string, response string) error {
 	// Validate size before checking operator configuration.
 	if len(response) > maxResponseLen {
 		return fmt.Errorf("response too large: %d bytes exceeds maximum %d", len(response), maxResponseLen)
@@ -821,13 +821,10 @@ func (s *LocalService) RespondToPrompt(ctx context.Context, requestID string, re
 	if s.cfg.Operator == nil {
 		return fmt.Errorf("operator not configured")
 	}
-	return s.cfg.Operator.Send(ctx, operator.Event{
-		Type: operator.EventUserResponse,
-		Payload: operator.UserResponsePayload{
-			RequestID: requestID,
-			Text:      response,
-		},
-	})
+	// Call RespondToPrompt directly (not via event channel) because ask_user
+	// blocks the event loop goroutine waiting for the response. Routing through
+	// the event channel would deadlock.
+	return s.cfg.Operator.RespondToPrompt(requestID, response)
 }
 
 // Status returns the current state of the operator.
@@ -2223,6 +2220,7 @@ func (s *LocalService) startOperator(p provider.Provider, providerID, model stri
 		Store:                  s.cfg.Store,
 		Spawner:                s.cfg.Runtime,
 		SystemPrompt:           systemPrompt,
+		SessionFile:            filepath.Join(s.cfg.ConfigDir, "sessions", "operator.json"),
 		SystemEventBroadcaster: s,
 		PromptEngine:           s.cfg.PromptEngine,
 		DefaultProvider:        s.cfg.DefaultProvider,
@@ -2236,6 +2234,16 @@ func (s *LocalService) startOperator(p provider.Provider, providerID, model stri
 		OnTurnDone: func(tokensIn, tokensOut, reasoningTokens int) {
 			batcher.Flush()
 			s.BroadcastOperatorDone(model, tokensIn, tokensOut, reasoningTokens)
+		},
+		OnPrompt: func(requestID, question string, options []string) {
+			s.broadcast(Event{
+				Type: EventTypeOperatorPrompt,
+				Payload: OperatorPromptPayload{
+					RequestID: requestID,
+					Question:  question,
+					Options:   options,
+				},
+			})
 		},
 	})
 	if err != nil {

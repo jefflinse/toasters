@@ -614,8 +614,9 @@ func (m *Model) runtimeSessionForGridCell(cellIdx int) *runtimeSlot {
 	return nil
 }
 
-// formatFeedEntry returns a styled single-line string for a service.FeedEntry.
-func formatFeedEntry(entry service.FeedEntry) string {
+// formatFeedEntry returns a styled string for a service.FeedEntry.
+// maxWidth is used to word-wrap long content (e.g. blocker descriptions).
+func formatFeedEntry(entry service.FeedEntry, maxWidth int) string {
 	switch entry.EntryType {
 	case service.FeedEntryTypeSystemEvent:
 		return FeedSystemEventStyle.Render("  ⚙ " + entry.Content)
@@ -628,7 +629,11 @@ func formatFeedEntry(entry service.FeedEntry) string {
 	case service.FeedEntryTypeTaskFailed:
 		return FeedTaskFailedStyle.Render("✗ " + entry.Content)
 	case service.FeedEntryTypeBlockerReported:
-		return FeedBlockerReportedStyle.Render("🚫 " + entry.Content)
+		text := "🚫 " + entry.Content
+		if maxWidth > 4 {
+			text = wrapText(text, maxWidth-4)
+		}
+		return FeedBlockerReportedStyle.Render(text)
 	case service.FeedEntryTypeJobComplete:
 		return FeedJobCompleteStyle.Render("✅ " + entry.Content)
 	case service.FeedEntryTypeUserMessage, service.FeedEntryTypeOperatorMessage:

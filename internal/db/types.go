@@ -178,18 +178,32 @@ type FeedEntry struct {
 
 // WorkerSession tracks a single worker execution session.
 type WorkerSession struct {
-	ID        string
-	WorkerID  string
-	JobID     string // may be empty
-	TaskID    string // may be empty
-	Status    SessionStatus
-	Model     string
-	Provider  string
-	TokensIn  int64
-	TokensOut int64
-	StartedAt time.Time
-	EndedAt   *time.Time
-	CostUSD   *float64
+	ID           string
+	WorkerID     string
+	JobID        string // may be empty
+	TaskID       string // may be empty
+	Status       SessionStatus
+	Model        string
+	Provider     string
+	TokensIn     int64
+	TokensOut    int64
+	StartedAt    time.Time
+	EndedAt      *time.Time
+	CostUSD      *float64
+	SystemPrompt string // full system prompt sent to LLM
+	ToolsJSON    string // JSON array of tool names available to the session
+}
+
+// SessionMessage records a single message in a session's conversation transcript.
+type SessionMessage struct {
+	ID         int64
+	SessionID  string
+	Seq        int
+	Role       string // "user", "assistant", "tool"
+	Content    string
+	ToolCalls  string // JSON-serialized []ToolCall for assistant messages
+	ToolCallID string // for tool result messages
+	CreatedAt  time.Time
 }
 
 // ChatEntry records a single message in the operator/user conversation.

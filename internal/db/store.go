@@ -64,6 +64,10 @@ type Store interface {
 	UpdateSession(ctx context.Context, id string, update SessionUpdate) error
 	GetActiveSessions(ctx context.Context) ([]*WorkerSession, error)
 
+	// Session transcripts
+	AppendSessionMessage(ctx context.Context, msg *SessionMessage) error
+	ListSessionMessages(ctx context.Context, sessionID string) ([]*SessionMessage, error)
+
 	// Artifacts
 	LogArtifact(ctx context.Context, artifact *Artifact) error
 	ListArtifactsForJob(ctx context.Context, jobID string) ([]*Artifact, error)

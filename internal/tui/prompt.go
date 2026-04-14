@@ -2,6 +2,8 @@
 package tui
 
 import (
+	"context"
+	"log/slog"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -29,31 +31,16 @@ func (m *Model) updatePromptMode(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				m.input.Reset()
 				cmds = append(cmds, m.input.Focus())
 			} else {
-				// Selected a pre-defined option — send the response to the operator.
-				result := allOptions[m.prompt.promptSelected]
-				m.prompt.promptMode = false
-				m.prompt.promptCustom = false
-				m.prompt.promptQuestion = ""
-				m.prompt.promptOptions = nil
-				m.prompt.promptSelected = 0
-				m.input.Reset()
-				m.input.SetValue(result)
-				cmds = append(cmds, m.sendMessage())
+				// Selected a pre-defined option — send the response.
+				cmds = append(cmds, m.submitPromptResponse(allOptions[m.prompt.promptSelected]))
 			}
 		} else {
-			// Custom text submitted — send the response to the operator.
+			// Custom text submitted — send the response.
 			result := strings.TrimSpace(m.input.Value())
 			if result == "" {
 				result = "User provided no response."
 			}
-			m.prompt.promptMode = false
-			m.prompt.promptCustom = false
-			m.prompt.promptQuestion = ""
-			m.prompt.promptOptions = nil
-			m.prompt.promptSelected = 0
-			m.input.Reset()
-			m.input.SetValue(result)
-			cmds = append(cmds, m.sendMessage())
+			cmds = append(cmds, m.submitPromptResponse(result))
 		}
 	case "esc":
 		if m.prompt.promptCustom {
@@ -61,15 +48,8 @@ func (m *Model) updatePromptMode(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.prompt.promptCustom = false
 			m.input.Reset()
 		} else {
-			// Cancel entirely — send cancellation to the operator.
-			m.prompt.promptMode = false
-			m.prompt.promptCustom = false
-			m.prompt.promptQuestion = ""
-			m.prompt.promptOptions = nil
-			m.prompt.promptSelected = 0
-			m.input.Reset()
-			m.input.SetValue("User cancelled.")
-			cmds = append(cmds, m.sendMessage())
+			// Cancel entirely.
+			cmds = append(cmds, m.submitPromptResponse("User cancelled."))
 		}
 	default:
 		if m.prompt.promptCustom {
@@ -80,4 +60,34 @@ func (m *Model) updatePromptMode(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 	return m, tea.Batch(cmds...)
+}
+
+// submitPromptResponse sends the user's answer and clears prompt mode.
+// If there's a requestID (from ask_user), it routes through RespondToPrompt.
+// Otherwise, it sends as a regular chat message.
+func (m *Model) submitPromptResponse(text string) tea.Cmd {
+	requestID := m.prompt.requestID
+
+	// Clear prompt state.
+	m.prompt.promptMode = false
+	m.prompt.promptCustom = false
+	m.prompt.promptQuestion = ""
+	m.prompt.promptOptions = nil
+	m.prompt.promptSelected = 0
+	m.prompt.requestID = ""
+	m.input.Reset()
+
+	if requestID != "" && m.svc != nil {
+		// Route through RespondToPrompt for ask_user prompts.
+		return func() tea.Msg {
+			if err := m.svc.Operator().RespondToPrompt(context.Background(), requestID, text); err != nil {
+				slog.Warn("failed to respond to prompt", "request_id", requestID, "error", err)
+			}
+			return nil
+		}
+	}
+
+	// Fallback: send as a regular chat message.
+	m.input.SetValue(text)
+	return m.sendMessage()
 }

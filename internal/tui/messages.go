@@ -283,6 +283,13 @@ type OperatorEventMsg struct {
 	Event service.Event
 }
 
+// OperatorPromptMsg is sent when the operator calls ask_user and needs input.
+type OperatorPromptMsg struct {
+	RequestID string
+	Question  string
+	Options   []string
+}
+
 // EditorFinishedMsg is sent when an external $EDITOR process completes.
 type EditorFinishedMsg struct {
 	Err error
