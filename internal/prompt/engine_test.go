@@ -1,6 +1,7 @@
 package prompt
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -103,6 +104,61 @@ Write clean Go code.
 	}
 }
 
+func TestEngine_SetGlobal(t *testing.T) {
+	dir := t.TempDir()
+	mkdirAll(t, filepath.Join(dir, "roles"))
+
+	writeFile(t, filepath.Join(dir, "roles", "test.md"), `---
+name: Test Role
+---
+Granularity is {{ globals.task.granularity }}.
+`)
+
+	engine := NewEngine()
+	engine.SetGlobal("task.granularity", "fine")
+	if err := engine.LoadDir(dir, "test"); err != nil {
+		t.Fatalf("LoadDir: %v", err)
+	}
+
+	result, err := engine.Compose("test", nil)
+	if err != nil {
+		t.Fatalf("Compose: %v", err)
+	}
+
+	if !strings.Contains(result, "Granularity is fine.") {
+		t.Errorf("expected custom global to resolve, got:\n%s", result)
+	}
+}
+
+func TestEngine_SetGlobal_TimeOverrides(t *testing.T) {
+	dir := t.TempDir()
+	mkdirAll(t, filepath.Join(dir, "roles"))
+
+	writeFile(t, filepath.Join(dir, "roles", "test.md"), `---
+name: Test Role
+---
+Year is {{ globals.now.year }}.
+`)
+
+	engine := NewEngine()
+	// Attempt to override a time-based global — time should win.
+	engine.SetGlobal("now.year", "1999")
+	if err := engine.LoadDir(dir, "test"); err != nil {
+		t.Fatalf("LoadDir: %v", err)
+	}
+
+	result, err := engine.Compose("test", nil)
+	if err != nil {
+		t.Fatalf("Compose: %v", err)
+	}
+
+	now := time.Now()
+	wantYear := fmt.Sprintf("%d", now.Year())
+	if !strings.Contains(result, "Year is "+wantYear+".") {
+		t.Errorf("time-based global should override caller-set global, got:\n%s", result)
+	}
+}
+
 func TestEngine_Compose_VarOverrides(t *testing.T) {
 	dir := t.TempDir()
 	mkdirAll(t, filepath.Join(dir, "roles"))
@@ -161,16 +217,23 @@ func TestEngine_Compose_MissingDir(t *testing.T) {
 }
 
 func TestEngine_Compose_WithActualDefaults(t *testing.T) {
-	// Test with the actual defaults/user/ directory if it exists.
-	defaultsDir := filepath.Join("..", "..", "defaults", "user")
-	if _, err := os.Stat(defaultsDir); os.IsNotExist(err) {
+	// Test with the actual defaults directories if they exist.
+	systemDir := filepath.Join("..", "..", "defaults", "system")
+	userDir := filepath.Join("..", "..", "defaults", "user")
+	if _, err := os.Stat(userDir); os.IsNotExist(err) {
 		t.Skip("defaults/user not found, skipping integration test")
 	}
 
 	engine := NewEngine()
-	if err := engine.LoadDir(defaultsDir, "test"); err != nil {
-		t.Fatalf("LoadDir: %v", err)
+	if _, err := os.Stat(systemDir); err == nil {
+		if err := engine.LoadDir(systemDir, "system"); err != nil {
+			t.Fatalf("LoadDir(system): %v", err)
+		}
 	}
+	if err := engine.LoadDir(userDir, "test"); err != nil {
+		t.Fatalf("LoadDir(user): %v", err)
+	}
+	engine.SetGlobal("task.granularity", "moderate")
 
 	result, err := engine.Compose("go-coder", nil)
 	if err != nil {
@@ -202,15 +265,22 @@ func TestEngine_Compose_WithActualDefaults(t *testing.T) {
 }
 
 func TestEngine_Compose_AllRoles(t *testing.T) {
-	defaultsDir := filepath.Join("..", "..", "defaults", "user")
-	if _, err := os.Stat(defaultsDir); os.IsNotExist(err) {
+	systemDir := filepath.Join("..", "..", "defaults", "system")
+	userDir := filepath.Join("..", "..", "defaults", "user")
+	if _, err := os.Stat(userDir); os.IsNotExist(err) {
 		t.Skip("defaults/user not found, skipping integration test")
 	}
 
 	engine := NewEngine()
-	if err := engine.LoadDir(defaultsDir, "test"); err != nil {
-		t.Fatalf("LoadDir: %v", err)
+	if _, err := os.Stat(systemDir); err == nil {
+		if err := engine.LoadDir(systemDir, "system"); err != nil {
+			t.Fatalf("LoadDir(system): %v", err)
+		}
 	}
+	if err := engine.LoadDir(userDir, "test"); err != nil {
+		t.Fatalf("LoadDir(user): %v", err)
+	}
+	engine.SetGlobal("task.granularity", "moderate")
 
 	for _, name := range engine.Roles() {
 		t.Run(name, func(t *testing.T) {

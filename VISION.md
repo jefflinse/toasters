@@ -41,6 +41,7 @@ The core insight: LLMs are good at reasoning and writing code, but bad at mainta
 - Not a replacement for Claude Code or OpenCode — it orchestrates work at a higher level
 - Not a web application (TUI-first, server architecture comes later)
 - Not a multi-tenant platform (single-user for now)
+- Task granularity is a single global setting — per-model and per-role granularity configuration is planned but not yet implemented
 
 ---
 

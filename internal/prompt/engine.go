@@ -35,6 +35,7 @@ type Engine struct {
 	roles        map[string]*Role
 	toolchains   map[string]*Toolchain
 	instructions map[string]string // name → body (plain text)
+	globals      map[string]string // caller-set globals (e.g. config values)
 }
 
 // Role is a worker definition with template references.
@@ -71,7 +72,15 @@ func NewEngine() *Engine {
 		roles:        make(map[string]*Role),
 		toolchains:   make(map[string]*Toolchain),
 		instructions: make(map[string]string),
+		globals:      make(map[string]string),
 	}
+}
+
+// SetGlobal registers a global template variable that will be available as
+// {{ globals.<key> }} in role templates. Call this during startup before any
+// goroutines call Compose.
+func (e *Engine) SetGlobal(key, value string) {
+	e.globals[key] = value
 }
 
 // LoadDir loads all definitions from a directory containing roles/, toolchains/,
@@ -99,13 +108,16 @@ func (e *Engine) Compose(roleName string, overrides map[string]string) (string, 
 		return "", fmt.Errorf("role %q not found", roleName)
 	}
 
-	// Build the globals map.
+	// Build the globals map: caller-set globals first, then time-based globals
+	// (time values win on collision).
 	now := time.Now()
-	globals := map[string]string{
-		"now.month": now.Format("January"),
-		"now.year":  fmt.Sprintf("%d", now.Year()),
-		"now.date":  now.Format("2006-01-02"),
+	globals := make(map[string]string, len(e.globals)+3)
+	for k, v := range e.globals {
+		globals[k] = v
 	}
+	globals["now.month"] = now.Format("January")
+	globals["now.year"] = fmt.Sprintf("%d", now.Year())
+	globals["now.date"] = now.Format("2006-01-02")
 
 	// Pre-resolve all toolchain bodies with their vars.
 	resolvedToolchains := make(map[string]string, len(e.toolchains))

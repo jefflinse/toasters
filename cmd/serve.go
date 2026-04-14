@@ -126,6 +126,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 	if err := promptEngine.LoadDir(userDir, "user"); err != nil {
 		slog.Warn("failed to load user prompt definitions", "dir", userDir, "error", err)
 	}
+	promptEngine.SetGlobal("task.granularity", config.ValidTaskGranularity(cfg.TaskGranularity))
 	slog.Info("loaded prompt definitions", "roles", len(promptEngine.Roles()))
 
 	// Load definitions from files into DB.

@@ -16,11 +16,12 @@ import (
 // Providers are no longer stored here — they live in providers/*.yaml files
 // and are loaded by the Loader.
 type Config struct {
-	WorkspaceDir string         `mapstructure:"workspace_dir"`
-	DatabasePath string         `mapstructure:"database_path"`
-	Operator     OperatorConfig `mapstructure:"operator"`
-	Agents       AgentsConfig   `mapstructure:"agents"`
-	MCP          MCPConfig      `mapstructure:"mcp"`
+	WorkspaceDir    string         `mapstructure:"workspace_dir"`
+	DatabasePath    string         `mapstructure:"database_path"`
+	TaskGranularity string         `mapstructure:"task_granularity"`
+	Operator        OperatorConfig `mapstructure:"operator"`
+	Agents          AgentsConfig   `mapstructure:"agents"`
+	MCP             MCPConfig      `mapstructure:"mcp"`
 }
 
 // MCPServerConfig holds configuration for a single MCP server.
@@ -75,6 +76,7 @@ func Load() (*Config, error) {
 	viper.SetDefault("operator.provider", "")
 	viper.SetDefault("operator.model", "")
 	viper.SetDefault("operator.teams_dir", filepath.Join(home, ".config", "toasters", "user", "teams"))
+	viper.SetDefault("task_granularity", "moderate")
 	viper.SetDefault("agents.defaults.provider", "")
 	viper.SetDefault("agents.defaults.model", "")
 
@@ -94,6 +96,19 @@ func Load() (*Config, error) {
 	ensureConfigFilePermissions()
 
 	return &cfg, nil
+}
+
+// ValidTaskGranularity returns value if it is a recognized task granularity
+// preset (coarse, moderate, fine, atomic). Otherwise it logs a warning and
+// returns "moderate".
+func ValidTaskGranularity(value string) string {
+	switch value {
+	case "coarse", "moderate", "fine", "atomic":
+		return value
+	default:
+		slog.Warn("invalid task_granularity, defaulting to moderate", "value", value)
+		return "moderate"
+	}
 }
 
 // isPlaintextKey returns true if key is a non-empty API key value that does

@@ -1,3 +1,6 @@
+# Task granularity for team leads: coarse, moderate, fine, atomic
+task_granularity: moderate
+
 operator:
   provider:
   model:

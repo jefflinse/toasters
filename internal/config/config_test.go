@@ -26,6 +26,67 @@ func writeConfigYAML(t *testing.T, dir, content string) {
 	}
 }
 
+// --- ValidTaskGranularity tests ---
+
+func TestValidTaskGranularity_ValidValues(t *testing.T) {
+	for _, v := range []string{"coarse", "moderate", "fine", "atomic"} {
+		got := ValidTaskGranularity(v)
+		if got != v {
+			t.Errorf("ValidTaskGranularity(%q) = %q, want %q", v, got, v)
+		}
+	}
+}
+
+func TestValidTaskGranularity_InvalidValue_DefaultsToModerate(t *testing.T) {
+	for _, v := range []string{"", "invalid", "FINE", "medium", "very-fine"} {
+		got := ValidTaskGranularity(v)
+		if got != "moderate" {
+			t.Errorf("ValidTaskGranularity(%q) = %q, want %q", v, got, "moderate")
+		}
+	}
+}
+
+func TestLoad_TaskGranularity_Default(t *testing.T) {
+	resetViper(t)
+
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if cfg.TaskGranularity != "moderate" {
+		t.Errorf("TaskGranularity: got %q, want %q", cfg.TaskGranularity, "moderate")
+	}
+}
+
+func TestLoad_TaskGranularity_Override(t *testing.T) {
+	resetViper(t)
+
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+
+	configDir := filepath.Join(tmpHome, ".config", "toasters")
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		t.Fatalf("creating config dir: %v", err)
+	}
+
+	writeConfigYAML(t, configDir, `
+task_granularity: fine
+`)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if cfg.TaskGranularity != "fine" {
+		t.Errorf("TaskGranularity: got %q, want %q", cfg.TaskGranularity, "fine")
+	}
+}
+
 // --- WorkspaceDir tests ---
 
 func TestWorkspaceDir_EmptyString_ReturnsDefault(t *testing.T) {
