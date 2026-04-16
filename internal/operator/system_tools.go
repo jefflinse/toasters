@@ -41,6 +41,13 @@ type SystemEventBroadcaster interface {
 	BroadcastTaskAssigned(taskID, jobID, teamID, title string)
 }
 
+// GraphTaskExecutor dispatches tasks to rhizome graph-based execution.
+// Implemented by *graphexec.Executor. Defined here to keep the dependency
+// direction one-way (operator does not import graphexec).
+type GraphTaskExecutor interface {
+	ExecuteTask(ctx context.Context, jobType, jobID, taskID, taskTitle, jobTitle, jobDescription, workspaceDir, providerName, model string) error
+}
+
 // SystemTools provides orchestration tools for system workers (decomposer,
 // scheduler, blocker-handler). These are distinct from the operator's own
 // tools — system workers use them to create/query jobs and tasks, assign
@@ -52,12 +59,13 @@ type SystemTools struct {
 	defaultModel    string
 	eventCh         chan<- Event
 	spawner         TeamLeadSpawner
+	graphExecutor   GraphTaskExecutor      // optional; when set and TOASTERS_USE_RHIZOME=1, tasks dispatch here
 	workDir         string                 // global workspace directory; per-job subdirs are created under this
 	broadcaster     SystemEventBroadcaster // optional; nil means no service event broadcast
 }
 
 // NewSystemTools creates a new SystemTools instance.
-func NewSystemTools(store db.Store, promptEngine *prompt.Engine, defaultProvider, defaultModel string, eventCh chan<- Event, spawner TeamLeadSpawner, workDir string, broadcaster SystemEventBroadcaster) *SystemTools {
+func NewSystemTools(store db.Store, promptEngine *prompt.Engine, defaultProvider, defaultModel string, eventCh chan<- Event, spawner TeamLeadSpawner, workDir string, broadcaster SystemEventBroadcaster, graphExecutor GraphTaskExecutor) *SystemTools {
 	return &SystemTools{
 		store:           store,
 		promptEngine:    promptEngine,
@@ -65,6 +73,7 @@ func NewSystemTools(store db.Store, promptEngine *prompt.Engine, defaultProvider
 		defaultModel:    defaultModel,
 		eventCh:         eventCh,
 		spawner:         spawner,
+		graphExecutor:   graphExecutor,
 		workDir:         workDir,
 		broadcaster:     broadcaster,
 	}
@@ -465,6 +474,50 @@ func (st *SystemTools) assignTask(ctx context.Context, args json.RawMessage) (st
 	// 5. No task in progress — start this one. Set status to in_progress and assign team.
 	if err := st.store.AssignTask(ctx, params.TaskID, params.TeamID); err != nil {
 		return "", fmt.Errorf("assigning task: %w", err)
+	}
+
+	// 5a. Rhizome graph execution path — when TOASTERS_USE_RHIZOME=1 is set
+	// and a graph executor is configured, dispatch via the graph engine instead
+	// of spawning a team lead. Both paths coexist during the transition.
+	if st.graphExecutor != nil && os.Getenv("TOASTERS_USE_RHIZOME") == "1" {
+		// Broadcast assignment event.
+		if st.broadcaster != nil {
+			st.broadcaster.BroadcastTaskAssigned(params.TaskID, task.JobID, params.TeamID, task.Title)
+		}
+
+		// Promote the job to active if still pending.
+		if job.Status == db.JobStatusPending {
+			if err := st.store.UpdateJobStatus(ctx, task.JobID, db.JobStatusActive); err != nil {
+				slog.Warn("failed to mark job active", "job_id", task.JobID, "error", err)
+			}
+		}
+
+		// Resolve provider/model: team → global default.
+		prov := team.Provider
+		if prov == "" {
+			prov = st.defaultProvider
+		}
+		mod := team.Model
+		if mod == "" {
+			mod = st.defaultModel
+		}
+
+		// Fire graph execution in a goroutine (non-blocking, like SpawnTeamLead).
+		go func() {
+			if err := st.graphExecutor.ExecuteTask(
+				context.Background(), // detach from operator context
+				job.Type, task.JobID, params.TaskID, task.Title,
+				job.Title, job.Description, job.WorkspaceDir,
+				prov, mod,
+			); err != nil {
+				slog.Error("graph task execution failed",
+					"task_id", params.TaskID, "job_id", task.JobID, "error", err)
+			}
+		}()
+
+		slog.Info("task dispatched via rhizome graph",
+			"task_id", params.TaskID, "job_id", task.JobID, "team_id", params.TeamID)
+		return fmt.Sprintf("Task assigned to team %s (via rhizome graph)", team.Name), nil
 	}
 
 	// 6. Compose the team lead worker via the prompt engine.

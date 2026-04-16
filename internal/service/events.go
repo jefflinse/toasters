@@ -114,6 +114,22 @@ const (
 	// Not sent by the server — synthesized by RemoteClient.
 	// Payload: ConnectionRestoredPayload.
 	EventTypeConnectionRestored EventType = "connection.restored"
+
+	// EventTypeGraphNodeStarted is sent when a rhizome graph node begins
+	// execution. Payload: GraphNodeStartedPayload.
+	EventTypeGraphNodeStarted EventType = "graph.node_started"
+
+	// EventTypeGraphNodeCompleted is sent when a rhizome graph node finishes
+	// execution. Payload: GraphNodeCompletedPayload.
+	EventTypeGraphNodeCompleted EventType = "graph.node_completed"
+
+	// EventTypeGraphCompleted is sent when a rhizome graph finishes
+	// execution successfully. Payload: GraphCompletedPayload.
+	EventTypeGraphCompleted EventType = "graph.completed"
+
+	// EventTypeGraphFailed is sent when a rhizome graph execution fails.
+	// Payload: GraphFailedPayload.
+	EventTypeGraphFailed EventType = "graph.failed"
 )
 
 // ---------------------------------------------------------------------------
@@ -355,6 +371,35 @@ type ConnectionLostPayload struct {
 // ConnectionRestoredPayload is the payload for EventTypeConnectionRestored events.
 // Client-only — synthesized by RemoteClient when the SSE connection is re-established.
 type ConnectionRestoredPayload struct{}
+
+// GraphNodeStartedPayload is the payload for EventTypeGraphNodeStarted events.
+type GraphNodeStartedPayload struct {
+	JobID  string
+	TaskID string
+	Node   string // node name in the graph (e.g. "investigate", "implement")
+}
+
+// GraphNodeCompletedPayload is the payload for EventTypeGraphNodeCompleted events.
+type GraphNodeCompletedPayload struct {
+	JobID  string
+	TaskID string
+	Node   string
+	Status string // node's status after execution (e.g. "tests_passed", "review_approved")
+}
+
+// GraphCompletedPayload is the payload for EventTypeGraphCompleted events.
+type GraphCompletedPayload struct {
+	JobID   string
+	TaskID  string
+	Summary string // final text from the graph execution
+}
+
+// GraphFailedPayload is the payload for EventTypeGraphFailed events.
+type GraphFailedPayload struct {
+	JobID  string
+	TaskID string
+	Error  string
+}
 
 // ---------------------------------------------------------------------------
 // EventService interface

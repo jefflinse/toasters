@@ -168,7 +168,7 @@ func newTestOperatorTools(t *testing.T, workers []*db.Worker) *operatorTools {
 	})
 
 	eventCh := make(chan Event, 64)
-	systemTools := NewSystemTools(store, engine, "test-provider", "test-model", eventCh, nil, t.TempDir(), nil)
+	systemTools := NewSystemTools(store, engine, "test-provider", "test-model", eventCh, nil, t.TempDir(), nil, nil)
 
 	return newOperatorTools(nil, engine, "test-provider", "test-model", store, systemTools, t.TempDir())
 }
@@ -674,7 +674,7 @@ func TestEventLoop_TaskCompleted_AssignsNextTask(t *testing.T) {
 		"lead-agent": "You are a test lead.",
 	})
 	eventCh := make(chan Event, eventChSize)
-	systemTools := NewSystemTools(store, engine, "test-provider", "test-model", eventCh, spawner, t.TempDir(), nil)
+	systemTools := NewSystemTools(store, engine, "test-provider", "test-model", eventCh, spawner, t.TempDir(), nil, nil)
 	tools := newOperatorTools(rt, engine, "test-provider", "test-model", store, systemTools, t.TempDir())
 	provTools := operatorToolsToProviderTools(tools.Definitions())
 
@@ -1665,7 +1665,7 @@ func TestSurfaceToUserMissingText(t *testing.T) {
 func TestSurfaceToUserCreatesFeedEntry(t *testing.T) {
 	store := newOperatorTestStore(t)
 	eventCh := make(chan Event, 64)
-	systemTools := NewSystemTools(store, nil, "test-provider", "test-model", eventCh, nil, t.TempDir(), nil)
+	systemTools := NewSystemTools(store, nil, "test-provider", "test-model", eventCh, nil, t.TempDir(), nil, nil)
 	tools := newOperatorTools(nil, nil, "test-provider", "test-model", store, systemTools, t.TempDir())
 
 	result, err := tools.Execute(context.Background(), "surface_to_user",
@@ -1738,7 +1738,7 @@ func TestQueryJobDelegatesToSystemTools(t *testing.T) {
 	}
 
 	eventCh := make(chan Event, 64)
-	systemTools := NewSystemTools(store, nil, "test-provider", "test-model", eventCh, nil, t.TempDir(), nil)
+	systemTools := NewSystemTools(store, nil, "test-provider", "test-model", eventCh, nil, t.TempDir(), nil, nil)
 	tools := newOperatorTools(nil, nil, "test-provider", "test-model", store, systemTools, t.TempDir())
 
 	result, err := tools.Execute(ctx, "query_job",
@@ -1756,7 +1756,7 @@ func TestQueryTeamsDelegatesToSystemTools(t *testing.T) {
 	seedTeam(t, ctx, store, "team-1", "Alpha Team", "lead-1")
 
 	eventCh := make(chan Event, 64)
-	systemTools := NewSystemTools(store, nil, "test-provider", "test-model", eventCh, nil, t.TempDir(), nil)
+	systemTools := NewSystemTools(store, nil, "test-provider", "test-model", eventCh, nil, t.TempDir(), nil, nil)
 	tools := newOperatorTools(nil, nil, "test-provider", "test-model", store, systemTools, t.TempDir())
 
 	result, err := tools.Execute(ctx, "query_teams", json.RawMessage(`{}`))

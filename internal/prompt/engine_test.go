@@ -347,15 +347,30 @@ func TestEngine_Compose_AllRoles(t *testing.T) {
 	}
 	engine.SetGlobal("task.granularity", "moderate")
 
+	// Phase roles (used by graphexec) reference per-task globals that are
+	// injected at Compose-time by the graph executor. Supply stub values so
+	// the test can validate the role templates resolve cleanly.
+	phaseOverrides := map[string]string{
+		"task.description":     "stub task description",
+		"job.title":            "stub job title",
+		"job.description":      "stub job description",
+		"investigate.findings": "stub investigation findings",
+		"plan.steps":           "stub plan steps",
+		"implement.summary":    "stub implementation summary",
+		"test.results":         "stub test results",
+		"review.feedback":      "",
+	}
+
 	for _, name := range engine.Roles() {
 		t.Run(name, func(t *testing.T) {
-			// Lead roles require per-call overrides (team.workers is injected
-			// at spawn time by system_tools.go).
-			var overrides map[string]string
+			overrides := make(map[string]string, len(phaseOverrides)+1)
+			for k, v := range phaseOverrides {
+				overrides[k] = v
+			}
+			// Lead roles require team.workers, injected at spawn time by
+			// system_tools.go.
 			if role := engine.Role(name); role != nil && role.Mode == "lead" {
-				overrides = map[string]string{
-					"team.workers": "- **test-worker**: A test worker.",
-				}
+				overrides["team.workers"] = "- **test-worker**: A test worker."
 			}
 			result, err := engine.Compose(name, overrides)
 			if err != nil {

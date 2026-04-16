@@ -1,0 +1,124 @@
+package graphexec
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	"time"
+
+	"github.com/jefflinse/rhizome"
+	"github.com/jefflinse/toasters/internal/db"
+)
+
+// EventSink receives graph execution events. This interface is satisfied by
+// *service.LocalService — defining it here keeps the dependency direction
+// one-way (service imports graphexec, not the reverse).
+type EventSink interface {
+	BroadcastGraphNodeStarted(jobID, taskID, node string)
+	BroadcastGraphNodeCompleted(jobID, taskID, node, status string)
+	BroadcastGraphCompleted(jobID, taskID, summary string)
+	BroadcastGraphFailed(jobID, taskID, errMsg string)
+}
+
+// EventMiddleware emits graph node lifecycle events to the service event
+// stream. It broadcasts node-started before execution and node-completed
+// after, giving the TUI real-time progress at node granularity.
+func EventMiddleware(sink EventSink) rhizome.Middleware[*TaskState] {
+	return func(ctx context.Context, node string, state *TaskState, next rhizome.NodeFunc[*TaskState]) (*TaskState, error) {
+		if sink != nil {
+			sink.BroadcastGraphNodeStarted(state.JobID, state.TaskID, node)
+		}
+
+		result, err := next(ctx, state)
+
+		if sink != nil {
+			status := ""
+			if result != nil {
+				status = result.Status
+			}
+			sink.BroadcastGraphNodeCompleted(state.JobID, state.TaskID, node, status)
+		}
+
+		return result, err
+	}
+}
+
+// PersistenceMiddleware writes progress reports to the database at node
+// boundaries. After each node completes, it persists a summary so the
+// TUI can show historical progress even after reconnection.
+func PersistenceMiddleware(store db.Store) rhizome.Middleware[*TaskState] {
+	return func(ctx context.Context, node string, state *TaskState, next rhizome.NodeFunc[*TaskState]) (*TaskState, error) {
+		result, err := next(ctx, state)
+
+		if store != nil && result != nil {
+			report := &db.ProgressReport{
+				JobID:    result.JobID,
+				TaskID:   result.TaskID,
+				WorkerID: fmt.Sprintf("graph:%s", node),
+				Status:   progressStatus(result, err),
+				Message:  progressMessage(node, result, err),
+			}
+			if persistErr := store.ReportProgress(ctx, report); persistErr != nil {
+				slog.Warn("failed to persist graph progress",
+					"node", node, "job_id", result.JobID, "task_id", result.TaskID, "error", persistErr)
+			}
+		}
+
+		return result, err
+	}
+}
+
+// LoggingMiddleware provides slog-based logging of node entry and exit.
+func LoggingMiddleware() rhizome.Middleware[*TaskState] {
+	return func(ctx context.Context, node string, state *TaskState, next rhizome.NodeFunc[*TaskState]) (*TaskState, error) {
+		start := time.Now()
+		slog.Info("graph node started",
+			"node", node, "job_id", state.JobID, "task_id", state.TaskID)
+
+		result, err := next(ctx, state)
+
+		elapsed := time.Since(start)
+		if err != nil {
+			slog.Error("graph node failed",
+				"node", node, "job_id", state.JobID, "task_id", state.TaskID,
+				"error", err, "elapsed", elapsed)
+		} else {
+			status := ""
+			if result != nil {
+				status = result.Status
+			}
+			slog.Info("graph node completed",
+				"node", node, "job_id", state.JobID, "task_id", state.TaskID,
+				"status", status, "elapsed", elapsed)
+		}
+
+		return result, err
+	}
+}
+
+// progressStatus returns a short status string for the progress report.
+func progressStatus(state *TaskState, err error) string {
+	if err != nil {
+		return "failed"
+	}
+	if state.Status != "" {
+		return state.Status
+	}
+	return "completed"
+}
+
+// progressMessage builds a human-readable message for the progress report.
+func progressMessage(node string, state *TaskState, err error) string {
+	if err != nil {
+		return fmt.Sprintf("Node %q failed: %s", node, err.Error())
+	}
+	if state.FinalText != "" {
+		// Truncate to a reasonable summary length.
+		text := state.FinalText
+		if len(text) > 500 {
+			text = text[:500] + "..."
+		}
+		return fmt.Sprintf("Node %q completed: %s", node, text)
+	}
+	return fmt.Sprintf("Node %q completed", node)
+}

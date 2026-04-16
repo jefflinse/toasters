@@ -16,6 +16,7 @@ import (
 
 	"github.com/jefflinse/toasters/defaults"
 	"github.com/jefflinse/toasters/internal/auth"
+	"github.com/jefflinse/toasters/internal/graphexec"
 	"github.com/jefflinse/toasters/internal/bootstrap"
 	"github.com/jefflinse/toasters/internal/config"
 	"github.com/jefflinse/toasters/internal/db"
@@ -229,6 +230,19 @@ func runServe(cmd *cobra.Command, args []string) error {
 	// session activity reaches subscribers (TUI, SSE clients).
 	rt.OnSessionStarted = svc.BroadcastSessionStarted
 
+	// Create the graph executor for rhizome-based task execution.
+	// Active when TOASTERS_USE_RHIZOME=1 is set. Per-task tool executors are
+	// constructed inside ExecuteTask scoped to each task's workspace directory
+	// (mirroring runtime.SpawnWorker) — the MCP manager is long-lived and shared.
+	graphExec := graphexec.NewExecutor(graphexec.ExecutorConfig{
+		Registry:     registry,
+		MCPManager:   mcpManager,
+		PromptEngine: promptEngine,
+		Store:        store,
+		EventSink:    svc,
+		DefaultModel: defaultModel,
+	})
+
 	// Create and start the operator event loop.
 	// Both a store and a provider are required — if the provider couldn't be
 	// resolved (no providers configured, or operator.provider not found), the
@@ -250,6 +264,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 			Spawner:                rt,
 			SystemPrompt:           operatorPrompt,
 			SystemEventBroadcaster: svc,
+			GraphExecutor:          graphExec,
 			PromptEngine:           promptEngine,
 			DefaultProvider:        defaultProvider,
 			DefaultModel:           defaultModel,

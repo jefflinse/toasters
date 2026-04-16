@@ -617,6 +617,55 @@ func (s *LocalService) BroadcastTaskAssigned(taskID, jobID, teamID, title string
 	})
 }
 
+// BroadcastGraphNodeStarted broadcasts a graph.node_started event.
+func (s *LocalService) BroadcastGraphNodeStarted(jobID, taskID, node string) {
+	s.broadcast(Event{
+		Type: EventTypeGraphNodeStarted,
+		Payload: GraphNodeStartedPayload{
+			JobID:  jobID,
+			TaskID: taskID,
+			Node:   node,
+		},
+	})
+}
+
+// BroadcastGraphNodeCompleted broadcasts a graph.node_completed event.
+func (s *LocalService) BroadcastGraphNodeCompleted(jobID, taskID, node, status string) {
+	s.broadcast(Event{
+		Type: EventTypeGraphNodeCompleted,
+		Payload: GraphNodeCompletedPayload{
+			JobID:  jobID,
+			TaskID: taskID,
+			Node:   node,
+			Status: status,
+		},
+	})
+}
+
+// BroadcastGraphCompleted broadcasts a graph.completed event.
+func (s *LocalService) BroadcastGraphCompleted(jobID, taskID, summary string) {
+	s.broadcast(Event{
+		Type: EventTypeGraphCompleted,
+		Payload: GraphCompletedPayload{
+			JobID:   jobID,
+			TaskID:  taskID,
+			Summary: summary,
+		},
+	})
+}
+
+// BroadcastGraphFailed broadcasts a graph.failed event.
+func (s *LocalService) BroadcastGraphFailed(jobID, taskID, errMsg string) {
+	s.broadcast(Event{
+		Type: EventTypeGraphFailed,
+		Payload: GraphFailedPayload{
+			JobID:  jobID,
+			TaskID: taskID,
+			Error:  errMsg,
+		},
+	})
+}
+
 // BroadcastSessionStarted bridges a runtime session into the unified service
 // event stream. It emits session.started immediately, then spawns a goroutine
 // that subscribes to the session's events and re-emits them as session.text /

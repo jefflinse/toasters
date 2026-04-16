@@ -67,6 +67,7 @@ type Config struct {
 	Store                  db.Store
 	Spawner                runtime.TeamLeadSpawner // spawns team lead sessions on task assignment; may be nil
 	SystemEventBroadcaster SystemEventBroadcaster  // optional; for broadcasting service events from system tools
+	GraphExecutor          GraphTaskExecutor       // optional; rhizome graph-based task execution
 	PromptEngine           *prompt.Engine          // prompt engine for role-based prompt composition
 	DefaultProvider        string                  // default provider for system agents and team leads
 	DefaultModel           string                  // default model for system agents and team leads
@@ -94,7 +95,7 @@ func New(cfg Config) (*Operator, error) {
 	eventCh := make(chan Event, eventChSize)
 	var systemTools *SystemTools
 	if cfg.Store != nil {
-		systemTools = NewSystemTools(cfg.Store, cfg.PromptEngine, cfg.DefaultProvider, cfg.DefaultModel, eventCh, cfg.Spawner, cfg.WorkDir, cfg.SystemEventBroadcaster)
+		systemTools = NewSystemTools(cfg.Store, cfg.PromptEngine, cfg.DefaultProvider, cfg.DefaultModel, eventCh, cfg.Spawner, cfg.WorkDir, cfg.SystemEventBroadcaster, cfg.GraphExecutor)
 	}
 
 	tools := newOperatorTools(cfg.Runtime, cfg.PromptEngine, cfg.DefaultProvider, cfg.DefaultModel, cfg.Store, systemTools, cfg.WorkDir)
