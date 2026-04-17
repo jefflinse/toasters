@@ -80,8 +80,10 @@ func (e *Executor) buildToolExecutor(workspaceDir string) runtime.ToolExecutor {
 
 // Execute runs a compiled graph with the given initial state. It applies
 // event, persistence, and logging middleware, then updates the task status
-// in the database based on the outcome.
-func (e *Executor) Execute(ctx context.Context, graph *rhizome.CompiledGraph[*TaskState], state *TaskState) error {
+// in the database based on the outcome. teamID is carried through to the
+// task_completed / task_failed events so the operator's event loop can
+// advance to the next ready task.
+func (e *Executor) Execute(ctx context.Context, graph *rhizome.CompiledGraph[*TaskState], state *TaskState, teamID string) error {
 	// Run the graph with middleware.
 	result, err := graph.Run(ctx, state,
 		rhizome.WithMiddleware[*TaskState](
@@ -96,10 +98,6 @@ func (e *Executor) Execute(ctx context.Context, graph *rhizome.CompiledGraph[*Ta
 		slog.Error("graph execution failed",
 			"job_id", state.JobID, "task_id", state.TaskID, "error", err)
 
-		if e.eventSink != nil {
-			e.eventSink.BroadcastGraphFailed(state.JobID, state.TaskID, err.Error())
-		}
-
 		if e.store != nil {
 			failSummary := fmt.Sprintf("Graph execution failed: %s", err.Error())
 			if dbErr := e.store.UpdateTaskStatus(ctx, state.TaskID, db.TaskStatusFailed, failSummary); dbErr != nil {
@@ -107,24 +105,26 @@ func (e *Executor) Execute(ctx context.Context, graph *rhizome.CompiledGraph[*Ta
 			}
 		}
 
+		if e.eventSink != nil {
+			e.eventSink.BroadcastGraphFailed(state.JobID, state.TaskID, err.Error())
+			// Advance the operator. Operator-level task_failed event is distinct
+			// from the service-level graph.failed broadcast above.
+			e.eventSink.BroadcastTaskFailed(state.JobID, state.TaskID, teamID, err.Error())
+		}
+
 		return fmt.Errorf("graph execution: %w", err)
 	}
 
-	// Success.
-	summary := ""
-	if result != nil {
-		summary = result.FinalText
-		if len(summary) > 500 {
-			summary = summary[:500] + "..."
-		}
+	// Success. Guard against a nil result — rhizome returns (nil, nil)
+	// for graphs that reach End without running any nodes (defensive;
+	// shouldn't happen with our templates).
+	if result == nil {
+		result = state
 	}
+	summary := truncateSummary(result.FinalText)
 
 	slog.Info("graph execution completed",
 		"job_id", state.JobID, "task_id", state.TaskID, "status", result.Status)
-
-	if e.eventSink != nil {
-		e.eventSink.BroadcastGraphCompleted(state.JobID, state.TaskID, summary)
-	}
 
 	if e.store != nil {
 		if dbErr := e.store.UpdateTaskStatus(ctx, state.TaskID, db.TaskStatusCompleted, summary); dbErr != nil {
@@ -132,56 +132,105 @@ func (e *Executor) Execute(ctx context.Context, graph *rhizome.CompiledGraph[*Ta
 		}
 	}
 
+	// Determine HasNextTask so the operator knows whether to advance
+	// mechanically (next task exists) or consult the scheduler.
+	hasNextTask := false
+	if e.store != nil {
+		if ready, readyErr := e.store.GetReadyTasks(ctx, state.JobID); readyErr == nil {
+			hasNextTask = len(ready) > 0
+		} else {
+			slog.Warn("failed to check ready tasks after graph completion",
+				"job_id", state.JobID, "error", readyErr)
+		}
+	}
+
+	if e.eventSink != nil {
+		e.eventSink.BroadcastGraphCompleted(state.JobID, state.TaskID, summary)
+		// Advance the operator. Operator-level task_completed event is what
+		// drives assignNextTask — the team-lead path emits this via
+		// team_tools.completeTask.
+		e.eventSink.BroadcastTaskCompleted(state.JobID, state.TaskID, teamID, summary, hasNextTask)
+	}
+
 	return nil
 }
 
-// ExecuteTask is a convenience method that builds the appropriate graph
-// template based on job type, resolves the provider, and runs it.
-func (e *Executor) ExecuteTask(ctx context.Context, jobType, jobID, taskID, taskTitle, jobTitle, jobDescription, workspaceDir, providerName, model string) error {
-	// Resolve provider.
-	prov, ok := e.registry.Get(providerName)
+// TaskRequest carries everything needed to execute a task through the graph
+// executor. Replaces the prior 11-positional-string signature which was
+// error-prone at call sites.
+type TaskRequest struct {
+	JobID          string
+	JobType        JobType
+	JobTitle       string
+	JobDescription string
+
+	TaskID    string
+	TaskTitle string
+	TeamID    string
+
+	WorkspaceDir string
+	ProviderName string
+	Model        string
+}
+
+// TaskExecutor is the interface operator uses to dispatch tasks to the graph
+// engine. *Executor implements this. Defined here so the TaskRequest shape
+// is owned by graphexec — callers import graphexec to build the request.
+type TaskExecutor interface {
+	ExecuteTask(ctx context.Context, req TaskRequest) error
+}
+
+// ExecuteTask builds the appropriate graph template based on req.JobType,
+// resolves the provider, and runs it.
+func (e *Executor) ExecuteTask(ctx context.Context, req TaskRequest) error {
+	prov, ok := e.registry.Get(req.ProviderName)
 	if !ok {
-		return fmt.Errorf("provider %q not found in registry", providerName)
+		return fmt.Errorf("provider %q not found in registry", req.ProviderName)
 	}
 
+	model := req.Model
 	if model == "" {
 		model = e.defaultModel
 	}
 
 	tmplCfg := TemplateConfig{
 		Provider:     prov,
-		ToolExecutor: e.buildToolExecutor(workspaceDir),
+		ToolExecutor: e.buildToolExecutor(req.WorkspaceDir),
 		Model:        model,
 		PromptEngine: e.promptEngine,
 		Roles:        DefaultRoles(),
 	}
 
-	// Select graph template by job type.
-	var graph *rhizome.CompiledGraph[*TaskState]
-	var err error
-	switch jobType {
-	case "bug_fix":
-		graph, err = BugFixGraph(tmplCfg)
-	case "new_feature":
-		graph, err = NewFeatureGraph(tmplCfg)
-	case "prototype":
-		graph, err = PrototypeGraph(tmplCfg)
-	default:
-		// Default to single worker graph for unknown types.
-		graph, err = SingleWorkerGraph(tmplCfg,
-			"You are a general-purpose worker. Complete the assigned task.",
-			fmt.Sprintf("Task: %s\n\nJob: %s\n%s", taskTitle, jobTitle, jobDescription),
-		)
-	}
+	graph, err := buildGraphForJobType(req.JobType, tmplCfg, req)
 	if err != nil {
-		return fmt.Errorf("building graph for job type %q: %w", jobType, err)
+		return fmt.Errorf("building graph for job type %q: %w", req.JobType, err)
 	}
 
-	// Build initial state.
-	state := NewTaskState(jobID, taskID, workspaceDir, providerName, model)
-	state.SetArtifact("task.description", taskTitle)
-	state.SetArtifact("job.title", jobTitle)
-	state.SetArtifact("job.description", jobDescription)
+	state := NewTaskState(req.JobID, req.TaskID, req.WorkspaceDir, req.ProviderName, model)
+	state.SetArtifact("task.description", req.TaskTitle)
+	state.SetArtifact("job.title", req.JobTitle)
+	state.SetArtifact("job.description", req.JobDescription)
 
-	return e.Execute(ctx, graph, state)
+	return e.Execute(ctx, graph, state, req.TeamID)
+}
+
+// buildGraphForJobType picks the template. Untyped jobs default to BugFixGraph
+// so the full investigate → plan → implement → test → review cycle runs —
+// SingleWorkerGraph would bypass everything rhizome adds.
+func buildGraphForJobType(jobType JobType, tmplCfg TemplateConfig, req TaskRequest) (*rhizome.CompiledGraph[*TaskState], error) {
+	switch jobType {
+	case JobTypeNewFeature:
+		return NewFeatureGraph(tmplCfg)
+	case JobTypePrototype:
+		return PrototypeGraph(tmplCfg)
+	case JobTypeSingleWorker:
+		return SingleWorkerGraph(tmplCfg,
+			"You are a general-purpose worker. Complete the assigned task.",
+			fmt.Sprintf("Task: %s\n\nJob: %s\n%s", req.TaskTitle, req.JobTitle, req.JobDescription),
+		)
+	case JobTypeBugFix, JobTypeUnset:
+		return BugFixGraph(tmplCfg)
+	default:
+		return BugFixGraph(tmplCfg)
+	}
 }

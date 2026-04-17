@@ -100,6 +100,7 @@ type LocalConfig struct {
 	Catalog          CatalogSource // optional models.dev catalog; nil disables ListCatalogProviders
 	Registry         *provider.Registry // provider registry for live operator activation
 	PromptEngine     *prompt.Engine     // optional; for role-based prompt composition
+	GraphExecutor    operator.GraphTaskExecutor // optional; rhizome graph-based task execution
 }
 
 // LocalService is the in-process implementation of Service. It delegates to
@@ -224,6 +225,14 @@ func (s *LocalService) safeGo(operationID, kind string, fn func()) {
 		}()
 		fn()
 	}()
+}
+
+// SetGraphExecutor sets the graph executor on the service after construction.
+// Required when startup-time operator creation is skipped (no operator
+// provider configured yet) and the operator is instead created live via
+// startOperator after the user selects a provider in the TUI.
+func (s *LocalService) SetGraphExecutor(g operator.GraphTaskExecutor) {
+	s.cfg.GraphExecutor = g
 }
 
 // SetOperator sets the operator on the service after construction. This is
@@ -664,6 +673,67 @@ func (s *LocalService) BroadcastGraphFailed(jobID, taskID, errMsg string) {
 			Error:  errMsg,
 		},
 	})
+}
+
+// BroadcastTaskCompleted signals task completion to the operator's event loop
+// so it can advance to the next ready task. Called by graphexec.Executor
+// after a graph finishes successfully — mirrors what team_tools.completeTask
+// does on the team-lead path.
+func (s *LocalService) BroadcastTaskCompleted(jobID, taskID, teamID, summary string, hasNextTask bool) {
+	op := s.currentOperator()
+	if op == nil {
+		slog.Warn("graph task completed but operator unavailable; next task will not auto-advance",
+			"task_id", taskID, "job_id", jobID)
+		return
+	}
+	ctx, cancel := context.WithTimeout(s.ctx, 5*time.Second)
+	defer cancel()
+	if err := op.Send(ctx, operator.Event{
+		Type: operator.EventTaskCompleted,
+		Payload: operator.TaskCompletedPayload{
+			TaskID:      taskID,
+			JobID:       jobID,
+			TeamID:      teamID,
+			Summary:     summary,
+			HasNextTask: hasNextTask,
+		},
+	}); err != nil {
+		slog.Warn("failed to forward task_completed to operator",
+			"task_id", taskID, "job_id", jobID, "error", err)
+	}
+}
+
+// BroadcastTaskFailed signals task failure to the operator's event loop so it
+// can consult the blocker-handler. Mirrors team_lead's force-fail pathway.
+func (s *LocalService) BroadcastTaskFailed(jobID, taskID, teamID, errMsg string) {
+	op := s.currentOperator()
+	if op == nil {
+		slog.Warn("graph task failed but operator unavailable",
+			"task_id", taskID, "job_id", jobID)
+		return
+	}
+	ctx, cancel := context.WithTimeout(s.ctx, 5*time.Second)
+	defer cancel()
+	if err := op.Send(ctx, operator.Event{
+		Type: operator.EventTaskFailed,
+		Payload: operator.TaskFailedPayload{
+			TaskID: taskID,
+			JobID:  jobID,
+			TeamID: teamID,
+			Error:  errMsg,
+		},
+	}); err != nil {
+		slog.Warn("failed to forward task_failed to operator",
+			"task_id", taskID, "job_id", jobID, "error", err)
+	}
+}
+
+// currentOperator returns the currently active operator, if any, honoring
+// live activation/replacement under opMu.
+func (s *LocalService) currentOperator() *operator.Operator {
+	s.opMu.Lock()
+	defer s.opMu.Unlock()
+	return s.cfg.Operator
 }
 
 // BroadcastSessionStarted bridges a runtime session into the unified service
@@ -2271,6 +2341,7 @@ func (s *LocalService) startOperator(p provider.Provider, providerID, model stri
 		SystemPrompt:           systemPrompt,
 		SessionFile:            filepath.Join(s.cfg.ConfigDir, "sessions", "operator.json"),
 		SystemEventBroadcaster: s,
+		GraphExecutor:          s.cfg.GraphExecutor,
 		PromptEngine:           s.cfg.PromptEngine,
 		DefaultProvider:        s.cfg.DefaultProvider,
 		DefaultModel:           s.cfg.DefaultModel,

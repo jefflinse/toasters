@@ -13,6 +13,7 @@ import (
 	"github.com/gofrs/uuid/v5"
 
 	"github.com/jefflinse/toasters/internal/db"
+	"github.com/jefflinse/toasters/internal/graphexec"
 	"github.com/jefflinse/toasters/internal/prompt"
 	"github.com/jefflinse/toasters/internal/runtime"
 )
@@ -41,12 +42,9 @@ type SystemEventBroadcaster interface {
 	BroadcastTaskAssigned(taskID, jobID, teamID, title string)
 }
 
-// GraphTaskExecutor dispatches tasks to rhizome graph-based execution.
-// Implemented by *graphexec.Executor. Defined here to keep the dependency
-// direction one-way (operator does not import graphexec).
-type GraphTaskExecutor interface {
-	ExecuteTask(ctx context.Context, jobType, jobID, taskID, taskTitle, jobTitle, jobDescription, workspaceDir, providerName, model string) error
-}
+// GraphTaskExecutor is an alias for graphexec.TaskExecutor, kept here so
+// existing operator.Config consumers don't have to import graphexec directly.
+type GraphTaskExecutor = graphexec.TaskExecutor
 
 // SystemTools provides orchestration tools for system workers (decomposer,
 // scheduler, blocker-handler). These are distinct from the operator's own
@@ -503,15 +501,25 @@ func (st *SystemTools) assignTask(ctx context.Context, args json.RawMessage) (st
 		}
 
 		// Fire graph execution in a goroutine (non-blocking, like SpawnTeamLead).
+		req := graphexec.TaskRequest{
+			JobID:          task.JobID,
+			JobType:        graphexec.JobType(job.Type),
+			JobTitle:       job.Title,
+			JobDescription: job.Description,
+			TaskID:         params.TaskID,
+			TaskTitle:      task.Title,
+			TeamID:         params.TeamID,
+			WorkspaceDir:   job.WorkspaceDir,
+			ProviderName:   prov,
+			Model:          mod,
+		}
 		go func() {
 			if err := st.graphExecutor.ExecuteTask(
 				context.Background(), // detach from operator context
-				job.Type, task.JobID, params.TaskID, task.Title,
-				job.Title, job.Description, job.WorkspaceDir,
-				prov, mod,
+				req,
 			); err != nil {
 				slog.Error("graph task execution failed",
-					"task_id", params.TaskID, "job_id", task.JobID, "error", err)
+					"task_id", req.TaskID, "job_id", req.JobID, "error", err)
 			}
 		}()
 

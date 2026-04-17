@@ -160,6 +160,28 @@ type SessionDoneMsg struct {
 	Status    string // "completed", "failed", "cancelled"
 }
 
+// GraphNodeStartedMsg is sent when a rhizome graph node begins executing.
+// The TUI renders it as a pseudo-worker in the Workers panel — graph nodes
+// don't create runtime.Session instances (they're stateless), so the
+// existing session.started pathway sees nothing for graph-based tasks.
+type GraphNodeStartedMsg struct {
+	SessionID string // synthesized as "graph:<TaskID>:<Node>"
+	Node      string // e.g. "investigate", "plan"
+	JobID     string
+	TaskID    string
+}
+
+// GraphNodeDoneMsg is sent when a rhizome graph node finishes executing.
+// Status comes from TaskState.Status — "tests_passed", "review_approved",
+// "review_rejected", or empty for nodes that don't set one.
+type GraphNodeDoneMsg struct {
+	SessionID string
+	Node      string
+	JobID     string
+	TaskID    string
+	Status    string
+}
+
 // TeamsReloadedMsg is sent by the hot-reload watcher when the teams directory changes.
 type TeamsReloadedMsg struct {
 	Teams []service.TeamView

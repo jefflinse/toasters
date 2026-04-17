@@ -1,6 +1,8 @@
 package graphexec
 
 import (
+	"context"
+
 	"github.com/jefflinse/rhizome"
 	"github.com/jefflinse/toasters/internal/prompt"
 	"github.com/jefflinse/toasters/internal/provider"
@@ -91,8 +93,9 @@ func SingleWorkerGraph(cfg TemplateConfig, systemPrompt, initialMessage string) 
 	if err := g.AddEdge(rhizome.Start, "work"); err != nil {
 		return nil, err
 	}
-
-	// work -> End is implicit (no outgoing edge = End).
+	if err := g.AddEdge("work", rhizome.End); err != nil {
+		return nil, err
+	}
 
 	return g.Compile()
 }
@@ -140,22 +143,22 @@ func BugFixGraph(cfg TemplateConfig) (*rhizome.CompiledGraph[*TaskState], error)
 	}
 
 	// Conditional: test -> review (if passed) or -> implement (if failed).
-	if err := g.AddConditionalEdge("test", func(s *TaskState) string {
+	if err := g.AddConditionalEdge("test", func(_ context.Context, s *TaskState) (string, error) {
 		if s.Status == "tests_passed" {
-			return "review"
+			return "review", nil
 		}
-		return "implement" // tests failed — retry implementation
-	}); err != nil {
+		return "implement", nil // tests failed — retry implementation
+	}, "review", "implement"); err != nil {
 		return nil, err
 	}
 
 	// Conditional: review -> End (if approved) or -> implement (if rejected).
-	if err := g.AddConditionalEdge("review", func(s *TaskState) string {
+	if err := g.AddConditionalEdge("review", func(_ context.Context, s *TaskState) (string, error) {
 		if s.Status == "review_approved" {
-			return rhizome.End
+			return rhizome.End, nil
 		}
-		return "implement" // review rejected — revise
-	}); err != nil {
+		return "implement", nil // review rejected — revise
+	}, rhizome.End, "implement"); err != nil {
 		return nil, err
 	}
 
@@ -197,21 +200,21 @@ func NewFeatureGraph(cfg TemplateConfig) (*rhizome.CompiledGraph[*TaskState], er
 		return nil, err
 	}
 
-	if err := g.AddConditionalEdge("test", func(s *TaskState) string {
+	if err := g.AddConditionalEdge("test", func(_ context.Context, s *TaskState) (string, error) {
 		if s.Status == "tests_passed" {
-			return "review"
+			return "review", nil
 		}
-		return "implement"
-	}); err != nil {
+		return "implement", nil
+	}, "review", "implement"); err != nil {
 		return nil, err
 	}
 
-	if err := g.AddConditionalEdge("review", func(s *TaskState) string {
+	if err := g.AddConditionalEdge("review", func(_ context.Context, s *TaskState) (string, error) {
 		if s.Status == "review_approved" {
-			return rhizome.End
+			return rhizome.End, nil
 		}
-		return "implement"
-	}); err != nil {
+		return "implement", nil
+	}, rhizome.End, "implement"); err != nil {
 		return nil, err
 	}
 
@@ -244,12 +247,12 @@ func PrototypeGraph(cfg TemplateConfig) (*rhizome.CompiledGraph[*TaskState], err
 		return nil, err
 	}
 
-	if err := g.AddConditionalEdge("test", func(s *TaskState) string {
+	if err := g.AddConditionalEdge("test", func(_ context.Context, s *TaskState) (string, error) {
 		if s.Status == "tests_passed" {
-			return rhizome.End
+			return rhizome.End, nil
 		}
-		return "implement"
-	}); err != nil {
+		return "implement", nil
+	}, rhizome.End, "implement"); err != nil {
 		return nil, err
 	}
 

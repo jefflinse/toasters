@@ -171,6 +171,36 @@ func translateEvent(ev service.Event) tea.Msg {
 			Status:    p.Status,
 		}
 
+	case service.EventTypeGraphNodeStarted:
+		p, ok := ev.Payload.(service.GraphNodeStartedPayload)
+		if !ok {
+			return nil
+		}
+		return GraphNodeStartedMsg{
+			SessionID: "graph:" + p.TaskID + ":" + p.Node,
+			Node:      p.Node,
+			JobID:     p.JobID,
+			TaskID:    p.TaskID,
+		}
+
+	case service.EventTypeGraphNodeCompleted:
+		p, ok := ev.Payload.(service.GraphNodeCompletedPayload)
+		if !ok {
+			return nil
+		}
+		return GraphNodeDoneMsg{
+			SessionID: "graph:" + p.TaskID + ":" + p.Node,
+			Node:      p.Node,
+			JobID:     p.JobID,
+			TaskID:    p.TaskID,
+			Status:    p.Status,
+		}
+
+	case service.EventTypeGraphCompleted, service.EventTypeGraphFailed:
+		// Task-level graph events — the operator advances via task_completed
+		// / task_failed. Nothing extra for the TUI to do here.
+		return nil
+
 	case service.EventTypeDefinitionsReloaded:
 		return DefinitionsReloadedMsg{}
 

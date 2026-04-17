@@ -470,6 +470,31 @@ type wireConnectionLostPayload struct {
 
 type wireConnectionRestoredPayload struct{}
 
+type wireGraphNodeStartedPayload struct {
+	JobID  string `json:"job_id"`
+	TaskID string `json:"task_id"`
+	Node   string `json:"node"`
+}
+
+type wireGraphNodeCompletedPayload struct {
+	JobID  string `json:"job_id"`
+	TaskID string `json:"task_id"`
+	Node   string `json:"node"`
+	Status string `json:"status"`
+}
+
+type wireGraphCompletedPayload struct {
+	JobID   string `json:"job_id"`
+	TaskID  string `json:"task_id"`
+	Summary string `json:"summary"`
+}
+
+type wireGraphFailedPayload struct {
+	JobID  string `json:"job_id"`
+	TaskID string `json:"task_id"`
+	Error  string `json:"error"`
+}
+
 // ---------------------------------------------------------------------------
 // Wire → service converter functions
 // ---------------------------------------------------------------------------
@@ -1089,6 +1114,34 @@ func parseSSEPayload(eventType string, raw json.RawMessage) (any, error) {
 
 	case service.EventTypeConnectionRestored:
 		return service.ConnectionRestoredPayload{}, nil
+
+	case service.EventTypeGraphNodeStarted:
+		var w wireGraphNodeStartedPayload
+		if err := json.Unmarshal(raw, &w); err != nil {
+			return nil, fmt.Errorf("decoding graph.node_started payload: %w", err)
+		}
+		return service.GraphNodeStartedPayload{JobID: w.JobID, TaskID: w.TaskID, Node: w.Node}, nil
+
+	case service.EventTypeGraphNodeCompleted:
+		var w wireGraphNodeCompletedPayload
+		if err := json.Unmarshal(raw, &w); err != nil {
+			return nil, fmt.Errorf("decoding graph.node_completed payload: %w", err)
+		}
+		return service.GraphNodeCompletedPayload{JobID: w.JobID, TaskID: w.TaskID, Node: w.Node, Status: w.Status}, nil
+
+	case service.EventTypeGraphCompleted:
+		var w wireGraphCompletedPayload
+		if err := json.Unmarshal(raw, &w); err != nil {
+			return nil, fmt.Errorf("decoding graph.completed payload: %w", err)
+		}
+		return service.GraphCompletedPayload{JobID: w.JobID, TaskID: w.TaskID, Summary: w.Summary}, nil
+
+	case service.EventTypeGraphFailed:
+		var w wireGraphFailedPayload
+		if err := json.Unmarshal(raw, &w); err != nil {
+			return nil, fmt.Errorf("decoding graph.failed payload: %w", err)
+		}
+		return service.GraphFailedPayload{JobID: w.JobID, TaskID: w.TaskID, Error: w.Error}, nil
 
 	default:
 		// Unknown event type — forward-compatible, ignore payload.

@@ -184,9 +184,11 @@ func LLMNode(cfg NodeConfig) rhizome.NodeFunc[*TaskState] {
 			// Loop — send tool results back to LLM.
 		}
 
-		// Max turns exceeded — return partial state.
-		state.Err = fmt.Errorf("max turns (%d) exceeded", maxTurns)
-		return state, nil
+		// Max turns exceeded — hard stop. Returning nil would let the graph
+		// route to the next node with broken state (e.g. no decision tool
+		// was ever called), so fail the whole graph instead. The operator's
+		// task_failed handler will then consult the blocker-handler.
+		return state, fmt.Errorf("max turns (%d) exceeded", maxTurns)
 	}
 }
 

@@ -907,6 +907,31 @@ type wireConnectionLostPayload struct {
 
 type wireConnectionRestoredPayload struct{}
 
+type wireGraphNodeStartedPayload struct {
+	JobID  string `json:"job_id"`
+	TaskID string `json:"task_id"`
+	Node   string `json:"node"`
+}
+
+type wireGraphNodeCompletedPayload struct {
+	JobID  string `json:"job_id"`
+	TaskID string `json:"task_id"`
+	Node   string `json:"node"`
+	Status string `json:"status"`
+}
+
+type wireGraphCompletedPayload struct {
+	JobID   string `json:"job_id"`
+	TaskID  string `json:"task_id"`
+	Summary string `json:"summary"`
+}
+
+type wireGraphFailedPayload struct {
+	JobID  string `json:"job_id"`
+	TaskID string `json:"task_id"`
+	Error  string `json:"error"`
+}
+
 // eventPayloadToWire converts a service event payload to its wire representation.
 func eventPayloadToWire(ev service.Event) any {
 	switch p := ev.Payload.(type) {
@@ -997,6 +1022,14 @@ func eventPayloadToWire(ev service.Event) any {
 		return wireConnectionLostPayload{Error: p.Error}
 	case service.ConnectionRestoredPayload:
 		return wireConnectionRestoredPayload{}
+	case service.GraphNodeStartedPayload:
+		return wireGraphNodeStartedPayload{JobID: p.JobID, TaskID: p.TaskID, Node: p.Node}
+	case service.GraphNodeCompletedPayload:
+		return wireGraphNodeCompletedPayload{JobID: p.JobID, TaskID: p.TaskID, Node: p.Node, Status: p.Status}
+	case service.GraphCompletedPayload:
+		return wireGraphCompletedPayload{JobID: p.JobID, TaskID: p.TaskID, Summary: p.Summary}
+	case service.GraphFailedPayload:
+		return wireGraphFailedPayload{JobID: p.JobID, TaskID: p.TaskID, Error: p.Error}
 	default:
 		return ev.Payload
 	}

@@ -178,7 +178,9 @@ func TestLLMNode_ToolCallThenCompletion(t *testing.T) {
 }
 
 func TestLLMNode_MaxTurnsExceeded(t *testing.T) {
-	// Provider always returns a tool call — never completes.
+	// Provider always returns a tool call — never completes. Exceeding
+	// max turns is now a hard error: the node fails the graph rather than
+	// letting it advance with broken state.
 	prov := &mockProvider{
 		responses: [][]provider.StreamEvent{
 			toolCallResponse("call-1", "read_file", `{}`),
@@ -199,18 +201,12 @@ func TestLLMNode_MaxTurnsExceeded(t *testing.T) {
 
 	state := NewTaskState("job-1", "task-1", "/workspace", "mock", "test-model")
 
-	result, err := node(context.Background(), state)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	_, err := node(context.Background(), state)
+	if err == nil {
+		t.Fatal("expected error on max turns exceeded")
 	}
-
-	// Node should set state.Err rather than returning an error.
-	if result.Err == nil {
-		t.Fatal("expected state.Err to be set on max turns")
-	}
-
-	if got := result.Err.Error(); got != "max turns (3) exceeded" {
-		t.Errorf("state.Err = %q, want %q", got, "max turns (3) exceeded")
+	if got := err.Error(); got != "max turns (3) exceeded" {
+		t.Errorf("error = %q, want %q", got, "max turns (3) exceeded")
 	}
 }
 
@@ -730,6 +726,14 @@ func (m *mockEventSink) BroadcastGraphFailed(jobID, taskID, errMsg string) {
 	m.events = append(m.events, fmt.Sprintf("graph_failed:%s", errMsg))
 }
 
+func (m *mockEventSink) BroadcastTaskCompleted(jobID, taskID, teamID, summary string, hasNextTask bool) {
+	m.events = append(m.events, fmt.Sprintf("task_completed:%s:%v", teamID, hasNextTask))
+}
+
+func (m *mockEventSink) BroadcastTaskFailed(jobID, taskID, teamID, errMsg string) {
+	m.events = append(m.events, fmt.Sprintf("task_failed:%s:%s", teamID, errMsg))
+}
+
 func TestEventMiddleware(t *testing.T) {
 	sink := &mockEventSink{}
 	mw := EventMiddleware(sink)
@@ -806,7 +810,7 @@ func TestExecutor_Execute(t *testing.T) {
 
 	state := NewTaskState("job-1", "task-1", "/workspace", "mock", "test-model")
 
-	err = executor.Execute(context.Background(), graph, state)
+	err = executor.Execute(context.Background(), graph, state, "test-team")
 	if err != nil {
 		t.Fatalf("Execute error: %v", err)
 	}

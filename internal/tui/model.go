@@ -1252,6 +1252,34 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// operator's event channel. The TUI is a viewer, not a router.
 		return m, tea.Batch(cmds...)
 
+	case GraphNodeStartedMsg:
+		// Render graph nodes as pseudo-workers so users can watch each phase
+		// (investigate → plan → implement → test → review) light up in the
+		// Workers panel. Graph nodes are stateless transformers, not
+		// runtime.Sessions, but the panel's rendering is agnostic to that.
+		m.runtimeSessions[msg.SessionID] = &runtimeSlot{
+			sessionID: msg.SessionID,
+			agentName: "graph:" + msg.Node,
+			jobID:     msg.JobID,
+			taskID:    msg.TaskID,
+			status:    "active",
+			startTime: time.Now(),
+		}
+		return m, nil
+
+	case GraphNodeDoneMsg:
+		slot, ok := m.runtimeSessions[msg.SessionID]
+		if !ok {
+			return m, nil
+		}
+		// Graph nodes don't have a multi-valued status like sessions do;
+		// mark them completed unconditionally. The node's semantic status
+		// (tests_passed / review_rejected / …) lives on TaskState.Status
+		// and drives the router, not the panel icon.
+		slot.status = "completed"
+		slot.endTime = time.Now()
+		return m, nil
+
 	case tea.MouseClickMsg:
 		// Click-to-focus: route clicks to the appropriate panel.
 		// Don't steal clicks when any overlay is active.

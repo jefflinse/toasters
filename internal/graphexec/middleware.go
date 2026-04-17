@@ -13,11 +13,18 @@ import (
 // EventSink receives graph execution events. This interface is satisfied by
 // *service.LocalService — defining it here keeps the dependency direction
 // one-way (service imports graphexec, not the reverse).
+//
+// BroadcastTaskCompleted / BroadcastTaskFailed are the operator-advance
+// signals: they must propagate into the operator's event loop so it picks
+// up the next ready task (the team-lead path relies on the equivalent
+// EventTaskCompleted / EventTaskFailed events emitted by team_tools).
 type EventSink interface {
 	BroadcastGraphNodeStarted(jobID, taskID, node string)
 	BroadcastGraphNodeCompleted(jobID, taskID, node, status string)
 	BroadcastGraphCompleted(jobID, taskID, summary string)
 	BroadcastGraphFailed(jobID, taskID, errMsg string)
+	BroadcastTaskCompleted(jobID, taskID, teamID, summary string, hasNextTask bool)
+	BroadcastTaskFailed(jobID, taskID, teamID, errMsg string)
 }
 
 // EventMiddleware emits graph node lifecycle events to the service event
@@ -113,12 +120,7 @@ func progressMessage(node string, state *TaskState, err error) string {
 		return fmt.Sprintf("Node %q failed: %s", node, err.Error())
 	}
 	if state.FinalText != "" {
-		// Truncate to a reasonable summary length.
-		text := state.FinalText
-		if len(text) > 500 {
-			text = text[:500] + "..."
-		}
-		return fmt.Sprintf("Node %q completed: %s", node, text)
+		return fmt.Sprintf("Node %q completed: %s", node, truncateSummary(state.FinalText))
 	}
 	return fmt.Sprintf("Node %q completed", node)
 }

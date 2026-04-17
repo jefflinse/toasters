@@ -3,6 +3,33 @@
 // the long-lived session model with bounded, stateless LLM transformers.
 package graphexec
 
+// JobType selects which graph template ExecuteTask will run for a job.
+// The zero value (JobTypeUnset) routes to BugFixGraph — the full
+// investigate → plan → implement → test → review cycle — so untyped jobs
+// still exercise the rhizome pipeline end-to-end.
+type JobType string
+
+const (
+	// JobTypeUnset is the zero value; maps to BugFixGraph as the default.
+	JobTypeUnset JobType = ""
+
+	// JobTypeBugFix runs the full investigate → plan → implement → test →
+	// review cycle with review-rejection retry (capped at 3 iterations).
+	JobTypeBugFix JobType = "bug_fix"
+
+	// JobTypeNewFeature skips investigation (task description is assumed
+	// self-sufficient for planning) but otherwise mirrors BugFix.
+	JobTypeNewFeature JobType = "new_feature"
+
+	// JobTypePrototype runs implement → test with retry cycles and no
+	// investigation/planning/review. For quick iterations.
+	JobTypePrototype JobType = "prototype"
+
+	// JobTypeSingleWorker is the escape hatch: one bounded LLM node with
+	// the full tool set. Skips the multi-phase cycle entirely.
+	JobTypeSingleWorker JobType = "single_worker"
+)
+
 // TaskState is the state type for rhizome graphs (the S in Graph[S]).
 // It flows through nodes, accumulating structured artifacts at each step.
 // Each node receives the full state but builds a fresh LLM prompt from
@@ -75,4 +102,19 @@ func (s *TaskState) GetArtifact(key string) any {
 func (s *TaskState) GetArtifactString(key string) string {
 	v, _ := s.GetArtifact(key).(string)
 	return v
+}
+
+// maxSummaryLen caps the length of task/node summary strings stored in
+// progress reports and broadcast events. Keeps DB rows and SSE payloads
+// bounded when a node's final text is unexpectedly verbose.
+const maxSummaryLen = 500
+
+// truncateSummary caps s at maxSummaryLen, appending an ellipsis when
+// truncated. Single source of truth so DB rows, broadcast payloads, and
+// middleware progress messages agree on the cutoff.
+func truncateSummary(s string) string {
+	if len(s) <= maxSummaryLen {
+		return s
+	}
+	return s[:maxSummaryLen] + "..."
 }

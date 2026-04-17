@@ -204,7 +204,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 	// Initialize the models.dev catalog client for the provider/model browser.
 	catalog := modelsdev.NewCatalogSource(modelsdev.NewClient())
 
-	// Create the LocalService.
+	// Create the LocalService first (without graphExec — it needs svc as EventSink).
 	svc := service.NewLocal(service.LocalConfig{
 		Store:            store,
 		Runtime:          rt,
@@ -242,6 +242,14 @@ func runServe(cmd *cobra.Command, args []string) error {
 		EventSink:    svc,
 		DefaultModel: defaultModel,
 	})
+
+	// Share the graph executor with the service. Both the startup-time
+	// operator (created just below) and any live-activated operator
+	// (LocalService.startOperator, invoked when the user sets a provider
+	// through the TUI) read this to wire rhizome dispatch. Without it, the
+	// env-var gate in system_tools.assignTask finds graphExecutor nil and
+	// silently falls back to team-lead.
+	svc.SetGraphExecutor(graphExec)
 
 	// Create and start the operator event loop.
 	// Both a store and a provider are required — if the provider couldn't be
