@@ -231,24 +231,25 @@ func runServe(cmd *cobra.Command, args []string) error {
 	rt.OnSessionStarted = svc.BroadcastSessionStarted
 
 	// Create the graph executor for rhizome-based task execution.
-	// Active when TOASTERS_USE_RHIZOME=1 is set. Per-task tool executors are
-	// constructed inside ExecuteTask scoped to each task's workspace directory
-	// (mirroring runtime.SpawnWorker) — the MCP manager is long-lived and shared.
+	// Per-task tool executors are constructed inside ExecuteTask scoped to
+	// each task's workspace directory (mirroring runtime.SpawnWorker) — the
+	// MCP manager is long-lived and shared. The broker is shared with the
+	// operator so ask_user from either path lands in the same TUI modal.
 	graphExec := graphexec.NewExecutor(graphexec.ExecutorConfig{
 		Registry:     registry,
 		MCPManager:   mcpManager,
 		PromptEngine: promptEngine,
 		Store:        store,
 		EventSink:    svc,
+		Broker:       svc.Broker(),
 		DefaultModel: defaultModel,
 	})
 
-	// Share the graph executor with the service. Both the startup-time
+	// Share the graph executor with the service so both the startup-time
 	// operator (created just below) and any live-activated operator
 	// (LocalService.startOperator, invoked when the user sets a provider
-	// through the TUI) read this to wire rhizome dispatch. Without it, the
-	// env-var gate in system_tools.assignTask finds graphExecutor nil and
-	// silently falls back to team-lead.
+	// through the TUI) pick it up. Without this, live activation would
+	// leave assignTask with no executor and tasks would error at dispatch.
 	svc.SetGraphExecutor(graphExec)
 
 	// Create and start the operator event loop.
@@ -272,6 +273,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 			SystemPrompt:           operatorPrompt,
 			SystemEventBroadcaster: svc,
 			GraphExecutor:          graphExec,
+			Broker:                 svc.Broker(),
 			PromptEngine:           promptEngine,
 			DefaultProvider:        defaultProvider,
 			DefaultModel:           defaultModel,

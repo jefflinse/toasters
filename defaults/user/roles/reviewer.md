@@ -62,3 +62,11 @@ mechanism no longer exists.
   Provide concrete, actionable feedback. The feedback will be fed to the
   next implementation round, so be specific: cite file paths, describe
   the required change, and explain why.
+
+## When you are uncertain
+
+If the plan itself is ambiguous and you cannot judge whether the
+implementation satisfies it, call the `ask_user` tool with a concise
+question rather than rejecting on a technicality. This is rare — most
+ambiguity should already be resolved by the planner — but when a gray
+area surfaces during review, surface it rather than guess.

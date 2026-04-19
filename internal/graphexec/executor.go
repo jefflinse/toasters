@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/gofrs/uuid/v5"
 	"github.com/jefflinse/rhizome"
 	"github.com/jefflinse/toasters/internal/db"
+	"github.com/jefflinse/toasters/internal/hitl"
 	"github.com/jefflinse/toasters/internal/mcp"
 	"github.com/jefflinse/toasters/internal/prompt"
 	"github.com/jefflinse/toasters/internal/provider"
@@ -22,6 +24,7 @@ type Executor struct {
 	promptEngine *prompt.Engine
 	store        db.Store
 	eventSink    EventSink
+	broker       *hitl.Broker
 	defaultModel string
 }
 
@@ -47,6 +50,12 @@ type ExecutorConfig struct {
 	// EventSink receives graph execution events (typically *service.LocalService).
 	EventSink EventSink
 
+	// Broker handles HITL prompts from nodes (via rhizome.Interrupt). When
+	// nil, nodes that call Interrupt receive an error — fine in tests, but
+	// production must supply one so investigator/reviewer/planner roles can
+	// ask clarifying questions.
+	Broker *hitl.Broker
+
 	// DefaultModel is used when the task state doesn't specify a model.
 	DefaultModel string
 }
@@ -59,7 +68,40 @@ func NewExecutor(cfg ExecutorConfig) *Executor {
 		promptEngine: cfg.PromptEngine,
 		store:        cfg.Store,
 		eventSink:    cfg.EventSink,
+		broker:       cfg.Broker,
 		defaultModel: cfg.DefaultModel,
+	}
+}
+
+// interruptHandler is registered on every graph Run via
+// rhizome.WithInterruptHandler. Nodes pause by calling rhizome.Interrupt;
+// this handler translates the request into a HITL broker Ask so the TUI
+// (or any other subscriber) receives the question and the node resumes
+// with the user's response. For v1, only "ask_user" kind is supported.
+func (e *Executor) interruptHandler(ctx context.Context, req rhizome.InterruptRequest) (rhizome.InterruptResponse, error) {
+	switch req.Kind {
+	case InterruptKindAskUser:
+		if e.broker == nil {
+			return rhizome.InterruptResponse{}, fmt.Errorf("ask_user unavailable: no HITL broker configured")
+		}
+		payload, ok := req.Payload.(AskUserPayload)
+		if !ok {
+			return rhizome.InterruptResponse{}, fmt.Errorf("ask_user: expected AskUserPayload, got %T", req.Payload)
+		}
+		requestID := "graph-ask-" + uuid.Must(uuid.NewV4()).String()
+		source := "graph:" + req.Node
+		broadcast := func() {
+			if e.eventSink != nil {
+				e.eventSink.BroadcastPrompt(requestID, payload.Question, payload.Options, source)
+			}
+		}
+		text, err := e.broker.Ask(ctx, requestID, broadcast)
+		if err != nil {
+			return rhizome.InterruptResponse{}, err
+		}
+		return rhizome.InterruptResponse{Value: text}, nil
+	default:
+		return rhizome.InterruptResponse{}, fmt.Errorf("unknown interrupt kind %q", req.Kind)
 	}
 }
 
@@ -84,13 +126,17 @@ func (e *Executor) buildToolExecutor(workspaceDir string) runtime.ToolExecutor {
 // task_completed / task_failed events so the operator's event loop can
 // advance to the next ready task.
 func (e *Executor) Execute(ctx context.Context, graph *rhizome.CompiledGraph[*TaskState], state *TaskState, teamID string) error {
-	// Run the graph with middleware.
+	// Run the graph with middleware + interrupt handler. The interrupt
+	// handler translates rhizome.Interrupt calls from nodes into HITL
+	// broker Asks, so ask_user on a graph node and ask_user on the
+	// operator both end up in the same TUI prompt modal.
 	result, err := graph.Run(ctx, state,
 		rhizome.WithMiddleware[*TaskState](
 			LoggingMiddleware(),
 			EventMiddleware(e.eventSink),
 			PersistenceMiddleware(e.store),
 		),
+		rhizome.WithInterruptHandler[*TaskState](e.interruptHandler),
 	)
 
 	// Update task status based on outcome.

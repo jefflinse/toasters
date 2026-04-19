@@ -205,17 +205,23 @@ type OperatorDonePayload struct {
 }
 
 // OperatorPromptPayload is the payload for EventTypeOperatorPrompt events.
-// The operator has called ask_user and is waiting for a human response.
+// Something on the server has called ask_user (the operator directly, or a
+// graph node via rhizome.Interrupt) and is waiting for a human response.
 // The TUI should enter prompt mode and call Operator().RespondToPrompt() with
-// the user's answer.
+// the user's answer — both paths funnel through the same broker.
 type OperatorPromptPayload struct {
 	// RequestID uniquely identifies this prompt request. Must be passed back
 	// to Operator().RespondToPrompt() to correlate the response.
 	RequestID string
-	// Question is the question the operator is asking the user.
+	// Question is the question being asked.
 	Question string
 	// Options is an optional list of suggested answers. Empty means free-form.
 	Options []string
+	// Source identifies who is asking. Empty (the default) means the operator;
+	// "graph:<node>" (e.g. "graph:investigate") means a graph node via
+	// rhizome.Interrupt. Lets the TUI render a hint about the asker without
+	// forking the event type.
+	Source string
 	// ConfirmDispatch is true when the prompt is a tool-dispatch confirmation
 	// (the "assign_team" confirm flow). The TUI should show the dispatch UI.
 	ConfirmDispatch bool

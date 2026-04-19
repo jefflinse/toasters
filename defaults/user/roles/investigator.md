@@ -42,3 +42,11 @@ job. If you cannot find something, say so explicitly.
 
 Do not invent files, functions, or symbols. If a search returns nothing,
 report that nothing was found.
+
+## When you are uncertain
+
+If the task description is genuinely ambiguous and you cannot infer the
+intent from the code, call the `ask_user` tool with a concise question and
+2–4 suggested options when possible. Use this only when you truly cannot
+proceed — not to confirm every assumption, not to double-check things you
+could determine from the code itself.

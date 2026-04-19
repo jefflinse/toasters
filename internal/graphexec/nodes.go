@@ -101,7 +101,8 @@ func composePrompt(cfg TemplateConfig, roleName string, state *TaskState) (strin
 }
 
 // InvestigateNodeDynamic explores the codebase with read-only tools and
-// writes findings to "investigate.findings".
+// writes findings to "investigate.findings". Has ask_user available for
+// genuinely ambiguous task descriptions.
 func InvestigateNodeDynamic(cfg TemplateConfig) rhizome.NodeFunc[*TaskState] {
 	roles := cfg.Roles.resolve()
 	return func(ctx context.Context, state *TaskState) (*TaskState, error) {
@@ -109,9 +110,10 @@ func InvestigateNodeDynamic(cfg TemplateConfig) rhizome.NodeFunc[*TaskState] {
 		if err != nil {
 			return state, fmt.Errorf("composing investigator prompt: %w", err)
 		}
+		tools := mergeTools(askUserTool(), FilterTools(cfg.ToolExecutor, ReadOnlyTools))
 		node := LLMNode(NodeConfig{
 			Provider:     cfg.Provider,
-			ToolExecutor: FilterTools(cfg.ToolExecutor, ReadOnlyTools),
+			ToolExecutor: tools,
 			Model:        cfg.Model,
 			ArtifactKey:  "investigate.findings",
 			MaxTurns:     DefaultMaxTurns,
@@ -122,7 +124,8 @@ func InvestigateNodeDynamic(cfg TemplateConfig) rhizome.NodeFunc[*TaskState] {
 }
 
 // PlanNodeDynamic reads investigation findings and writes an implementation
-// plan to "plan.steps".
+// plan to "plan.steps". Has ask_user available for clarifying scope before
+// locking down steps.
 func PlanNodeDynamic(cfg TemplateConfig) rhizome.NodeFunc[*TaskState] {
 	roles := cfg.Roles.resolve()
 	return func(ctx context.Context, state *TaskState) (*TaskState, error) {
@@ -130,9 +133,10 @@ func PlanNodeDynamic(cfg TemplateConfig) rhizome.NodeFunc[*TaskState] {
 		if err != nil {
 			return state, fmt.Errorf("composing planner prompt: %w", err)
 		}
+		tools := mergeTools(askUserTool(), FilterTools(cfg.ToolExecutor, ReadOnlyTools))
 		node := LLMNode(NodeConfig{
 			Provider:     cfg.Provider,
-			ToolExecutor: FilterTools(cfg.ToolExecutor, ReadOnlyTools),
+			ToolExecutor: tools,
 			Model:        cfg.Model,
 			ArtifactKey:  "plan.steps",
 			MaxTurns:     DefaultMaxTurns,
@@ -238,7 +242,9 @@ func ReviewNodeDynamic(cfg TemplateConfig) rhizome.NodeFunc[*TaskState] {
 				ArgField:    "feedback",
 			},
 		)
-		tools := mergeTools(decision, FilterTools(cfg.ToolExecutor, ReadOnlyTools))
+		// Review gets both decision tools (terminal) and ask_user (if the
+		// reviewer hits a scope ambiguity while evaluating the work).
+		tools := mergeTools(decision, mergeTools(askUserTool(), FilterTools(cfg.ToolExecutor, ReadOnlyTools)))
 
 		node := LLMNode(NodeConfig{
 			Provider:      cfg.Provider,

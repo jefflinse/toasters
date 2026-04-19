@@ -21,6 +21,7 @@ import (
 
 	"github.com/jefflinse/toasters/internal/config"
 	"github.com/jefflinse/toasters/internal/db"
+	"github.com/jefflinse/toasters/internal/hitl"
 	"github.com/jefflinse/toasters/internal/loader"
 	"github.com/jefflinse/toasters/internal/mcp"
 	"github.com/jefflinse/toasters/internal/mdfmt"
@@ -132,6 +133,10 @@ type LocalService struct {
 	// Operator lifecycle — for live activation.
 	opMu     sync.Mutex
 	opCancel context.CancelFunc // cancels the running operator; nil if no operator
+
+	// broker coordinates HITL prompt/response for both the operator's
+	// ask_user tool and any graph node that calls rhizome.Interrupt.
+	broker *hitl.Broker
 }
 
 // localJobService wraps LocalService to implement JobService without conflicting
@@ -178,8 +183,13 @@ func NewLocal(cfg LocalConfig) *LocalService {
 		cancel:      cancel,
 		subscribers: make(map[uint64]chan Event),
 		asyncSem:    make(chan struct{}, maxConcurrentOps),
+		broker:      hitl.New(),
 	}
 }
+
+// Broker exposes the HITL broker so the operator and graph executor can
+// register pending prompts with a single shared coordinator.
+func (s *LocalService) Broker() *hitl.Broker { return s.broker }
 
 // Shutdown cancels the service lifetime context, stopping background goroutines.
 func (s *LocalService) Shutdown() { s.cancel() }
@@ -675,6 +685,23 @@ func (s *LocalService) BroadcastGraphFailed(jobID, taskID, errMsg string) {
 	})
 }
 
+// BroadcastPrompt emits an OperatorPromptPayload with Source populated so the
+// TUI can surface a HITL question that originated from a graph node (via
+// rhizome.Interrupt). The operator's own ask_user path emits the same event
+// with an empty Source; both travel through the existing OperatorPrompt
+// pipeline without forking the event type.
+func (s *LocalService) BroadcastPrompt(requestID, question string, options []string, source string) {
+	s.broadcast(Event{
+		Type: EventTypeOperatorPrompt,
+		Payload: OperatorPromptPayload{
+			RequestID: requestID,
+			Question:  question,
+			Options:   options,
+			Source:    source,
+		},
+	})
+}
+
 // BroadcastTaskCompleted signals task completion to the operator's event loop
 // so it can advance to the next ready task. Called by graphexec.Executor
 // after a graph finishes successfully — mirrors what team_tools.completeTask
@@ -932,18 +959,14 @@ func (s *LocalService) SendMessage(ctx context.Context, message string) (string,
 }
 
 // RespondToPrompt sends the user's answer to an active ask_user prompt.
+// Routed through the shared HITL broker, so it works for both operator
+// prompts and graph-node interrupts without the service needing to know
+// which path is waiting.
 func (s *LocalService) RespondToPrompt(_ context.Context, requestID string, response string) error {
-	// Validate size before checking operator configuration.
 	if len(response) > maxResponseLen {
 		return fmt.Errorf("response too large: %d bytes exceeds maximum %d", len(response), maxResponseLen)
 	}
-	if s.cfg.Operator == nil {
-		return fmt.Errorf("operator not configured")
-	}
-	// Call RespondToPrompt directly (not via event channel) because ask_user
-	// blocks the event loop goroutine waiting for the response. Routing through
-	// the event channel would deadlock.
-	return s.cfg.Operator.RespondToPrompt(requestID, response)
+	return s.broker.Respond(requestID, response)
 }
 
 // Status returns the current state of the operator.
@@ -2341,6 +2364,7 @@ func (s *LocalService) startOperator(p provider.Provider, providerID, model stri
 		SessionFile:            filepath.Join(s.cfg.ConfigDir, "sessions", "operator.json"),
 		SystemEventBroadcaster: s,
 		GraphExecutor:          s.cfg.GraphExecutor,
+		Broker:                 s.broker,
 		PromptEngine:           s.cfg.PromptEngine,
 		DefaultProvider:        s.cfg.DefaultProvider,
 		DefaultModel:           s.cfg.DefaultModel,

@@ -25,6 +25,10 @@ type EventSink interface {
 	BroadcastGraphFailed(jobID, taskID, errMsg string)
 	BroadcastTaskCompleted(jobID, taskID, teamID, summary string, hasNextTask bool)
 	BroadcastTaskFailed(jobID, taskID, teamID, errMsg string)
+	// BroadcastPrompt surfaces a HITL question that originated inside a
+	// graph node (via rhizome.Interrupt). Source is typically
+	// "graph:<node>" so the TUI can render an attribution hint.
+	BroadcastPrompt(requestID, question string, options []string, source string)
 }
 
 // EventMiddleware emits graph node lifecycle events to the service event

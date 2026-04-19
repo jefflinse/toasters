@@ -8,9 +8,12 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/jefflinse/rhizome"
+	"github.com/jefflinse/toasters/internal/hitl"
 	"github.com/jefflinse/toasters/internal/prompt"
 	"github.com/jefflinse/toasters/internal/provider"
 	"github.com/jefflinse/toasters/internal/runtime"
@@ -734,6 +737,10 @@ func (m *mockEventSink) BroadcastTaskFailed(jobID, taskID, teamID, errMsg string
 	m.events = append(m.events, fmt.Sprintf("task_failed:%s:%s", teamID, errMsg))
 }
 
+func (m *mockEventSink) BroadcastPrompt(requestID, question string, options []string, source string) {
+	m.events = append(m.events, fmt.Sprintf("prompt:%s:%s", source, question))
+}
+
 func TestEventMiddleware(t *testing.T) {
 	sink := &mockEventSink{}
 	mw := EventMiddleware(sink)
@@ -1085,6 +1092,116 @@ func TestExecutor_BuildToolExecutor_ScopedPerTask(t *testing.T) {
 	}
 	if resultA == resultB {
 		t.Errorf("execA and execB returned identical content (%q) — tool executors are not scoped per-task", resultA)
+	}
+}
+
+// capturingSink records prompt request IDs so tests can respond to the
+// broker without needing to know the ID the handler generated. The
+// promptID field is protected by a mutex because the broadcast writer
+// and the test's polling reader run on different goroutines.
+type capturingSink struct {
+	mockEventSink
+	promptMu sync.Mutex
+	promptID string
+}
+
+func (c *capturingSink) BroadcastPrompt(requestID, question string, options []string, source string) {
+	c.mockEventSink.BroadcastPrompt(requestID, question, options, source)
+	c.promptMu.Lock()
+	c.promptID = requestID
+	c.promptMu.Unlock()
+}
+
+func (c *capturingSink) lastPromptID() string {
+	c.promptMu.Lock()
+	defer c.promptMu.Unlock()
+	return c.promptID
+}
+
+// TestInterruptHandler_AskUser_RoutesThroughBroker verifies the executor's
+// interrupt handler: when a node calls rhizome.Interrupt with kind
+// "ask_user", the handler emits the prompt via EventSink.BroadcastPrompt
+// and blocks on the HITL broker until Respond is called. The node resumes
+// with the user's answer as the tool result.
+func TestInterruptHandler_AskUser_RoutesThroughBroker(t *testing.T) {
+	broker := hitl.New()
+	sink := &capturingSink{}
+
+	executor := NewExecutor(ExecutorConfig{
+		EventSink: sink,
+		Broker:    broker,
+	})
+
+	// Respond to the broker on the request ID the sink captures.
+	go func() {
+		for i := 0; i < 100; i++ {
+			if id := sink.lastPromptID(); id != "" {
+				_ = broker.Respond(id, "42")
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	resp, err := executor.interruptHandler(ctx, rhizome.InterruptRequest{
+		Node:    "investigate",
+		Kind:    InterruptKindAskUser,
+		Payload: AskUserPayload{Question: "What is the answer?", Options: []string{"42", "other"}},
+	})
+	if err != nil {
+		t.Fatalf("handler error: %v", err)
+	}
+	if val, _ := resp.Value.(string); val != "42" {
+		t.Errorf("resp.Value = %q, want %q", val, "42")
+	}
+
+	sawPrompt := false
+	for _, ev := range sink.events {
+		if strings.HasPrefix(ev, "prompt:graph:investigate:") {
+			sawPrompt = true
+			break
+		}
+	}
+	if !sawPrompt {
+		t.Errorf("expected prompt:graph:investigate:... event in sink.events, got %v", sink.events)
+	}
+}
+
+// TestInterruptHandler_AskUser_NoBrokerReturnsError verifies the handler
+// errors cleanly when a node calls rhizome.Interrupt but no broker was
+// configured on the executor. The node (via the ask_user tool) will see
+// the error as a tool-call failure and adapt.
+func TestInterruptHandler_AskUser_NoBrokerReturnsError(t *testing.T) {
+	executor := NewExecutor(ExecutorConfig{}) // no Broker
+
+	_, err := executor.interruptHandler(context.Background(), rhizome.InterruptRequest{
+		Node:    "investigate",
+		Kind:    InterruptKindAskUser,
+		Payload: AskUserPayload{Question: "?"},
+	})
+	if err == nil {
+		t.Fatal("expected error when no broker configured")
+	}
+	if !strings.Contains(err.Error(), "no HITL broker") {
+		t.Errorf("err = %v, want message mentioning 'no HITL broker'", err)
+	}
+}
+
+// TestAskUserTool_Definitions verifies the ask_user tool exposes a single
+// tool with the expected name and required "question" parameter.
+func TestAskUserTool_Definitions(t *testing.T) {
+	defs := askUserTool().Definitions()
+	if len(defs) != 1 {
+		t.Fatalf("expected 1 tool definition, got %d", len(defs))
+	}
+	if defs[0].Name != InterruptKindAskUser {
+		t.Errorf("tool name = %q, want %q", defs[0].Name, InterruptKindAskUser)
+	}
+	if !strings.Contains(string(defs[0].Parameters), `"question"`) {
+		t.Errorf("parameters schema missing question field: %s", defs[0].Parameters)
 	}
 }
 

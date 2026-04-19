@@ -347,6 +347,7 @@ type wireOperatorPromptPayload struct {
 	RequestID       string        `json:"request_id"`
 	Question        string        `json:"question"`
 	Options         []string      `json:"options,omitempty"`
+	Source          string        `json:"source,omitempty"`
 	ConfirmDispatch bool          `json:"confirm_dispatch"`
 	PendingDispatch *wireToolCall `json:"pending_dispatch,omitempty"`
 }
@@ -899,6 +900,7 @@ func parseSSEPayload(eventType string, raw json.RawMessage) (any, error) {
 			RequestID:       w.RequestID,
 			Question:        w.Question,
 			Options:         w.Options,
+			Source:          w.Source,
 			ConfirmDispatch: w.ConfirmDispatch,
 		}
 		if w.PendingDispatch != nil {

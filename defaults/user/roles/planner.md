@@ -46,3 +46,11 @@ a step.
 Do not design for hypothetical future requirements. Do not add steps that
 introduce abstractions the task does not require. Three similar lines is
 better than a premature abstraction.
+
+## When you are uncertain
+
+If the findings leave a genuine scope question you cannot resolve (e.g.
+"should the fix preserve backward compatibility or is a breaking change
+acceptable?"), call the `ask_user` tool with a concise question and 2–4
+suggested options. Do not ask about implementation details you could
+decide yourself — save `ask_user` for scope and intent.

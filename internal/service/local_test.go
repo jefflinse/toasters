@@ -1936,17 +1936,21 @@ func TestRespondToBlocker_NilOperator(t *testing.T) {
 	}
 }
 
-func TestRespondToPrompt_NilOperator(t *testing.T) {
+func TestRespondToPrompt_NoPendingRequest(t *testing.T) {
 	t.Parallel()
 
+	// RespondToPrompt now goes through the shared HITL broker, so a
+	// request ID that was never registered produces a broker error
+	// rather than "operator not configured". The operator being nil
+	// is no longer the check — a dangling response is.
 	svc := newTestService(t)
 
 	err := svc.RespondToPrompt(context.Background(), "request-1", "response")
 	if err == nil {
-		t.Fatal("expected error for nil operator")
+		t.Fatal("expected error for unknown request ID")
 	}
-	if !strings.Contains(err.Error(), "operator not configured") {
-		t.Errorf("error = %q, want 'operator not configured'", err.Error())
+	if !strings.Contains(err.Error(), "no pending request") {
+		t.Errorf("error = %q, want broker 'no pending request' message", err.Error())
 	}
 }
 

@@ -777,6 +777,7 @@ type wireOperatorPromptPayload struct {
 	RequestID       string        `json:"request_id"`
 	Question        string        `json:"question"`
 	Options         []string      `json:"options,omitempty"`
+	Source          string        `json:"source,omitempty"`
 	ConfirmDispatch bool          `json:"confirm_dispatch"`
 	PendingDispatch *wireToolCall `json:"pending_dispatch,omitempty"`
 }
@@ -947,6 +948,7 @@ func eventPayloadToWire(ev service.Event) any {
 			RequestID:       p.RequestID,
 			Question:        p.Question,
 			Options:         p.Options,
+			Source:          p.Source,
 			ConfirmDispatch: p.ConfirmDispatch,
 		}
 		if p.PendingDispatch != nil {

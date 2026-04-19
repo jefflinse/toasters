@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/jefflinse/toasters/internal/db"
+	"github.com/jefflinse/toasters/internal/hitl"
 	"github.com/jefflinse/toasters/internal/prompt"
 	"github.com/jefflinse/toasters/internal/provider"
 	"github.com/jefflinse/toasters/internal/runtime"
@@ -45,10 +46,10 @@ type Operator struct {
 	messages     []provider.Message
 	provTools    []provider.Tool
 
-	// Pending ask_user prompts. Protected by promptMu.
-	// Key = requestID, value = channel that receives the user's response.
-	promptMu       sync.Mutex
-	pendingPrompts map[string]chan string
+	// broker coordinates ask_user prompts. Shared with graph nodes —
+	// responses come back via service.LocalService.RespondToPrompt, which
+	// delegates to broker.Respond, routing to whichever path is waiting.
+	broker *hitl.Broker
 
 	// Callbacks — set at construction time via Config, immutable after New().
 	onText     func(text string)                                  // called with streamed text from the operator LLM
@@ -67,6 +68,7 @@ type Config struct {
 	Store                  db.Store
 	SystemEventBroadcaster SystemEventBroadcaster // optional; for broadcasting service events from system tools
 	GraphExecutor          GraphTaskExecutor      // required for task execution — tasks dispatch through the graph engine
+	Broker                 *hitl.Broker           // required for ask_user; shared with the graph executor so responses route to whichever path is waiting
 	PromptEngine           *prompt.Engine         // prompt engine for role-based prompt composition
 	DefaultProvider        string                 // default provider for system agents
 	DefaultModel           string                 // default model for system agents
@@ -101,21 +103,21 @@ func New(cfg Config) (*Operator, error) {
 	provTools := operatorToolsToProviderTools(tools.Definitions())
 
 	op := &Operator{
-		rt:             cfg.Runtime,
-		prov:           cfg.Provider,
-		model:          cfg.Model,
-		tools:          tools,
-		store:          cfg.Store,
-		eventCh:        eventCh,
-		workDir:        cfg.WorkDir,
-		sessionFile:    cfg.SessionFile,
-		systemPrompt:   cfg.SystemPrompt,
-		provTools:      provTools,
-		pendingPrompts: make(map[string]chan string),
-		onText:         cfg.OnText,
-		onEvent:        cfg.OnEvent,
-		onTurnDone:     cfg.OnTurnDone,
-		onPrompt:       cfg.OnPrompt,
+		rt:           cfg.Runtime,
+		prov:         cfg.Provider,
+		model:        cfg.Model,
+		tools:        tools,
+		store:        cfg.Store,
+		eventCh:      eventCh,
+		workDir:      cfg.WorkDir,
+		sessionFile:  cfg.SessionFile,
+		systemPrompt: cfg.SystemPrompt,
+		provTools:    provTools,
+		broker:       cfg.Broker,
+		onText:       cfg.OnText,
+		onEvent:      cfg.OnEvent,
+		onTurnDone:   cfg.OnTurnDone,
+		onPrompt:     cfg.OnPrompt,
 	}
 
 	// Wire the ask_user prompt function into the tool executor.
@@ -504,50 +506,22 @@ func (o *Operator) handleUserMessage(ctx context.Context, payload UserMessagePay
 	}
 }
 
-// promptUser implements the ask_user tool. It broadcasts a prompt event,
-// then blocks until the user responds via RespondToPrompt.
-// Called from the event loop goroutine — the response arrives on a separate
-// goroutine (HTTP handler), so there's no deadlock.
+// promptUser implements the ask_user tool. Delegates to the shared HITL
+// broker, emitting the operator-prompt event via the onPrompt callback so
+// the TUI still sees the prompt the same way it always did. Called from
+// the event loop goroutine — the response arrives on a separate goroutine
+// (HTTP handler → LocalService.RespondToPrompt → broker.Respond), so no
+// deadlock.
 func (o *Operator) promptUser(ctx context.Context, requestID, question string, options []string) (string, error) {
-	ch := make(chan string, 1)
-
-	o.promptMu.Lock()
-	o.pendingPrompts[requestID] = ch
-	o.promptMu.Unlock()
-
-	// Broadcast the prompt to TUI/SSE clients.
-	if o.onPrompt != nil {
-		o.onPrompt(requestID, question, options)
+	if o.broker == nil {
+		return "", fmt.Errorf("operator: no HITL broker configured")
 	}
-
-	// Block until the user responds or context is cancelled.
-	select {
-	case response := <-ch:
-		return response, nil
-	case <-ctx.Done():
-		o.promptMu.Lock()
-		delete(o.pendingPrompts, requestID)
-		o.promptMu.Unlock()
-		return "", ctx.Err()
+	broadcast := func() {
+		if o.onPrompt != nil {
+			o.onPrompt(requestID, question, options)
+		}
 	}
-}
-
-// RespondToPrompt delivers the user's answer to a pending ask_user prompt.
-// Called from the service layer (HTTP handler goroutine), not the event loop.
-func (o *Operator) RespondToPrompt(requestID, text string) error {
-	o.promptMu.Lock()
-	ch, ok := o.pendingPrompts[requestID]
-	if ok {
-		delete(o.pendingPrompts, requestID)
-	}
-	o.promptMu.Unlock()
-
-	if !ok {
-		return fmt.Errorf("no pending prompt with request ID %q", requestID)
-	}
-
-	ch <- text
-	return nil
+	return o.broker.Ask(ctx, requestID, broadcast)
 }
 
 // appendMessage adds a message to the conversation history under lock
