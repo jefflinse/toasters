@@ -16,16 +16,16 @@ import (
 
 	"github.com/jefflinse/toasters/defaults"
 	"github.com/jefflinse/toasters/internal/auth"
-	"github.com/jefflinse/toasters/internal/graphexec"
 	"github.com/jefflinse/toasters/internal/bootstrap"
 	"github.com/jefflinse/toasters/internal/config"
 	"github.com/jefflinse/toasters/internal/db"
+	"github.com/jefflinse/toasters/internal/graphexec"
 	"github.com/jefflinse/toasters/internal/loader"
 	"github.com/jefflinse/toasters/internal/mcp"
-	"github.com/jefflinse/toasters/internal/operator"
-	"github.com/jefflinse/toasters/internal/provider"
 	"github.com/jefflinse/toasters/internal/modelsdev"
+	"github.com/jefflinse/toasters/internal/operator"
 	"github.com/jefflinse/toasters/internal/prompt"
+	"github.com/jefflinse/toasters/internal/provider"
 	"github.com/jefflinse/toasters/internal/runtime"
 	"github.com/jefflinse/toasters/internal/server"
 	"github.com/jefflinse/toasters/internal/service"
@@ -269,7 +269,6 @@ func runServe(cmd *cobra.Command, args []string) error {
 			Model:                  cfg.Operator.Model,
 			WorkDir:                workspaceDir,
 			Store:                  store,
-			Spawner:                rt,
 			SystemPrompt:           operatorPrompt,
 			SystemEventBroadcaster: svc,
 			GraphExecutor:          graphExec,

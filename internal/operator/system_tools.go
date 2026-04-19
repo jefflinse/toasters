@@ -18,11 +18,6 @@ import (
 	"github.com/jefflinse/toasters/internal/runtime"
 )
 
-// TeamLeadSpawner is the interface for spawning team lead sessions.
-// This is an alias for runtime.TeamLeadSpawner, re-exported here for
-// convenience so callers don't need to import both packages.
-type TeamLeadSpawner = runtime.TeamLeadSpawner
-
 // SystemEventBroadcaster is the surface SystemTools uses to publish state
 // changes (job/task creation, task assignment) to the unified service event
 // stream so subscribers see real-time activity instead of waiting for the
@@ -56,27 +51,24 @@ type SystemTools struct {
 	defaultProvider string
 	defaultModel    string
 	eventCh         chan<- Event
-	spawner         TeamLeadSpawner
-	graphExecutor   GraphTaskExecutor      // optional; when set and TOASTERS_USE_RHIZOME=1, tasks dispatch here
+	graphExecutor   GraphTaskExecutor      // required for assign_task; tasks dispatch here
 	workDir         string                 // global workspace directory; per-job subdirs are created under this
 	broadcaster     SystemEventBroadcaster // optional; nil means no service event broadcast
 }
 
 // NewSystemTools creates a new SystemTools instance.
-func NewSystemTools(store db.Store, promptEngine *prompt.Engine, defaultProvider, defaultModel string, eventCh chan<- Event, spawner TeamLeadSpawner, workDir string, broadcaster SystemEventBroadcaster, graphExecutor GraphTaskExecutor) *SystemTools {
+func NewSystemTools(store db.Store, promptEngine *prompt.Engine, defaultProvider, defaultModel string, eventCh chan<- Event, workDir string, broadcaster SystemEventBroadcaster, graphExecutor GraphTaskExecutor) *SystemTools {
 	return &SystemTools{
 		store:           store,
 		promptEngine:    promptEngine,
 		defaultProvider: defaultProvider,
 		defaultModel:    defaultModel,
 		eventCh:         eventCh,
-		spawner:         spawner,
 		graphExecutor:   graphExecutor,
 		workDir:         workDir,
 		broadcaster:     broadcaster,
 	}
 }
-
 
 // Definitions returns the tool definitions available to system agents.
 func (st *SystemTools) Definitions() []runtime.ToolDef {
@@ -123,7 +115,7 @@ func (st *SystemTools) Definitions() []runtime.ToolDef {
 		},
 		{
 			Name:        "assign_task",
-			Description: "Assign a pending task to a team. This spawns the team lead and starts execution. The task must be in pending status.",
+			Description: "Assign a pending task to a team. This dispatches the task to the graph execution engine. The task must be in pending status.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
@@ -444,11 +436,6 @@ func (st *SystemTools) assignTask(ctx context.Context, args json.RawMessage) (st
 		return "", fmt.Errorf("cannot assign job tasks to system team %q; use a user or auto team", team.Name)
 	}
 
-	// 3b. Validate that the team has a lead worker before we modify the task.
-	if team.LeadWorker == "" {
-		return "", fmt.Errorf("team %q has no lead worker configured; cannot assign task", team.Name)
-	}
-
 	// 4. Enforce serial execution: if another task in this job is already in progress,
 	// pre-assign the team (so assignNextTask can pick it up later) but don't start it.
 	allTasks, err := st.store.ListTasksForJob(ctx, task.JobID)
@@ -474,110 +461,12 @@ func (st *SystemTools) assignTask(ctx context.Context, args json.RawMessage) (st
 		return "", fmt.Errorf("assigning task: %w", err)
 	}
 
-	// 5a. Rhizome graph execution path — when TOASTERS_USE_RHIZOME=1 is set
-	// and a graph executor is configured, dispatch via the graph engine instead
-	// of spawning a team lead. Both paths coexist during the transition.
-	if st.graphExecutor != nil && os.Getenv("TOASTERS_USE_RHIZOME") == "1" {
-		// Broadcast assignment event.
-		if st.broadcaster != nil {
-			st.broadcaster.BroadcastTaskAssigned(params.TaskID, task.JobID, params.TeamID, task.Title)
-		}
-
-		// Promote the job to active if still pending.
-		if job.Status == db.JobStatusPending {
-			if err := st.store.UpdateJobStatus(ctx, task.JobID, db.JobStatusActive); err != nil {
-				slog.Warn("failed to mark job active", "job_id", task.JobID, "error", err)
-			}
-		}
-
-		// Resolve provider/model: team → global default.
-		prov := team.Provider
-		if prov == "" {
-			prov = st.defaultProvider
-		}
-		mod := team.Model
-		if mod == "" {
-			mod = st.defaultModel
-		}
-
-		// Fire graph execution in a goroutine (non-blocking, like SpawnTeamLead).
-		req := graphexec.TaskRequest{
-			JobID:          task.JobID,
-			JobType:        graphexec.JobType(job.Type),
-			JobTitle:       job.Title,
-			JobDescription: job.Description,
-			TaskID:         params.TaskID,
-			TaskTitle:      task.Title,
-			TeamID:         params.TeamID,
-			WorkspaceDir:   job.WorkspaceDir,
-			ProviderName:   prov,
-			Model:          mod,
-		}
-		go func() {
-			if err := st.graphExecutor.ExecuteTask(
-				context.Background(), // detach from operator context
-				req,
-			); err != nil {
-				slog.Error("graph task execution failed",
-					"task_id", req.TaskID, "job_id", req.JobID, "error", err)
-			}
-		}()
-
-		slog.Info("task dispatched via rhizome graph",
-			"task_id", params.TaskID, "job_id", task.JobID, "team_id", params.TeamID)
-		return fmt.Sprintf("Task assigned to team %s (via rhizome graph)", team.Name), nil
+	// 6. Dispatch to the graph executor. The team-lead path was removed in
+	// the Phase 4 cleanup; every task runs through rhizome now.
+	if st.graphExecutor == nil {
+		return "", fmt.Errorf("cannot assign task: no graph executor configured")
 	}
 
-	// 6. Compose the team lead worker via the prompt engine.
-	// The engine stores roles by filename stem (e.g. "coordinator"), but
-	// team.LeadWorker is the qualified worker ID (e.g. "the-kitchen/coordinator"),
-	// so extract the role name.
-	roleName := team.LeadWorker
-	if idx := strings.LastIndex(roleName, "/"); idx >= 0 {
-		roleName = roleName[idx+1:]
-	}
-	if st.promptEngine == nil {
-		return "", fmt.Errorf("prompt engine not configured")
-	}
-	role := st.promptEngine.Role(roleName)
-	if role == nil {
-		return "", fmt.Errorf("no role %q found for team lead %q", roleName, team.LeadWorker)
-	}
-	// Build the dynamic worker list for the coordinator prompt.
-	var overrides map[string]string
-	members, membersErr := st.store.ListTeamWorkers(ctx, params.TeamID)
-	if membersErr != nil {
-		slog.Warn("failed to list team workers for prompt injection", "team_id", params.TeamID, "error", membersErr)
-	} else {
-		var workerLines []string
-		for _, tw := range members {
-			if tw.Role == "lead" {
-				continue
-			}
-			memberRole := tw.WorkerID
-			if idx := strings.LastIndex(memberRole, "/"); idx >= 0 {
-				memberRole = memberRole[idx+1:]
-			}
-			desc := ""
-			if r := st.promptEngine.Role(memberRole); r != nil {
-				desc = r.Description
-			}
-			if desc != "" {
-				workerLines = append(workerLines, fmt.Sprintf("- **%s**: %s", memberRole, desc))
-			} else {
-				workerLines = append(workerLines, fmt.Sprintf("- **%s**", memberRole))
-			}
-		}
-		if len(workerLines) > 0 {
-			overrides = map[string]string{
-				"team.workers": strings.Join(workerLines, "\n"),
-			}
-		}
-	}
-	leadPrompt, promptErr := st.promptEngine.Compose(roleName, overrides)
-	if promptErr != nil {
-		return "", fmt.Errorf("composing team lead %q: %w", team.LeadWorker, promptErr)
-	}
 	// Resolve provider/model: team → global default.
 	prov := team.Provider
 	if prov == "" {
@@ -587,48 +476,42 @@ func (st *SystemTools) assignTask(ctx context.Context, args json.RawMessage) (st
 	if mod == "" {
 		mod = st.defaultModel
 	}
-	composed := &runtime.ComposedWorker{
-		WorkerID:     team.LeadWorker,
-		Name:         role.Name,
-		SystemPrompt: leadPrompt,
-		Provider:     prov,
-		Model:        mod,
-		TeamID:       params.TeamID,
+
+	req := graphexec.TaskRequest{
+		JobID:          task.JobID,
+		JobType:        graphexec.JobType(job.Type),
+		JobTitle:       job.Title,
+		JobDescription: job.Description,
+		TaskID:         params.TaskID,
+		TaskTitle:      task.Title,
+		TeamID:         params.TeamID,
+		WorkspaceDir:   job.WorkspaceDir,
+		ProviderName:   prov,
+		Model:          mod,
 	}
-	slog.Info("composed team lead from prompt engine",
-		"role", team.LeadWorker, "team", params.TeamID, "prompt_len", len(leadPrompt))
+	go func() {
+		if err := st.graphExecutor.ExecuteTask(
+			context.Background(), // detach from operator context
+			req,
+		); err != nil {
+			slog.Error("graph task execution failed",
+				"task_id", req.TaskID, "job_id", req.JobID, "error", err)
+		}
+	}()
 
-	// 7. Spawn team lead goroutine (fire-and-forget) with the job's workspace dir.
-	if st.spawner == nil {
-		return "", fmt.Errorf("cannot assign task: no agent spawner configured")
-	}
-	// Build the initial message for the team lead from the task and job context.
-	initialMsg := fmt.Sprintf("Task: %s\n\nJob: %s\n%s", task.Title, job.Title, job.Description)
-
-	// Create team lead tools that send events through the operator's event channel.
-	teamLeadTools := NewTeamLeadTools(st.store, st.eventCh, params.TaskID, task.JobID, params.TeamID)
-
-	if err := st.spawner.SpawnTeamLead(ctx, composed, params.TaskID, task.JobID, job.WorkspaceDir, initialMsg, teamLeadTools); err != nil {
-		return "", fmt.Errorf("spawning team lead: %w", err)
-	}
-
-	// Broadcast task.assigned only AFTER the team_lead has successfully spawned.
-	// Otherwise the user sees "task assigned" in chat for an assignment that
-	// silently fell over at the compose or spawn step.
+	// Broadcast assignment event.
 	if st.broadcaster != nil {
 		st.broadcaster.BroadcastTaskAssigned(params.TaskID, task.JobID, params.TeamID, task.Title)
 	}
 
-	// After SpawnTeamLead succeeds, promote the job to active (only if still pending).
+	// Promote the job to active if still pending.
 	if job.Status == db.JobStatusPending {
 		if err := st.store.UpdateJobStatus(ctx, task.JobID, db.JobStatusActive); err != nil {
 			slog.Warn("failed to mark job active", "job_id", task.JobID, "error", err)
-			// non-fatal: the task is already assigned and the team lead is already spawned.
-			// The job will not appear in the TUI Jobs panel until the next status transition.
 		}
 	}
 
-	// 8. Handle task-started side effects inline. We do NOT send
+	// 7. Handle task-started side effects inline. We do NOT send
 	// EventTaskStarted through the event channel because assignTask may be
 	// called from the event loop goroutine (via assignNextTask or operator
 	// tool execution). Sending to eventCh from the sole reader would

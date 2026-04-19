@@ -51,10 +51,10 @@ type Operator struct {
 	pendingPrompts map[string]chan string
 
 	// Callbacks — set at construction time via Config, immutable after New().
-	onText     func(text string)                                              // called with streamed text from the operator LLM
-	onEvent    func(event Event)                                              // called when the event loop processes an event
-	onTurnDone func(tokensIn, tokensOut, reasoningTokens int)                 // called when the operator finishes processing a user message turn
-	onPrompt   func(requestID, question string, options []string)             // called when the operator calls ask_user
+	onText     func(text string)                                  // called with streamed text from the operator LLM
+	onEvent    func(event Event)                                  // called when the event loop processes an event
+	onTurnDone func(tokensIn, tokensOut, reasoningTokens int)     // called when the operator finishes processing a user message turn
+	onPrompt   func(requestID, question string, options []string) // called when the operator calls ask_user
 }
 
 // Config holds configuration for creating an Operator.
@@ -65,14 +65,13 @@ type Config struct {
 	WorkDir                string
 	SystemPrompt           string // required; system prompt for the operator LLM session
 	Store                  db.Store
-	Spawner                runtime.TeamLeadSpawner // spawns team lead sessions on task assignment; may be nil
-	SystemEventBroadcaster SystemEventBroadcaster  // optional; for broadcasting service events from system tools
-	GraphExecutor          GraphTaskExecutor       // optional; rhizome graph-based task execution
-	PromptEngine           *prompt.Engine          // prompt engine for role-based prompt composition
-	DefaultProvider        string                  // default provider for system agents and team leads
-	DefaultModel           string                  // default model for system agents and team leads
-	OnText                 func(text string)       // called with streamed text from the operator LLM
-	OnEvent                func(event Event)       // called when the event loop processes an event
+	SystemEventBroadcaster SystemEventBroadcaster // optional; for broadcasting service events from system tools
+	GraphExecutor          GraphTaskExecutor      // required for task execution — tasks dispatch through the graph engine
+	PromptEngine           *prompt.Engine         // prompt engine for role-based prompt composition
+	DefaultProvider        string                 // default provider for system agents
+	DefaultModel           string                 // default model for system agents
+	OnText                 func(text string)      // called with streamed text from the operator LLM
+	OnEvent                func(event Event)      // called when the event loop processes an event
 	// OnTurnDone is called when the operator finishes processing a user
 	// message turn. tokensIn / tokensOut / reasoningTokens are the totals
 	// across all LLM round-trips that occurred during the turn (the operator
@@ -95,7 +94,7 @@ func New(cfg Config) (*Operator, error) {
 	eventCh := make(chan Event, eventChSize)
 	var systemTools *SystemTools
 	if cfg.Store != nil {
-		systemTools = NewSystemTools(cfg.Store, cfg.PromptEngine, cfg.DefaultProvider, cfg.DefaultModel, eventCh, cfg.Spawner, cfg.WorkDir, cfg.SystemEventBroadcaster, cfg.GraphExecutor)
+		systemTools = NewSystemTools(cfg.Store, cfg.PromptEngine, cfg.DefaultProvider, cfg.DefaultModel, eventCh, cfg.WorkDir, cfg.SystemEventBroadcaster, cfg.GraphExecutor)
 	}
 
 	tools := newOperatorTools(cfg.Runtime, cfg.PromptEngine, cfg.DefaultProvider, cfg.DefaultModel, cfg.Store, systemTools, cfg.WorkDir)
@@ -564,12 +563,12 @@ func (o *Operator) appendMessage(msg provider.Message) {
 
 // operatorSession is the JSON structure written to the session file.
 type operatorSession struct {
-	SystemPrompt string             `json:"system_prompt"`
-	Model        string             `json:"model"`
-	Provider     string             `json:"provider"`
-	Tools        []string           `json:"tools"`
-	Messages     []operatorMessage  `json:"messages"`
-	UpdatedAt    time.Time          `json:"updated_at"`
+	SystemPrompt string            `json:"system_prompt"`
+	Model        string            `json:"model"`
+	Provider     string            `json:"provider"`
+	Tools        []string          `json:"tools"`
+	Messages     []operatorMessage `json:"messages"`
+	UpdatedAt    time.Time         `json:"updated_at"`
 }
 
 type operatorMessage struct {

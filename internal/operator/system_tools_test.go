@@ -9,44 +9,58 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/gofrs/uuid/v5"
 
 	"github.com/jefflinse/toasters/internal/db"
+	"github.com/jefflinse/toasters/internal/graphexec"
 	"github.com/jefflinse/toasters/internal/prompt"
 	"github.com/jefflinse/toasters/internal/runtime"
 )
 
 // --- Test helpers ---
 
-// mockSpawner records SpawnTeamLead calls.
-type mockSpawner struct {
+// mockGraphExecutor records ExecuteTask calls. ExecuteTask is invoked from a
+// goroutine inside assignTask, so tests use waitForGraphCall to synchronize.
+type mockGraphExecutor struct {
 	mu    sync.Mutex
-	calls []spawnCall
+	calls []graphexec.TaskRequest
+	fired chan struct{} // signalled when ExecuteTask is entered
 }
 
-type spawnCall struct {
-	Composed        *runtime.ComposedWorker
-	TaskID          string
-	JobID           string
-	WorkDir         string
-	TaskDescription string
-	ExtraTools      runtime.ToolExecutor
+func newMockGraphExecutor() *mockGraphExecutor {
+	return &mockGraphExecutor{fired: make(chan struct{}, 16)}
 }
 
-func (m *mockSpawner) SpawnTeamLead(_ context.Context, composed *runtime.ComposedWorker, taskID string, jobID string, workDir string, taskDescription string, extraTools runtime.ToolExecutor) error {
+func (m *mockGraphExecutor) ExecuteTask(_ context.Context, req graphexec.TaskRequest) error {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.calls = append(m.calls, spawnCall{Composed: composed, TaskID: taskID, JobID: jobID, WorkDir: workDir, TaskDescription: taskDescription, ExtraTools: extraTools})
+	m.calls = append(m.calls, req)
+	m.mu.Unlock()
+	select {
+	case m.fired <- struct{}{}:
+	default:
+	}
 	return nil
 }
 
-func (m *mockSpawner) getCalls() []spawnCall {
+func (m *mockGraphExecutor) getCalls() []graphexec.TaskRequest {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	cp := make([]spawnCall, len(m.calls))
+	cp := make([]graphexec.TaskRequest, len(m.calls))
 	copy(cp, m.calls)
 	return cp
+}
+
+// waitForGraphCall blocks until ExecuteTask has been entered at least once,
+// or fails the test on timeout. Required because dispatch is asynchronous.
+func (m *mockGraphExecutor) waitForGraphCall(t *testing.T) {
+	t.Helper()
+	select {
+	case <-m.fired:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for ExecuteTask to fire")
+	}
 }
 
 // newTestStore opens a real SQLite store in a temp directory.
@@ -60,26 +74,22 @@ func newTestStore(t *testing.T) db.Store {
 	return store
 }
 
-// newTestSystemTools creates a SystemTools with a real store, mock spawner,
-// and buffered event channel. Returns the SystemTools, store, spawner, event
-// channel, and the workDir used by SystemTools.
-func newTestSystemTools(t *testing.T) (*SystemTools, db.Store, *mockSpawner, chan Event, string) {
+// newTestSystemTools creates a SystemTools wired to a real store, a mock
+// graph executor (assignTask dispatches through it), and a buffered event
+// channel. Returns the SystemTools, store, graph executor, event channel,
+// and the workDir used by SystemTools.
+func newTestSystemTools(t *testing.T) (*SystemTools, db.Store, *mockGraphExecutor, chan Event, string) {
 	t.Helper()
 	store := newTestStore(t)
-	spawner := &mockSpawner{}
+	gExec := newMockGraphExecutor()
 	eventCh := make(chan Event, 64)
 
-	// Create a prompt engine with a generic coordinator role for team lead composition.
+	// Minimal prompt engine — assignTask itself no longer composes roles,
+	// but other system tools may touch the engine.
 	dir := t.TempDir()
 	rolesDir := filepath.Join(dir, "roles")
 	if err := os.MkdirAll(rolesDir, 0o755); err != nil {
 		t.Fatal(err)
-	}
-	roleContent := "---\nname: Coordinator\nmode: lead\n---\nYou are a test coordinator."
-	for _, name := range []string{"lead-agent", "lead-1", "backend-lead"} {
-		if err := os.WriteFile(filepath.Join(rolesDir, name+".md"), []byte(roleContent), 0o644); err != nil {
-			t.Fatal(err)
-		}
 	}
 	engine := prompt.NewEngine()
 	if err := engine.LoadDir(dir, "test"); err != nil {
@@ -88,8 +98,8 @@ func newTestSystemTools(t *testing.T) (*SystemTools, db.Store, *mockSpawner, cha
 
 	workDir := t.TempDir()
 	t.Setenv("HOME", workDir) // Ensure workDir passes home-directory validation
-	st := NewSystemTools(store, engine, "test-provider", "test-model", eventCh, spawner, workDir, nil, nil)
-	return st, store, spawner, eventCh, workDir
+	st := NewSystemTools(store, engine, "test-provider", "test-model", eventCh, workDir, nil, gExec)
+	return st, store, gExec, eventCh, workDir
 }
 
 // seedTeam inserts a team, its lead worker, and team membership into the store.
@@ -279,7 +289,7 @@ func TestCreateTask_MissingParams(t *testing.T) {
 }
 
 func TestAssignTask(t *testing.T) {
-	st, store, spawner, eventCh, _ := newTestSystemTools(t)
+	st, store, gExec, eventCh, _ := newTestSystemTools(t)
 	ctx := context.Background()
 
 	// Seed a team.
@@ -324,22 +334,21 @@ func TestAssignTask(t *testing.T) {
 	assertEqual(t, string(db.TaskStatusInProgress), string(task.Status))
 	assertEqual(t, "backend", task.TeamID)
 
-	// Verify spawner was called.
-	calls := spawner.getCalls()
+	// Wait for the async graph dispatch and verify the request shape.
+	gExec.waitForGraphCall(t)
+	calls := gExec.getCalls()
 	if len(calls) != 1 {
-		t.Fatalf("want 1 spawn call, got %d", len(calls))
+		t.Fatalf("want 1 graph dispatch, got %d", len(calls))
 	}
 	assertEqual(t, taskID, calls[0].TaskID)
 	assertEqual(t, jobID, calls[0].JobID)
-	assertEqual(t, "lead-agent", calls[0].Composed.WorkerID)
-	if calls[0].ExtraTools == nil {
-		t.Fatal("expected non-nil ExtraTools (TeamLeadTools) to be passed to SpawnTeamLead")
-	}
+	assertEqual(t, "backend", calls[0].TeamID)
+	assertEqual(t, "Build API", calls[0].TaskTitle)
 
-	// Verify the job's workspace directory was propagated to the spawner.
+	// Verify the job's workspace directory was propagated.
 	job, err := store.GetJob(ctx, jobID)
 	assertNoError(t, err)
-	assertEqual(t, job.WorkspaceDir, calls[0].WorkDir)
+	assertEqual(t, job.WorkspaceDir, calls[0].WorkspaceDir)
 
 	// Verify feed entry was created inline (no event sent to channel).
 	entries, err := store.ListRecentFeedEntries(ctx, 10)
@@ -901,14 +910,13 @@ func TestQueryJobContext_Execute_NonExistentJobID(t *testing.T) {
 
 func TestCreateJob_RejectsWorkDirOutsideHome(t *testing.T) {
 	store := newTestStore(t)
-	spawner := &mockSpawner{}
 	eventCh := make(chan Event, 64)
 	// Set HOME to a temp dir, then use a workDir outside of it.
 	fakeHome := t.TempDir()
 	t.Setenv("HOME", fakeHome)
 
 	outsideDir := t.TempDir() // A different temp dir, not under fakeHome.
-	st := NewSystemTools(store, nil, "test-provider", "test-model", eventCh, spawner, outsideDir, nil, nil)
+	st := NewSystemTools(store, nil, "test-provider", "test-model", eventCh, outsideDir, nil, nil)
 
 	ctx := context.Background()
 	args, _ := json.Marshal(map[string]string{
@@ -922,7 +930,6 @@ func TestCreateJob_RejectsWorkDirOutsideHome(t *testing.T) {
 
 func TestCreateJob_AcceptsWorkDirUnderHome(t *testing.T) {
 	store := newTestStore(t)
-	spawner := &mockSpawner{}
 	eventCh := make(chan Event, 64)
 	// Set HOME to a temp dir, then create workDir under it.
 	fakeHome := t.TempDir()
@@ -933,7 +940,7 @@ func TestCreateJob_AcceptsWorkDirUnderHome(t *testing.T) {
 		t.Fatalf("creating workDir: %v", err)
 	}
 
-	st := NewSystemTools(store, nil, "test-provider", "test-model", eventCh, spawner, workDir, nil, nil)
+	st := NewSystemTools(store, nil, "test-provider", "test-model", eventCh, workDir, nil, nil)
 
 	ctx := context.Background()
 	args, _ := json.Marshal(map[string]string{

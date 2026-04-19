@@ -19,11 +19,11 @@ import (
 	"github.com/gofrs/uuid/v5"
 	"gopkg.in/yaml.v3"
 
-	"github.com/jefflinse/toasters/internal/mdfmt"
 	"github.com/jefflinse/toasters/internal/config"
 	"github.com/jefflinse/toasters/internal/db"
 	"github.com/jefflinse/toasters/internal/loader"
 	"github.com/jefflinse/toasters/internal/mcp"
+	"github.com/jefflinse/toasters/internal/mdfmt"
 	"github.com/jefflinse/toasters/internal/operator"
 	"github.com/jefflinse/toasters/internal/prompt"
 	"github.com/jefflinse/toasters/internal/provider"
@@ -94,12 +94,12 @@ type LocalConfig struct {
 	ConfigDir        string
 	WorkspaceDir     string
 	TeamsDir         string
-	OperatorModel    string    // for OperatorStatus.ModelName
-	OperatorEndpoint string    // for OperatorStatus.Endpoint (LLM provider URL)
-	StartTime        time.Time // for Health().Uptime
-	Catalog          CatalogSource // optional models.dev catalog; nil disables ListCatalogProviders
-	Registry         *provider.Registry // provider registry for live operator activation
-	PromptEngine     *prompt.Engine     // optional; for role-based prompt composition
+	OperatorModel    string                     // for OperatorStatus.ModelName
+	OperatorEndpoint string                     // for OperatorStatus.Endpoint (LLM provider URL)
+	StartTime        time.Time                  // for Health().Uptime
+	Catalog          CatalogSource              // optional models.dev catalog; nil disables ListCatalogProviders
+	Registry         *provider.Registry         // provider registry for live operator activation
+	PromptEngine     *prompt.Engine             // optional; for role-based prompt composition
 	GraphExecutor    operator.GraphTaskExecutor // optional; rhizome graph-based task execution
 }
 
@@ -828,10 +828,10 @@ func (s *LocalService) BroadcastSessionStarted(sess *runtime.Session) {
 						SessionID: sessionID,
 						Payload: SessionDonePayload{
 							WorkerName: finalSnap.WorkerID,
-							JobID:     finalSnap.JobID,
-							TaskID:    finalSnap.TaskID,
-							Status:    finalSnap.Status,
-							FinalText: sess.FinalText(),
+							JobID:      finalSnap.JobID,
+							TaskID:     finalSnap.TaskID,
+							Status:     finalSnap.Status,
+							FinalText:  sess.FinalText(),
 						},
 					})
 					return
@@ -2337,7 +2337,6 @@ func (s *LocalService) startOperator(p provider.Provider, providerID, model stri
 		Model:                  model,
 		WorkDir:                s.cfg.WorkspaceDir,
 		Store:                  s.cfg.Store,
-		Spawner:                s.cfg.Runtime,
 		SystemPrompt:           systemPrompt,
 		SessionFile:            filepath.Join(s.cfg.ConfigDir, "sessions", "operator.json"),
 		SystemEventBroadcaster: s,
@@ -2506,7 +2505,7 @@ func dbTeamToService(t *db.Team) Team {
 		ID:          t.ID,
 		Name:        t.Name,
 		Description: t.Description,
-		LeadWorker:   t.LeadWorker,
+		LeadWorker:  t.LeadWorker,
 		Skills:      skills,
 		Provider:    t.Provider,
 		Model:       t.Model,

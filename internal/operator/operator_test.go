@@ -168,7 +168,7 @@ func newTestOperatorTools(t *testing.T, workers []*db.Worker) *operatorTools {
 	})
 
 	eventCh := make(chan Event, 64)
-	systemTools := NewSystemTools(store, engine, "test-provider", "test-model", eventCh, nil, t.TempDir(), nil, nil)
+	systemTools := NewSystemTools(store, engine, "test-provider", "test-model", eventCh, t.TempDir(), nil, nil)
 
 	return newOperatorTools(nil, engine, "test-provider", "test-model", store, systemTools, t.TempDir())
 }
@@ -532,9 +532,9 @@ func TestOperatorMechanicalEvents(t *testing.T) {
 	_ = op.Send(ctx, Event{
 		Type: EventProgressUpdate,
 		Payload: ProgressUpdatePayload{
-			TaskID:  "task-1",
+			TaskID:   "task-1",
 			WorkerID: "agent-2",
-			Message: "50% complete",
+			Message:  "50% complete",
 		},
 	})
 
@@ -667,14 +667,14 @@ func TestEventLoop_TaskCompleted_AssignsNextTask(t *testing.T) {
 
 	reg := newTestRegistry(mp)
 	rt := runtime.New(store, reg)
-	spawner := &mockSpawner{}
+	gExec := newMockGraphExecutor()
 
-	// Create operator with SystemTools that have a spawner and prompt engine.
+	// Create operator with SystemTools wired to a mock graph executor.
 	engine := testPromptEngine(t, map[string]string{
 		"lead-agent": "You are a test lead.",
 	})
 	eventCh := make(chan Event, eventChSize)
-	systemTools := NewSystemTools(store, engine, "test-provider", "test-model", eventCh, spawner, t.TempDir(), nil, nil)
+	systemTools := NewSystemTools(store, engine, "test-provider", "test-model", eventCh, t.TempDir(), nil, gExec)
 	tools := newOperatorTools(rt, engine, "test-provider", "test-model", store, systemTools, t.TempDir())
 	provTools := operatorToolsToProviderTools(tools.Definitions())
 
@@ -715,15 +715,15 @@ func TestEventLoop_TaskCompleted_AssignsNextTask(t *testing.T) {
 		},
 	})
 
-	// Wait for the spawner to be called (assign_task spawns the team lead).
+	// Wait for the graph executor to be called (assign_task dispatches to it).
 	waitFor(t, func() bool {
-		return len(spawner.getCalls()) > 0
+		return len(gExec.getCalls()) > 0
 	}, 3*time.Second)
 
-	// Verify the next task was assigned.
-	calls := spawner.getCalls()
+	// Verify the next task was dispatched.
+	calls := gExec.getCalls()
 	if len(calls) != 1 {
-		t.Fatalf("want 1 spawn call, got %d", len(calls))
+		t.Fatalf("want 1 graph dispatch, got %d", len(calls))
 	}
 	assertEqual(t, "task-2", calls[0].TaskID)
 	assertEqual(t, "job-1", calls[0].JobID)
@@ -1124,9 +1124,9 @@ func TestEventLoop_ProgressUpdate_NoFeedEntry(t *testing.T) {
 	_ = op.Send(ctx, Event{
 		Type: EventProgressUpdate,
 		Payload: ProgressUpdatePayload{
-			TaskID:  "task-1",
+			TaskID:   "task-1",
 			WorkerID: "agent-1",
-			Message: "50% complete",
+			Message:  "50% complete",
 		},
 	})
 
@@ -1665,7 +1665,7 @@ func TestSurfaceToUserMissingText(t *testing.T) {
 func TestSurfaceToUserCreatesFeedEntry(t *testing.T) {
 	store := newOperatorTestStore(t)
 	eventCh := make(chan Event, 64)
-	systemTools := NewSystemTools(store, nil, "test-provider", "test-model", eventCh, nil, t.TempDir(), nil, nil)
+	systemTools := NewSystemTools(store, nil, "test-provider", "test-model", eventCh, t.TempDir(), nil, nil)
 	tools := newOperatorTools(nil, nil, "test-provider", "test-model", store, systemTools, t.TempDir())
 
 	result, err := tools.Execute(context.Background(), "surface_to_user",
@@ -1738,7 +1738,7 @@ func TestQueryJobDelegatesToSystemTools(t *testing.T) {
 	}
 
 	eventCh := make(chan Event, 64)
-	systemTools := NewSystemTools(store, nil, "test-provider", "test-model", eventCh, nil, t.TempDir(), nil, nil)
+	systemTools := NewSystemTools(store, nil, "test-provider", "test-model", eventCh, t.TempDir(), nil, nil)
 	tools := newOperatorTools(nil, nil, "test-provider", "test-model", store, systemTools, t.TempDir())
 
 	result, err := tools.Execute(ctx, "query_job",
@@ -1756,7 +1756,7 @@ func TestQueryTeamsDelegatesToSystemTools(t *testing.T) {
 	seedTeam(t, ctx, store, "team-1", "Alpha Team", "lead-1")
 
 	eventCh := make(chan Event, 64)
-	systemTools := NewSystemTools(store, nil, "test-provider", "test-model", eventCh, nil, t.TempDir(), nil, nil)
+	systemTools := NewSystemTools(store, nil, "test-provider", "test-model", eventCh, t.TempDir(), nil, nil)
 	tools := newOperatorTools(nil, nil, "test-provider", "test-model", store, systemTools, t.TempDir())
 
 	result, err := tools.Execute(ctx, "query_teams", json.RawMessage(`{}`))
