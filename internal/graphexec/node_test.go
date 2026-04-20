@@ -741,6 +741,10 @@ func (m *mockEventSink) BroadcastPrompt(requestID, question string, options []st
 	m.events = append(m.events, fmt.Sprintf("prompt:%s:%s", source, question))
 }
 
+func (m *mockEventSink) BroadcastSessionText(sessionID, text string) {
+	m.events = append(m.events, fmt.Sprintf("session_text:%s:%s", sessionID, text))
+}
+
 func TestEventMiddleware(t *testing.T) {
 	sink := &mockEventSink{}
 	mw := EventMiddleware(sink)

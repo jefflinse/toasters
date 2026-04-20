@@ -26,6 +26,7 @@ type jobsModalState struct {
 	taskIdx           int
 	confirmCancel     bool
 	agentScrollOffset int // TODO: implement scrolling in the agent detail panel (v2)
+	graphNodeIdx      int // focused node when the selected task has graph state
 }
 
 // loadJobsForModal loads all jobs from the service into the jobs modal state.
@@ -91,14 +92,21 @@ func (m *Model) updateJobsModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				m.jobsModal.jobIdx--
 				m.jobsModal.taskIdx = 0
 				m.jobsModal.agentScrollOffset = 0
+				m.jobsModal.graphNodeIdx = 0
 				m.loadJobDetail()
 			}
 		case 1:
 			if m.jobsModal.taskIdx > 0 {
 				m.jobsModal.taskIdx--
 				m.jobsModal.agentScrollOffset = 0
+				m.jobsModal.graphNodeIdx = 0
 			}
-			// focus==2: no-op (display-only panel in v1)
+		case 2:
+			if gts := m.selectedJobsModalGraphTaskState(); gts != nil {
+				if m.jobsModal.graphNodeIdx > 0 {
+					m.jobsModal.graphNodeIdx--
+				}
+			}
 		}
 
 	case "down":
@@ -108,6 +116,7 @@ func (m *Model) updateJobsModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				m.jobsModal.jobIdx++
 				m.jobsModal.taskIdx = 0
 				m.jobsModal.agentScrollOffset = 0
+				m.jobsModal.graphNodeIdx = 0
 				m.loadJobDetail()
 			}
 		case 1:
@@ -117,9 +126,15 @@ func (m *Model) updateJobsModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				if m.jobsModal.taskIdx < len(tasks)-1 {
 					m.jobsModal.taskIdx++
 					m.jobsModal.agentScrollOffset = 0
+					m.jobsModal.graphNodeIdx = 0
 				}
 			}
-			// focus==2: no-op (display-only panel in v1)
+		case 2:
+			if gts := m.selectedJobsModalGraphTaskState(); gts != nil {
+				if m.jobsModal.graphNodeIdx < len(gts.topology.Nodes)-1 {
+					m.jobsModal.graphNodeIdx++
+				}
+			}
 		}
 
 	case "ctrl+x":
@@ -378,7 +393,7 @@ func (m *Model) renderJobsModal() string {
 		midPanel = ModalPanelStyle.Width(midPanelW).Height(panelH).Render(midContent)
 	}
 
-	// --- Right panel: agent cards for selected task ---
+	// --- Right panel: graph view (when task has graph state) or agent cards. ---
 	var rightPanel string
 	{
 		var rightLines []string
@@ -403,6 +418,15 @@ func (m *Model) renderJobsModal() string {
 			panelTitle = truncateStr(selectedTask.Title, rightInnerW)
 		}
 		rightLines = append(rightLines, gradientText(panelTitle, [3]uint8{50, 130, 255}, [3]uint8{0, 200, 200}))
+
+		// Branch: if the task has graph state, render graph + output instead
+		// of the legacy agent cards.
+		if selectedTask != nil {
+			if gts, ok := m.graphTasks[selectedTask.ID]; ok {
+				rightLines = append(rightLines, m.renderGraphTaskPane(gts, rightInnerW, panelInnerH-1)...)
+				goto finishRightPanel
+			}
+		}
 
 		if selectedTask == nil {
 			// No task selected yet.
@@ -473,6 +497,7 @@ func (m *Model) renderJobsModal() string {
 			}
 		}
 
+	finishRightPanel:
 		// Pad/trim right panel to fill height.
 		for len(rightLines) < panelInnerH {
 			rightLines = append(rightLines, "")

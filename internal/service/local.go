@@ -685,6 +685,21 @@ func (s *LocalService) BroadcastGraphFailed(jobID, taskID, errMsg string) {
 	})
 }
 
+// BroadcastSessionText broadcasts a session.text event for an arbitrary
+// session id. Used by graph nodes (which synthesize session ids of the form
+// "graph:<TaskID>:<Node>") to stream LLM text through the same pipeline as
+// worker sessions.
+func (s *LocalService) BroadcastSessionText(sessionID, text string) {
+	if text == "" {
+		return
+	}
+	s.broadcast(Event{
+		Type:      EventTypeSessionText,
+		SessionID: sessionID,
+		Payload:   SessionTextPayload{Text: text},
+	})
+}
+
 // BroadcastPrompt emits an OperatorPromptPayload with Source populated so the
 // TUI can surface a HITL question that originated from a graph node (via
 // rhizome.Interrupt). The operator's own ask_user path emits the same event

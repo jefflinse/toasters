@@ -217,6 +217,11 @@ func collectResponse(ctx context.Context, eventCh <-chan provider.StreamEvent) (
 			switch ev.Type {
 			case provider.EventText:
 				textBuf.WriteString(ev.Text)
+				if ev.Text != "" {
+					if nc := NodeContextFromContext(ctx); nc != nil && nc.Sink != nil {
+						nc.Sink.BroadcastSessionText(nc.SessionID, ev.Text)
+					}
+				}
 			case provider.EventToolCall:
 				if ev.ToolCall != nil {
 					toolCalls = append(toolCalls, *ev.ToolCall)

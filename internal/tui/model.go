@@ -186,6 +186,14 @@ type Model struct {
 	// Jobs modal state.
 	jobsModal jobsModalState
 
+	// Graph map modal state (POC viewer for dagmap renderers).
+	graphMapModal graphMapModalState
+
+	// Per-task graph execution state — populated by GraphNodeStartedMsg /
+	// GraphNodeDoneMsg. The modal reads from lastGraphTaskID.
+	graphTasks      map[string]*graphTaskState
+	lastGraphTaskID string
+
 	// Agent pane state.
 	selectedAgentSlot int // which slot is highlighted in the agents pane
 
@@ -364,6 +372,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Jobs modal key handling — intercept all keys when modal is open.
 		if m.jobsModal.show {
 			return m.updateJobsModal(msg)
+		}
+
+		// Graph map modal key handling — intercept all keys when modal is open.
+		if m.graphMapModal.show {
+			return m.updateGraphMapModal(msg)
 		}
 
 		// Blocker modal key handling — intercept all keys when modal is open.
@@ -850,6 +863,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.loadJobDetail()
 					}
 					return m, nil
+				case "/graphmap":
+					m.input.Reset()
+					m.cmdPopup.show = false
+					m.graphMapModal = graphMapModalState{show: true}
+					return m, nil
 				case "/mcp":
 					m.input.Reset()
 					m.cmdPopup.show = false
@@ -1265,11 +1283,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			status:    "active",
 			startTime: time.Now(),
 		}
+		m.recordGraphNodeStarted(msg.JobID, msg.TaskID, msg.Node)
 		return m, nil
 
 	case GraphNodeDoneMsg:
 		slot, ok := m.runtimeSessions[msg.SessionID]
 		if !ok {
+			m.recordGraphNodeDone(msg.JobID, msg.TaskID, msg.Node, msg.Status)
 			return m, nil
 		}
 		// Graph nodes don't have a multi-valued status like sessions do;
@@ -1278,6 +1298,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// and drives the router, not the panel icon.
 		slot.status = "completed"
 		slot.endTime = time.Now()
+		m.recordGraphNodeDone(msg.JobID, msg.TaskID, msg.Node, msg.Status)
 		return m, nil
 
 	case tea.MouseClickMsg:

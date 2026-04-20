@@ -29,6 +29,46 @@ type EventSink interface {
 	// graph node (via rhizome.Interrupt). Source is typically
 	// "graph:<node>" so the TUI can render an attribution hint.
 	BroadcastPrompt(requestID, question string, options []string, source string)
+	// BroadcastSessionText carries streamed LLM text from a graph node. The
+	// SessionID convention is "graph:<TaskID>:<Node>" so the TUI's existing
+	// runtimeSlot pipeline picks it up without a special case.
+	BroadcastSessionText(sessionID, text string)
+}
+
+type nodeContextKey struct{}
+
+// NodeContext carries per-node identity and an event sink so node bodies
+// can emit streaming events (LLM text, tool calls) without rhizome plumbing.
+type NodeContext struct {
+	JobID     string
+	TaskID    string
+	Node      string
+	SessionID string
+	Sink      EventSink
+}
+
+// NodeContextFromContext returns the NodeContext injected by
+// NodeContextMiddleware, or nil if none is set.
+func NodeContextFromContext(ctx context.Context) *NodeContext {
+	nc, _ := ctx.Value(nodeContextKey{}).(*NodeContext)
+	return nc
+}
+
+// NodeContextMiddleware injects a NodeContext into ctx for every node call.
+// Must be placed in the middleware chain outside (or at) any middleware
+// that calls the node — the node body needs the value at call time.
+func NodeContextMiddleware(sink EventSink) rhizome.Middleware[*TaskState] {
+	return func(ctx context.Context, node string, state *TaskState, next rhizome.NodeFunc[*TaskState]) (*TaskState, error) {
+		nc := &NodeContext{
+			JobID:     state.JobID,
+			TaskID:    state.TaskID,
+			Node:      node,
+			SessionID: "graph:" + state.TaskID + ":" + node,
+			Sink:      sink,
+		}
+		ctx = context.WithValue(ctx, nodeContextKey{}, nc)
+		return next(ctx, state)
+	}
 }
 
 // EventMiddleware emits graph node lifecycle events to the service event

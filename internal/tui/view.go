@@ -228,6 +228,15 @@ func (m *Model) View() tea.View {
 		return v
 	}
 
+	// Graph map modal (POC).
+	if m.graphMapModal.show {
+		gmView := m.renderGraphMapModal()
+		v := tea.NewView(gmView)
+		v.AltScreen = true
+		v.MouseMode = tea.MouseModeCellMotion
+		return v
+	}
+
 	// Operator modal takes over the full terminal.
 	if m.operatorModal.show {
 		operatorView := m.renderOperatorModal()

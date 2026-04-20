@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/gofrs/uuid/v5"
 	"github.com/jefflinse/rhizome"
@@ -19,13 +20,15 @@ import (
 // It resolves providers, applies middleware for events and persistence,
 // and updates task status after execution.
 type Executor struct {
-	registry     *provider.Registry
-	mcpManager   *mcp.Manager
-	promptEngine *prompt.Engine
-	store        db.Store
-	eventSink    EventSink
-	broker       *hitl.Broker
-	defaultModel string
+	registry      *provider.Registry
+	mcpManager    *mcp.Manager
+	promptEngine  *prompt.Engine
+	store         db.Store
+	eventSink     EventSink
+	broker        *hitl.Broker
+	defaultModel  string
+	nodeTimeout   time.Duration
+	retryAttempts int
 }
 
 // ExecutorConfig holds configuration for creating an Executor.
@@ -58,18 +61,33 @@ type ExecutorConfig struct {
 
 	// DefaultModel is used when the task state doesn't specify a model.
 	DefaultModel string
+
+	// NodeTimeout bounds each node attempt. Zero disables the middleware-level
+	// timeout; LLM providers still apply their own timeouts inside the call.
+	NodeTimeout time.Duration
+
+	// RetryAttempts is the max number of attempts per node, including the
+	// initial call. Values ≤ 1 disable retries. Defaults to rhizome's default
+	// when zero.
+	RetryAttempts int
 }
 
 // NewExecutor creates an Executor with the given configuration.
 func NewExecutor(cfg ExecutorConfig) *Executor {
+	retries := cfg.RetryAttempts
+	if retries <= 0 {
+		retries = rhizome.DefaultRetryMaxAttempts
+	}
 	return &Executor{
-		registry:     cfg.Registry,
-		mcpManager:   cfg.MCPManager,
-		promptEngine: cfg.PromptEngine,
-		store:        cfg.Store,
-		eventSink:    cfg.EventSink,
-		broker:       cfg.Broker,
-		defaultModel: cfg.DefaultModel,
+		registry:      cfg.Registry,
+		mcpManager:    cfg.MCPManager,
+		promptEngine:  cfg.PromptEngine,
+		store:         cfg.Store,
+		eventSink:     cfg.EventSink,
+		broker:        cfg.Broker,
+		defaultModel:  cfg.DefaultModel,
+		nodeTimeout:   cfg.NodeTimeout,
+		retryAttempts: retries,
 	}
 }
 
@@ -126,15 +144,23 @@ func (e *Executor) buildToolExecutor(workspaceDir string) runtime.ToolExecutor {
 // task_completed / task_failed events so the operator's event loop can
 // advance to the next ready task.
 func (e *Executor) Execute(ctx context.Context, graph *rhizome.CompiledGraph[*TaskState], state *TaskState, teamID string) error {
-	// Run the graph with middleware + interrupt handler. The interrupt
-	// handler translates rhizome.Interrupt calls from nodes into HITL
-	// broker Asks, so ask_user on a graph node and ask_user on the
-	// operator both end up in the same TUI prompt modal.
+	// Middleware chain, outermost → innermost:
+	//   NodeContext — inject per-node identity + sink into ctx for node bodies
+	//   Event       — one start/complete per logical execution (UI)
+	//   Persistence — persist outcomes once per logical execution
+	//   Retry       — re-invoke on transient errors
+	//   Recover     — per-attempt panic safety; Retry sees panics as errors
+	//   Timeout     — per-attempt deadline (doc: Timeout inside Retry)
+	//   Logging     — slog per attempt
 	result, err := graph.Run(ctx, state,
 		rhizome.WithMiddleware[*TaskState](
-			LoggingMiddleware(),
+			NodeContextMiddleware(e.eventSink),
 			EventMiddleware(e.eventSink),
 			PersistenceMiddleware(e.store),
+			rhizome.Retry[*TaskState](rhizome.WithMaxAttempts(e.retryAttempts)),
+			rhizome.Recover[*TaskState](),
+			rhizome.Timeout[*TaskState](e.nodeTimeout),
+			LoggingMiddleware(),
 		),
 		rhizome.WithInterruptHandler[*TaskState](e.interruptHandler),
 	)
