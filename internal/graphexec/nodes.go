@@ -4,87 +4,28 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
+	"github.com/jefflinse/mycelium/agent"
 	"github.com/jefflinse/rhizome"
-	"github.com/jefflinse/toasters/internal/runtime"
+
+	"github.com/jefflinse/toasters/internal/provider"
 )
-
-// Tool name constants for building allowlists.
-const (
-	ToolReadFile  = "read_file"
-	ToolWriteFile = "write_file"
-	ToolEditFile  = "edit_file"
-	ToolGlob      = "glob"
-	ToolGrep      = "grep"
-	ToolShell     = "shell"
-	ToolWebFetch  = "web_fetch"
-)
-
-// Common tool sets for node builders.
-var (
-	// ReadOnlyTools allows only non-mutating tools.
-	ReadOnlyTools = []string{ToolReadFile, ToolGlob, ToolGrep}
-
-	// WriteTools allows mutation plus reading.
-	WriteTools = []string{ToolReadFile, ToolWriteFile, ToolEditFile, ToolGlob, ToolGrep, ToolShell}
-
-	// TestTools allows running tests.
-	TestTools = []string{ToolReadFile, ToolGlob, ToolGrep, ToolShell}
-)
-
-// filteredExecutor wraps a ToolExecutor and restricts it to a named subset.
-type filteredExecutor struct {
-	inner   runtime.ToolExecutor
-	allowed map[string]bool
-}
-
-// FilterTools creates a ToolExecutor that only exposes the named tools
-// from the inner executor. This is the graphexec equivalent of
-// runtime.filteredToolExecutor (which is unexported).
-func FilterTools(inner runtime.ToolExecutor, allowed []string) runtime.ToolExecutor {
-	m := make(map[string]bool, len(allowed))
-	for _, name := range allowed {
-		m[name] = true
-	}
-	return &filteredExecutor{inner: inner, allowed: m}
-}
-
-func (f *filteredExecutor) Definitions() []runtime.ToolDef {
-	all := f.inner.Definitions()
-	filtered := make([]runtime.ToolDef, 0, len(f.allowed))
-	for _, td := range all {
-		if f.allowed[td.Name] {
-			filtered = append(filtered, td)
-		}
-	}
-	return filtered
-}
-
-func (f *filteredExecutor) Execute(ctx context.Context, name string, args json.RawMessage) (string, error) {
-	if !f.allowed[name] {
-		// Return ErrUnknownTool so mergeTools can fall through to sibling
-		// executors (e.g. decision tools) — matches the runtime convention
-		// used by layeredToolExecutor.
-		return "", fmt.Errorf("%w: %s", runtime.ErrUnknownTool, name)
-	}
-	return f.inner.Execute(ctx, name, args)
-}
 
 // --- Specialized node builders ---
 //
-// Each builder wraps LLMNode with a focused tool set and a system prompt
-// composed by the prompt engine from role markdown (defaults/user/roles/).
-// Overrides are built from accumulated TaskState artifacts so each role
-// sees the structured context it needs — findings, plan, feedback, etc.
+// Each builder wraps a bounded mycelium.agent.Run with a focused tool set,
+// a role-composed system prompt, and a typed output schema. The model is
+// required to end each node by calling `complete` with a payload conforming
+// to the role's schema; the node's apply step folds the typed output into
+// TaskState so conditional edges can route.
 
-// composePrompt resolves a role's system prompt via the prompt engine, passing
-// TaskState artifacts as overrides. The role template references these as
-// {{ globals.task.description }} etc. Falls back to a minimal prompt if the
-// engine is unset (test path) or the role is unknown.
+// composePrompt resolves a role's system prompt via the prompt engine,
+// passing TaskState artifacts as overrides. The role template references
+// these as {{ globals.task.description }} etc. Falls back to a minimal
+// prompt if the engine is unset (test path) or the role is unknown.
 func composePrompt(cfg TemplateConfig, roleName string, state *TaskState) (string, error) {
 	if cfg.PromptEngine == nil {
-		// Test fallback — acceptable because tests typically don't drive
-		// the LLM on prompt content.
 		return fmt.Sprintf("You are the %s. Task: %s", roleName, state.GetArtifactString("task.description")), nil
 	}
 	overrides := map[string]string{
@@ -100,49 +41,129 @@ func composePrompt(cfg TemplateConfig, roleName string, state *TaskState) (strin
 	return cfg.PromptEngine.Compose(roleName, overrides)
 }
 
+// buildInitialMessage constructs a user message from TaskState artifacts.
+// Individual node builders may override it when they want stricter framing.
+func buildInitialMessage(state *TaskState) string {
+	var parts []string
+
+	if desc := state.GetArtifactString("task.description"); desc != "" {
+		parts = append(parts, fmt.Sprintf("Task: %s", desc))
+	}
+	if state.WorkspaceDir != "" {
+		parts = append(parts, fmt.Sprintf("Workspace: %s", state.WorkspaceDir))
+	}
+	for key, val := range state.Artifacts {
+		if key == "task.description" {
+			continue
+		}
+		if s, ok := val.(string); ok && s != "" {
+			parts = append(parts, fmt.Sprintf("## %s\n%s", key, s))
+		}
+	}
+	if len(parts) == 0 {
+		return "Please complete the assigned task."
+	}
+	return strings.Join(parts, "\n\n")
+}
+
+// onEventSink returns an agent OnEvent handler that broadcasts streaming
+// text and reasoning chunks to the EventSink attached to the current
+// NodeContext, if any. No-op when no sink is configured — tests and
+// library-only uses pay nothing.
+func onEventSink(ctx context.Context) func(agent.Event) {
+	nc := NodeContextFromContext(ctx)
+	if nc == nil || nc.Sink == nil {
+		return nil
+	}
+	return func(ev agent.Event) {
+		switch ev.Kind {
+		case agent.EventKindText:
+			if ev.Text != "" {
+				nc.Sink.BroadcastSessionText(nc.SessionID, ev.Text)
+			}
+		case agent.EventKindReasoning:
+			// Reasoning is rendered separately by the TUI — prefix it so
+			// the existing session-text pipeline can distinguish if it
+			// ever grows a real channel for reasoning. For now, just log
+			// it into the stream so it appears in live output.
+			if ev.Text != "" {
+				nc.Sink.BroadcastSessionText(nc.SessionID, ev.Text)
+			}
+		}
+	}
+}
+
+// runNode is the shared inner loop for every role node. It composes the
+// prompt, runs a typed agent.Run, forwards streaming events, and surfaces
+// the typed result + status string for the caller's apply step.
+func runNode[O any](
+	ctx context.Context,
+	cfg TemplateConfig,
+	roleName string,
+	state *TaskState,
+	tools []agent.Tool,
+	schema json.RawMessage,
+) (agent.Result[O], error) {
+	sysPrompt, err := composePrompt(cfg, roleName, state)
+	if err != nil {
+		return agent.Result[O]{}, fmt.Errorf("composing %s prompt: %w", roleName, err)
+	}
+	return agent.Run(ctx, agent.Config[O]{
+		Provider:     cfg.Provider,
+		Model:        cfg.Model,
+		System:       sysPrompt,
+		Messages:     []provider.Message{{Role: "user", Content: buildInitialMessage(state)}},
+		Tools:        tools,
+		OutputSchema: schema,
+		OnEvent:      onEventSink(ctx),
+	})
+}
+
 // InvestigateNodeDynamic explores the codebase with read-only tools and
-// writes findings to "investigate.findings". Has ask_user available for
-// genuinely ambiguous task descriptions.
+// writes findings to "investigate.findings".
 func InvestigateNodeDynamic(cfg TemplateConfig) rhizome.NodeFunc[*TaskState] {
 	roles := cfg.Roles.resolve()
 	return func(ctx context.Context, state *TaskState) (*TaskState, error) {
-		sysPrompt, err := composePrompt(cfg, roles.Investigate, state)
+		tools := append([]agent.Tool{AskUserTool()}, AdaptTools(cfg.ToolExecutor, ReadOnlyTools)...)
+		res, err := runNode[FindingsOutput](ctx, cfg, roles.Investigate, state, tools, findingsSchema)
 		if err != nil {
-			return state, fmt.Errorf("composing investigator prompt: %w", err)
+			return state, err
 		}
-		tools := mergeTools(askUserTool(), FilterTools(cfg.ToolExecutor, ReadOnlyTools))
-		node := LLMNode(NodeConfig{
-			Provider:     cfg.Provider,
-			ToolExecutor: tools,
-			Model:        cfg.Model,
-			ArtifactKey:  "investigate.findings",
-			MaxTurns:     DefaultMaxTurns,
-			SystemPrompt: sysPrompt,
-		})
-		return node(ctx, state)
+		switch res.Status {
+		case agent.StatusCompleted:
+			state.FinalText = res.Output.Summary
+			state.SetArtifact("investigate.findings", res.Output.Summary)
+			return state, nil
+		case agent.StatusNeedsContext:
+			return state, fmt.Errorf("investigate node requested context: %+v", res.Required)
+		case agent.StatusError:
+			return state, fmt.Errorf("investigate node reported error: %s", res.Error.Error())
+		}
+		return state, fmt.Errorf("investigate node: unexpected terminal status %q", res.Status)
 	}
 }
 
 // PlanNodeDynamic reads investigation findings and writes an implementation
-// plan to "plan.steps". Has ask_user available for clarifying scope before
-// locking down steps.
+// plan to "plan.steps".
 func PlanNodeDynamic(cfg TemplateConfig) rhizome.NodeFunc[*TaskState] {
 	roles := cfg.Roles.resolve()
 	return func(ctx context.Context, state *TaskState) (*TaskState, error) {
-		sysPrompt, err := composePrompt(cfg, roles.Plan, state)
+		tools := append([]agent.Tool{AskUserTool()}, AdaptTools(cfg.ToolExecutor, ReadOnlyTools)...)
+		res, err := runNode[PlanOutput](ctx, cfg, roles.Plan, state, tools, planSchema)
 		if err != nil {
-			return state, fmt.Errorf("composing planner prompt: %w", err)
+			return state, err
 		}
-		tools := mergeTools(askUserTool(), FilterTools(cfg.ToolExecutor, ReadOnlyTools))
-		node := LLMNode(NodeConfig{
-			Provider:     cfg.Provider,
-			ToolExecutor: tools,
-			Model:        cfg.Model,
-			ArtifactKey:  "plan.steps",
-			MaxTurns:     DefaultMaxTurns,
-			SystemPrompt: sysPrompt,
-		})
-		return node(ctx, state)
+		switch res.Status {
+		case agent.StatusCompleted:
+			state.FinalText = res.Output.Summary
+			state.SetArtifact("plan.steps", res.Output.Summary)
+			return state, nil
+		case agent.StatusNeedsContext:
+			return state, fmt.Errorf("plan node requested context: %+v", res.Required)
+		case agent.StatusError:
+			return state, fmt.Errorf("plan node reported error: %s", res.Error.Error())
+		}
+		return state, fmt.Errorf("plan node: unexpected terminal status %q", res.Status)
 	}
 }
 
@@ -151,119 +172,116 @@ func PlanNodeDynamic(cfg TemplateConfig) rhizome.NodeFunc[*TaskState] {
 func ImplementNodeDynamic(cfg TemplateConfig) rhizome.NodeFunc[*TaskState] {
 	roles := cfg.Roles.resolve()
 	return func(ctx context.Context, state *TaskState) (*TaskState, error) {
-		sysPrompt, err := composePrompt(cfg, roles.Implement, state)
+		tools := AdaptTools(cfg.ToolExecutor, WriteTools)
+		res, err := runNode[ImplementOutput](ctx, cfg, roles.Implement, state, tools, implementSchema)
 		if err != nil {
-			return state, fmt.Errorf("composing implementer prompt: %w", err)
+			return state, err
 		}
-		node := LLMNode(NodeConfig{
-			Provider:     cfg.Provider,
-			ToolExecutor: FilterTools(cfg.ToolExecutor, WriteTools),
-			Model:        cfg.Model,
-			ArtifactKey:  "implement.summary",
-			MaxTurns:     DefaultMaxTurns,
-			SystemPrompt: sysPrompt,
-		})
-		return node(ctx, state)
+		switch res.Status {
+		case agent.StatusCompleted:
+			state.FinalText = res.Output.Summary
+			state.SetArtifact("implement.summary", res.Output.Summary)
+			return state, nil
+		case agent.StatusNeedsContext:
+			return state, fmt.Errorf("implement node requested context: %+v", res.Required)
+		case agent.StatusError:
+			return state, fmt.Errorf("implement node reported error: %s", res.Error.Error())
+		}
+		return state, fmt.Errorf("implement node: unexpected terminal status %q", res.Status)
 	}
 }
 
-// TestNodeDynamic runs tests and records the outcome via decision tools.
-// The LLM must call decide_tests_passed or decide_tests_failed to advance
-// the graph — substring parsing was dropped because it was fragile against
-// multi-line test output.
+// TestNodeDynamic runs tests. The typed TestOutput.Passed field drives the
+// graph's conditional edge (tests_passed → review; tests_failed →
+// implement retry).
 func TestNodeDynamic(cfg TemplateConfig) rhizome.NodeFunc[*TaskState] {
 	roles := cfg.Roles.resolve()
 	return func(ctx context.Context, state *TaskState) (*TaskState, error) {
-		sysPrompt, err := composePrompt(cfg, roles.Test, state)
-		if err != nil {
-			return state, fmt.Errorf("composing tester prompt: %w", err)
-		}
-		decision := newDecisionExecutor(state,
-			DecisionOutcome{
-				ToolName:    "decide_tests_passed",
-				Description: "Record that tests passed. Call this tool once you have confirmed the relevant tests all pass.",
-				Status:      "tests_passed",
-				ArtifactKey: "test.results",
-				ArgField:    "summary",
-			},
-			DecisionOutcome{
-				ToolName:    "decide_tests_failed",
-				Description: "Record that tests failed. Call this tool if any relevant test did not pass. Include the failing output in the summary so the next implementation round can address it.",
-				Status:      "tests_failed",
-				ArtifactKey: "test.results",
-				ArgField:    "summary",
-			},
-		)
-		tools := mergeTools(decision, FilterTools(cfg.ToolExecutor, TestTools))
-
-		node := LLMNode(NodeConfig{
-			Provider:      cfg.Provider,
-			ToolExecutor:  tools,
-			Model:         cfg.Model,
-			MaxTurns:      DefaultMaxTurns,
-			SystemPrompt:  sysPrompt,
-			TerminalTools: []string{"decide_tests_passed", "decide_tests_failed"},
-		})
-		state, err = node(ctx, state)
+		tools := AdaptTools(cfg.ToolExecutor, TestTools)
+		res, err := runNode[TestOutput](ctx, cfg, roles.Test, state, tools, testSchema)
 		if err != nil {
 			return state, err
 		}
-		if !decision.Decided() {
-			return state, fmt.Errorf("test node ended without calling decide_tests_passed or decide_tests_failed")
+		switch res.Status {
+		case agent.StatusCompleted:
+			state.FinalText = res.Output.Summary
+			state.SetArtifact("test.results", res.Output.Summary)
+			if res.Output.Passed {
+				state.Status = StatusTestsPassed
+			} else {
+				state.Status = StatusTestsFailed
+			}
+			return state, nil
+		case agent.StatusNeedsContext:
+			return state, fmt.Errorf("test node requested context: %+v", res.Required)
+		case agent.StatusError:
+			return state, fmt.Errorf("test node reported error: %s", res.Error.Error())
 		}
-		return state, nil
+		return state, fmt.Errorf("test node: unexpected terminal status %q", res.Status)
 	}
 }
 
-// ReviewNodeDynamic reviews the implementation against the plan. The LLM
-// must call decide_approved or decide_rejected to advance the graph —
-// substring parsing was dropped because "not approved" matched "approved"
-// and routed rejected work to End.
+// ReviewNodeDynamic reviews the implementation against the plan. The typed
+// ReviewOutput.Approved field drives routing (approved → End; rejected →
+// implement retry).
 func ReviewNodeDynamic(cfg TemplateConfig) rhizome.NodeFunc[*TaskState] {
 	roles := cfg.Roles.resolve()
 	return func(ctx context.Context, state *TaskState) (*TaskState, error) {
-		sysPrompt, err := composePrompt(cfg, roles.Review, state)
-		if err != nil {
-			return state, fmt.Errorf("composing reviewer prompt: %w", err)
-		}
-		decision := newDecisionExecutor(state,
-			DecisionOutcome{
-				ToolName:    "decide_approved",
-				Description: "Record that the implementation is approved. Call this tool when the work satisfies the plan and needs no further revision.",
-				Status:      "review_approved",
-				ArtifactKey: "review.feedback",
-				ArgField:    "reason",
-			},
-			DecisionOutcome{
-				ToolName:    "decide_rejected",
-				Description: "Record that the implementation is rejected. Call this tool with concrete feedback when the work needs revision — the feedback will be passed to the next implementation round.",
-				Status:      "review_rejected",
-				ArtifactKey: "review.feedback",
-				ArgField:    "feedback",
-			},
-		)
-		// Review gets both decision tools (terminal) and ask_user (if the
-		// reviewer hits a scope ambiguity while evaluating the work).
-		tools := mergeTools(decision, mergeTools(askUserTool(), FilterTools(cfg.ToolExecutor, ReadOnlyTools)))
-
-		node := LLMNode(NodeConfig{
-			Provider:      cfg.Provider,
-			ToolExecutor:  tools,
-			Model:         cfg.Model,
-			MaxTurns:      DefaultMaxTurns,
-			SystemPrompt:  sysPrompt,
-			TerminalTools: []string{"decide_approved", "decide_rejected"},
-		})
-		state, err = node(ctx, state)
+		tools := append([]agent.Tool{AskUserTool()}, AdaptTools(cfg.ToolExecutor, ReadOnlyTools)...)
+		res, err := runNode[ReviewOutput](ctx, cfg, roles.Review, state, tools, reviewSchema)
 		if err != nil {
 			return state, err
 		}
-		if !decision.Decided() {
-			return state, fmt.Errorf("review node ended without calling decide_approved or decide_rejected")
+		switch res.Status {
+		case agent.StatusCompleted:
+			state.FinalText = res.Output.Feedback
+			state.SetArtifact("review.feedback", res.Output.Feedback)
+			if res.Output.Approved {
+				state.Status = StatusReviewApproved
+			} else {
+				state.Status = StatusReviewRejected
+			}
+			return state, nil
+		case agent.StatusNeedsContext:
+			return state, fmt.Errorf("review node requested context: %+v", res.Required)
+		case agent.StatusError:
+			return state, fmt.Errorf("review node reported error: %s", res.Error.Error())
 		}
-		return state, nil
+		return state, fmt.Errorf("review node: unexpected terminal status %q", res.Status)
 	}
 }
 
-// Compile-time interface check.
-var _ runtime.ToolExecutor = (*filteredExecutor)(nil)
+// SingleWorkerNode runs one bounded agent call with the full tool set. It
+// replaces the old LLMNode for single-worker graphs.
+func SingleWorkerNode(cfg TemplateConfig, sysPrompt, initialMessage string) rhizome.NodeFunc[*TaskState] {
+	return func(ctx context.Context, state *TaskState) (*TaskState, error) {
+		msg := initialMessage
+		if msg == "" {
+			msg = buildInitialMessage(state)
+		}
+		res, err := agent.Run(ctx, agent.Config[WorkOutput]{
+			Provider:     cfg.Provider,
+			Model:        cfg.Model,
+			System:       sysPrompt,
+			Messages:     []provider.Message{{Role: "user", Content: msg}},
+			Tools:        AdaptTools(cfg.ToolExecutor, nil),
+			OutputSchema: workSchema,
+			OnEvent:      onEventSink(ctx),
+		})
+		if err != nil {
+			return state, err
+		}
+		switch res.Status {
+		case agent.StatusCompleted:
+			state.FinalText = res.Output.Output
+			state.SetArtifact("work.output", res.Output.Output)
+			state.Status = StatusCompleted
+			return state, nil
+		case agent.StatusNeedsContext:
+			return state, fmt.Errorf("work node requested context: %+v", res.Required)
+		case agent.StatusError:
+			return state, fmt.Errorf("work node reported error: %s", res.Error.Error())
+		}
+		return state, fmt.Errorf("work node: unexpected terminal status %q", res.Status)
+	}
+}

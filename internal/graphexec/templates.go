@@ -74,19 +74,11 @@ func (r RoleMap) resolve() RoleMap {
 }
 
 // SingleWorkerGraph builds a minimal Start -> work -> End graph.
-// This is the Phase 1 proof-of-concept: a single LLM node that receives
-// a task description and executes it with the full tool set.
+// One bounded agent call with the full tool set and the WorkOutput schema.
 func SingleWorkerGraph(cfg TemplateConfig, systemPrompt, initialMessage string) (*rhizome.CompiledGraph[*TaskState], error) {
 	g := rhizome.New[*TaskState]()
 
-	if err := g.AddNode("work", LLMNode(NodeConfig{
-		Provider:       cfg.Provider,
-		ToolExecutor:   cfg.ToolExecutor,
-		SystemPrompt:   systemPrompt,
-		InitialMessage: initialMessage,
-		Model:          cfg.Model,
-		ArtifactKey:    "work.output",
-	})); err != nil {
+	if err := g.AddNode("work", SingleWorkerNode(cfg, systemPrompt, initialMessage)); err != nil {
 		return nil, err
 	}
 
@@ -144,7 +136,7 @@ func BugFixGraph(cfg TemplateConfig) (*rhizome.CompiledGraph[*TaskState], error)
 
 	// Conditional: test -> review (if passed) or -> implement (if failed).
 	if err := g.AddConditionalEdge("test", func(_ context.Context, s *TaskState) (string, error) {
-		if s.Status == "tests_passed" {
+		if s.Status == StatusTestsPassed {
 			return "review", nil
 		}
 		return "implement", nil // tests failed — retry implementation
@@ -154,10 +146,10 @@ func BugFixGraph(cfg TemplateConfig) (*rhizome.CompiledGraph[*TaskState], error)
 
 	// Conditional: review -> End (if approved) or -> implement (if rejected).
 	if err := g.AddConditionalEdge("review", func(_ context.Context, s *TaskState) (string, error) {
-		if s.Status == "review_approved" {
+		if s.Status == StatusReviewApproved {
 			return rhizome.End, nil
 		}
-		return "implement", nil // review rejected — revise
+		return "implement", nil
 	}, rhizome.End, "implement"); err != nil {
 		return nil, err
 	}
@@ -201,7 +193,7 @@ func NewFeatureGraph(cfg TemplateConfig) (*rhizome.CompiledGraph[*TaskState], er
 	}
 
 	if err := g.AddConditionalEdge("test", func(_ context.Context, s *TaskState) (string, error) {
-		if s.Status == "tests_passed" {
+		if s.Status == StatusTestsPassed {
 			return "review", nil
 		}
 		return "implement", nil
@@ -210,7 +202,7 @@ func NewFeatureGraph(cfg TemplateConfig) (*rhizome.CompiledGraph[*TaskState], er
 	}
 
 	if err := g.AddConditionalEdge("review", func(_ context.Context, s *TaskState) (string, error) {
-		if s.Status == "review_approved" {
+		if s.Status == StatusReviewApproved {
 			return rhizome.End, nil
 		}
 		return "implement", nil
@@ -248,7 +240,7 @@ func PrototypeGraph(cfg TemplateConfig) (*rhizome.CompiledGraph[*TaskState], err
 	}
 
 	if err := g.AddConditionalEdge("test", func(_ context.Context, s *TaskState) (string, error) {
-		if s.Status == "tests_passed" {
+		if s.Status == StatusTestsPassed {
 			return rhizome.End, nil
 		}
 		return "implement", nil
