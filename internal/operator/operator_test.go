@@ -14,6 +14,7 @@ import (
 	"os"
 
 	"github.com/jefflinse/toasters/internal/db"
+	"github.com/jefflinse/toasters/internal/graphexec"
 	"github.com/jefflinse/toasters/internal/prompt"
 	"github.com/jefflinse/toasters/internal/provider"
 	"github.com/jefflinse/toasters/internal/runtime"
@@ -138,7 +139,7 @@ func testPromptEngine(t *testing.T, roles map[string]string) *prompt.Engine {
 	}
 	for name, body := range roles {
 		path := filepath.Join(rolesDir, name+".md")
-		content := fmt.Sprintf("---\nname: %s\nmode: worker\ntools:\n  - query_teams\n  - create_job\n  - create_task\n  - assign_task\n  - query_job_context\n---\n%s", name, body)
+		content := fmt.Sprintf("---\nname: %s\nmode: worker\ntools:\n  - query_graphs\n  - create_job\n  - create_task\n  - assign_task\n  - query_job_context\n---\n%s", name, body)
 		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 			t.Fatalf("writing role %s: %v", name, err)
 		}
@@ -600,7 +601,7 @@ func TestEventLoop_TaskStarted_CreatesFeedEntry(t *testing.T) {
 		Payload: TaskStartedPayload{
 			TaskID: "task-1",
 			JobID:  "job-1",
-			TeamID: "backend",
+			TeamID: "bug-fix",
 			Title:  "Build API",
 		},
 	})
@@ -618,16 +619,13 @@ func TestEventLoop_TaskStarted_CreatesFeedEntry(t *testing.T) {
 		t.Fatalf("want 1 feed entry, got %d", len(entries))
 	}
 	assertEqual(t, string(db.FeedEntryTaskStarted), string(entries[0].EntryType))
-	assertContains(t, entries[0].Content, "backend")
+	assertContains(t, entries[0].Content, "bug-fix")
 	assertContains(t, entries[0].Content, "Build API")
 }
 
 func TestEventLoop_TaskCompleted_AssignsNextTask(t *testing.T) {
 	store := newOperatorTestStore(t)
 	ctx := context.Background()
-
-	// Seed a team with a lead worker.
-	seedTeam(t, ctx, store, "backend", "Backend Team", "lead-agent")
 
 	// Create a job.
 	job := &db.Job{
@@ -640,20 +638,20 @@ func TestEventLoop_TaskCompleted_AssignsNextTask(t *testing.T) {
 
 	// Create a completed task and a pending next task with pre-assigned team.
 	task1 := &db.Task{
-		ID:     "task-1",
-		JobID:  "job-1",
-		Title:  "First task",
-		Status: db.TaskStatusCompleted,
-		TeamID: "backend",
+		ID:      "task-1",
+		JobID:   "job-1",
+		Title:   "First task",
+		Status:  db.TaskStatusCompleted,
+		GraphID: "bug-fix",
 	}
 	assertNoError(t, store.CreateTask(ctx, task1))
 
 	task2 := &db.Task{
-		ID:     "task-2",
-		JobID:  "job-1",
-		Title:  "Second task",
-		Status: db.TaskStatusPending,
-		TeamID: "backend",
+		ID:      "task-2",
+		JobID:   "job-1",
+		Title:   "Second task",
+		Status:  db.TaskStatusPending,
+		GraphID: "bug-fix",
 	}
 	assertNoError(t, store.CreateTask(ctx, task2))
 
@@ -980,7 +978,7 @@ func TestEventLoop_TaskFailed_RoutesToLLM(t *testing.T) {
 		Payload: TaskFailedPayload{
 			TaskID: "task-1",
 			JobID:  "job-1",
-			TeamID: "backend",
+			TeamID: "bug-fix",
 			Error:  "compilation error in main.go",
 		},
 	})
@@ -1731,7 +1729,7 @@ func TestOperatorToolDefinitions(t *testing.T) {
 		names[d.Name] = true
 	}
 
-	for _, expected := range []string{"consult_worker", "surface_to_user", "list_jobs", "query_job", "query_teams", "setup_workspace", "create_job", "create_task", "assign_task", "save_work_request", "start_job", "ask_user"} {
+	for _, expected := range []string{"consult_worker", "surface_to_user", "list_jobs", "query_job", "query_graphs", "setup_workspace", "create_job", "create_task", "assign_task", "save_work_request", "start_job", "ask_user"} {
 		if !names[expected] {
 			t.Errorf("expected %s in definitions", expected)
 		}
@@ -1769,12 +1767,9 @@ func TestQueryJobDelegatesToSystemTools(t *testing.T) {
 	assertContains(t, result, "job-1")
 }
 
-func TestQueryTeamsDelegatesToSystemTools(t *testing.T) {
+func TestQueryGraphsDelegatesToSystemTools(t *testing.T) {
 	store := newOperatorTestStore(t)
 	ctx := context.Background()
-
-	// Seed a team.
-	seedTeam(t, ctx, store, "team-1", "Alpha Team", "lead-1")
 
 	eventCh := make(chan Event, 64)
 	systemTools := NewSystemTools(SystemToolsConfig{
@@ -1783,12 +1778,15 @@ func TestQueryTeamsDelegatesToSystemTools(t *testing.T) {
 		DefaultModel:    "test-model",
 		EventCh:         eventCh,
 		WorkDir:         t.TempDir(),
+		GraphCatalog: stubCatalog{graphs: []*graphexec.Definition{
+			{ID: "bug-fix", Name: "Alpha Graph"},
+		}},
 	})
 	tools := newOperatorTools(nil, nil, "test-provider", "test-model", store, systemTools, t.TempDir())
 
-	result, err := tools.Execute(ctx, "query_teams", json.RawMessage(`{}`))
+	result, err := tools.Execute(ctx, "query_graphs", json.RawMessage(`{}`))
 	assertNoError(t, err)
-	assertContains(t, result, "Alpha Team")
+	assertContains(t, result, "Alpha Graph")
 }
 
 // --- Regression tests for Bug 1: consultWorker tool filtering ---
@@ -1912,7 +1910,7 @@ func TestConsultWorker_ToolFiltering(t *testing.T) {
 	}
 
 	// The scheduler must NOT see tools it did not declare.
-	undeclaredTools := []string{"assign_task", "query_teams", "query_job", "query_job_context", "surface_to_user"}
+	undeclaredTools := []string{"assign_task", "query_graphs", "query_job", "query_job_context", "surface_to_user"}
 	for _, undeclared := range undeclaredTools {
 		if schedulerToolNames[undeclared] {
 			t.Errorf("scheduler session has undeclared tool %q — regression: consultWorker not filtering tools to worker's declared set", undeclared)

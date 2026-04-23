@@ -364,23 +364,23 @@ func (o *Operator) assignNextTask(ctx context.Context, jobID string) {
 	}
 
 	task := readyTasks[0]
-	if task.TeamID == "" {
-		// No pre-assigned team — need LLM to decide.
-		msg := fmt.Sprintf("Task %q (id: %s) is ready but has no team assigned. Please assign it to an appropriate team.",
+	if task.GraphID == "" {
+		// No pre-assigned graph — need LLM to decide.
+		msg := fmt.Sprintf("Task %q (id: %s) is ready but has no graph assigned. Please assign it to an appropriate graph.",
 			task.Title, task.ID)
 		o.sendToLLM(ctx, msg)
 		return
 	}
 
-	// Use SystemTools to assign the task (handles spawning, status update, event).
+	// Use SystemTools to assign the task (handles dispatch, status update, event).
 	if o.tools == nil || o.tools.systemTools == nil {
 		slog.Warn("cannot assign next task: no system tools configured")
 		return
 	}
 
 	args, err := json.Marshal(map[string]string{
-		"task_id": task.ID,
-		"team_id": task.TeamID,
+		"task_id":  task.ID,
+		"graph_id": task.GraphID,
 	})
 	if err != nil {
 		slog.Error("failed to marshal assign_task args", "error", err)
@@ -388,7 +388,7 @@ func (o *Operator) assignNextTask(ctx context.Context, jobID string) {
 	}
 
 	if _, err := o.tools.systemTools.Execute(ctx, "assign_task", args); err != nil {
-		slog.Error("failed to assign next task", "task_id", task.ID, "team_id", task.TeamID, "error", err)
+		slog.Error("failed to assign next task", "task_id", task.ID, "graph_id", task.GraphID, "error", err)
 	}
 }
 

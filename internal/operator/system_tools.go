@@ -118,7 +118,7 @@ func (st *SystemTools) Definitions() []runtime.ToolDef {
 		},
 		{
 			Name:        "create_task",
-			Description: "Create a new task on a job. Tasks are individual steps within a job that can be assigned to a team or a graph.",
+			Description: "Create a new task on a job. Tasks are individual steps within a job; pre-assign one to a graph by setting graph_id (optional).",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
@@ -130,13 +130,9 @@ func (st *SystemTools) Definitions() []runtime.ToolDef {
 						"type": "string",
 						"description": "Short title for the task"
 					},
-					"team_id": {
-						"type": "string",
-						"description": "Team to pre-assign the task to (optional, mutually exclusive with graph_id)"
-					},
 					"graph_id": {
 						"type": "string",
-						"description": "Graph to pre-assign the task to (optional, mutually exclusive with team_id). Use query_graphs to list available graphs."
+						"description": "Graph to pre-assign the task to (optional). Use query_graphs to list available graphs."
 					}
 				},
 				"required": ["job_id", "title"]
@@ -144,7 +140,7 @@ func (st *SystemTools) Definitions() []runtime.ToolDef {
 		},
 		{
 			Name:        "assign_task",
-			Description: "Assign a pending task to a team or a graph. This dispatches the task to the graph execution engine. The task must be in pending status. Exactly one of team_id or graph_id must be set.",
+			Description: "Assign a pending task to a graph. This dispatches the task to the graph execution engine. The task must be in pending status.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
@@ -152,24 +148,12 @@ func (st *SystemTools) Definitions() []runtime.ToolDef {
 						"type": "string",
 						"description": "ID of the task to assign"
 					},
-					"team_id": {
-						"type": "string",
-						"description": "ID of the team to assign the task to (mutually exclusive with graph_id)"
-					},
 					"graph_id": {
 						"type": "string",
-						"description": "ID of the graph to run the task through (mutually exclusive with team_id). Use query_graphs to list available graphs."
+						"description": "ID of the graph to run the task through. Use query_graphs to list available graphs."
 					}
 				},
-				"required": ["task_id"]
-			}`),
-		},
-		{
-			Name:        "query_teams",
-			Description: "List all available teams with their descriptions, lead agents, and member counts.",
-			Parameters: json.RawMessage(`{
-				"type": "object",
-				"properties": {}
+				"required": ["task_id", "graph_id"]
 			}`),
 		},
 		{
@@ -266,8 +250,6 @@ func (st *SystemTools) Execute(ctx context.Context, name string, args json.RawMe
 		return st.createTask(ctx, args)
 	case "assign_task":
 		return st.assignTask(ctx, args)
-	case "query_teams":
-		return st.queryTeams(ctx)
 	case "query_graphs":
 		return st.queryGraphs()
 	case "query_job":
@@ -390,7 +372,6 @@ func (st *SystemTools) createTask(ctx context.Context, args json.RawMessage) (st
 	var params struct {
 		JobID   string `json:"job_id"`
 		Title   string `json:"title"`
-		TeamID  string `json:"team_id"`
 		GraphID string `json:"graph_id"`
 	}
 	if err := json.Unmarshal(args, &params); err != nil {
@@ -403,9 +384,6 @@ func (st *SystemTools) createTask(ctx context.Context, args json.RawMessage) (st
 	if params.Title == "" {
 		return "", fmt.Errorf("title is required")
 	}
-	if params.TeamID != "" && params.GraphID != "" {
-		return "", fmt.Errorf("set team_id or graph_id, not both")
-	}
 
 	taskID, err := uuid.NewV4()
 	if err != nil {
@@ -417,7 +395,6 @@ func (st *SystemTools) createTask(ctx context.Context, args json.RawMessage) (st
 		JobID:   params.JobID,
 		Title:   params.Title,
 		Status:  db.TaskStatusPending,
-		TeamID:  params.TeamID,
 		GraphID: params.GraphID,
 	}
 
@@ -439,7 +416,6 @@ func (st *SystemTools) createTask(ctx context.Context, args json.RawMessage) (st
 func (st *SystemTools) assignTask(ctx context.Context, args json.RawMessage) (string, error) {
 	var params struct {
 		TaskID  string `json:"task_id"`
-		TeamID  string `json:"team_id"`
 		GraphID string `json:"graph_id"`
 	}
 	if err := json.Unmarshal(args, &params); err != nil {
@@ -449,11 +425,8 @@ func (st *SystemTools) assignTask(ctx context.Context, args json.RawMessage) (st
 	if params.TaskID == "" {
 		return "", fmt.Errorf("task_id is required")
 	}
-	if params.TeamID == "" && params.GraphID == "" {
-		return "", fmt.Errorf("one of team_id or graph_id is required")
-	}
-	if params.TeamID != "" && params.GraphID != "" {
-		return "", fmt.Errorf("set team_id or graph_id, not both")
+	if params.GraphID == "" {
+		return "", fmt.Errorf("graph_id is required")
 	}
 
 	// 1. Get task and verify it's pending.
@@ -477,11 +450,7 @@ func (st *SystemTools) assignTask(ctx context.Context, args json.RawMessage) (st
 		return "", fmt.Errorf("job workspace validation failed: %w", err)
 	}
 
-	// Branch on assignment target: graph or team.
-	if params.GraphID != "" {
-		return st.dispatchGraphTask(ctx, task, job, params.GraphID)
-	}
-	return st.dispatchTeamTask(ctx, task, job, params.TaskID, params.TeamID)
+	return st.dispatchGraphTask(ctx, task, job, params.GraphID)
 }
 
 // dispatchGraphTask runs a task via a declarative graph. The graph_id is
@@ -549,6 +518,36 @@ func (st *SystemTools) dispatchGraphTask(ctx context.Context, task *db.Task, job
 				"task_id", req.TaskID, "job_id", req.JobID, "graph_id", req.GraphID, "error", err)
 		}
 	}()
+
+	// Broadcast assignment event. TeamID carries the graph id for now so
+	// existing TUI listeners keep working — the field will be renamed in a
+	// later pass.
+	if st.broadcaster != nil {
+		st.broadcaster.BroadcastTaskAssigned(task.ID, task.JobID, graphID, task.Title)
+	}
+
+	// Promote the job to active if still pending — without this, the TUI
+	// Jobs panel never sees the job transition out of pending.
+	if job.Status == db.JobStatusPending {
+		if err := st.store.UpdateJobStatus(ctx, task.JobID, db.JobStatusActive); err != nil {
+			slog.Warn("failed to mark job active", "job_id", task.JobID, "error", err)
+		}
+	}
+
+	// Inline task-started feed entry — we must not send EventTaskStarted
+	// through the operator channel because assignTask is itself called from
+	// the event loop goroutine and a send-to-self could deadlock.
+	content := fmt.Sprintf("⚡ %s started task: %s", graphID, task.Title)
+	entry := &db.FeedEntry{
+		EntryType: db.FeedEntryTaskStarted,
+		Content:   content,
+		JobID:     task.JobID,
+	}
+	if err := st.store.CreateFeedEntry(ctx, entry); err != nil {
+		slog.Warn("failed to create task_started feed entry", "task_id", task.ID, "error", err)
+	}
+	slog.Info("task started", "task_id", task.ID, "job_id", task.JobID, "graph_id", graphID, "title", task.Title)
+
 	result, err := json.Marshal(map[string]string{
 		"task_id":  task.ID,
 		"graph_id": graphID,
@@ -558,153 +557,6 @@ func (st *SystemTools) dispatchGraphTask(ctx context.Context, task *db.Task, job
 		return "", fmt.Errorf("marshaling result: %w", err)
 	}
 	return string(result), nil
-}
-
-// dispatchTeamTask runs a task via the legacy team-based path. Kept while
-// teams are being retired; phase 4 will remove this.
-func (st *SystemTools) dispatchTeamTask(ctx context.Context, task *db.Task, job *db.Job, taskID, teamID string) (string, error) {
-	// Get team to verify it exists and get its name.
-	team, err := st.store.GetTeam(ctx, teamID)
-	if err != nil {
-		return "", fmt.Errorf("getting team: %w", err)
-	}
-	// Reject assignments to the system team — it handles orchestration only.
-	if team.Source == "system" {
-		return "", fmt.Errorf("cannot assign job tasks to system team %q; use a user or auto team", team.Name)
-	}
-
-	// Enforce serial execution: if another task in this job is already in progress,
-	// pre-assign the team (so assignNextTask can pick it up later) but don't start it.
-	allTasks, err := st.store.ListTasksForJob(ctx, task.JobID)
-	if err != nil {
-		return "", fmt.Errorf("checking job tasks: %w", err)
-	}
-	for _, t := range allTasks {
-		if t.ID != taskID && t.Status == db.TaskStatusInProgress {
-			if err := st.store.PreAssignTaskTeam(ctx, taskID, teamID); err != nil {
-				return "", fmt.Errorf("pre-assigning team: %w", err)
-			}
-			return fmt.Sprintf(
-				"Task %q queued for team %s — task %q is currently in progress. "+
-					"This task will start automatically when the current task completes.",
-				task.Title, team.Name, t.Title,
-			), nil
-		}
-	}
-
-	// No task in progress — start this one. Set status to in_progress and assign team.
-	if err := st.store.AssignTask(ctx, taskID, teamID); err != nil {
-		return "", fmt.Errorf("assigning task: %w", err)
-	}
-
-	if st.graphExecutor == nil {
-		return "", fmt.Errorf("cannot assign task: no graph executor configured")
-	}
-
-	// Resolve provider/model: team → global default.
-	prov := team.Provider
-	if prov == "" {
-		prov = st.defaultProvider
-	}
-	mod := team.Model
-	if mod == "" {
-		mod = st.defaultModel
-	}
-
-	req := graphexec.TaskRequest{
-		JobID:          task.JobID,
-		JobType:        graphexec.JobType(job.Type),
-		JobTitle:       job.Title,
-		JobDescription: job.Description,
-		TaskID:         taskID,
-		TaskTitle:      task.Title,
-		TeamID:         teamID,
-		WorkspaceDir:   job.WorkspaceDir,
-		ProviderName:   prov,
-		Model:          mod,
-	}
-	go func() {
-		if err := st.graphExecutor.ExecuteTask(
-			context.Background(), // detach from operator context
-			req,
-		); err != nil {
-			slog.Error("graph task execution failed",
-				"task_id", req.TaskID, "job_id", req.JobID, "error", err)
-		}
-	}()
-
-	// Broadcast assignment event.
-	if st.broadcaster != nil {
-		st.broadcaster.BroadcastTaskAssigned(taskID, task.JobID, teamID, task.Title)
-	}
-
-	// Promote the job to active if still pending.
-	if job.Status == db.JobStatusPending {
-		if err := st.store.UpdateJobStatus(ctx, task.JobID, db.JobStatusActive); err != nil {
-			slog.Warn("failed to mark job active", "job_id", task.JobID, "error", err)
-		}
-	}
-
-	// Handle task-started side effects inline. We do NOT send
-	// EventTaskStarted through the event channel because assignTask may be
-	// called from the event loop goroutine (via assignNextTask or operator
-	// tool execution). Sending to eventCh from the sole reader would
-	// self-deadlock if the buffer is full.
-	content := fmt.Sprintf("⚡ %s started task: %s", teamID, task.Title)
-	entry := &db.FeedEntry{
-		EntryType: db.FeedEntryTaskStarted,
-		Content:   content,
-		JobID:     task.JobID,
-	}
-	if err := st.store.CreateFeedEntry(ctx, entry); err != nil {
-		slog.Warn("failed to create task_started feed entry", "task_id", taskID, "error", err)
-	}
-	slog.Info("task started", "task_id", taskID, "job_id", task.JobID, "team_id", teamID, "title", task.Title)
-
-	return fmt.Sprintf("Task assigned to team %s", team.Name), nil
-}
-
-func (st *SystemTools) queryTeams(ctx context.Context) (string, error) {
-	allTeams, err := st.store.ListTeams(ctx)
-	if err != nil {
-		return "", fmt.Errorf("listing teams: %w", err)
-	}
-
-	// Filter out the system team — it handles orchestration, not job tasks.
-	var teams []*db.Team
-	for _, t := range allTeams {
-		if t.Source != "system" {
-			teams = append(teams, t)
-		}
-	}
-
-	if len(teams) == 0 {
-		return "No teams available.", nil
-	}
-
-	// Batch-load all team agents in one query per team. For small team counts
-	// (<10) this is fine; a single JOIN query would be an optimization for
-	// larger scales but isn't needed yet.
-	var b strings.Builder
-	b.WriteString("Available teams:\n")
-
-	for _, team := range teams {
-		fmt.Fprintf(&b, "\n- %s (id: %s)\n", team.Name, team.ID)
-		if team.Description != "" {
-			fmt.Fprintf(&b, "  Description: %s\n", team.Description)
-		}
-		if team.LeadWorker != "" {
-			fmt.Fprintf(&b, "  Lead: %s\n", team.LeadWorker)
-		}
-		members, err := st.store.ListTeamWorkers(ctx, team.ID)
-		if err != nil {
-			slog.Warn("failed to list team workers", "team_id", team.ID, "error", err)
-		} else {
-			fmt.Fprintf(&b, "  Members: %d\n", len(members))
-		}
-	}
-
-	return b.String(), nil
 }
 
 // queryGraphs renders the loaded graph catalog as markdown for the LLM.

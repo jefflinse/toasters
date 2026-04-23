@@ -16,7 +16,7 @@ import (
 
 // operatorTools implements runtime.ToolExecutor for the operator's tool set.
 // It provides consult_worker (spawn a system worker), surface_to_user (relay
-// information to the user), query_job, and query_teams.
+// information to the user), query_job, and query_graphs.
 type operatorTools struct {
 	rt              *runtime.Runtime
 	promptEngine    *prompt.Engine
@@ -102,8 +102,8 @@ func (ot *operatorTools) Definitions() []runtime.ToolDef {
 			}`),
 		},
 		{
-			Name:        "query_teams",
-			Description: "List all available teams with their descriptions, lead agents, and member counts.",
+			Name:        "query_graphs",
+			Description: "List all available graphs with their ids, names, descriptions, and tags. Graphs are declarative, user-defined pipelines that execute a specific class of work — pick one before creating a task to target it.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {}
@@ -181,8 +181,8 @@ func (ot *operatorTools) Execute(ctx context.Context, name string, args json.Raw
 		return ot.listJobs(ctx)
 	case "query_job":
 		return ot.queryJob(ctx, args)
-	case "query_teams":
-		return ot.queryTeams(ctx)
+	case "query_graphs":
+		return ot.queryGraphs(ctx)
 	case "setup_workspace":
 		return ot.setupWorkspace(ctx, args)
 	case "create_job":
@@ -270,7 +270,7 @@ func (ot *operatorTools) consultWorker(ctx context.Context, args json.RawMessage
 	)
 
 	// Determine tool executor and work directory. The decomposer uses CoreTools
-	// (built by the runtime, which includes spawn_worker) with query_teams as
+	// (built by the runtime, which includes spawn_worker) with query_graphs as
 	// an extra-tools overlay. All other system workers get SystemTools directly.
 	var toolExecutor runtime.ToolExecutor
 	var extraTools runtime.ToolExecutor
@@ -278,8 +278,8 @@ func (ot *operatorTools) consultWorker(ctx context.Context, args json.RawMessage
 
 	if isDecomposer(params.WorkerName) {
 		// Decomposer: don't set toolExecutor so the runtime builds CoreTools
-		// (including spawn_worker). Layer query_teams on top as ExtraTools.
-		extraTools = &queryTeamsExecutor{systemTools: ot.systemTools}
+		// (including spawn_worker). Layer query_graphs on top as ExtraTools.
+		extraTools = &queryGraphsExecutor{systemTools: ot.systemTools}
 
 		// Use the job's workspace directory so spawned explorers operate
 		// in the right location.
@@ -299,7 +299,7 @@ func (ot *operatorTools) consultWorker(ctx context.Context, args json.RawMessage
 	// For the decomposer, we use DisallowedTools instead of Tools because
 	// spawn_worker comes from CoreTools (built by the runtime), and its
 	// definition isn't available yet. We deny everything except spawn_worker
-	// so the decomposer sees only spawn_worker + query_teams (from ExtraTools).
+	// so the decomposer sees only spawn_worker + query_graphs (from ExtraTools).
 	var workerTools []runtime.ToolDef
 	var disallowedTools []string
 
@@ -388,12 +388,12 @@ func (ot *operatorTools) queryJob(ctx context.Context, args json.RawMessage) (st
 	return ot.systemTools.Execute(ctx, "query_job", args)
 }
 
-// queryTeams delegates to SystemTools.queryTeams for DB-backed team queries.
-func (ot *operatorTools) queryTeams(ctx context.Context) (string, error) {
+// queryGraphs delegates to SystemTools.queryGraphs for catalog queries.
+func (ot *operatorTools) queryGraphs(ctx context.Context) (string, error) {
 	if ot.systemTools == nil {
-		return "", fmt.Errorf("query_teams unavailable: no system tools configured")
+		return "", fmt.Errorf("query_graphs unavailable: no system tools configured")
 	}
-	return ot.systemTools.Execute(ctx, "query_teams", json.RawMessage(`{}`))
+	return ot.systemTools.Execute(ctx, "query_graphs", json.RawMessage(`{}`))
 }
 
 func (ot *operatorTools) askUser(ctx context.Context, args json.RawMessage) (string, error) {

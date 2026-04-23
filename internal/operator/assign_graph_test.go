@@ -135,31 +135,15 @@ func TestAssignTask_GraphDispatch_RejectsUnknownGraph(t *testing.T) {
 	}
 }
 
-func TestAssignTask_RejectsBothTeamAndGraph(t *testing.T) {
-	ctx := context.Background()
-	st, store, _, workDir := newTestSystemToolsWithCatalog(t, nil)
-	_, taskID := seedGraphJob(t, ctx, store, workDir)
-
-	args, _ := json.Marshal(map[string]string{
-		"task_id":  taskID,
-		"team_id":  "some-team",
-		"graph_id": "some-graph",
-	})
-	_, err := st.Execute(ctx, "assign_task", args)
-	if err == nil || !strings.Contains(err.Error(), "not both") {
-		t.Errorf("err = %v, want 'not both'", err)
-	}
-}
-
-func TestAssignTask_RejectsMissingAssignmentTarget(t *testing.T) {
+func TestAssignTask_RejectsMissingGraphID(t *testing.T) {
 	ctx := context.Background()
 	st, store, _, workDir := newTestSystemToolsWithCatalog(t, nil)
 	_, taskID := seedGraphJob(t, ctx, store, workDir)
 
 	args, _ := json.Marshal(map[string]string{"task_id": taskID})
 	_, err := st.Execute(ctx, "assign_task", args)
-	if err == nil || !strings.Contains(err.Error(), "required") {
-		t.Errorf("err = %v, want a required-field error", err)
+	if err == nil || !strings.Contains(err.Error(), "graph_id is required") {
+		t.Errorf("err = %v, want graph_id-required error", err)
 	}
 }
 
@@ -203,31 +187,6 @@ func TestAssignTask_GraphDispatch_DeferredWhenSiblingInProgress(t *testing.T) {
 	}
 	if task.GraphID != "bug-fix" {
 		t.Errorf("task.GraphID = %q, want bug-fix", task.GraphID)
-	}
-}
-
-func TestCreateTask_RejectsBothTeamAndGraph(t *testing.T) {
-	ctx := context.Background()
-	st, store, _, workDir := newTestSystemToolsWithCatalog(t, nil)
-
-	jobID := "j-create-reject"
-	jobDir := filepath.Join(workDir, jobID)
-	if err := os.MkdirAll(jobDir, 0o755); err != nil {
-		t.Fatalf("mkdir jobDir: %v", err)
-	}
-	if err := store.CreateJob(ctx, &db.Job{ID: jobID, Title: "t", Description: "d", Status: db.JobStatusPending, WorkspaceDir: jobDir}); err != nil {
-		t.Fatalf("CreateJob: %v", err)
-	}
-
-	args, _ := json.Marshal(map[string]string{
-		"job_id":   jobID,
-		"title":    "work",
-		"team_id":  "some-team",
-		"graph_id": "some-graph",
-	})
-	_, err := st.Execute(ctx, "create_task", args)
-	if err == nil || !strings.Contains(err.Error(), "not both") {
-		t.Errorf("err = %v, want 'not both'", err)
 	}
 }
 

@@ -9,25 +9,25 @@ import (
 	"github.com/jefflinse/toasters/internal/runtime"
 )
 
-// queryTeamsExecutor exposes only query_teams from SystemTools.
-// Used as an ExtraTools overlay for the decomposer so it gets query_teams
+// queryGraphsExecutor exposes only query_graphs from SystemTools.
+// Used as an ExtraTools overlay for the decomposer so it gets query_graphs
 // layered on top of the runtime's CoreTools (which provides spawn_worker).
-type queryTeamsExecutor struct {
+type queryGraphsExecutor struct {
 	systemTools *SystemTools
 }
 
-// Execute dispatches query_teams to SystemTools.
-func (q *queryTeamsExecutor) Execute(ctx context.Context, name string, args json.RawMessage) (string, error) {
-	if name == "query_teams" {
-		return q.systemTools.Execute(ctx, "query_teams", args)
+// Execute dispatches query_graphs to SystemTools.
+func (q *queryGraphsExecutor) Execute(ctx context.Context, name string, args json.RawMessage) (string, error) {
+	if name == "query_graphs" {
+		return q.systemTools.Execute(ctx, "query_graphs", args)
 	}
 	return "", fmt.Errorf("%w: %s", runtime.ErrUnknownTool, name)
 }
 
-// Definitions returns only the query_teams tool definition.
-func (q *queryTeamsExecutor) Definitions() []runtime.ToolDef {
+// Definitions returns only the query_graphs tool definition.
+func (q *queryGraphsExecutor) Definitions() []runtime.ToolDef {
 	for _, td := range q.systemTools.Definitions() {
-		if td.Name == "query_teams" {
+		if td.Name == "query_graphs" {
 			return []runtime.ToolDef{td}
 		}
 	}
