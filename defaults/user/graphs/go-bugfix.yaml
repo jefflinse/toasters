@@ -1,0 +1,48 @@
+id: go-bugfix
+name: Go Bug Fix
+description: >
+  Full investigate → plan → implement → test → review cycle specialized
+  for Go. Uses the go-coder, go-tester, and go-reviewer roles so code,
+  tests, and review feedback all carry Go idioms. Retries on test
+  failure or review rejection, bounded by max_iterations.
+tags: [kind:bugfix, language:go]
+
+entry: investigate
+exit: review
+max_iterations: 3
+
+nodes:
+  - id: investigate
+    role: investigator
+  - id: plan
+    role: planner
+  - id: implement
+    role: go-coder
+  - id: test
+    role: go-tester
+  - id: review
+    role: go-reviewer
+
+edges:
+  - from: investigate
+    to: plan
+  - from: plan
+    to: implement
+  - from: implement
+    to: test
+  - from: test
+    router:
+      on: $test.output.passed
+      branches:
+        - when: true
+          to: review
+        - when: false
+          to: implement
+  - from: review
+    router:
+      on: $review.output.approved
+      branches:
+        - when: true
+          to: end
+        - when: false
+          to: implement

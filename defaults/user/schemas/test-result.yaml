@@ -1,0 +1,19 @@
+name: test-result
+description: >
+  Outcome of running a test suite. Carries a boolean pass/fail flag that
+  downstream routers inspect to decide whether to proceed or retry, plus a
+  narrative summary with the details.
+fields:
+  passed:
+    type: boolean
+    description: >
+      true when every test that ran passed; false if any test failed or if
+      the tests could not be run at all. Do not fabricate a pass when you
+      could not determine how to run the tests.
+    required: true
+  summary:
+    type: string
+    description: >
+      Short description of what ran and the outcome. When failing, include
+      the failing output so the next implementation round can address it.
+    required: true

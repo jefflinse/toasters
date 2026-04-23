@@ -3,6 +3,7 @@ package graphexec
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/jefflinse/rhizome"
@@ -36,7 +37,7 @@ func runBundled(t *testing.T, name string, responses [][]provider.StreamEvent) (
 
 	def := loadBundled(t, name)
 
-	cfg, mock := templateConfig(responses)
+	cfg, mock := templateConfig(t, responses)
 	compiled, err := Compile(def, cfg, nil)
 	if err != nil {
 		t.Fatalf("Compile %s: %v", name, err)
@@ -52,20 +53,20 @@ func runBundled(t *testing.T, name string, responses [][]provider.StreamEvent) (
 	return result, mock.calls
 }
 
-// --- bug-fix.yaml matches BugFixGraph from templates.go ---
+// --- bug-fix.yaml ---
 
 func TestBundled_BugFix_HappyPath(t *testing.T) {
 	state, calls := runBundled(t, "bug-fix", [][]provider.StreamEvent{
-		completeResponse(FindingsOutput{Summary: "found bug"}),
-		completeResponse(PlanOutput{Summary: "fix it"}),
-		completeResponse(ImplementOutput{Summary: "patch"}),
-		completeResponse(TestOutput{Passed: true, Summary: "pass"}),
-		completeResponse(ReviewOutput{Approved: true, Feedback: "lgtm"}),
+		summaryResp("found bug"),
+		summaryResp("fix it"),
+		summaryResp("patch"),
+		testResultResp(true, "pass"),
+		reviewResp(true, "lgtm"),
 	})
 	if calls != 5 {
 		t.Errorf("provider called %d times, want 5", calls)
 	}
-	for _, key := range []string{"investigate.findings", "plan.steps", "implement.summary", "test.results", "review.feedback"} {
+	for _, key := range []string{"investigate.summary", "plan.summary", "implement.summary", "test.summary", "review.feedback"} {
 		if got := state.GetArtifactString(key); got == "" {
 			t.Errorf("artifact %q unset", key)
 		}
@@ -74,13 +75,13 @@ func TestBundled_BugFix_HappyPath(t *testing.T) {
 
 func TestBundled_BugFix_TestFailureRetry(t *testing.T) {
 	_, calls := runBundled(t, "bug-fix", [][]provider.StreamEvent{
-		completeResponse(FindingsOutput{Summary: "f"}),
-		completeResponse(PlanOutput{Summary: "p"}),
-		completeResponse(ImplementOutput{Summary: "i1"}),
-		completeResponse(TestOutput{Passed: false, Summary: "fail"}),
-		completeResponse(ImplementOutput{Summary: "i2"}),
-		completeResponse(TestOutput{Passed: true, Summary: "ok"}),
-		completeResponse(ReviewOutput{Approved: true, Feedback: "ok"}),
+		summaryResp("f"),
+		summaryResp("p"),
+		summaryResp("i1"),
+		testResultResp(false, "fail"),
+		summaryResp("i2"),
+		testResultResp(true, "ok"),
+		reviewResp(true, "ok"),
 	})
 	if calls != 7 {
 		t.Errorf("provider called %d times, want 7", calls)
@@ -89,45 +90,45 @@ func TestBundled_BugFix_TestFailureRetry(t *testing.T) {
 
 func TestBundled_BugFix_ReviewRejectionRetry(t *testing.T) {
 	_, calls := runBundled(t, "bug-fix", [][]provider.StreamEvent{
-		completeResponse(FindingsOutput{Summary: "f"}),
-		completeResponse(PlanOutput{Summary: "p"}),
-		completeResponse(ImplementOutput{Summary: "i1"}),
-		completeResponse(TestOutput{Passed: true, Summary: "pass"}),
-		completeResponse(ReviewOutput{Approved: false, Feedback: "fix more"}),
-		completeResponse(ImplementOutput{Summary: "i2"}),
-		completeResponse(TestOutput{Passed: true, Summary: "still pass"}),
-		completeResponse(ReviewOutput{Approved: true, Feedback: "ok"}),
+		summaryResp("f"),
+		summaryResp("p"),
+		summaryResp("i1"),
+		testResultResp(true, "pass"),
+		reviewResp(false, "fix more"),
+		summaryResp("i2"),
+		testResultResp(true, "still pass"),
+		reviewResp(true, "ok"),
 	})
 	if calls != 8 {
 		t.Errorf("provider called %d times, want 8", calls)
 	}
 }
 
-// --- new-feature.yaml matches NewFeatureGraph ---
+// --- new-feature.yaml ---
 
 func TestBundled_NewFeature_HappyPath(t *testing.T) {
 	_, calls := runBundled(t, "new-feature", [][]provider.StreamEvent{
-		completeResponse(PlanOutput{Summary: "plan"}),
-		completeResponse(ImplementOutput{Summary: "impl"}),
-		completeResponse(TestOutput{Passed: true, Summary: "ok"}),
-		completeResponse(ReviewOutput{Approved: true, Feedback: "lgtm"}),
+		summaryResp("plan"),
+		summaryResp("impl"),
+		testResultResp(true, "ok"),
+		reviewResp(true, "lgtm"),
 	})
 	if calls != 4 {
 		t.Errorf("provider called %d times, want 4", calls)
 	}
 }
 
-// --- prototype.yaml matches PrototypeGraph ---
+// --- prototype.yaml ---
 
 func TestBundled_Prototype_HitsCycleCap(t *testing.T) {
 	def := loadBundled(t, "prototype")
-	cfg, _ := templateConfig([][]provider.StreamEvent{
-		completeResponse(ImplementOutput{Summary: "1"}),
-		completeResponse(TestOutput{Passed: false, Summary: "fail"}),
-		completeResponse(ImplementOutput{Summary: "2"}),
-		completeResponse(TestOutput{Passed: false, Summary: "fail"}),
-		completeResponse(ImplementOutput{Summary: "3"}),
-		completeResponse(TestOutput{Passed: false, Summary: "fail"}),
+	cfg, _ := templateConfig(t, [][]provider.StreamEvent{
+		summaryResp("1"),
+		testResultResp(false, "fail"),
+		summaryResp("2"),
+		testResultResp(false, "fail"),
+		summaryResp("3"),
+		testResultResp(false, "fail"),
 	})
 	compiled, err := Compile(def, cfg, nil)
 	if err != nil {
@@ -148,21 +149,17 @@ func TestBundled_AllGraphsCompile(t *testing.T) {
 		t.Fatal("no bundled graphs found — expected at least one")
 	}
 
-	cfg := TemplateConfig{}
+	cfg, _ := templateConfig(t, nil)
 	for _, e := range entries {
-		if e.IsDir() || !hasSuffix(e.Name(), ".yaml") {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".yaml") {
 			continue
 		}
 		t.Run(e.Name(), func(t *testing.T) {
-			name := e.Name()[:len(e.Name())-len(".yaml")]
+			name := strings.TrimSuffix(e.Name(), ".yaml")
 			def := loadBundled(t, name)
 			if _, err := Compile(def, cfg, nil); err != nil {
 				t.Errorf("Compile %s: %v", name, err)
 			}
 		})
 	}
-}
-
-func hasSuffix(s, suffix string) bool {
-	return len(s) >= len(suffix) && s[len(s)-len(suffix):] == suffix
 }

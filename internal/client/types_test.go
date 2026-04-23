@@ -76,7 +76,7 @@ func TestWireTaskToService(t *testing.T) {
 		JobID:           "job-1",
 		Title:           "Write tests",
 		Status:          "in_progress",
-		WorkerID:         "agent-1",
+		WorkerID:        "agent-1",
 		GraphID:         "team-1",
 		ParentID:        "task-0",
 		SortOrder:       3,
@@ -313,7 +313,6 @@ func TestWireWorkerToService_NilOptionalFields(t *testing.T) {
 	}
 }
 
-
 func TestWireSessionSnapshotToService(t *testing.T) {
 	t.Parallel()
 
@@ -368,7 +367,7 @@ func TestWireSessionDetailToService(t *testing.T) {
 	w := wireSessionDetail{
 		Snapshot: wireSessionSnapshot{
 			ID:        "sess-1",
-			WorkerID:   "agent-1",
+			WorkerID:  "agent-1",
 			Status:    "completed",
 			StartTime: testTime,
 			TokensIn:  100,
@@ -710,7 +709,7 @@ func TestWireWorkerSessionToService(t *testing.T) {
 	cost := 0.0042
 	w := wireWorkerSession{
 		ID:        "sess-1",
-		WorkerID:   "agent-1",
+		WorkerID:  "agent-1",
 		JobID:     "job-1",
 		TaskID:    "task-1",
 		Status:    "completed",
@@ -769,7 +768,7 @@ func TestWireWorkerSessionToService_NilOptionalFields(t *testing.T) {
 
 	w := wireWorkerSession{
 		ID:        "sess-2",
-		WorkerID:   "agent-2",
+		WorkerID:  "agent-2",
 		Status:    "active",
 		StartedAt: testTime,
 	}

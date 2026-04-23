@@ -914,4 +914,3 @@ func TestUpdateCmdPopup_UnhandledKeyFallsThrough(t *testing.T) {
 		t.Error("expected nil cmd for unhandled key")
 	}
 }
-

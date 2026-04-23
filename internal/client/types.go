@@ -230,7 +230,7 @@ type wireProgressState struct {
 	Jobs           []wireJob                       `json:"jobs"`
 	Tasks          map[string][]wireTask           `json:"tasks"`
 	Reports        map[string][]wireProgressReport `json:"reports"`
-	ActiveSessions []wireWorkerSession              `json:"active_sessions"`
+	ActiveSessions []wireWorkerSession             `json:"active_sessions"`
 	LiveSnapshots  []wireSessionSnapshot           `json:"live_snapshots"`
 	FeedEntries    []wireFeedEntry                 `json:"feed_entries"`
 }
@@ -430,9 +430,9 @@ type wireSessionToolResultPayload struct {
 type wireSessionDonePayload struct {
 	WorkerName string `json:"worker_name"`
 	JobID      string `json:"job_id,omitempty"`
-	TaskID    string `json:"task_id,omitempty"`
-	Status    string `json:"status"`
-	FinalText string `json:"final_text,omitempty"`
+	TaskID     string `json:"task_id,omitempty"`
+	Status     string `json:"status"`
+	FinalText  string `json:"final_text,omitempty"`
 }
 
 type wireOperationCompletedPayload struct {
@@ -1060,9 +1060,9 @@ func parseSSEPayload(eventType string, raw json.RawMessage) (any, error) {
 		return service.SessionDonePayload{
 			WorkerName: w.WorkerName,
 			JobID:      w.JobID,
-			TaskID:    w.TaskID,
-			Status:    w.Status,
-			FinalText: w.FinalText,
+			TaskID:     w.TaskID,
+			Status:     w.Status,
+			FinalText:  w.FinalText,
 		}, nil
 
 	case service.EventTypeOperationCompleted:

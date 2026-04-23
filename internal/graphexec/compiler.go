@@ -8,6 +8,8 @@ import (
 	"strings"
 
 	"github.com/jefflinse/rhizome"
+
+	"github.com/jefflinse/toasters/internal/prompt"
 )
 
 // Compile turns a validated Definition into a runnable rhizome graph. Each
@@ -34,23 +36,29 @@ func Compile(def *Definition, cfg TemplateConfig, registry *RoleRegistry) (*rhiz
 
 	g := rhizome.New[*TaskState]()
 
+	// Collect each node's role so router compilation can validate the
+	// `on:` expression against the source node's declared schema.
+	nodeRoles := make(map[string]*prompt.Role, len(def.Nodes))
+
 	// Nodes.
 	for _, n := range def.Nodes {
 		if n.Graph != "" {
-			// Subgraphs are reserved for Phase 3; reject cleanly for now.
+			// Subgraphs are reserved for a later phase; reject cleanly for now.
 			return nil, fmt.Errorf("compile %q: node %q references subgraph %q, which is not yet supported", def.ID, n.ID, n.Graph)
 		}
-		fn, err := registry.Build(n.Role, cfg)
+		fn, err := registry.Build(n.Role, n.ID, cfg)
 		if err != nil {
 			return nil, fmt.Errorf("compile %q: node %q: %w", def.ID, n.ID, err)
 		}
+		if cfg.PromptEngine != nil {
+			if role := cfg.PromptEngine.Role(n.Role); role != nil {
+				nodeRoles[n.ID] = role
+			}
+		}
 		// Wrap the node so that a NodeContext is always present during the
 		// body — even when a caller drives the graph without the
-		// NodeContextMiddleware. Without this, role nodes writing into
-		// NodeOutputs fall back to keying by role name, and routers that
-		// read $<nodeID>.output.* miss their source. In the executor path
-		// the middleware has already set a richer context; we don't
-		// overwrite.
+		// NodeContextMiddleware. In the executor path the middleware has
+		// already set a richer context; we don't overwrite.
 		nodeID := n.ID
 		fn = withDefaultNodeContext(nodeID, fn)
 		if err := g.AddNode(nodeID, fn); err != nil {
@@ -71,6 +79,11 @@ func Compile(def *Definition, cfg TemplateConfig, registry *RoleRegistry) (*rhiz
 				return nil, fmt.Errorf("compile %q: edge[%d] %s→%s: %w", def.ID, i, e.From, e.To, err)
 			}
 		default:
+			if cfg.PromptEngine != nil {
+				if err := validateRouter(e.Router, nodeRoles, cfg.PromptEngine); err != nil {
+					return nil, fmt.Errorf("compile %q: edge[%d] router from %q: %w", def.ID, i, e.From, err)
+				}
+			}
 			fn, dests, err := buildRouter(e.From, e.Router)
 			if err != nil {
 				return nil, fmt.Errorf("compile %q: edge[%d] router from %q: %w", def.ID, i, e.From, err)
@@ -194,6 +207,43 @@ func buildRouter(fromNode string, r *Router) (func(context.Context, *TaskState) 
 		return "", fmt.Errorf("router %q from %q: no branch matched value %s", onExpr, fromNode, string(valJSON))
 	}
 	return fn, destNames, nil
+}
+
+// validateRouter checks that a router's `on:` expression references a field
+// declared on the source node's output schema. Returns a clear error when
+// the source role is unknown, the referenced schema is not loaded, or the
+// leading field segment is missing from the schema.
+//
+// Routers today only inspect the top-level field (nested paths are rare in
+// practice) so validation stops at the first segment — that's enough to
+// catch "graph wired for the wrong role" mistakes without being clever.
+func validateRouter(r *Router, nodeRoles map[string]*prompt.Role, engine *prompt.Engine) error {
+	srcNode, fieldPath, ok := parsePath(r.On)
+	if !ok {
+		return fmt.Errorf("invalid router expression %q", r.On)
+	}
+	role, ok := nodeRoles[srcNode]
+	if !ok {
+		// Role was not in the prompt engine — Build() already errored, or
+		// the test path omitted it. Nothing to validate against.
+		return nil
+	}
+	_, schema, err := ResolveSchema(engine, role)
+	if err != nil {
+		return err
+	}
+	head := fieldPath
+	if idx := strings.IndexByte(head, '.'); idx >= 0 {
+		head = head[:idx]
+	}
+	if _, ok := schema.Fields[head]; !ok {
+		names := make([]string, 0, len(schema.Fields))
+		for name := range schema.Fields {
+			names = append(names, name)
+		}
+		return fmt.Errorf("router expression %q: node %q (role %q) emits schema %q which has no field %q (available: %s)", r.On, srcNode, role.Name, schema.Name, head, strings.Join(names, ", "))
+	}
+	return nil
 }
 
 // extractField walks fieldPath (dot-separated) through the JSON decoded

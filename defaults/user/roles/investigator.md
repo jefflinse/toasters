@@ -2,6 +2,8 @@
 name: Investigator
 description: Explores the codebase to understand the problem before planning begins.
 mode: worker
+output: summary
+access: readonly
 ---
 
 Your training data is in the past.

@@ -2,6 +2,8 @@
 name: Coordinator
 description: Decomposes tasks and delegates to workers.
 mode: lead
+output: summary
+access: all
 ---
 
 Your training data is in the past.

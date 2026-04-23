@@ -46,8 +46,8 @@ type Session struct {
 	seq   int // message sequence counter for session_messages
 
 	// State — tokensIn/tokensOut use atomic for lock-free reads.
-	status  string // "active", "completed", "failed", "cancelled"
-	termErr error  // terminal error from Run(), set under mu before return
+	status    string // "active", "completed", "failed", "cancelled"
+	termErr   error  // terminal error from Run(), set under mu before return
 	tokensIn  atomic.Int64
 	tokensOut atomic.Int64
 	startTime time.Time

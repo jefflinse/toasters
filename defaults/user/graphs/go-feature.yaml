@@ -1,0 +1,43 @@
+id: go-feature
+name: Go Feature
+description: >
+  Plan → implement → test → review for a new Go feature. Skips
+  investigation — the task description is assumed to be sufficient for
+  planning. Uses go-coder, go-tester, and go-reviewer.
+tags: [kind:feature, language:go]
+
+entry: plan
+exit: review
+max_iterations: 3
+
+nodes:
+  - id: plan
+    role: planner
+  - id: implement
+    role: go-coder
+  - id: test
+    role: go-tester
+  - id: review
+    role: go-reviewer
+
+edges:
+  - from: plan
+    to: implement
+  - from: implement
+    to: test
+  - from: test
+    router:
+      on: $test.output.passed
+      branches:
+        - when: true
+          to: review
+        - when: false
+          to: implement
+  - from: review
+    router:
+      on: $review.output.approved
+      branches:
+        - when: true
+          to: end
+        - when: false
+          to: implement

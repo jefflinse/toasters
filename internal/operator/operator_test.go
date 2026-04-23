@@ -528,10 +528,10 @@ func TestOperatorMechanicalEvents(t *testing.T) {
 	_ = op.Send(ctx, Event{
 		Type: EventTaskStarted,
 		Payload: TaskStartedPayload{
-			TaskID: "task-0",
-			JobID:  "job-1",
+			TaskID:  "task-0",
+			JobID:   "job-1",
 			GraphID: "team-1",
-			Title:  "Setup",
+			Title:   "Setup",
 		},
 	})
 	_ = op.Send(ctx, Event{
@@ -599,10 +599,10 @@ func TestEventLoop_TaskStarted_CreatesFeedEntry(t *testing.T) {
 	_ = op.Send(ctx, Event{
 		Type: EventTaskStarted,
 		Payload: TaskStartedPayload{
-			TaskID: "task-1",
-			JobID:  "job-1",
+			TaskID:  "task-1",
+			JobID:   "job-1",
 			GraphID: "bug-fix",
-			Title:  "Build API",
+			Title:   "Build API",
 		},
 	})
 
@@ -716,7 +716,7 @@ func TestEventLoop_TaskCompleted_AssignsNextTask(t *testing.T) {
 		Payload: TaskCompletedPayload{
 			TaskID:      "task-1",
 			JobID:       "job-1",
-			GraphID:      "backend",
+			GraphID:     "backend",
 			Summary:     "First task done",
 			HasNextTask: true,
 		},
@@ -800,7 +800,7 @@ func TestEventLoop_TaskCompleted_ChecksJobComplete(t *testing.T) {
 		Payload: TaskCompletedPayload{
 			TaskID:      "task-1",
 			JobID:       "job-1",
-			GraphID:      "backend",
+			GraphID:     "backend",
 			Summary:     "All done",
 			HasNextTask: false,
 		},
@@ -904,7 +904,7 @@ func TestEventLoop_TaskCompleted_WithRecommendations(t *testing.T) {
 		Payload: TaskCompletedPayload{
 			TaskID:          "task-1",
 			JobID:           "job-1",
-			GraphID:          "backend",
+			GraphID:         "backend",
 			Summary:         "API built",
 			Recommendations: "Add caching layer for performance",
 			HasNextTask:     false,
@@ -976,10 +976,10 @@ func TestEventLoop_TaskFailed_RoutesToLLM(t *testing.T) {
 	_ = op.Send(ctx, Event{
 		Type: EventTaskFailed,
 		Payload: TaskFailedPayload{
-			TaskID: "task-1",
-			JobID:  "job-1",
+			TaskID:  "task-1",
+			JobID:   "job-1",
 			GraphID: "bug-fix",
-			Error:  "compilation error in main.go",
+			Error:   "compilation error in main.go",
 		},
 	})
 
@@ -1058,7 +1058,7 @@ func TestEventLoop_BlockerReported_RoutesToLLM(t *testing.T) {
 		Type: EventBlockerReported,
 		Payload: BlockerReportedPayload{
 			TaskID:      "task-1",
-			GraphID:      "backend",
+			GraphID:     "backend",
 			WorkerID:    "worker-1",
 			Description: "Cannot access production database",
 		},

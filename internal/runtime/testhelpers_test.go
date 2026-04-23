@@ -108,7 +108,7 @@ func (s *noopStore) UpsertWorker(_ context.Context, _ *db.Worker) error        {
 func (s *noopStore) GetWorker(_ context.Context, _ string) (*db.Worker, error) { return nil, nil }
 func (s *noopStore) ListWorkers(_ context.Context) ([]*db.Worker, error)       { return nil, nil }
 func (s *noopStore) DeleteAllWorkers(_ context.Context) error                  { return nil }
-func (s *noopStore) CreateFeedEntry(_ context.Context, _ *db.FeedEntry) error { return nil }
+func (s *noopStore) CreateFeedEntry(_ context.Context, _ *db.FeedEntry) error  { return nil }
 func (s *noopStore) ListFeedEntries(_ context.Context, _ string, _ int) ([]*db.FeedEntry, error) {
 	return nil, nil
 }

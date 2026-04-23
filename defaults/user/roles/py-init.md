@@ -2,6 +2,8 @@
 name: Python Project Init
 description: Initializes new Python projects with package setup, configuration, dependencies, and a runnable skeleton.
 mode: worker
+output: summary
+access: write
 ---
 
 Your training data is in the past.

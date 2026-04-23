@@ -11,17 +11,17 @@ import (
 	"github.com/jefflinse/toasters/internal/provider"
 )
 
-// compilerStreamFor is the minimal set of provider responses a compiler test
-// needs — one complete() per node execution, supplied as a FIFO list.
-func compilerTemplate(responses [][]provider.StreamEvent) TemplateConfig {
-	cfg, _ := templateConfig(responses)
+// compilerTemplate is a convenience wrapper around templateConfig.
+func compilerTemplate(t testing.TB, responses [][]provider.StreamEvent) TemplateConfig {
+	t.Helper()
+	cfg, _ := templateConfig(t, responses)
 	return cfg
 }
 
-// bugFixDef is the declarative analogue of BugFixGraph in templates.go. If
-// this definition compiles to a graph that behaves identically under the
-// same provider responses, we have confidence the compiler is correct
-// against the v1 surface.
+// bugFixDef is the declarative analogue of the bug-fix graph in
+// defaults/user/graphs/bug-fix.yaml. If this definition compiles and
+// behaves identically under the same provider responses, we have
+// confidence the compiler is correct against the runtime surface.
 func bugFixDef() *Definition {
 	return &Definition{
 		ID:    "bug-fix",
@@ -58,12 +58,12 @@ func bugFixDef() *Definition {
 }
 
 func TestCompile_LinearAndConditional_HappyPath(t *testing.T) {
-	cfg := compilerTemplate([][]provider.StreamEvent{
-		completeResponse(FindingsOutput{Summary: "found bug"}),
-		completeResponse(PlanOutput{Summary: "fix it"}),
-		completeResponse(ImplementOutput{Summary: "done"}),
-		completeResponse(TestOutput{Passed: true, Summary: "ok"}),
-		completeResponse(ReviewOutput{Approved: true, Feedback: "lgtm"}),
+	cfg := compilerTemplate(t, [][]provider.StreamEvent{
+		summaryResp("found bug"),
+		summaryResp("fix it"),
+		summaryResp("done"),
+		testResultResp(true, "ok"),
+		reviewResp(true, "lgtm"),
 	})
 
 	compiled, err := Compile(bugFixDef(), cfg, nil)
@@ -78,7 +78,7 @@ func TestCompile_LinearAndConditional_HappyPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	for _, key := range []string{"investigate.findings", "plan.steps", "implement.summary", "test.results", "review.feedback"} {
+	for _, key := range []string{"investigate.summary", "plan.summary", "implement.summary", "test.summary", "review.feedback"} {
 		if got := result.GetArtifactString(key); got == "" {
 			t.Errorf("expected artifact %q to be set", key)
 		}
@@ -86,14 +86,14 @@ func TestCompile_LinearAndConditional_HappyPath(t *testing.T) {
 }
 
 func TestCompile_RouterRetriesOnFailure(t *testing.T) {
-	cfg := compilerTemplate([][]provider.StreamEvent{
-		completeResponse(FindingsOutput{Summary: "f"}),
-		completeResponse(PlanOutput{Summary: "p"}),
-		completeResponse(ImplementOutput{Summary: "i1"}),
-		completeResponse(TestOutput{Passed: false, Summary: "fail"}),
-		completeResponse(ImplementOutput{Summary: "i2"}),
-		completeResponse(TestOutput{Passed: true, Summary: "ok"}),
-		completeResponse(ReviewOutput{Approved: true, Feedback: "lgtm"}),
+	cfg := compilerTemplate(t, [][]provider.StreamEvent{
+		summaryResp("f"),
+		summaryResp("p"),
+		summaryResp("i1"),
+		testResultResp(false, "fail"),
+		summaryResp("i2"),
+		testResultResp(true, "ok"),
+		reviewResp(true, "lgtm"),
 	})
 
 	compiled, err := Compile(bugFixDef(), cfg, nil)
@@ -113,7 +113,6 @@ func TestCompile_RouterRetriesOnFailure(t *testing.T) {
 }
 
 func TestCompile_MaxIterationsCap(t *testing.T) {
-	// Definition with an always-failing test loop.
 	def := &Definition{
 		ID:    "proto",
 		Entry: "implement",
@@ -134,13 +133,13 @@ func TestCompile_MaxIterationsCap(t *testing.T) {
 		MaxIterations: 3,
 	}
 
-	cfg := compilerTemplate([][]provider.StreamEvent{
-		completeResponse(ImplementOutput{Summary: "1"}),
-		completeResponse(TestOutput{Passed: false, Summary: "fail"}),
-		completeResponse(ImplementOutput{Summary: "2"}),
-		completeResponse(TestOutput{Passed: false, Summary: "fail"}),
-		completeResponse(ImplementOutput{Summary: "3"}),
-		completeResponse(TestOutput{Passed: false, Summary: "fail"}),
+	cfg := compilerTemplate(t, [][]provider.StreamEvent{
+		summaryResp("1"),
+		testResultResp(false, "fail"),
+		summaryResp("2"),
+		testResultResp(false, "fail"),
+		summaryResp("3"),
+		testResultResp(false, "fail"),
 	})
 
 	compiled, err := Compile(def, cfg, nil)
@@ -175,9 +174,9 @@ func TestCompile_RouterDefault(t *testing.T) {
 		},
 	}
 
-	cfg := compilerTemplate([][]provider.StreamEvent{
-		completeResponse(FindingsOutput{Summary: "anything"}),
-		completeResponse(PlanOutput{Summary: "plan"}),
+	cfg := compilerTemplate(t, [][]provider.StreamEvent{
+		summaryResp("anything"),
+		summaryResp("plan"),
 	})
 	compiled, err := Compile(def, cfg, nil)
 	if err != nil {
@@ -187,8 +186,8 @@ func TestCompile_RouterDefault(t *testing.T) {
 	if _, err := compiled.Run(context.Background(), state); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if got := state.GetArtifactString("plan.steps"); got != "plan" {
-		t.Errorf("plan.steps = %q, want %q (default branch should have fired)", got, "plan")
+	if got := state.GetArtifactString("plan.summary"); got != "plan" {
+		t.Errorf("plan.summary = %q, want %q (default branch should have fired)", got, "plan")
 	}
 }
 
@@ -211,8 +210,8 @@ func TestCompile_RouterErrorsWhenNoBranchMatchesAndNoDefault(t *testing.T) {
 		},
 	}
 
-	cfg := compilerTemplate([][]provider.StreamEvent{
-		completeResponse(FindingsOutput{Summary: "something-else"}),
+	cfg := compilerTemplate(t, [][]provider.StreamEvent{
+		summaryResp("something-else"),
 	})
 	compiled, err := Compile(def, cfg, nil)
 	if err != nil {
@@ -242,7 +241,8 @@ func TestCompile_RejectsUnknownRole(t *testing.T) {
 		Nodes: []Node{{ID: "a", Role: "does-not-exist"}},
 		Edges: []Edge{{From: "a", To: EndNode}},
 	}
-	_, err := Compile(def, TemplateConfig{}, nil)
+	cfg := compilerTemplate(t, nil)
+	_, err := Compile(def, cfg, nil)
 	if err == nil {
 		t.Fatal("Compile: expected unknown-role error")
 	}
@@ -264,5 +264,35 @@ func TestCompile_RejectsSubgraphForNow(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "not yet supported") {
 		t.Errorf("err = %v, want not-yet-supported message", err)
+	}
+}
+
+func TestCompile_RouterRejectsUnknownField(t *testing.T) {
+	// "$test.output.bogus" is a field not on the test-result schema.
+	def := &Definition{
+		ID:    "bad-router",
+		Entry: "implement",
+		Nodes: []Node{
+			{ID: "implement", Role: "implementer"},
+			{ID: "test", Role: "tester"},
+		},
+		Edges: []Edge{
+			{From: "implement", To: "test"},
+			{From: "test", Router: &Router{
+				On: "$test.output.bogus",
+				Branches: []Branch{
+					{When: true, To: EndNode},
+					{When: false, To: "implement"},
+				},
+			}},
+		},
+	}
+	cfg := compilerTemplate(t, nil)
+	_, err := Compile(def, cfg, nil)
+	if err == nil {
+		t.Fatal("Compile: expected router-schema error")
+	}
+	if !strings.Contains(err.Error(), "bogus") {
+		t.Errorf("err = %v, want to mention unknown field", err)
 	}
 }

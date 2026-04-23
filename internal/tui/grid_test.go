@@ -1114,10 +1114,10 @@ func TestRenderLeftPanel_TeamNesting(t *testing.T) {
 		m.progress.tasks = map[string][]service.Task{
 			jobID: {
 				{
-					ID:     "task-1",
-					JobID:  jobID,
-					Title:  "Build the thing",
-					Status: service.TaskStatusInProgress,
+					ID:      "task-1",
+					JobID:   jobID,
+					Title:   "Build the thing",
+					Status:  service.TaskStatusInProgress,
 					GraphID: "backend-team",
 				},
 			},
@@ -1144,10 +1144,10 @@ func TestRenderLeftPanel_TeamNesting(t *testing.T) {
 		m.progress.tasks = map[string][]service.Task{
 			jobID: {
 				{
-					ID:     "task-2",
-					JobID:  jobID,
-					Title:  "Do the work",
-					Status: service.TaskStatusPending,
+					ID:      "task-2",
+					JobID:   jobID,
+					Title:   "Do the work",
+					Status:  service.TaskStatusPending,
 					GraphID: "", // no team assigned
 				},
 			},
@@ -1187,17 +1187,17 @@ func TestRenderLeftPanel_TeamNesting(t *testing.T) {
 		m.progress.tasks = map[string][]service.Task{
 			jobID: {
 				{
-					ID:     "task-with-team",
-					JobID:  jobID,
-					Title:  "Assigned task",
-					Status: service.TaskStatusInProgress,
+					ID:      "task-with-team",
+					JobID:   jobID,
+					Title:   "Assigned task",
+					Status:  service.TaskStatusInProgress,
 					GraphID: "frontend-team",
 				},
 				{
-					ID:     "task-without-team",
-					JobID:  jobID,
-					Title:  "Unassigned task",
-					Status: service.TaskStatusPending,
+					ID:      "task-without-team",
+					JobID:   jobID,
+					Title:   "Unassigned task",
+					Status:  service.TaskStatusPending,
 					GraphID: "",
 				},
 			},

@@ -333,10 +333,10 @@ type SessionToolResultPayload struct {
 // SessionDonePayload is the payload for EventTypeSessionDone events.
 type SessionDonePayload struct {
 	WorkerName string
-	JobID     string
-	TaskID    string
-	Status    string // "completed", "failed", "cancelled"
-	FinalText string // last text output from the session (may be empty)
+	JobID      string
+	TaskID     string
+	Status     string // "completed", "failed", "cancelled"
+	FinalText  string // last text output from the session (may be empty)
 }
 
 // OperationCompletedPayload is the payload for EventTypeOperationCompleted events.

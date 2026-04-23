@@ -198,4 +198,3 @@ func TestWatcher_StopCleanup(t *testing.T) {
 		t.Fatal("Start goroutine did not exit after Stop")
 	}
 }
-

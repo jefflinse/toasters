@@ -43,7 +43,7 @@ type catalogModalState struct {
 
 	// Configure form sub-state.
 	configuring  bool
-	configEdit   bool               // true if editing an existing provider
+	configEdit   bool // true if editing an existing provider
 	configField  configField
 	configValues [fieldCount]string // indexed by configField
 	configErr    string             // validation/save error

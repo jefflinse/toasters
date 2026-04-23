@@ -10,11 +10,11 @@ import (
 
 // ReportTaskProgressParams holds parameters for the report_task_progress tool.
 type ReportTaskProgressParams struct {
-	JobID   string `json:"job_id"`
-	TaskID  string `json:"task_id"`
+	JobID    string `json:"job_id"`
+	TaskID   string `json:"task_id"`
 	WorkerID string `json:"worker_id"`
 	Status   string `json:"status"`
-	Message string `json:"message"`
+	Message  string `json:"message"`
 }
 
 // ReportBlockerParams holds parameters for the report_blocker tool.
@@ -75,11 +75,11 @@ func ReportTaskProgress(ctx context.Context, store db.Store, params ReportTaskPr
 		return "", fmt.Errorf("invalid status %q: must be one of in_progress, completed, failed, blocked", params.Status)
 	}
 	report := &db.ProgressReport{
-		JobID:   params.JobID,
-		TaskID:  params.TaskID,
+		JobID:    params.JobID,
+		TaskID:   params.TaskID,
 		WorkerID: params.WorkerID,
-		Status:  params.Status,
-		Message: params.Message,
+		Status:   params.Status,
+		Message:  params.Message,
 	}
 	if err := store.ReportProgress(ctx, report); err != nil {
 		return "", fmt.Errorf("reporting progress: %w", err)
@@ -99,11 +99,11 @@ func ReportBlocker(ctx context.Context, store db.Store, params ReportBlockerPara
 		return "", fmt.Errorf("invalid severity %q: must be one of low, medium, high", params.Severity)
 	}
 	report := &db.ProgressReport{
-		JobID:   params.JobID,
-		TaskID:  params.TaskID,
+		JobID:    params.JobID,
+		TaskID:   params.TaskID,
 		WorkerID: params.WorkerID,
-		Status:  "blocked",
-		Message: fmt.Sprintf("[%s] %s", params.Severity, params.Description),
+		Status:   "blocked",
+		Message:  fmt.Sprintf("[%s] %s", params.Severity, params.Description),
 	}
 	if err := store.ReportProgress(ctx, report); err != nil {
 		return "", fmt.Errorf("reporting blocker: %w", err)
@@ -149,11 +149,11 @@ func RequestReview(ctx context.Context, store db.Store, params RequestReviewPara
 	}
 
 	report := &db.ProgressReport{
-		JobID:   params.JobID,
-		TaskID:  params.TaskID,
+		JobID:    params.JobID,
+		TaskID:   params.TaskID,
 		WorkerID: params.WorkerID,
-		Status:  "review_requested",
-		Message: "Review requested for " + params.ArtifactPath,
+		Status:   "review_requested",
+		Message:  "Review requested for " + params.ArtifactPath,
 	}
 	if err := store.ReportProgress(ctx, report); err != nil {
 		return "", fmt.Errorf("reporting review progress: %w", err)

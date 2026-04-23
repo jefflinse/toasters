@@ -609,7 +609,7 @@ type wireProgressState struct {
 	Jobs           []wireJob                       `json:"jobs"`
 	Tasks          map[string][]wireTask           `json:"tasks"`
 	Reports        map[string][]wireProgressReport `json:"reports"`
-	ActiveSessions []wireWorkerSession              `json:"active_sessions"`
+	ActiveSessions []wireWorkerSession             `json:"active_sessions"`
 	LiveSnapshots  []wireSessionSnapshot           `json:"live_snapshots"`
 	FeedEntries    []wireFeedEntry                 `json:"feed_entries"`
 }

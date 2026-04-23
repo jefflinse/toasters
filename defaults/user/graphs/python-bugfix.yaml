@@ -1,0 +1,48 @@
+id: python-bugfix
+name: Python Bug Fix
+description: >
+  Full investigate → plan → implement → test → review cycle specialized
+  for Python. Uses py-coder, py-tester, and py-reviewer so work carries
+  Python idioms (pytest, PEP 8, async patterns). Retries on test
+  failure or review rejection, bounded by max_iterations.
+tags: [kind:bugfix, language:python]
+
+entry: investigate
+exit: review
+max_iterations: 3
+
+nodes:
+  - id: investigate
+    role: investigator
+  - id: plan
+    role: planner
+  - id: implement
+    role: py-coder
+  - id: test
+    role: py-tester
+  - id: review
+    role: py-reviewer
+
+edges:
+  - from: investigate
+    to: plan
+  - from: plan
+    to: implement
+  - from: implement
+    to: test
+  - from: test
+    router:
+      on: $test.output.passed
+      branches:
+        - when: true
+          to: review
+        - when: false
+          to: implement
+  - from: review
+    router:
+      on: $review.output.approved
+      branches:
+        - when: true
+          to: end
+        - when: false
+          to: implement

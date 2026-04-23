@@ -2,6 +2,8 @@
 name: Go Coder
 description: Implements and fixes Go code according to input requirements.
 mode: worker
+output: summary
+access: write
 ---
 
 Your training data is in the past.

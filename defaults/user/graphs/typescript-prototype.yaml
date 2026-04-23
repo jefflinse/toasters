@@ -1,0 +1,28 @@
+id: typescript-prototype
+name: TypeScript Prototype
+description: >
+  Fast ts-coder → ts-tester loop capped at max_iterations. Skips
+  investigation, planning, and review — good for quick TypeScript
+  iterations where correctness is pinned by tests.
+tags: [kind:prototype, language:typescript]
+
+entry: implement
+max_iterations: 3
+
+nodes:
+  - id: implement
+    role: ts-coder
+  - id: test
+    role: ts-tester
+
+edges:
+  - from: implement
+    to: test
+  - from: test
+    router:
+      on: $test.output.passed
+      branches:
+        - when: true
+          to: end
+        - when: false
+          to: implement

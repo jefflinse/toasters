@@ -35,13 +35,13 @@ type mockService struct {
 	respondToBlockerFn func(ctx context.Context, jobID, taskID string, answers []string) error
 
 	// Definitions
-	listSkillsFn        func(ctx context.Context) ([]service.Skill, error)
-	getSkillFn          func(ctx context.Context, id string) (service.Skill, error)
-	createSkillFn       func(ctx context.Context, name string) (service.Skill, error)
-	deleteSkillFn       func(ctx context.Context, id string) error
-	generateSkillFn     func(ctx context.Context, prompt string) (string, error)
-	listWorkersFn func(ctx context.Context) ([]service.Worker, error)
-	getWorkerFn   func(ctx context.Context, id string) (service.Worker, error)
+	listSkillsFn    func(ctx context.Context) ([]service.Skill, error)
+	getSkillFn      func(ctx context.Context, id string) (service.Skill, error)
+	createSkillFn   func(ctx context.Context, name string) (service.Skill, error)
+	deleteSkillFn   func(ctx context.Context, id string) error
+	generateSkillFn func(ctx context.Context, prompt string) (string, error)
+	listWorkersFn   func(ctx context.Context) ([]service.Worker, error)
+	getWorkerFn     func(ctx context.Context, id string) (service.Worker, error)
 
 	// Jobs
 	listJobsFn    func(ctx context.Context, filter *service.JobListFilter) ([]service.Job, error)

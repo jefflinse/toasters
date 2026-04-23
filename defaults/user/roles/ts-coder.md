@@ -2,6 +2,8 @@
 name: TypeScript Coder
 description: Implements and fixes TypeScript/JavaScript code according to input requirements.
 mode: worker
+output: summary
+access: write
 ---
 
 Your training data is in the past.

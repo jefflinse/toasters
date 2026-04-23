@@ -29,7 +29,7 @@ func TestRuntimeSpawnWorker(t *testing.T) {
 	rt := New(nil, newTestRegistry(mp))
 
 	sess, err := rt.SpawnWorker(context.Background(), SpawnOpts{
-		WorkerID:        "worker-1",
+		WorkerID:       "worker-1",
 		ProviderName:   "test",
 		Model:          "test-model",
 		InitialMessage: "Hello",
@@ -346,7 +346,7 @@ func TestSpawnWorker_ExtraToolsLayered(t *testing.T) {
 	}
 
 	_, err := rt.SpawnWorker(context.Background(), SpawnOpts{
-		WorkerID:        "test-worker",
+		WorkerID:       "test-worker",
 		ProviderName:   "test",
 		Model:          "test-model",
 		ExtraTools:     extraTools,

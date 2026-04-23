@@ -1,0 +1,13 @@
+name: summary
+description: >
+  Free-form narrative output. Used by any role whose work is captured as a
+  single block of prose: investigation findings, implementation plans,
+  change descriptions, project scaffolding reports.
+fields:
+  summary:
+    type: string
+    description: >
+      Concise narrative of the node's work. Include file paths, function
+      names, and other concrete references so downstream nodes can act on
+      the result without re-deriving context.
+    required: true

@@ -1,0 +1,19 @@
+name: review-decision
+description: >
+  Outcome of a code review. Carries a boolean approval flag that downstream
+  routers inspect to decide whether the work ships or returns for another
+  implementation round, plus concrete feedback.
+fields:
+  approved:
+    type: boolean
+    description: >
+      true when the implementation satisfies the requirements and needs no
+      further revision; false when the work needs changes.
+    required: true
+  feedback:
+    type: string
+    description: >
+      Concrete, actionable review notes. When rejecting, describe what
+      needs to change (cite file paths and explain why) — the feedback is
+      passed to the next implementation round.
+    required: true

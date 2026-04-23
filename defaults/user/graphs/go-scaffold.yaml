@@ -1,0 +1,29 @@
+id: go-scaffold
+name: Go Project Scaffold
+description: >
+  Stand up a new Go project: module init, directory layout, a runnable
+  main, and basic wiring. The scaffold goes through review so obvious
+  structural mistakes are caught before downstream work begins.
+tags: [kind:scaffold, language:go]
+
+entry: scaffold
+exit: review
+max_iterations: 2
+
+nodes:
+  - id: scaffold
+    role: go-init
+  - id: review
+    role: go-reviewer
+
+edges:
+  - from: scaffold
+    to: review
+  - from: review
+    router:
+      on: $review.output.approved
+      branches:
+        - when: true
+          to: end
+        - when: false
+          to: scaffold

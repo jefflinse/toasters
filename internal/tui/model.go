@@ -1641,4 +1641,3 @@ func formatServiceEvent(ev service.Event, maxWidth int) string {
 		return ""
 	}
 }
-

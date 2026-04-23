@@ -2,6 +2,8 @@
 name: TUI Coder
 description: Implements and fixes Go TUI code using Bubble Tea and the Charm ecosystem.
 mode: worker
+output: summary
+access: write
 ---
 
 Your training data is in the past.

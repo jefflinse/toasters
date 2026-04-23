@@ -1,0 +1,43 @@
+id: python-feature
+name: Python Feature
+description: >
+  Plan → implement → test → review for a new Python feature. Skips
+  investigation — the task description is assumed to be sufficient for
+  planning. Uses py-coder, py-tester, and py-reviewer.
+tags: [kind:feature, language:python]
+
+entry: plan
+exit: review
+max_iterations: 3
+
+nodes:
+  - id: plan
+    role: planner
+  - id: implement
+    role: py-coder
+  - id: test
+    role: py-tester
+  - id: review
+    role: py-reviewer
+
+edges:
+  - from: plan
+    to: implement
+  - from: implement
+    to: test
+  - from: test
+    router:
+      on: $test.output.passed
+      branches:
+        - when: true
+          to: review
+        - when: false
+          to: implement
+  - from: review
+    router:
+      on: $review.output.approved
+      branches:
+        - when: true
+          to: end
+        - when: false
+          to: implement

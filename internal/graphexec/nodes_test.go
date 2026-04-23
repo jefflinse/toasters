@@ -71,22 +71,36 @@ func (m *mockToolExecutor) Definitions() []runtime.ToolDef {
 	return m.defs
 }
 
-// --- Helpers ---
+// --- Test fixtures ---
 
-// completeResponse returns stream events for a terminal complete() tool call
-// carrying the given output payload. Used to drive typed nodes.
-func completeResponse(payload any) []provider.StreamEvent {
-	b, err := json.Marshal(payload)
-	if err != nil {
-		panic(err)
-	}
+// completeJSON returns stream events for a terminal complete() tool call
+// with the given JSON payload.
+func completeJSON(payload string) []provider.StreamEvent {
 	return []provider.StreamEvent{
 		{Type: provider.EventToolCall, ToolCall: &provider.ToolCall{
 			ID:        "call-complete",
 			Name:      "complete",
-			Arguments: b,
+			Arguments: json.RawMessage(payload),
 		}},
 	}
+}
+
+// summaryResp returns a complete() response for the default "summary" schema.
+func summaryResp(summary string) []provider.StreamEvent {
+	b, _ := json.Marshal(map[string]any{"summary": summary})
+	return completeJSON(string(b))
+}
+
+// testResultResp returns a complete() response for the "test-result" schema.
+func testResultResp(passed bool, summary string) []provider.StreamEvent {
+	b, _ := json.Marshal(map[string]any{"passed": passed, "summary": summary})
+	return completeJSON(string(b))
+}
+
+// reviewResp returns a complete() response for the "review-decision" schema.
+func reviewResp(approved bool, feedback string) []provider.StreamEvent {
+	b, _ := json.Marshal(map[string]any{"approved": approved, "feedback": feedback})
+	return completeJSON(string(b))
 }
 
 // toolCallResponse returns a non-terminal tool call (e.g. read_file).
@@ -100,7 +114,20 @@ func toolCallResponse(id, name, argsJSON string) []provider.StreamEvent {
 	}
 }
 
-func templateConfig(responses [][]provider.StreamEvent) (TemplateConfig, *mockProvider) {
+// testEngine returns a prompt engine loaded with the standard user defaults
+// (roles + schemas). Tests call this to get a ready-to-use engine without
+// hand-rolling role files in every test.
+func testEngine(t testing.TB) *prompt.Engine {
+	t.Helper()
+	e := prompt.NewEngine()
+	if err := e.LoadDir("../../defaults/user", "user"); err != nil {
+		t.Fatalf("LoadDir user defaults: %v", err)
+	}
+	return e
+}
+
+func templateConfig(t testing.TB, responses [][]provider.StreamEvent) (TemplateConfig, *mockProvider) {
+	t.Helper()
 	prov := &mockProvider{responses: responses}
 	toolExec := &mockToolExecutor{
 		defs: []tooldef.ToolDef{
@@ -112,92 +139,74 @@ func templateConfig(responses [][]provider.StreamEvent) (TemplateConfig, *mockPr
 			{Name: "shell", Description: "Run a command"},
 		},
 	}
-	return TemplateConfig{Provider: prov, ToolExecutor: toolExec, Model: "test-model"}, prov
+	return TemplateConfig{
+		Provider:     prov,
+		ToolExecutor: toolExec,
+		Model:        "test-model",
+		PromptEngine: testEngine(t),
+	}, prov
 }
 
 // --- Node-level tests ---
 
-func TestTestNode_PassedRoutesToPassed(t *testing.T) {
-	cfg, _ := templateConfig([][]provider.StreamEvent{
-		completeResponse(TestOutput{Passed: true, Summary: "all tests pass"}),
+func TestRoleNode_TesterPassedRoutesViaOutput(t *testing.T) {
+	cfg, _ := templateConfig(t, [][]provider.StreamEvent{
+		testResultResp(true, "all tests pass"),
 	})
 
-	node := TestNodeDynamic(cfg)
+	role := cfg.PromptEngine.Role("tester")
+	if role == nil {
+		t.Fatal("tester role not loaded")
+	}
+	node := RoleNode(cfg, role, "test")
 	state := NewTaskState("job-1", "task-1", "/workspace", "mock", "test-model")
 
 	result, err := node(context.Background(), state)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if result.Status != StatusTestsPassed {
-		t.Errorf("Status = %q, want %q", result.Status, StatusTestsPassed)
+	if got := result.GetArtifactString("test.summary"); got != "all tests pass" {
+		t.Errorf("test.summary = %q, want %q", got, "all tests pass")
 	}
-	if got := result.GetArtifactString("test.results"); got != "all tests pass" {
-		t.Errorf("test.results = %q, want %q", got, "all tests pass")
+	var out map[string]any
+	if err := result.UnmarshalNodeOutput("test", &out); err != nil {
+		t.Fatalf("UnmarshalNodeOutput: %v", err)
+	}
+	if passed, _ := out["passed"].(bool); !passed {
+		t.Errorf("node output passed = %v, want true", out["passed"])
 	}
 }
 
-func TestTestNode_FailedRoutesToFailed(t *testing.T) {
-	cfg, _ := templateConfig([][]provider.StreamEvent{
-		completeResponse(TestOutput{Passed: false, Summary: "test_parser failed"}),
+func TestRoleNode_ReviewerRejectedCarriesFeedback(t *testing.T) {
+	cfg, _ := templateConfig(t, [][]provider.StreamEvent{
+		reviewResp(false, "missing error handling"),
 	})
 
-	node := TestNodeDynamic(cfg)
+	role := cfg.PromptEngine.Role("reviewer")
+	node := RoleNode(cfg, role, "review")
 	state := NewTaskState("job-1", "task-1", "/workspace", "mock", "test-model")
 
 	result, err := node(context.Background(), state)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
-	}
-	if result.Status != StatusTestsFailed {
-		t.Errorf("Status = %q, want %q", result.Status, StatusTestsFailed)
-	}
-}
-
-func TestReviewNode_ApprovedRoutesToApproved(t *testing.T) {
-	cfg, _ := templateConfig([][]provider.StreamEvent{
-		completeResponse(ReviewOutput{Approved: true, Feedback: "looks good"}),
-	})
-
-	node := ReviewNodeDynamic(cfg)
-	state := NewTaskState("job-1", "task-1", "/workspace", "mock", "test-model")
-
-	result, err := node(context.Background(), state)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if result.Status != StatusReviewApproved {
-		t.Errorf("Status = %q, want %q", result.Status, StatusReviewApproved)
-	}
-}
-
-func TestReviewNode_RejectedRoutesToRejected(t *testing.T) {
-	cfg, _ := templateConfig([][]provider.StreamEvent{
-		completeResponse(ReviewOutput{Approved: false, Feedback: "missing error handling"}),
-	})
-
-	node := ReviewNodeDynamic(cfg)
-	state := NewTaskState("job-1", "task-1", "/workspace", "mock", "test-model")
-
-	result, err := node(context.Background(), state)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if result.Status != StatusReviewRejected {
-		t.Errorf("Status = %q, want %q", result.Status, StatusReviewRejected)
 	}
 	if got := result.GetArtifactString("review.feedback"); got != "missing error handling" {
 		t.Errorf("review.feedback = %q, want feedback preserved", got)
 	}
+	var out map[string]any
+	_ = result.UnmarshalNodeOutput("review", &out)
+	if approved, _ := out["approved"].(bool); approved {
+		t.Error("approved = true, want false")
+	}
 }
 
-func TestImplementNode_CallsToolThenCompletes(t *testing.T) {
-	cfg, _ := templateConfig([][]provider.StreamEvent{
+func TestRoleNode_ImplementerToolCallThenComplete(t *testing.T) {
+	cfg, _ := templateConfig(t, [][]provider.StreamEvent{
 		toolCallResponse("call-1", "read_file", `{"path":"main.go"}`),
-		completeResponse(ImplementOutput{Summary: "applied fix"}),
+		summaryResp("applied fix"),
 	})
 	cfg.ToolExecutor = &mockToolExecutor{
-		handler: func(_ context.Context, name string, _ json.RawMessage) (string, error) {
+		handler: func(_ context.Context, _ string, _ json.RawMessage) (string, error) {
 			return "package main", nil
 		},
 		defs: []tooldef.ToolDef{
@@ -210,7 +219,8 @@ func TestImplementNode_CallsToolThenCompletes(t *testing.T) {
 		},
 	}
 
-	node := ImplementNodeDynamic(cfg)
+	role := cfg.PromptEngine.Role("implementer")
+	node := RoleNode(cfg, role, "implement")
 	state := NewTaskState("job-1", "task-1", "/workspace", "mock", "test-model")
 
 	result, err := node(context.Background(), state)
@@ -221,11 +231,6 @@ func TestImplementNode_CallsToolThenCompletes(t *testing.T) {
 		t.Errorf("implement.summary = %q, want %q", got, "applied fix")
 	}
 }
-
-// Hard-coded graph templates (BugFixGraph / NewFeatureGraph / PrototypeGraph /
-// SingleWorkerGraph) were retired in Phase 4. Equivalent end-to-end coverage
-// lives in bundled_test.go, where the YAML versions under defaults/user/graphs/
-// are loaded, compiled, and run against mock provider streams.
 
 // --- Adapters & tools ---
 
@@ -334,8 +339,8 @@ func (m *mockEventSink) BroadcastSessionText(sessionID, text string) {
 }
 
 func TestExecutor_Execute(t *testing.T) {
-	cfg, _ := templateConfig([][]provider.StreamEvent{
-		completeResponse(FindingsOutput{Summary: "done"}),
+	cfg, _ := templateConfig(t, [][]provider.StreamEvent{
+		summaryResp("done"),
 	})
 
 	graph, err := Compile(&Definition{
@@ -441,6 +446,7 @@ func TestComposePrompt_UsesPromptEngine(t *testing.T) {
 name: Test Investigator
 description: Test role
 mode: worker
+output: summary
 ---
 
 TASK_MARKER: {{ globals.task.description }}
@@ -453,15 +459,16 @@ JOB_MARKER: {{ globals.job.title }}
 		t.Fatalf("LoadDir: %v", err)
 	}
 
-	cfg := TemplateConfig{
-		PromptEngine: engine,
-		Roles:        RoleMap{Investigate: "test-investigator"},
+	cfg := TemplateConfig{PromptEngine: engine}
+	role := engine.Role("test-investigator")
+	if role == nil {
+		t.Fatal("role not loaded")
 	}
 	state := NewTaskState("job-1", "task-1", "/workspace", "mock", "test-model")
 	state.SetArtifact("task.description", "Find the bug")
 	state.SetArtifact("job.title", "Parser reliability")
 
-	got, err := composePrompt(cfg, cfg.Roles.Investigate, state)
+	got, err := composePrompt(cfg, role, state)
 	if err != nil {
 		t.Fatalf("composePrompt: %v", err)
 	}
@@ -473,35 +480,32 @@ JOB_MARKER: {{ globals.job.title }}
 	}
 }
 
-func TestDefaultRolesLoadFromBundledDefaults(t *testing.T) {
-	engine := prompt.NewEngine()
-	if err := engine.LoadDir("../../defaults/user", "user"); err != nil {
-		t.Fatalf("LoadDir user: %v", err)
-	}
-	if err := engine.LoadDir("../../defaults/system", "system"); err != nil {
-		t.Fatalf("LoadDir system: %v", err)
-	}
-
-	roles := DefaultRoles()
+func TestBundledRolesCompose(t *testing.T) {
+	engine := testEngine(t)
 	state := NewTaskState("job-1", "task-1", "/workspace", "mock", "test-model")
 	state.SetArtifact("task.description", "stub task")
 	state.SetArtifact("job.title", "stub job")
 	state.SetArtifact("job.description", "stub desc")
-	state.SetArtifact("investigate.findings", "stub findings")
-	state.SetArtifact("plan.steps", "stub plan")
+	state.SetArtifact("investigate.summary", "stub findings")
+	state.SetArtifact("plan.summary", "stub plan")
 	state.SetArtifact("implement.summary", "stub impl")
-	state.SetArtifact("test.results", "stub tests")
+	state.SetArtifact("test.summary", "stub tests")
 	state.SetArtifact("review.feedback", "")
 
-	cfg := TemplateConfig{PromptEngine: engine, Roles: roles}
-	for _, roleName := range []string{roles.Investigate, roles.Plan, roles.Implement, roles.Test, roles.Review} {
-		got, err := composePrompt(cfg, roleName, state)
+	cfg := TemplateConfig{PromptEngine: engine}
+	for _, name := range []string{"investigator", "planner", "implementer", "tester", "reviewer"} {
+		role := engine.Role(name)
+		if role == nil {
+			t.Errorf("role %q not loaded", name)
+			continue
+		}
+		got, err := composePrompt(cfg, role, state)
 		if err != nil {
-			t.Errorf("compose %q: %v", roleName, err)
+			t.Errorf("compose %q: %v", name, err)
 			continue
 		}
 		if got == "" {
-			t.Errorf("compose %q: empty prompt", roleName)
+			t.Errorf("compose %q: empty prompt", name)
 		}
 	}
 }
@@ -549,7 +553,7 @@ func TestExecutor_BuildToolExecutor_ScopedPerTask(t *testing.T) {
 func TestTaskState_SetNodeOutputRoundTrip(t *testing.T) {
 	s := NewTaskState("j", "t", "/w", "mock", "m")
 
-	if err := s.SetNodeOutput("triage", FindingsOutput{Summary: "bug on line 42"}); err != nil {
+	if err := s.SetNodeOutput("triage", map[string]any{"summary": "bug on line 42"}); err != nil {
 		t.Fatalf("SetNodeOutput: %v", err)
 	}
 
@@ -558,30 +562,30 @@ func TestTaskState_SetNodeOutputRoundTrip(t *testing.T) {
 		t.Fatal("GetNodeOutput returned empty")
 	}
 
-	var got FindingsOutput
+	var got map[string]any
 	if err := s.UnmarshalNodeOutput("triage", &got); err != nil {
 		t.Fatalf("UnmarshalNodeOutput: %v", err)
 	}
-	if got.Summary != "bug on line 42" {
-		t.Errorf("Summary = %q, want %q", got.Summary, "bug on line 42")
+	if got["summary"] != "bug on line 42" {
+		t.Errorf("Summary = %q, want %q", got["summary"], "bug on line 42")
 	}
 }
 
 func TestTaskState_UnmarshalNodeOutputMissingNode(t *testing.T) {
 	s := NewTaskState("j", "t", "/w", "mock", "m")
-	var got FindingsOutput
+	var got map[string]any
 	if err := s.UnmarshalNodeOutput("missing", &got); err == nil {
 		t.Fatal("expected error for missing node output")
 	}
 }
 
 func TestBugFixGraph_PopulatesTypedEnvelope(t *testing.T) {
-	cfg, _ := templateConfig([][]provider.StreamEvent{
-		completeResponse(FindingsOutput{Summary: "finding"}),
-		completeResponse(PlanOutput{Summary: "plan"}),
-		completeResponse(ImplementOutput{Summary: "impl"}),
-		completeResponse(TestOutput{Passed: true, Summary: "pass"}),
-		completeResponse(ReviewOutput{Approved: true, Feedback: "ok"}),
+	cfg, _ := templateConfig(t, [][]provider.StreamEvent{
+		summaryResp("finding"),
+		summaryResp("plan"),
+		summaryResp("impl"),
+		testResultResp(true, "pass"),
+		reviewResp(true, "ok"),
 	})
 
 	graph, err := Compile(bugFixDef(), cfg, nil)
@@ -596,39 +600,34 @@ func TestBugFixGraph_PopulatesTypedEnvelope(t *testing.T) {
 		t.Fatalf("graph.Run: %v", err)
 	}
 
-	// Every role node should have recorded its typed output in the envelope,
-	// keyed by the rhizome node id injected via the compiler's default
-	// NodeContext wrapper.
-	var findings FindingsOutput
+	var findings map[string]any
 	if err := result.UnmarshalNodeOutput("investigate", &findings); err != nil {
 		t.Errorf("investigate output: %v", err)
-	} else if findings.Summary != "finding" {
-		t.Errorf("findings.Summary = %q, want %q", findings.Summary, "finding")
+	} else if findings["summary"] != "finding" {
+		t.Errorf("investigate.summary = %q, want %q", findings["summary"], "finding")
 	}
 
-	var test TestOutput
-	if err := result.UnmarshalNodeOutput("test", &test); err != nil {
+	var tr map[string]any
+	if err := result.UnmarshalNodeOutput("test", &tr); err != nil {
 		t.Errorf("test output: %v", err)
-	} else if !test.Passed {
-		t.Errorf("test.Passed = false, want true")
+	} else if passed, _ := tr["passed"].(bool); !passed {
+		t.Errorf("test.passed = false, want true")
 	}
 
-	var review ReviewOutput
-	if err := result.UnmarshalNodeOutput("review", &review); err != nil {
+	var rv map[string]any
+	if err := result.UnmarshalNodeOutput("review", &rv); err != nil {
 		t.Errorf("review output: %v", err)
-	} else if !review.Approved {
-		t.Errorf("review.Approved = false, want true")
+	} else if approved, _ := rv["approved"].(bool); !approved {
+		t.Errorf("review.approved = false, want true")
 	}
 
-	// Old artifacts path still works.
-	if got := result.GetArtifactString("investigate.findings"); got != "finding" {
-		t.Errorf("artifact investigate.findings = %q, want %q", got, "finding")
+	if got := result.GetArtifactString("investigate.summary"); got != "finding" {
+		t.Errorf("artifact investigate.summary = %q, want %q", got, "finding")
 	}
 }
 
 // Compile-time interface checks.
 var (
-	_ rhizome.NodeFunc[*TaskState] = InvestigateNodeDynamic(TemplateConfig{})
-	_ EventSink                    = (*mockEventSink)(nil)
-	_ agent.Tool                   = AskUserTool()
+	_ EventSink  = (*mockEventSink)(nil)
+	_ agent.Tool = AskUserTool()
 )

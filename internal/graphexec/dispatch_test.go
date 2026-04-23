@@ -44,6 +44,7 @@ func buildDispatchExecutor(t *testing.T, responses [][]provider.StreamEvent, gra
 		Registry:     reg,
 		Store:        store,
 		Graphs:       graphs,
+		PromptEngine: testEngine(t),
 		DefaultModel: "test-model",
 	}), mock, store
 }
@@ -52,11 +53,11 @@ func TestExecuteTask_DispatchesViaGraphID(t *testing.T) {
 	def := bugFixDef() // from compiler_test.go
 
 	executor, mock, store := buildDispatchExecutor(t, [][]provider.StreamEvent{
-		completeResponse(FindingsOutput{Summary: "finding"}),
-		completeResponse(PlanOutput{Summary: "plan"}),
-		completeResponse(ImplementOutput{Summary: "impl"}),
-		completeResponse(TestOutput{Passed: true, Summary: "ok"}),
-		completeResponse(ReviewOutput{Approved: true, Feedback: "lgtm"}),
+		summaryResp("finding"),
+		summaryResp("plan"),
+		summaryResp("impl"),
+		testResultResp(true, "ok"),
+		reviewResp(true, "lgtm"),
 	}, mapGraphSource{"bug-fix": def})
 
 	workspace := t.TempDir()

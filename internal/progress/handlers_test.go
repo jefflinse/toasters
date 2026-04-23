@@ -137,11 +137,11 @@ func TestReportTaskProgress_Success(t *testing.T) {
 	createTestJob(t, ctx, store, "job-1")
 
 	params := ReportTaskProgressParams{
-		JobID:   "job-1",
-		TaskID:  "task-1",
+		JobID:    "job-1",
+		TaskID:   "task-1",
 		WorkerID: "agent-1",
-		Status:  "in_progress",
-		Message: "working on it",
+		Status:   "in_progress",
+		Message:  "working on it",
 	}
 
 	result, err := ReportTaskProgress(ctx, store, params)
@@ -253,7 +253,7 @@ func TestReportBlocker_Success(t *testing.T) {
 	params := ReportBlockerParams{
 		JobID:       "job-blocker",
 		TaskID:      "task-1",
-		WorkerID:     "agent-1",
+		WorkerID:    "agent-1",
 		Description: "cannot access the database",
 		Severity:    "high",
 	}
@@ -520,7 +520,7 @@ func TestRequestReview_Success(t *testing.T) {
 	params := RequestReviewParams{
 		JobID:        "job-rr",
 		TaskID:       "task-rr",
-		WorkerID:      "agent-rr",
+		WorkerID:     "agent-rr",
 		ArtifactPath: "/path/to/artifact.go",
 		Notes:        "please review this carefully",
 	}
@@ -815,9 +815,9 @@ func TestQueryJobContext_RecentProgressLimit(t *testing.T) {
 	// Insert 15 progress reports — QueryJobContext should only return 10.
 	for i := range 15 {
 		if err := store.ReportProgress(ctx, &db.ProgressReport{
-			JobID:   "job-limit",
-			Status:  "in_progress",
-			Message: "step",
+			JobID:    "job-limit",
+			Status:   "in_progress",
+			Message:  "step",
 			WorkerID: string(rune('a' + i)),
 		}); err != nil {
 			t.Fatalf("ReportProgress(%d): %v", i, err)

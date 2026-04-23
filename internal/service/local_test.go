@@ -403,7 +403,6 @@ func TestStripCodeFences(t *testing.T) {
 	}
 }
 
-
 // ---------------------------------------------------------------------------
 // CreateSkill — filesystem tests
 // ---------------------------------------------------------------------------
@@ -799,10 +798,10 @@ func TestBroadcastOperatorEvent_TaskStarted(t *testing.T) {
 	svc.BroadcastOperatorEvent(operator.Event{
 		Type: operator.EventTaskStarted,
 		Payload: operator.TaskStartedPayload{
-			TaskID: "task-1",
-			JobID:  "job-1",
+			TaskID:  "task-1",
+			JobID:   "job-1",
 			GraphID: "team-1",
-			Title:  "Do the thing",
+			Title:   "Do the thing",
 		},
 	})
 
@@ -839,7 +838,7 @@ func TestBroadcastOperatorEvent_TaskCompleted(t *testing.T) {
 		Payload: operator.TaskCompletedPayload{
 			TaskID:          "task-2",
 			JobID:           "job-2",
-			GraphID:          "team-2",
+			GraphID:         "team-2",
 			Summary:         "Done",
 			Recommendations: "Next: do X",
 			HasNextTask:     true,
@@ -877,10 +876,10 @@ func TestBroadcastOperatorEvent_TaskFailed(t *testing.T) {
 	svc.BroadcastOperatorEvent(operator.Event{
 		Type: operator.EventTaskFailed,
 		Payload: operator.TaskFailedPayload{
-			TaskID: "task-3",
-			JobID:  "job-3",
+			TaskID:  "task-3",
+			JobID:   "job-3",
 			GraphID: "team-3",
-			Error:  "something went wrong",
+			Error:   "something went wrong",
 		},
 	})
 
@@ -913,7 +912,7 @@ func TestBroadcastOperatorEvent_BlockerReported(t *testing.T) {
 		Type: operator.EventBlockerReported,
 		Payload: operator.BlockerReportedPayload{
 			TaskID:      "task-4",
-			GraphID:      "team-4",
+			GraphID:     "team-4",
 			WorkerID:    "agent-4",
 			Description: "blocked on X",
 		},

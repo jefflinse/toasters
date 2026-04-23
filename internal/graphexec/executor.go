@@ -300,7 +300,6 @@ func (e *Executor) ExecuteTask(ctx context.Context, req TaskRequest) error {
 		ToolExecutor: e.buildToolExecutor(req.WorkspaceDir),
 		Model:        model,
 		PromptEngine: e.promptEngine,
-		Roles:        DefaultRoles(),
 	}
 
 	if e.graphs == nil {

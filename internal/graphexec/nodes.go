@@ -9,40 +9,150 @@ import (
 	"github.com/jefflinse/mycelium/agent"
 	"github.com/jefflinse/rhizome"
 
+	"github.com/jefflinse/toasters/internal/prompt"
 	"github.com/jefflinse/toasters/internal/provider"
+	"github.com/jefflinse/toasters/internal/runtime"
 )
 
-// --- Specialized node builders ---
+// RoleNode returns a generic rhizome NodeFunc bound to a single role. The
+// system prompt is composed from the role's markdown body; the terminal
+// output shape comes from the role's declared schema; the tool allowlist
+// is picked from the role's Access field.
 //
-// Each builder wraps a bounded mycelium.agent.Run with a focused tool set,
-// a role-composed system prompt, and a typed output schema. The model is
-// required to end each node by calling `complete` with a payload conforming
-// to the role's schema; the node's apply step folds the typed output into
-// TaskState so conditional edges can route.
+// Every role runs through the same path — there are no per-role builders.
+// Language-specific roles (go-coder, py-tester, …) only differ from the
+// generic investigator/planner/etc. via their markdown bodies and their
+// declared schemas.
+func RoleNode(cfg TemplateConfig, role *prompt.Role, nodeID string) rhizome.NodeFunc[*TaskState] {
+	return func(ctx context.Context, state *TaskState) (*TaskState, error) {
+		schemaRaw, _, err := ResolveSchema(cfg.PromptEngine, role)
+		if err != nil {
+			return state, fmt.Errorf("role %q: %w", role.Name, err)
+		}
+
+		sysPrompt, err := composePrompt(cfg, role, state)
+		if err != nil {
+			return state, fmt.Errorf("composing prompt for role %q: %w", role.Name, err)
+		}
+
+		tools := toolsForAccess(cfg.ToolExecutor, role.Access)
+
+		res, err := agent.Run(ctx, agent.Config[json.RawMessage]{
+			Provider:     cfg.Provider,
+			Model:        cfg.Model,
+			System:       sysPrompt,
+			Messages:     []provider.Message{{Role: "user", Content: buildInitialMessage(state)}},
+			Tools:        tools,
+			OutputSchema: schemaRaw,
+			OnEvent:      onEventSink(ctx),
+		})
+		if err != nil {
+			return state, fmt.Errorf("role %q: %w", role.Name, err)
+		}
+
+		switch res.Status {
+		case agent.StatusCompleted:
+			return applyOutput(ctx, state, nodeID, res.Output)
+		case agent.StatusNeedsContext:
+			return state, fmt.Errorf("role %q: node requested context: %+v", role.Name, res.Required)
+		case agent.StatusError:
+			return state, fmt.Errorf("role %q: node reported error: %s", role.Name, res.Error.Error())
+		}
+		return state, fmt.Errorf("role %q: unexpected terminal status %q", role.Name, res.Status)
+	}
+}
+
+// applyOutput folds a node's terminal JSON output into TaskState. The raw
+// payload is stored in NodeOutputs keyed by nodeID (routers read from
+// here); each field is also exposed under "<nodeID>.<field>" in Artifacts
+// so downstream role prompts can reference it via template expansion.
+func applyOutput(ctx context.Context, state *TaskState, nodeID string, raw json.RawMessage) (*TaskState, error) {
+	id := effectiveNodeID(ctx, nodeID)
+	if err := state.SetNodeOutput(id, raw); err != nil {
+		return state, err
+	}
+	var fields map[string]any
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return state, fmt.Errorf("node %q: unmarshal output: %w", id, err)
+	}
+	for name, v := range fields {
+		state.SetArtifact(id+"."+name, v)
+		if name == "summary" {
+			if s, ok := v.(string); ok {
+				state.FinalText = s
+			}
+		}
+	}
+	return state, nil
+}
+
+// effectiveNodeID returns the rhizome node id from NodeContext when one is
+// attached (i.e. the executor middleware has run), falling back to the
+// compile-time nodeID when a caller drives the graph without middleware
+// (tests, direct invocations).
+func effectiveNodeID(ctx context.Context, fallback string) string {
+	if nc := NodeContextFromContext(ctx); nc != nil && nc.Node != "" {
+		return nc.Node
+	}
+	return fallback
+}
 
 // composePrompt resolves a role's system prompt via the prompt engine,
-// passing TaskState artifacts as overrides. The role template references
-// these as {{ globals.task.description }} etc. Falls back to a minimal
-// prompt if the engine is unset (test path) or the role is unknown.
-func composePrompt(cfg TemplateConfig, roleName string, state *TaskState) (string, error) {
+// passing TaskState artifacts as overrides. Every artifact string value is
+// exposed as a global so role templates can reference `{{ globals.<node-id>.<field> }}`
+// for any upstream node.
+func composePrompt(cfg TemplateConfig, role *prompt.Role, state *TaskState) (string, error) {
 	if cfg.PromptEngine == nil {
-		return fmt.Sprintf("You are the %s. Task: %s", roleName, state.GetArtifactString("task.description")), nil
+		return fmt.Sprintf("You are %s. Task: %s", roleLabel(role), state.GetArtifactString("task.description")), nil
 	}
-	overrides := map[string]string{
-		"task.description":     state.GetArtifactString("task.description"),
-		"job.title":            state.GetArtifactString("job.title"),
-		"job.description":      state.GetArtifactString("job.description"),
-		"investigate.findings": state.GetArtifactString("investigate.findings"),
-		"plan.steps":           state.GetArtifactString("plan.steps"),
-		"implement.summary":    state.GetArtifactString("implement.summary"),
-		"test.results":         state.GetArtifactString("test.results"),
-		"review.feedback":      state.GetArtifactString("review.feedback"),
+	overrides := make(map[string]string, len(state.Artifacts))
+	for key, val := range state.Artifacts {
+		if s, ok := val.(string); ok {
+			overrides[key] = s
+		}
 	}
-	return cfg.PromptEngine.Compose(roleName, overrides)
+	return cfg.PromptEngine.Compose(roleLookupKey(role), overrides)
+}
+
+// roleLookupKey picks the key the prompt engine registered the role under.
+// The engine stores roles under both the slugified frontmatter name and the
+// filename stem — we prefer the slug since that matches the field in
+// Role.Name. Empty falls back to "role" to give the error path something
+// printable.
+func roleLookupKey(role *prompt.Role) string {
+	if role.Name != "" {
+		return slugify(role.Name)
+	}
+	return "role"
+}
+
+// roleLabel is a human-friendly label for the role (used in the fallback
+// prompt and in error messages).
+func roleLabel(role *prompt.Role) string {
+	if role == nil {
+		return "a worker"
+	}
+	if role.Name != "" {
+		return role.Name
+	}
+	return "a worker"
+}
+
+// slugify mirrors prompt.slugify so graphexec can produce the same lookup
+// key without exporting the helper.
+func slugify(s string) string {
+	s = strings.ToLower(s)
+	s = strings.ReplaceAll(s, " ", "-")
+	var buf strings.Builder
+	for _, r := range s {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' {
+			buf.WriteRune(r)
+		}
+	}
+	return buf.String()
 }
 
 // buildInitialMessage constructs a user message from TaskState artifacts.
-// Individual node builders may override it when they want stricter framing.
 func buildInitialMessage(state *TaskState) string {
 	var parts []string
 
@@ -66,6 +176,24 @@ func buildInitialMessage(state *TaskState) string {
 	return strings.Join(parts, "\n\n")
 }
 
+// toolsForAccess picks a tool allowlist based on the role's declared
+// access level. Read-only roles also get the mid-loop ask_user tool so
+// they can surface clarifying questions; write/test roles do not, by
+// convention: the user should not be asked to choose between variants of
+// "run this or that command."
+func toolsForAccess(exec runtime.ToolExecutor, access string) []agent.Tool {
+	switch strings.ToLower(strings.TrimSpace(access)) {
+	case "write":
+		return AdaptTools(exec, WriteTools)
+	case "test":
+		return AdaptTools(exec, TestTools)
+	case "all":
+		return AdaptTools(exec, nil)
+	default: // "", "readonly", "read-only"
+		return append([]agent.Tool{AskUserTool()}, AdaptTools(exec, ReadOnlyTools)...)
+	}
+}
+
 // onEventSink returns an agent OnEvent handler that broadcasts streaming
 // text and reasoning chunks to the EventSink attached to the current
 // NodeContext, if any. No-op when no sink is configured — tests and
@@ -79,195 +207,5 @@ func onEventSink(ctx context.Context) func(agent.Event) {
 		if ev.Kind == agent.EventKindText && ev.Text != "" {
 			nc.Sink.BroadcastSessionText(nc.SessionID, ev.Text)
 		}
-	}
-}
-
-// runNode is the shared inner loop for every role node. It composes the
-// prompt, runs a typed agent.Run, forwards streaming events, and surfaces
-// the typed result + status string for the caller's apply step.
-func runNode[O any](
-	ctx context.Context,
-	cfg TemplateConfig,
-	roleName string,
-	state *TaskState,
-	tools []agent.Tool,
-	schema json.RawMessage,
-) (agent.Result[O], error) {
-	sysPrompt, err := composePrompt(cfg, roleName, state)
-	if err != nil {
-		return agent.Result[O]{}, fmt.Errorf("composing %s prompt: %w", roleName, err)
-	}
-	return agent.Run(ctx, agent.Config[O]{
-		Provider:     cfg.Provider,
-		Model:        cfg.Model,
-		System:       sysPrompt,
-		Messages:     []provider.Message{{Role: "user", Content: buildInitialMessage(state)}},
-		Tools:        tools,
-		OutputSchema: schema,
-		OnEvent:      onEventSink(ctx),
-	})
-}
-
-// recordNodeOutput writes the role node's typed output into TaskState.NodeOutputs,
-// keyed by the rhizome node ID injected via NodeContext. This is the edge
-// data-flow carrier that YAML-defined graphs (and any future consumer that
-// reads $node.output.field) will rely on. The existing Artifacts-based flow
-// stays intact for prompt composition.
-//
-// If no NodeContext is set (tests that call a node function directly without
-// going through the executor middleware) we fall back to roleName — so unit
-// tests still see the output under a stable key.
-func recordNodeOutput(ctx context.Context, state *TaskState, roleName string, v any) error {
-	id := roleName
-	if nc := NodeContextFromContext(ctx); nc != nil && nc.Node != "" {
-		id = nc.Node
-	}
-	return state.SetNodeOutput(id, v)
-}
-
-// InvestigateNodeDynamic explores the codebase with read-only tools and
-// writes findings to "investigate.findings".
-func InvestigateNodeDynamic(cfg TemplateConfig) rhizome.NodeFunc[*TaskState] {
-	roles := cfg.Roles.resolve()
-	return func(ctx context.Context, state *TaskState) (*TaskState, error) {
-		tools := append([]agent.Tool{AskUserTool()}, AdaptTools(cfg.ToolExecutor, ReadOnlyTools)...)
-		res, err := runNode[FindingsOutput](ctx, cfg, roles.Investigate, state, tools, findingsSchema)
-		if err != nil {
-			return state, err
-		}
-		switch res.Status {
-		case agent.StatusCompleted:
-			state.FinalText = res.Output.Summary
-			state.SetArtifact("investigate.findings", res.Output.Summary)
-			if err := recordNodeOutput(ctx, state, roles.Investigate, res.Output); err != nil {
-				return state, err
-			}
-			return state, nil
-		case agent.StatusNeedsContext:
-			return state, fmt.Errorf("investigate node requested context: %+v", res.Required)
-		case agent.StatusError:
-			return state, fmt.Errorf("investigate node reported error: %s", res.Error.Error())
-		}
-		return state, fmt.Errorf("investigate node: unexpected terminal status %q", res.Status)
-	}
-}
-
-// PlanNodeDynamic reads investigation findings and writes an implementation
-// plan to "plan.steps".
-func PlanNodeDynamic(cfg TemplateConfig) rhizome.NodeFunc[*TaskState] {
-	roles := cfg.Roles.resolve()
-	return func(ctx context.Context, state *TaskState) (*TaskState, error) {
-		tools := append([]agent.Tool{AskUserTool()}, AdaptTools(cfg.ToolExecutor, ReadOnlyTools)...)
-		res, err := runNode[PlanOutput](ctx, cfg, roles.Plan, state, tools, planSchema)
-		if err != nil {
-			return state, err
-		}
-		switch res.Status {
-		case agent.StatusCompleted:
-			state.FinalText = res.Output.Summary
-			state.SetArtifact("plan.steps", res.Output.Summary)
-			if err := recordNodeOutput(ctx, state, roles.Plan, res.Output); err != nil {
-				return state, err
-			}
-			return state, nil
-		case agent.StatusNeedsContext:
-			return state, fmt.Errorf("plan node requested context: %+v", res.Required)
-		case agent.StatusError:
-			return state, fmt.Errorf("plan node reported error: %s", res.Error.Error())
-		}
-		return state, fmt.Errorf("plan node: unexpected terminal status %q", res.Status)
-	}
-}
-
-// ImplementNodeDynamic reads the plan (and optional review feedback) and
-// makes code changes. Output goes to "implement.summary".
-func ImplementNodeDynamic(cfg TemplateConfig) rhizome.NodeFunc[*TaskState] {
-	roles := cfg.Roles.resolve()
-	return func(ctx context.Context, state *TaskState) (*TaskState, error) {
-		tools := AdaptTools(cfg.ToolExecutor, WriteTools)
-		res, err := runNode[ImplementOutput](ctx, cfg, roles.Implement, state, tools, implementSchema)
-		if err != nil {
-			return state, err
-		}
-		switch res.Status {
-		case agent.StatusCompleted:
-			state.FinalText = res.Output.Summary
-			state.SetArtifact("implement.summary", res.Output.Summary)
-			if err := recordNodeOutput(ctx, state, roles.Implement, res.Output); err != nil {
-				return state, err
-			}
-			return state, nil
-		case agent.StatusNeedsContext:
-			return state, fmt.Errorf("implement node requested context: %+v", res.Required)
-		case agent.StatusError:
-			return state, fmt.Errorf("implement node reported error: %s", res.Error.Error())
-		}
-		return state, fmt.Errorf("implement node: unexpected terminal status %q", res.Status)
-	}
-}
-
-// TestNodeDynamic runs tests. The typed TestOutput.Passed field drives the
-// graph's conditional edge (tests_passed → review; tests_failed →
-// implement retry).
-func TestNodeDynamic(cfg TemplateConfig) rhizome.NodeFunc[*TaskState] {
-	roles := cfg.Roles.resolve()
-	return func(ctx context.Context, state *TaskState) (*TaskState, error) {
-		tools := AdaptTools(cfg.ToolExecutor, TestTools)
-		res, err := runNode[TestOutput](ctx, cfg, roles.Test, state, tools, testSchema)
-		if err != nil {
-			return state, err
-		}
-		switch res.Status {
-		case agent.StatusCompleted:
-			state.FinalText = res.Output.Summary
-			state.SetArtifact("test.results", res.Output.Summary)
-			if res.Output.Passed {
-				state.Status = StatusTestsPassed
-			} else {
-				state.Status = StatusTestsFailed
-			}
-			if err := recordNodeOutput(ctx, state, roles.Test, res.Output); err != nil {
-				return state, err
-			}
-			return state, nil
-		case agent.StatusNeedsContext:
-			return state, fmt.Errorf("test node requested context: %+v", res.Required)
-		case agent.StatusError:
-			return state, fmt.Errorf("test node reported error: %s", res.Error.Error())
-		}
-		return state, fmt.Errorf("test node: unexpected terminal status %q", res.Status)
-	}
-}
-
-// ReviewNodeDynamic reviews the implementation against the plan. The typed
-// ReviewOutput.Approved field drives routing (approved → End; rejected →
-// implement retry).
-func ReviewNodeDynamic(cfg TemplateConfig) rhizome.NodeFunc[*TaskState] {
-	roles := cfg.Roles.resolve()
-	return func(ctx context.Context, state *TaskState) (*TaskState, error) {
-		tools := append([]agent.Tool{AskUserTool()}, AdaptTools(cfg.ToolExecutor, ReadOnlyTools)...)
-		res, err := runNode[ReviewOutput](ctx, cfg, roles.Review, state, tools, reviewSchema)
-		if err != nil {
-			return state, err
-		}
-		switch res.Status {
-		case agent.StatusCompleted:
-			state.FinalText = res.Output.Feedback
-			state.SetArtifact("review.feedback", res.Output.Feedback)
-			if res.Output.Approved {
-				state.Status = StatusReviewApproved
-			} else {
-				state.Status = StatusReviewRejected
-			}
-			if err := recordNodeOutput(ctx, state, roles.Review, res.Output); err != nil {
-				return state, err
-			}
-			return state, nil
-		case agent.StatusNeedsContext:
-			return state, fmt.Errorf("review node requested context: %+v", res.Required)
-		case agent.StatusError:
-			return state, fmt.Errorf("review node reported error: %s", res.Error.Error())
-		}
-		return state, fmt.Errorf("review node: unexpected terminal status %q", res.Status)
 	}
 }

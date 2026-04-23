@@ -2,78 +2,104 @@ package graphexec
 
 import (
 	"fmt"
-	"maps"
 	"sort"
 	"strings"
 	"sync"
 
 	"github.com/jefflinse/rhizome"
+	"github.com/jefflinse/toasters/internal/prompt"
 )
 
 // RoleBuilder constructs a rhizome NodeFunc for a single role. The same
 // builder is reused across graphs — each call returns a fresh NodeFunc
-// bound to the supplied TemplateConfig.
-type RoleBuilder func(cfg TemplateConfig) rhizome.NodeFunc[*TaskState]
-
-// defaultRoleBuilders is the built-in registry that maps role names to
-// their Go-side node builders. The declarative compiler resolves nodes'
-// `role:` field against this map to produce a NodeFunc.
-//
-// This is a v1 bridge: schemas, tools, and system prompts are currently
-// owned by Go code (outputs.go / agent_tools.go) rather than role
-// markdown. Later phases will relocate that metadata into role definition
-// files so YAML graphs can pull in arbitrary user-defined roles.
-var defaultRoleBuilders = map[string]RoleBuilder{
-	"investigator": InvestigateNodeDynamic,
-	"planner":      PlanNodeDynamic,
-	"implementer":  ImplementNodeDynamic,
-	"tester":       TestNodeDynamic,
-	"reviewer":     ReviewNodeDynamic,
-}
+// bound to the supplied TemplateConfig and node id.
+type RoleBuilder func(cfg TemplateConfig, nodeID string) rhizome.NodeFunc[*TaskState]
 
 // RoleRegistry resolves role names to RoleBuilders. The compiler holds one
 // registry per compile; tests may inject fakes via Register. Reads are
 // concurrency-safe so a single registry can back parallel compiles.
+//
+// By default the registry has no explicit entries — unregistered roles are
+// resolved against the prompt engine supplied in TemplateConfig at compile
+// time. Callers that want to pre-validate a role set can Register them, and
+// tests can override behavior by shadowing a name with a stub builder.
 type RoleRegistry struct {
 	mu       sync.RWMutex
 	builders map[string]RoleBuilder
 }
 
-// NewRoleRegistry returns a registry preloaded with the default builders.
-// Callers may override or extend via Register.
+// NewRoleRegistry returns an empty registry. At compile time unknown names
+// fall through to the dynamic builder that reads the role definition from
+// the prompt engine.
 func NewRoleRegistry() *RoleRegistry {
-	r := &RoleRegistry{builders: make(map[string]RoleBuilder, len(defaultRoleBuilders))}
-	maps.Copy(r.builders, defaultRoleBuilders)
-	return r
+	return &RoleRegistry{builders: make(map[string]RoleBuilder)}
 }
 
-// Register installs or replaces a RoleBuilder under name.
+// Register installs or replaces a RoleBuilder under name. Primarily useful
+// for tests that want to stub a role's behavior without touching the
+// prompt engine.
 func (r *RoleRegistry) Register(name string, b RoleBuilder) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.builders[name] = b
 }
 
-// Build returns a NodeFunc for the named role. Returns an error naming the
-// available roles when the lookup fails — helpful in compile-time diagnostics.
-func (r *RoleRegistry) Build(name string, cfg TemplateConfig) (rhizome.NodeFunc[*TaskState], error) {
+// Build returns a NodeFunc for the named role bound to the supplied nodeID.
+// Registered builders take precedence; unregistered names resolve against
+// the prompt engine in cfg. Returns an error when neither path yields a
+// role definition.
+func (r *RoleRegistry) Build(name, nodeID string, cfg TemplateConfig) (rhizome.NodeFunc[*TaskState], error) {
 	r.mu.RLock()
 	b, ok := r.builders[name]
 	r.mu.RUnlock()
-	if !ok {
-		return nil, fmt.Errorf("unknown role %q (available: %s)", name, strings.Join(r.Names(), ", "))
+	if ok {
+		return b(cfg, nodeID), nil
 	}
-	return b(cfg), nil
+	if cfg.PromptEngine == nil {
+		return nil, fmt.Errorf("unknown role %q (no prompt engine configured; registered: %s)", name, strings.Join(r.registered(), ", "))
+	}
+	role := cfg.PromptEngine.Role(name)
+	if role == nil {
+		return nil, fmt.Errorf("unknown role %q (not in prompt engine; loaded: %s)", name, strings.Join(cfg.PromptEngine.Roles(), ", "))
+	}
+	return RoleNode(cfg, role, nodeID), nil
 }
 
-// Names returns the registered role names, sorted alphabetically.
+// Names returns the explicitly registered role names, sorted alphabetically.
+// Dynamic roles resolved through the prompt engine are not included.
 func (r *RoleRegistry) Names() []string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+	return r.registered()
+}
+
+func (r *RoleRegistry) registered() []string {
 	out := make([]string, 0, len(r.builders))
 	for name := range r.builders {
 		out = append(out, name)
 	}
 	sort.Strings(out)
 	return out
+}
+
+// ResolveSchema returns the JSON Schema for a role's declared output. When
+// the role leaves `output:` empty the default summary schema is used.
+// Returns an error when neither the named nor the default schema is loaded.
+func ResolveSchema(engine *prompt.Engine, role *prompt.Role) ([]byte, *prompt.Schema, error) {
+	if engine == nil {
+		return nil, nil, fmt.Errorf("no prompt engine configured")
+	}
+	name := role.Output
+	if name == "" {
+		name = prompt.DefaultSchemaName
+	}
+	s := engine.Schema(name)
+	if s == nil {
+		return nil, nil, fmt.Errorf("role %q references unknown schema %q", role.Name, name)
+	}
+	raw, err := engine.SchemaJSON(name)
+	if err != nil {
+		return nil, nil, err
+	}
+	return raw, s, nil
 }

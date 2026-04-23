@@ -164,10 +164,10 @@ func translateEvent(ev service.Event) tea.Msg {
 		return SessionDoneMsg{
 			SessionID:  ev.SessionID,
 			WorkerName: p.WorkerName,
-			JobID:     p.JobID,
-			TaskID:    p.TaskID,
-			FinalText: p.FinalText,
-			Status:    p.Status,
+			JobID:      p.JobID,
+			TaskID:     p.TaskID,
+			FinalText:  p.FinalText,
+			Status:     p.Status,
 		}
 
 	case service.EventTypeGraphNodeStarted:

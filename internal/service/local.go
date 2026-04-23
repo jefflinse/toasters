@@ -482,10 +482,10 @@ func (s *LocalService) BroadcastOperatorEvent(ev operator.Event) {
 		s.broadcast(Event{
 			Type: EventTypeTaskStarted,
 			Payload: TaskStartedPayload{
-				TaskID: payload.TaskID,
-				JobID:  payload.JobID,
+				TaskID:  payload.TaskID,
+				JobID:   payload.JobID,
 				GraphID: payload.GraphID,
-				Title:  payload.Title,
+				Title:   payload.Title,
 			},
 		})
 
@@ -499,7 +499,7 @@ func (s *LocalService) BroadcastOperatorEvent(ev operator.Event) {
 			Payload: TaskCompletedPayload{
 				TaskID:          payload.TaskID,
 				JobID:           payload.JobID,
-				GraphID:          payload.GraphID,
+				GraphID:         payload.GraphID,
 				Summary:         payload.Summary,
 				Recommendations: payload.Recommendations,
 				HasNextTask:     payload.HasNextTask,
@@ -514,10 +514,10 @@ func (s *LocalService) BroadcastOperatorEvent(ev operator.Event) {
 		s.broadcast(Event{
 			Type: EventTypeTaskFailed,
 			Payload: TaskFailedPayload{
-				TaskID: payload.TaskID,
-				JobID:  payload.JobID,
+				TaskID:  payload.TaskID,
+				JobID:   payload.JobID,
 				GraphID: payload.GraphID,
-				Error:  payload.Error,
+				Error:   payload.Error,
 			},
 		})
 
@@ -530,7 +530,7 @@ func (s *LocalService) BroadcastOperatorEvent(ev operator.Event) {
 			Type: EventTypeBlockerReported,
 			Payload: BlockerReportedPayload{
 				TaskID:      payload.TaskID,
-				GraphID:      payload.GraphID,
+				GraphID:     payload.GraphID,
 				WorkerID:    payload.WorkerID,
 				Description: payload.Description,
 			},
@@ -1459,7 +1459,6 @@ func mapEndSentinel(to string) string {
 	return to
 }
 
-
 // ---------------------------------------------------------------------------
 // JobService (via localJobService)
 // ---------------------------------------------------------------------------
@@ -2174,4 +2173,3 @@ func stripCodeFences(s string) string {
 	s = strings.TrimSuffix(s, "```")
 	return strings.TrimSpace(s)
 }
-

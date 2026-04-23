@@ -1,0 +1,28 @@
+id: go-prototype
+name: Go Prototype
+description: >
+  Fast go-coder → go-tester loop capped at max_iterations. Skips
+  investigation, planning, and review — good for quick Go iterations
+  where correctness is pinned by tests.
+tags: [kind:prototype, language:go]
+
+entry: implement
+max_iterations: 3
+
+nodes:
+  - id: implement
+    role: go-coder
+  - id: test
+    role: go-tester
+
+edges:
+  - from: implement
+    to: test
+  - from: test
+    router:
+      on: $test.output.passed
+      branches:
+        - when: true
+          to: end
+        - when: false
+          to: implement

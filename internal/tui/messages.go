@@ -161,10 +161,10 @@ type SessionToolResultMsg struct {
 type SessionDoneMsg struct {
 	SessionID  string
 	WorkerName string
-	JobID     string
-	TaskID    string
-	FinalText string
-	Status    string // "completed", "failed", "cancelled"
+	JobID      string
+	TaskID     string
+	FinalText  string
+	Status     string // "completed", "failed", "cancelled"
 }
 
 // GraphNodeStartedMsg is sent when a rhizome graph node begins executing.

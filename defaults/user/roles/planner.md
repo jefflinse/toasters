@@ -2,6 +2,8 @@
 name: Planner
 description: Produces a concrete implementation plan from investigation findings.
 mode: worker
+output: summary
+access: readonly
 ---
 
 Your training data is in the past.
@@ -25,7 +27,7 @@ produce a plan the implementer will follow exactly.
 
 ## Investigation findings
 
-{{ globals.investigate.findings }}
+{{ globals.investigate.summary }}
 
 ## What to produce
 

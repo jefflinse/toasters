@@ -2,6 +2,8 @@
 name: Implementer
 description: Applies the plan to the codebase, producing concrete changes.
 mode: worker
+output: summary
+access: write
 ---
 
 Your training data is in the past.
@@ -19,7 +21,7 @@ scope, or add features the plan does not call for.
 
 ## Implementation plan
 
-{{ globals.plan.steps }}
+{{ globals.plan.summary }}
 
 ## Review feedback to address
 
