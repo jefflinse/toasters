@@ -405,22 +405,11 @@ func (p *AnthropicProvider) streamResponse(ctx context.Context, req *http.Reques
 
 // Models returns a static list of known Claude models.
 func (p *AnthropicProvider) Models(_ context.Context) ([]ModelInfo, error) {
-	models := []ModelInfo{
+	return []ModelInfo{
 		{ID: "claude-opus-4-6", Name: "Claude Opus 4.6", Provider: p.name},
 		{ID: "claude-sonnet-4-6", Name: "Claude Sonnet 4.6", Provider: p.name},
 		{ID: "claude-haiku-4-5", Name: "Claude Haiku 4.5", Provider: p.name},
-	}
-	// If a default model is configured, mark it as "loaded" so the TUI
-	// sidebar prefers it over the first entry in the list.
-	if p.defaultModel != "" {
-		for i, mi := range models {
-			if mi.ID == p.defaultModel {
-				models[i].State = "loaded"
-				break
-			}
-		}
-	}
-	return models, nil
+	}, nil
 }
 
 // --- Anthropic API types ---

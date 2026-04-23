@@ -2634,11 +2634,14 @@ func mcpServerStatusToService(ss mcp.ServerStatus) MCPServerStatus {
 }
 
 func providerModelInfoToService(m provider.ModelInfo) ModelInfo {
+	// State is a TUI affordance indicating the loaded/preferred model. The
+	// upstream mycelium ModelInfo no longer carries it; until a replacement
+	// signal is wired through, this field is left empty. The TUI degrades
+	// to showing the first model rather than the loaded one.
 	return ModelInfo{
 		ID:                  m.ID,
 		Name:                m.Name,
 		Provider:            m.Provider,
-		State:               m.State,
 		MaxContextLength:    m.MaxContextLength,
 		LoadedContextLength: m.LoadedContextLength,
 	}

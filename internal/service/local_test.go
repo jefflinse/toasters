@@ -1685,7 +1685,6 @@ func TestListModels_MapsFields(t *testing.T) {
 				ID:                  "model-1",
 				Name:                "Model One",
 				Provider:            "mock",
-				State:               "loaded",
 				MaxContextLength:    128000,
 				LoadedContextLength: 64000,
 			},
