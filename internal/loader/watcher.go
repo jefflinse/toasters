@@ -3,7 +3,6 @@ package loader
 import (
 	"context"
 	"log/slog"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -57,10 +56,6 @@ func (w *Watcher) Start(ctx context.Context) error {
 			if !ok {
 				return nil
 			}
-			// Dynamically watch new directories under user/teams/.
-			if event.Op&fsnotify.Create != 0 {
-				w.maybeWatchNewDir(event.Name)
-			}
 			// React to .md file changes (definitions) and .yaml file changes
 			// in providers/ or {system,user}/graphs/.
 			isProviderYAML := strings.HasSuffix(event.Name, ".yaml") &&
@@ -104,62 +99,20 @@ func (w *Watcher) Stop() error {
 func (w *Watcher) addWatchDirs() {
 	configDir := w.loader.configDir
 
-	// Fixed directories to watch.
 	dirs := []string{
 		filepath.Join(configDir, "system"),
-		filepath.Join(configDir, "system", "agents"),
 		filepath.Join(configDir, "system", "skills"),
 		filepath.Join(configDir, "system", "graphs"),
+		filepath.Join(configDir, "system", "roles"),
+		filepath.Join(configDir, "system", "instructions"),
 		filepath.Join(configDir, "user", "skills"),
-		filepath.Join(configDir, "user", "agents"),
-		filepath.Join(configDir, "user", "teams"),
 		filepath.Join(configDir, "user", "graphs"),
+		filepath.Join(configDir, "user", "roles"),
+		filepath.Join(configDir, "user", "instructions"),
 		filepath.Join(configDir, "providers"),
 	}
 
 	for _, dir := range dirs {
 		_ = w.watcher.Add(dir) // best-effort; skip if missing
 	}
-
-	// Watch each team directory and its agents/ subdirectory.
-	teamsDir := filepath.Join(configDir, "user", "teams")
-	w.watchTeamSubdirs(teamsDir)
-}
-
-// watchTeamSubdirs adds watches for each team directory and its agents/ subdir.
-func (w *Watcher) watchTeamSubdirs(teamsDir string) {
-	entries, err := os.ReadDir(teamsDir)
-	if err != nil {
-		return // directory doesn't exist — skip
-	}
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
-		teamDir := filepath.Join(teamsDir, e.Name())
-		_ = w.watcher.Add(teamDir)
-		agentsDir := filepath.Join(teamDir, "agents")
-		_ = w.watcher.Add(agentsDir)
-	}
-}
-
-// maybeWatchNewDir adds a newly created directory to the watch list if it's
-// under user/teams/. This handles dynamically created team directories.
-func (w *Watcher) maybeWatchNewDir(path string) {
-	info, err := os.Stat(path)
-	if err != nil || !info.IsDir() {
-		return
-	}
-
-	teamsDir := filepath.Join(w.loader.configDir, "user", "teams")
-	rel, err := filepath.Rel(teamsDir, path)
-	if err != nil {
-		return
-	}
-	// Only watch directories that are under user/teams/ (not outside it).
-	if strings.HasPrefix(rel, "..") {
-		return
-	}
-
-	_ = w.watcher.Add(path)
 }

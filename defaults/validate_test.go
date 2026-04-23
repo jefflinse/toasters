@@ -37,7 +37,6 @@ func TestSystemFilesParseCorrectly(t *testing.T) {
 		wantDef mdfmt.DefType
 		name    string
 	}{
-		{"system/team.md", mdfmt.DefTeam, "System"},
 		{"system/skills/orchestration.md", mdfmt.DefSkill, "Orchestration"},
 	}
 
@@ -52,19 +51,7 @@ func TestSystemFilesParseCorrectly(t *testing.T) {
 				t.Errorf("DefType = %q, want %q", defType, tt.wantDef)
 			}
 
-			// Verify name matches.
-			switch d := def.(type) {
-			case *mdfmt.TeamDef:
-				if d.Name != tt.name {
-					t.Errorf("Name = %q, want %q", d.Name, tt.name)
-				}
-				if d.Lead == "" {
-					t.Error("Lead is empty")
-				}
-				if d.Body == "" {
-					t.Error("Body is empty")
-				}
-			case *mdfmt.SkillDef:
+			if d, ok := def.(*mdfmt.SkillDef); ok {
 				if d.Name != tt.name {
 					t.Errorf("Name = %q, want %q", d.Name, tt.name)
 				}

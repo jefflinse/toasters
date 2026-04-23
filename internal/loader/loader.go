@@ -82,28 +82,14 @@ func (l *Loader) GraphByID(id string) *graphexec.Definition {
 // Load walks all directories, parses definitions, resolves references,
 // and rebuilds the database. It is idempotent.
 func (l *Loader) Load(ctx context.Context) error {
-	var (
-		skills      []*db.Skill
-		teams       []*db.Team
-		teamWorkers []*db.TeamWorker
-	)
+	var skills []*db.Skill
 
-	// 1. Walk system/ directory.
+	// 1. System skills.
 	systemDir := filepath.Join(l.configDir, "system")
-
-	// System skills.
 	systemSkills := l.loadSkills(filepath.Join(systemDir, "skills"), "system")
 	skills = append(skills, systemSkills...)
 
-	// System team (single team.md at system/ root).
-	sysTeam, sysTeamWorkers := l.loadSystemTeam(systemDir)
-	if sysTeam != nil {
-		teams = append(teams, sysTeam)
-		teamWorkers = append(teamWorkers, sysTeamWorkers...)
-	}
-
-	// 2. Walk user/skills/.
-	// User skills shadow system skills with the same ID.
+	// 2. User skills shadow system skills with the same ID.
 	userSkills := l.loadSkills(filepath.Join(l.configDir, "user", "skills"), "user")
 	userSkillIDs := make(map[string]bool, len(userSkills))
 	for _, sk := range userSkills {
@@ -117,19 +103,13 @@ func (l *Loader) Load(ctx context.Context) error {
 	}
 	skills = append(filtered, userSkills...)
 
-	// 3. Walk user/teams/.
-	teamsDir := filepath.Join(l.configDir, "user", "teams")
-	uTeams, uWorkers, uTeamWorkers := l.loadUserTeams(teamsDir)
-	teams = append(teams, uTeams...)
-	teamWorkers = append(teamWorkers, uTeamWorkers...)
-
-	// 4. Load providers from providers/*.yaml.
+	// 3. Load providers from providers/*.yaml.
 	provs := l.loadProviders()
 	l.provMu.Lock()
 	l.providers = provs
 	l.provMu.Unlock()
 
-	// 4a. Load graphs from system/graphs/ and user/graphs/. User graphs
+	// 4. Load graphs from system/graphs/ and user/graphs/. User graphs
 	// shadow system graphs sharing an id.
 	sysGraphs := l.loadGraphs(filepath.Join(l.configDir, "system", "graphs"))
 	userGraphs := l.loadGraphs(filepath.Join(l.configDir, "user", "graphs"))
@@ -138,8 +118,9 @@ func (l *Loader) Load(ctx context.Context) error {
 	l.graphs = merged
 	l.graphsMu.Unlock()
 
-	// 5. Rebuild database.
-	if err := l.store.RebuildDefinitions(ctx, skills, uWorkers, teams, teamWorkers); err != nil {
+	// 5. Rebuild database. Teams + workers are no longer loaded from disk —
+	// graphs are the execution primitive now.
+	if err := l.store.RebuildDefinitions(ctx, skills, nil, nil, nil); err != nil {
 		return fmt.Errorf("rebuilding definitions: %w", err)
 	}
 
@@ -269,193 +250,6 @@ func (l *Loader) loadSkills(dir, source string) []*db.Skill {
 	return skills
 }
 
-// loadSystemTeam loads the system team from system/team.md.
-func (l *Loader) loadSystemTeam(systemDir string) (*db.Team, []*db.TeamWorker) {
-	teamPath := filepath.Join(systemDir, "team.md")
-	td, err := mdfmt.ParseTeam(teamPath)
-	if err != nil {
-		// No system team file — skip silently.
-		return nil, nil
-	}
-	return convertTeam(td, "system", "system", teamPath, false), nil
-}
-
-// loadUserTeams walks user/teams/ and loads each team directory.
-func (l *Loader) loadUserTeams(teamsDir string) ([]*db.Team, []*db.Worker, []*db.TeamWorker) {
-	entries, err := os.ReadDir(teamsDir)
-	if err != nil {
-		return nil, nil, nil
-	}
-
-	var (
-		teams       []*db.Team
-		workers     []*db.Worker
-		teamWorkers []*db.TeamWorker
-	)
-
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
-		teamDir := filepath.Join(teamsDir, e.Name())
-		teamID := e.Name()
-
-		// Check for .auto-team marker.
-		isAuto := false
-		if _, err := os.Stat(filepath.Join(teamDir, ".auto-team")); err == nil {
-			isAuto = true
-		}
-
-		source := "user"
-		if isAuto {
-			source = "auto"
-		}
-
-		// Parse team.md if it exists.
-		teamPath := filepath.Join(teamDir, "team.md")
-
-		// Check for role-based team format first.
-		if t, w, tw, ok := l.tryLoadRoleBasedTeam(teamPath, teamID, teamDir, source); ok {
-			teams = append(teams, t)
-			workers = append(workers, w...)
-			teamWorkers = append(teamWorkers, tw...)
-			continue
-		}
-
-		td, err := mdfmt.ParseTeam(teamPath)
-		if err != nil {
-			if isAuto {
-				// Auto-teams without team.md get a synthetic TeamDef.
-				team := &db.Team{
-					ID:         teamID,
-					Name:       teamID,
-					Source:     source,
-					SourcePath: teamDir,
-					IsAuto:     true,
-				}
-				teams = append(teams, team)
-				continue
-			}
-			slog.Warn("skipping team without parseable team.md", "dir", teamDir, "error", err)
-			continue
-		}
-
-		team := convertTeam(td, teamID, source, teamPath, isAuto)
-		teams = append(teams, team)
-	}
-
-	return teams, workers, teamWorkers
-}
-
-// roleTeamDef is the YAML frontmatter format for role-based teams.
-type roleTeamDef struct {
-	Name        string   `yaml:"name"`
-	Description string   `yaml:"description"`
-	Lead        string   `yaml:"lead"`
-	Roles       []string `yaml:"roles"`
-}
-
-// tryLoadRoleBasedTeam attempts to parse a team.md as a role-based team.
-// Returns the team, synthetic workers, and team-worker mappings if successful.
-func (l *Loader) tryLoadRoleBasedTeam(teamPath, teamID, teamDir, source string) (*db.Team, []*db.Worker, []*db.TeamWorker, bool) {
-	data, err := os.ReadFile(teamPath)
-	if err != nil {
-		return nil, nil, nil, false
-	}
-
-	// Parse frontmatter to check for the roles field.
-	var def roleTeamDef
-	content := string(data)
-	if !strings.HasPrefix(content, "---\n") {
-		return nil, nil, nil, false
-	}
-	rest := content[4:]
-	idx := strings.Index(rest, "\n---")
-	if idx < 0 {
-		return nil, nil, nil, false
-	}
-	if err := yaml.Unmarshal([]byte(rest[:idx]), &def); err != nil {
-		return nil, nil, nil, false
-	}
-
-	// If no roles field, this is not a role-based team.
-	if len(def.Roles) == 0 {
-		return nil, nil, nil, false
-	}
-
-	slog.Info("loading role-based team", "team", teamID, "lead", def.Lead, "roles", len(def.Roles))
-
-	team := &db.Team{
-		ID:          teamID,
-		Name:        def.Name,
-		Description: def.Description,
-		Source:      source,
-		SourcePath:  teamDir,
-	}
-
-	var workers []*db.Worker
-	var teamWorkers []*db.TeamWorker
-
-	// Create a synthetic worker for the lead role.
-	if def.Lead != "" {
-		leadWorkerID := teamID + "/" + def.Lead
-		team.LeadWorker = leadWorkerID
-
-		leadWorker := l.syntheticWorkerFromRole(def.Lead, leadWorkerID, teamID, source)
-		workers = append(workers, leadWorker)
-		teamWorkers = append(teamWorkers, &db.TeamWorker{
-			TeamID:   teamID,
-			WorkerID: leadWorkerID,
-			Role:     "lead",
-		})
-	}
-
-	// Create synthetic workers for each worker role.
-	// Skip any role that matches the lead — it's already registered above.
-	for _, roleName := range def.Roles {
-		if roleName == def.Lead {
-			continue
-		}
-		workerID := teamID + "/" + roleName
-		worker := l.syntheticWorkerFromRole(roleName, workerID, teamID, source)
-		workers = append(workers, worker)
-		teamWorkers = append(teamWorkers, &db.TeamWorker{
-			TeamID:   teamID,
-			WorkerID: workerID,
-			Role:     "worker",
-		})
-	}
-
-	return team, workers, teamWorkers, true
-}
-
-// syntheticWorkerFromRole creates a db.Worker from a prompt engine role.
-// The worker's system prompt is left empty — it will be composed by the
-// prompt engine at spawn time.
-func (l *Loader) syntheticWorkerFromRole(roleName, workerID, teamID, source string) *db.Worker {
-	worker := &db.Worker{
-		ID:     workerID,
-		Name:   roleName,
-		Mode:   "worker",
-		Source: source,
-		TeamID: teamID,
-	}
-
-	// If the prompt engine is available, populate metadata from the role.
-	if l.promptEngine != nil {
-		if role := l.promptEngine.Role(roleName); role != nil {
-			worker.Name = role.Name
-			worker.Description = role.Description
-			worker.Mode = role.Mode
-			if worker.Mode == "" {
-				worker.Mode = "worker"
-			}
-		}
-	}
-
-	return worker
-}
-
 // --- Conversion helpers ---
 
 func convertSkill(sd *mdfmt.SkillDef, source, path string) *db.Skill {
@@ -467,21 +261,6 @@ func convertSkill(sd *mdfmt.SkillDef, source, path string) *db.Skill {
 		Prompt:      sd.Body,
 		Source:      source,
 		SourcePath:  path,
-	}
-}
-
-func convertTeam(td *mdfmt.TeamDef, teamID, source, path string, isAuto bool) *db.Team {
-	return &db.Team{
-		ID:          teamID,
-		Name:        td.Name,
-		Description: td.Description,
-		Skills:      marshalJSON(td.Skills),
-		Provider:    td.Provider,
-		Model:       td.Model,
-		Culture:     td.Body,
-		Source:      source,
-		SourcePath:  path,
-		IsAuto:      isAuto,
 	}
 }
 
