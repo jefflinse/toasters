@@ -14,6 +14,14 @@ type ProviderConfig struct {
 	Endpoint string `yaml:"endpoint" mapstructure:"endpoint"`
 	APIKey   string `yaml:"api_key" mapstructure:"api_key"`
 	Model    string `yaml:"model" mapstructure:"model"`
+
+	// Concurrency caps in-flight chat calls against this provider. Zero
+	// means "use the default" (1 — safe for a local LLM). Configure
+	// higher for cloud providers that can serve parallel requests.
+	// Isolating the operator from workers is done by configuring a
+	// separate ProviderConfig with a distinct ID (so it gets its own
+	// scheduler) rather than sharing this one.
+	Concurrency int `yaml:"concurrency" mapstructure:"concurrency"`
 }
 
 // Registry maps provider names to Provider instances.
