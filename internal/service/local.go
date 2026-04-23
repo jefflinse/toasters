@@ -102,6 +102,7 @@ type LocalConfig struct {
 	Registry         *provider.Registry         // provider registry for live operator activation
 	PromptEngine     *prompt.Engine             // optional; for role-based prompt composition
 	GraphExecutor    operator.GraphTaskExecutor // optional; rhizome graph-based task execution
+	GraphCatalog     operator.GraphCatalog      // optional; backs query_graphs on the live-activated operator
 }
 
 // LocalService is the in-process implementation of Service. It delegates to
@@ -2379,6 +2380,7 @@ func (s *LocalService) startOperator(p provider.Provider, providerID, model stri
 		SessionFile:            filepath.Join(s.cfg.ConfigDir, "sessions", "operator.json"),
 		SystemEventBroadcaster: s,
 		GraphExecutor:          s.cfg.GraphExecutor,
+		GraphCatalog:           s.cfg.GraphCatalog,
 		Broker:                 s.broker,
 		PromptEngine:           s.cfg.PromptEngine,
 		DefaultProvider:        s.cfg.DefaultProvider,

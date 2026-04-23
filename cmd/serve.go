@@ -222,6 +222,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 		PromptEngine:     promptEngine,
 		DefaultProvider:  defaultProvider,
 		DefaultModel:     defaultModel,
+		GraphCatalog:     ldr,
 	})
 	defer svc.Shutdown()
 
@@ -242,6 +243,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 		Store:        store,
 		EventSink:    svc,
 		Broker:       svc.Broker(),
+		Graphs:       ldr,
 		DefaultModel: defaultModel,
 	})
 
@@ -273,6 +275,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 			SystemPrompt:           operatorPrompt,
 			SystemEventBroadcaster: svc,
 			GraphExecutor:          graphExec,
+			GraphCatalog:           ldr,
 			Broker:                 svc.Broker(),
 			PromptEngine:           promptEngine,
 			DefaultProvider:        defaultProvider,
