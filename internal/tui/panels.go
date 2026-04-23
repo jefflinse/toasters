@@ -54,28 +54,19 @@ func (m Model) renderLeftPanel(panelWidth, panelHeight int) string {
 
 	// Each pane border adds 2 vertical rows (top + bottom border line).
 	paneFrameV := FocusedPaneStyle.GetVerticalBorderSize()
-	// 3 panes × 2 rows border = 6 rows of border overhead.
-	borderOverhead := 3 * paneFrameV
+	// 2 panes × 2 rows border = 4 rows of border overhead.
+	borderOverhead := 2 * paneFrameV
 
-	// Bottom pane: content-driven height (header + one row per team + optional hint).
-	bottomContentH := 1 + len(m.teams) // "Teams" header + one line per team
-	if len(m.teams) == 0 {
-		bottomContentH = 2 // header + "No teams configured"
-	}
-	if m.focused == focusTeams && len(m.teams) > 0 {
-		bottomContentH++ // hint line
-	}
-
-	// Middle pane (Agents): content-driven height.
+	// Bottom pane (Agents): content-driven height.
 	// Count active runtime sessions for the agents pane.
 	sortedRT := m.sortedRuntimeSessions()
 	agentCount := len(sortedRT)
-	middleContentH := 1 + agentCount // "Agents" header + one line per agent
+	bottomContentH := 1 + agentCount // "Workers" header + one line per agent
 	if agentCount == 0 {
-		middleContentH = 2 // header + "No workers running"
+		bottomContentH = 2 // header + "No workers running"
 	}
 	if m.focused == focusAgents {
-		middleContentH++ // hint line
+		bottomContentH++ // hint line
 	}
 
 	// Jobs hint line appears when the jobs pane is focused.
@@ -84,14 +75,14 @@ func (m Model) renderLeftPanel(panelWidth, panelHeight int) string {
 		jobsHintH = 1
 	}
 
-	// Available height for content across all three panes.
+	// Available height for content across all two panes.
 	availableH := panelHeight - borderOverhead
 	if availableH < 6 {
 		availableH = 6
 	}
 
-	// Top pane gets whatever is left after middle + bottom + jobs hint.
-	topContentH := availableH - middleContentH - bottomContentH - jobsHintH
+	// Top pane gets whatever is left after bottom + jobs hint.
+	topContentH := availableH - bottomContentH - jobsHintH
 	if topContentH < 3 {
 		topContentH = 3
 	}
@@ -151,9 +142,9 @@ func (m Model) renderLeftPanel(panelWidth, panelHeight int) string {
 						indicator, style := taskStatusIndicator(task.Status)
 						taskLine := "  " + indicator + " " + truncateStr(task.Title, contentWidth-5)
 						topLines = append(topLines, style.Render(taskLine))
-						if task.TeamID != "" && (task.Status == service.TaskStatusInProgress || task.Status == service.TaskStatusBlocked) {
-							teamLine := "    " + style.Render(indicator) + " " + TaskPendingStyle.Render(truncateStr(task.TeamID, contentWidth-7))
-							topLines = append(topLines, teamLine)
+						if task.GraphID != "" && (task.Status == service.TaskStatusInProgress || task.Status == service.TaskStatusBlocked) {
+							graphLine := "    " + style.Render(indicator) + " " + TaskPendingStyle.Render(truncateStr(task.GraphID, contentWidth-7))
+							topLines = append(topLines, graphLine)
 						}
 					}
 				}
@@ -178,7 +169,7 @@ func (m Model) renderLeftPanel(panelWidth, panelHeight int) string {
 	}
 	topPane := topPaneStyle.Width(panelWidth).Render(topContent)
 
-	// --- Middle pane: Agents ---
+	// --- Bottom pane: Agents ---
 	var agentLines []string
 	agentsTitle := gradientText("Workers", [3]uint8{50, 130, 255}, [3]uint8{0, 200, 200})
 	if m.focused == focusAgents && m.focusAnimFrames > 0 {
@@ -215,86 +206,30 @@ func (m Model) renderLeftPanel(panelWidth, panelHeight int) string {
 		agentLines = append(agentLines, DimStyle.Render("Enter → grid view"))
 	}
 
-	middleContent := lipgloss.NewStyle().Height(middleContentH).Render(
+	bottomContent := lipgloss.NewStyle().Height(bottomContentH).Render(
 		lipgloss.JoinVertical(lipgloss.Left, agentLines...),
 	)
-	middlePaneStyle := UnfocusedPaneStyle
-	if m.focused == focusAgents {
-		middlePaneStyle = FocusedPaneStyle
-	}
-	middlePane := middlePaneStyle.Width(panelWidth).Render(middleContent)
-
-	// --- Bottom pane: Teams ---
-	var bottomLines []string
-	teamsTitle := gradientText("Teams", [3]uint8{255, 175, 0}, [3]uint8{0, 200, 200})
-	if m.focused == focusTeams && m.focusAnimFrames > 0 {
-		teamsTitle = rainbowText("Teams", m.spinnerFrame)
-	}
-	bottomLines = append(bottomLines, teamsTitle)
-	if len(m.teams) == 0 {
-		bottomLines = append(bottomLines, PlaceholderPaneStyle.Render("No teams configured"))
-	} else {
-		for i, t := range m.teams {
-			teamColor := lipgloss.Color("135")
-			if t.Coordinator != nil && t.Coordinator.Color != "" {
-				teamColor = lipgloss.Color(t.Coordinator.Color)
-			}
-			prefix := lipgloss.NewStyle().Foreground(teamColor).Render("◆") + " "
-			workerCount := fmt.Sprintf("(%d workers)", len(t.Workers))
-			// Append badge for auto teams.
-			badge := ""
-			if t.IsAuto() {
-				badge = " ↻"
-			}
-			name := truncateStr(t.Name(), contentWidth-2)
-			if m.focused == focusTeams && i == m.selectedTeam {
-				line := JobSelectedStyle.Render(prefix + name + badge + " " + workerCount)
-				bottomLines = append(bottomLines, line)
-			} else {
-				line := SidebarValueStyle.Bold(true).Render(prefix+name+badge) + " " + DimStyle.Render(workerCount)
-				bottomLines = append(bottomLines, line)
-			}
-		}
-		if m.focused == focusTeams {
-			bottomLines = append(bottomLines, DimStyle.Render("Enter → view team details"))
-		}
-	}
-	bottomContent := lipgloss.JoinVertical(lipgloss.Left, bottomLines...)
 	bottomPaneStyle := UnfocusedPaneStyle
-	if m.focused == focusTeams {
+	if m.focused == focusAgents {
 		bottomPaneStyle = FocusedPaneStyle
 	}
 	bottomPane := bottomPaneStyle.Width(panelWidth).Render(bottomContent)
 
-	inner := lipgloss.JoinVertical(lipgloss.Left, topPane, middlePane, bottomPane)
+	inner := lipgloss.JoinVertical(lipgloss.Left, topPane, bottomPane)
 	return LeftPanelStyle.Width(panelWidth).Height(panelHeight).Render(inner)
 }
 
-// leftPanelAgentsPaneHeight returns the rendered height of the Agents middle pane
+// leftPanelAgentsPaneHeight returns the rendered height of the Agents bottom pane
 // in the left panel, for use in mouse hit-testing.
 func (m *Model) leftPanelAgentsPaneHeight() int {
 	paneFrameV := FocusedPaneStyle.GetVerticalBorderSize()
 	sortedRT := m.sortedRuntimeSessions()
 	agentCount := len(sortedRT)
-	middleContentH := 1 + agentCount
+	bottomContentH := 1 + agentCount
 	if agentCount == 0 {
-		middleContentH = 2
-	}
-	if m.focused == focusAgents {
-		middleContentH++
-	}
-	return middleContentH + paneFrameV
-}
-
-// leftPanelTeamsPaneHeight returns the rendered height of the Teams bottom pane
-// in the left panel, for use in mouse hit-testing.
-func (m *Model) leftPanelTeamsPaneHeight() int {
-	paneFrameV := FocusedPaneStyle.GetVerticalBorderSize()
-	bottomContentH := 1 + len(m.teams)
-	if len(m.teams) == 0 {
 		bottomContentH = 2
 	}
-	if m.focused == focusTeams && len(m.teams) > 0 {
+	if m.focused == focusAgents {
 		bottomContentH++
 	}
 	return bottomContentH + paneFrameV

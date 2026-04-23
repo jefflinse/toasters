@@ -171,16 +171,6 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/workers", s.listWorkers)
 	mux.HandleFunc("GET /api/v1/workers/{id}", s.getWorker)
 
-	// Teams
-	mux.HandleFunc("GET /api/v1/teams", s.listTeams)
-	mux.HandleFunc("GET /api/v1/teams/{id}", s.getTeam)
-	mux.HandleFunc("POST /api/v1/teams", s.createTeam)
-	mux.HandleFunc("DELETE /api/v1/teams/{id}", s.deleteTeam)
-	mux.HandleFunc("PUT /api/v1/teams/{id}/coordinator", s.setCoordinator)
-	mux.HandleFunc("POST /api/v1/teams/{id}/promote", s.promoteTeam)
-	mux.HandleFunc("POST /api/v1/teams/generate", s.generateTeam)
-	mux.HandleFunc("POST /api/v1/teams/{id}/detect-coordinator", s.detectCoordinator)
-
 	// Jobs
 	mux.HandleFunc("GET /api/v1/jobs", s.listJobs)
 	mux.HandleFunc("GET /api/v1/jobs/{id}", s.getJob)

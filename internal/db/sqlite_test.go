@@ -41,9 +41,7 @@ func TestOpen(t *testing.T) {
 		"task_dependencies",
 		"progress_reports",
 		"workers",
-		"teams",
 		"skills",
-		"team_workers",
 		"feed_entries",
 		"worker_sessions",
 		"artifacts",
@@ -726,127 +724,6 @@ func TestWorkers_NilTemperature(t *testing.T) {
 	}
 }
 
-// --- Teams CRUD ---
-
-func TestTeams_CRUD(t *testing.T) {
-	store := openTestStore(t)
-	ctx := context.Background()
-
-	// Create workers first for team workers.
-	worker1 := &Worker{ID: "tm-worker-1", Name: "Lead", Mode: "lead", Source: "test"}
-	worker2 := &Worker{ID: "tm-worker-2", Name: "Worker", Mode: "worker", Source: "test"}
-	for _, w := range []*Worker{worker1, worker2} {
-		if err := store.UpsertWorker(ctx, w); err != nil {
-			t.Fatalf("UpsertWorker(%s): %v", w.ID, err)
-		}
-	}
-
-	skills := json.RawMessage(`["go","testing"]`)
-	team := &Team{
-		ID:          "team-1",
-		Name:        "Backend Team",
-		Description: "Handles backend work",
-		LeadWorker:  "tm-worker-1",
-		Skills:      skills,
-		Provider:    "anthropic",
-		Model:       "claude-opus-4-20250514",
-		Culture:     "We write clean code.",
-		Source:      "user",
-		SourcePath:  "/teams/backend.md",
-	}
-
-	// Upsert (insert)
-	if err := store.UpsertTeam(ctx, team); err != nil {
-		t.Fatalf("UpsertTeam: %v", err)
-	}
-
-	// Get
-	got, err := store.GetTeam(ctx, "team-1")
-	if err != nil {
-		t.Fatalf("GetTeam: %v", err)
-	}
-	if got.Name != "Backend Team" {
-		t.Errorf("Name = %q, want %q", got.Name, "Backend Team")
-	}
-	if got.LeadWorker != "tm-worker-1" {
-		t.Errorf("LeadWorker = %q, want %q", got.LeadWorker, "tm-worker-1")
-	}
-	if string(got.Skills) != `["go","testing"]` {
-		t.Errorf("Skills = %q, want %q", string(got.Skills), `["go","testing"]`)
-	}
-	if got.Provider != "anthropic" {
-		t.Errorf("Provider = %q, want %q", got.Provider, "anthropic")
-	}
-	if got.Culture != "We write clean code." {
-		t.Errorf("Culture = %q, want %q", got.Culture, "We write clean code.")
-	}
-	if got.Source != "user" {
-		t.Errorf("Source = %q, want %q", got.Source, "user")
-	}
-	if got.SourcePath != "/teams/backend.md" {
-		t.Errorf("SourcePath = %q, want %q", got.SourcePath, "/teams/backend.md")
-	}
-
-	// Upsert (update)
-	team.Name = "Backend Team v2"
-	team.UpdatedAt = time.Time{} // reset so it gets set
-	if err := store.UpsertTeam(ctx, team); err != nil {
-		t.Fatalf("UpsertTeam (update): %v", err)
-	}
-	got, err = store.GetTeam(ctx, "team-1")
-	if err != nil {
-		t.Fatalf("GetTeam after upsert: %v", err)
-	}
-	if got.Name != "Backend Team v2" {
-		t.Errorf("Name after upsert = %q, want %q", got.Name, "Backend Team v2")
-	}
-
-	// List
-	team2 := &Team{ID: "team-2", Name: "Frontend Team", Description: "Handles frontend", Source: "user"}
-	if err := store.UpsertTeam(ctx, team2); err != nil {
-		t.Fatalf("UpsertTeam (2): %v", err)
-	}
-	teams, err := store.ListTeams(ctx)
-	if err != nil {
-		t.Fatalf("ListTeams: %v", err)
-	}
-	if len(teams) != 2 {
-		t.Fatalf("ListTeams returned %d teams, want 2", len(teams))
-	}
-
-	// Add team workers
-	tw1 := &TeamWorker{TeamID: "team-1", WorkerID: "tm-worker-1", Role: "lead"}
-	if err := store.AddTeamWorker(ctx, tw1); err != nil {
-		t.Fatalf("AddTeamWorker: %v", err)
-	}
-	tw2 := &TeamWorker{TeamID: "team-1", WorkerID: "tm-worker-2", Role: "worker"}
-	if err := store.AddTeamWorker(ctx, tw2); err != nil {
-		t.Fatalf("AddTeamWorker (2): %v", err)
-	}
-
-	// List team workers
-	teamWorkers, err := store.ListTeamWorkers(ctx, "team-1")
-	if err != nil {
-		t.Fatalf("ListTeamWorkers: %v", err)
-	}
-	if len(teamWorkers) != 2 {
-		t.Errorf("team worker count = %d, want 2", len(teamWorkers))
-	}
-}
-
-func TestGetTeam_NotFound(t *testing.T) {
-	store := openTestStore(t)
-	ctx := context.Background()
-
-	_, err := store.GetTeam(ctx, "nonexistent")
-	if err == nil {
-		t.Fatal("expected error for nonexistent team, got nil")
-	}
-	if !errors.Is(err, ErrNotFound) {
-		t.Errorf("expected ErrNotFound, got: %v", err)
-	}
-}
-
 // --- Sessions CRUD ---
 
 func TestSessions_CRUD(t *testing.T) {
@@ -1337,88 +1214,6 @@ func TestJobStatusPaused(t *testing.T) {
 	}
 }
 
-// --- Task TeamID ---
-
-func TestTasks_TeamID(t *testing.T) {
-	store := openTestStore(t)
-	ctx := context.Background()
-
-	job := &Job{ID: "job-team", Title: "Team test", Type: "test", Status: JobStatusActive}
-	if err := store.CreateJob(ctx, job); err != nil {
-		t.Fatalf("CreateJob: %v", err)
-	}
-
-	task := &Task{
-		ID:        "task-team-1",
-		JobID:     "job-team",
-		Title:     "Team task",
-		Status:    TaskStatusPending,
-		WorkerID:  "worker-1",
-		TeamID:    "backend-team",
-		SortOrder: 1,
-	}
-	if err := store.CreateTask(ctx, task); err != nil {
-		t.Fatalf("CreateTask: %v", err)
-	}
-
-	// GetTask
-	got, err := store.GetTask(ctx, "task-team-1")
-	if err != nil {
-		t.Fatalf("GetTask: %v", err)
-	}
-	if got.TeamID != "backend-team" {
-		t.Errorf("TeamID = %q, want %q", got.TeamID, "backend-team")
-	}
-
-	// ListTasksForJob
-	tasks, err := store.ListTasksForJob(ctx, "job-team")
-	if err != nil {
-		t.Fatalf("ListTasksForJob: %v", err)
-	}
-	if len(tasks) != 1 {
-		t.Fatalf("ListTasksForJob returned %d tasks, want 1", len(tasks))
-	}
-	if tasks[0].TeamID != "backend-team" {
-		t.Errorf("TeamID = %q, want %q", tasks[0].TeamID, "backend-team")
-	}
-
-	// GetReadyTasks
-	ready, err := store.GetReadyTasks(ctx, "job-team")
-	if err != nil {
-		t.Fatalf("GetReadyTasks: %v", err)
-	}
-	if len(ready) != 1 {
-		t.Fatalf("GetReadyTasks returned %d tasks, want 1", len(ready))
-	}
-	if ready[0].TeamID != "backend-team" {
-		t.Errorf("TeamID = %q, want %q", ready[0].TeamID, "backend-team")
-	}
-}
-
-func TestTasks_DefaultTeamID(t *testing.T) {
-	store := openTestStore(t)
-	ctx := context.Background()
-
-	job := &Job{ID: "job-noteam", Title: "No team", Type: "test", Status: JobStatusActive}
-	if err := store.CreateJob(ctx, job); err != nil {
-		t.Fatalf("CreateJob: %v", err)
-	}
-
-	// Create task without TeamID — should default to "".
-	task := &Task{ID: "task-noteam", JobID: "job-noteam", Title: "No team task", Status: TaskStatusPending}
-	if err := store.CreateTask(ctx, task); err != nil {
-		t.Fatalf("CreateTask: %v", err)
-	}
-
-	got, err := store.GetTask(ctx, "task-noteam")
-	if err != nil {
-		t.Fatalf("GetTask: %v", err)
-	}
-	if got.TeamID != "" {
-		t.Errorf("TeamID = %q, want empty", got.TeamID)
-	}
-}
-
 // --- Migration 002 ---
 
 func TestMigration002_NewColumns(t *testing.T) {
@@ -1454,7 +1249,7 @@ func TestMigration002_NewColumns(t *testing.T) {
 
 	checkColumn("jobs", "description")
 	checkColumn("jobs", "workspace_dir")
-	checkColumn("tasks", "team_id")
+	checkColumn("tasks", "graph_id")
 }
 
 // --- Migration tests ---
@@ -1689,7 +1484,6 @@ func TestWorkers_NewFields(t *testing.T) {
 		Disabled:        false,
 		Source:          "user",
 		SourcePath:      "/workers/full.md",
-		TeamID:          "team-backend",
 	}
 
 	if err := store.UpsertWorker(ctx, worker); err != nil {
@@ -1734,9 +1528,6 @@ func TestWorkers_NewFields(t *testing.T) {
 	if got.SourcePath != "/workers/full.md" {
 		t.Errorf("SourcePath = %q, want %q", got.SourcePath, "/workers/full.md")
 	}
-	if got.TeamID != "team-backend" {
-		t.Errorf("TeamID = %q, want %q", got.TeamID, "team-backend")
-	}
 }
 
 func TestWorkers_DeleteAll(t *testing.T) {
@@ -1767,117 +1558,6 @@ func TestWorkers_DeleteAll(t *testing.T) {
 	}
 	if len(workers) != 0 {
 		t.Errorf("ListWorkers after delete returned %d, want 0", len(workers))
-	}
-}
-
-// --- Team new fields ---
-
-func TestTeams_IsAuto(t *testing.T) {
-	store := openTestStore(t)
-	ctx := context.Background()
-
-	team := &Team{
-		ID:     "team-auto",
-		Name:   "Auto Team",
-		IsAuto: true,
-		Source: "auto",
-	}
-	if err := store.UpsertTeam(ctx, team); err != nil {
-		t.Fatalf("UpsertTeam: %v", err)
-	}
-
-	got, err := store.GetTeam(ctx, "team-auto")
-	if err != nil {
-		t.Fatalf("GetTeam: %v", err)
-	}
-	if !got.IsAuto {
-		t.Error("IsAuto = false, want true")
-	}
-}
-
-func TestTeams_DeleteAll(t *testing.T) {
-	store := openTestStore(t)
-	ctx := context.Background()
-
-	for _, id := range []string{"t1", "t2"} {
-		if err := store.UpsertTeam(ctx, &Team{ID: id, Name: id, Source: "test"}); err != nil {
-			t.Fatalf("UpsertTeam(%s): %v", id, err)
-		}
-	}
-
-	if err := store.DeleteAllTeams(ctx); err != nil {
-		t.Fatalf("DeleteAllTeams: %v", err)
-	}
-
-	teams, err := store.ListTeams(ctx)
-	if err != nil {
-		t.Fatalf("ListTeams after delete: %v", err)
-	}
-	if len(teams) != 0 {
-		t.Errorf("ListTeams after delete returned %d, want 0", len(teams))
-	}
-}
-
-// --- Team Workers ---
-
-func TestTeamWorkers_CRUD(t *testing.T) {
-	store := openTestStore(t)
-	ctx := context.Background()
-
-	// Create prerequisite data.
-	if err := store.UpsertTeam(ctx, &Team{ID: "tw-team", Name: "Test Team", Source: "test"}); err != nil {
-		t.Fatalf("UpsertTeam: %v", err)
-	}
-	for _, id := range []string{"tw-worker-1", "tw-worker-2", "tw-worker-3"} {
-		if err := store.UpsertWorker(ctx, &Worker{ID: id, Name: id, Source: "test"}); err != nil {
-			t.Fatalf("UpsertWorker(%s): %v", id, err)
-		}
-	}
-
-	// Add team workers.
-	for _, tw := range []*TeamWorker{
-		{TeamID: "tw-team", WorkerID: "tw-worker-1", Role: "lead"},
-		{TeamID: "tw-team", WorkerID: "tw-worker-2", Role: "worker"},
-		{TeamID: "tw-team", WorkerID: "tw-worker-3", Role: "worker"},
-	} {
-		if err := store.AddTeamWorker(ctx, tw); err != nil {
-			t.Fatalf("AddTeamWorker(%s): %v", tw.WorkerID, err)
-		}
-	}
-
-	// List.
-	teamWorkers, err := store.ListTeamWorkers(ctx, "tw-team")
-	if err != nil {
-		t.Fatalf("ListTeamWorkers: %v", err)
-	}
-	if len(teamWorkers) != 3 {
-		t.Fatalf("ListTeamWorkers returned %d, want 3", len(teamWorkers))
-	}
-
-	// Verify lead comes first (ordered by role, worker_id).
-	if teamWorkers[0].Role != "lead" {
-		t.Errorf("first team worker role = %q, want %q", teamWorkers[0].Role, "lead")
-	}
-
-	// List for nonexistent team should be empty.
-	empty, err := store.ListTeamWorkers(ctx, "nonexistent")
-	if err != nil {
-		t.Fatalf("ListTeamWorkers(nonexistent): %v", err)
-	}
-	if len(empty) != 0 {
-		t.Errorf("ListTeamWorkers(nonexistent) returned %d, want 0", len(empty))
-	}
-
-	// DeleteAll.
-	if err := store.DeleteAllTeamWorkers(ctx); err != nil {
-		t.Fatalf("DeleteAllTeamWorkers: %v", err)
-	}
-	teamWorkers, err = store.ListTeamWorkers(ctx, "tw-team")
-	if err != nil {
-		t.Fatalf("ListTeamWorkers after delete: %v", err)
-	}
-	if len(teamWorkers) != 0 {
-		t.Errorf("ListTeamWorkers after delete returned %d, want 0", len(teamWorkers))
 	}
 }
 
@@ -2023,16 +1703,9 @@ func TestRebuildDefinitions(t *testing.T) {
 		{ID: "wk-1", Name: "Builder", Mode: "worker", Source: "user"},
 		{ID: "wk-2", Name: "Reviewer", Mode: "lead", Source: "user"},
 	}
-	teams1 := []*Team{
-		{ID: "tm-1", Name: "Backend", LeadWorker: "wk-2", Source: "user"},
-	}
-	teamWorkers1 := []*TeamWorker{
-		{TeamID: "tm-1", WorkerID: "wk-1", Role: "worker"},
-		{TeamID: "tm-1", WorkerID: "wk-2", Role: "lead"},
-	}
 
 	// First rebuild.
-	if err := store.RebuildDefinitions(ctx, skills1, workers1, teams1, teamWorkers1); err != nil {
+	if err := store.RebuildDefinitions(ctx, skills1, workers1); err != nil {
 		t.Fatalf("RebuildDefinitions (first): %v", err)
 	}
 
@@ -2053,22 +1726,6 @@ func TestRebuildDefinitions(t *testing.T) {
 		t.Errorf("ListWorkers returned %d, want 2", len(workerList))
 	}
 
-	teamList, err := store.ListTeams(ctx)
-	if err != nil {
-		t.Fatalf("ListTeams: %v", err)
-	}
-	if len(teamList) != 1 {
-		t.Errorf("ListTeams returned %d, want 1", len(teamList))
-	}
-
-	twList, err := store.ListTeamWorkers(ctx, "tm-1")
-	if err != nil {
-		t.Fatalf("ListTeamWorkers: %v", err)
-	}
-	if len(twList) != 2 {
-		t.Errorf("ListTeamWorkers returned %d, want 2", len(twList))
-	}
-
 	// Second rebuild with different data — old data should be gone.
 	skills2 := []*Skill{
 		{ID: "sk-3", Name: "Python", Source: "user", Prompt: "Python expert"},
@@ -2076,14 +1733,8 @@ func TestRebuildDefinitions(t *testing.T) {
 	workers2 := []*Worker{
 		{ID: "wk-3", Name: "Tester", Mode: "worker", Source: "system"},
 	}
-	teams2 := []*Team{
-		{ID: "tm-2", Name: "QA", LeadWorker: "wk-3", Source: "system"},
-	}
-	teamWorkers2 := []*TeamWorker{
-		{TeamID: "tm-2", WorkerID: "wk-3", Role: "lead"},
-	}
 
-	if err := store.RebuildDefinitions(ctx, skills2, workers2, teams2, teamWorkers2); err != nil {
+	if err := store.RebuildDefinitions(ctx, skills2, workers2); err != nil {
 		t.Fatalf("RebuildDefinitions (second): %v", err)
 	}
 
@@ -2109,35 +1760,6 @@ func TestRebuildDefinitions(t *testing.T) {
 	if workerList[0].ID != "wk-3" {
 		t.Errorf("worker ID = %q, want %q", workerList[0].ID, "wk-3")
 	}
-
-	teamList, err = store.ListTeams(ctx)
-	if err != nil {
-		t.Fatalf("ListTeams after rebuild: %v", err)
-	}
-	if len(teamList) != 1 {
-		t.Fatalf("ListTeams after rebuild returned %d, want 1", len(teamList))
-	}
-	if teamList[0].ID != "tm-2" {
-		t.Errorf("team ID = %q, want %q", teamList[0].ID, "tm-2")
-	}
-
-	// Old team workers should be gone.
-	twList, err = store.ListTeamWorkers(ctx, "tm-1")
-	if err != nil {
-		t.Fatalf("ListTeamWorkers(tm-1) after rebuild: %v", err)
-	}
-	if len(twList) != 0 {
-		t.Errorf("ListTeamWorkers(tm-1) after rebuild returned %d, want 0", len(twList))
-	}
-
-	// New team workers should exist.
-	twList, err = store.ListTeamWorkers(ctx, "tm-2")
-	if err != nil {
-		t.Fatalf("ListTeamWorkers(tm-2) after rebuild: %v", err)
-	}
-	if len(twList) != 1 {
-		t.Errorf("ListTeamWorkers(tm-2) after rebuild returned %d, want 1", len(twList))
-	}
 }
 
 func TestRebuildDefinitions_Empty(t *testing.T) {
@@ -2145,17 +1767,16 @@ func TestRebuildDefinitions_Empty(t *testing.T) {
 	ctx := context.Background()
 
 	// Rebuild with empty slices should succeed.
-	if err := store.RebuildDefinitions(ctx, nil, nil, nil, nil); err != nil {
+	if err := store.RebuildDefinitions(ctx, nil, nil); err != nil {
 		t.Fatalf("RebuildDefinitions (empty): %v", err)
 	}
 
 	// All definition tables should be empty.
 	skills, _ := store.ListSkills(ctx)
 	workers, _ := store.ListWorkers(ctx)
-	teams, _ := store.ListTeams(ctx)
-	if len(skills) != 0 || len(workers) != 0 || len(teams) != 0 {
-		t.Errorf("expected all empty after empty rebuild: skills=%d workers=%d teams=%d",
-			len(skills), len(workers), len(teams))
+	if len(skills) != 0 || len(workers) != 0 {
+		t.Errorf("expected all empty after empty rebuild: skills=%d workers=%d",
+			len(skills), len(workers))
 	}
 }
 
@@ -2175,7 +1796,7 @@ func TestRebuildDefinitions_PreservesOperationalData(t *testing.T) {
 	}
 
 	// Rebuild definitions.
-	if err := store.RebuildDefinitions(ctx, nil, nil, nil, nil); err != nil {
+	if err := store.RebuildDefinitions(ctx, nil, nil); err != nil {
 		t.Fatalf("RebuildDefinitions: %v", err)
 	}
 
@@ -2203,7 +1824,7 @@ func TestMigration003_NewTables(t *testing.T) {
 	store := openTestStore(t)
 
 	// Verify new tables exist.
-	for _, table := range []string{"skills", "team_workers", "feed_entries"} {
+	for _, table := range []string{"skills", "feed_entries"} {
 		var name string
 		err := store.db.QueryRow(
 			"SELECT name FROM sqlite_master WHERE type='table' AND name=?", table,

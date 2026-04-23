@@ -97,14 +97,14 @@ type Task struct {
 	Title           string
 	Status          TaskStatus
 	WorkerID        string // assigned worker (may be empty)
-	TeamID          string // assigned team (may be empty)
+	GraphID         string // assigned graph definition id (may be empty)
 	ParentID        string // DAG edge; empty for root tasks
 	SortOrder       int
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
 	Summary         string          // completion summary or failure reason
 	ResultSummary   string          // structured result summary
-	Recommendations string          // structured recommendations from the team
+	Recommendations string          // structured recommendations
 	Metadata        json.RawMessage // extensible JSON blob; may be nil
 }
 
@@ -180,7 +180,6 @@ const (
 type SessionSnapshot struct {
 	ID        string
 	WorkerID  string
-	TeamName  string // team this worker belongs to; may be empty
 	JobID     string
 	TaskID    string
 	Status    string // "active", "completed", "failed", "cancelled"
@@ -201,7 +200,6 @@ type SessionDetail struct {
 	Output         string         // accumulated text output from the session
 	Activities     []ActivityItem // recent tool-call activities; newest last
 	WorkerName     string         // human-readable worker name
-	TeamName       string         // team name; may be empty
 	Task           string         // short human-readable task description
 }
 
@@ -250,7 +248,7 @@ type FeedEntry struct {
 }
 
 // ---------------------------------------------------------------------------
-// Definition types (Skills, Workers, Teams)
+// Definition types (Skills, Workers)
 // ---------------------------------------------------------------------------
 
 // Skill is the service-level representation of a reusable worker capability.
@@ -286,50 +284,9 @@ type Worker struct {
 	Disabled        bool
 	Source          string // "system", "user", "auto"
 	SourcePath      string `json:"-"` // absolute path to the .md file
-	TeamID          string // empty for shared workers
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
 }
-
-// Team is the service-level representation of a group of workers.
-type Team struct {
-	ID          string
-	Name        string
-	Description string
-	LeadWorker   string   // worker ID reference
-	Skills      []string // team-wide skill names
-	Provider    string   // team default provider
-	Model       string   // team default model
-	Culture     string   // team culture document (markdown body)
-	Source      string   // "system", "user", "auto"
-	SourcePath  string   `json:"-"` // absolute path to the team directory
-	IsAuto      bool
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
-}
-
-// TeamView bundles a Team with its resolved coordinator and workers.
-// It replaces the tui.TeamView type and is the canonical view used everywhere
-// a team is displayed with its members.
-type TeamView struct {
-	Team        Team
-	Coordinator *Worker  // nil if no lead is set or found
-	Workers     []Worker // all non-coordinator workers
-	IsReadOnly  bool    // true if the team is read-only (e.g. Claude Code auto-discovered teams)
-	IsSystem    bool    // true if the team is a system team (lives under the system config directory)
-}
-
-// Name returns the team name.
-func (tv TeamView) Name() string { return tv.Team.Name }
-
-// Description returns the team description.
-func (tv TeamView) Description() string { return tv.Team.Description }
-
-// Dir returns the team's source path (the team directory).
-func (tv TeamView) Dir() string { return tv.Team.SourcePath }
-
-// IsAuto returns true if the team was auto-detected rather than manually created.
-func (tv TeamView) IsAuto() bool { return tv.Team.IsAuto }
 
 // ---------------------------------------------------------------------------
 // Chat / conversation types
@@ -553,8 +510,6 @@ type OperationResult struct {
 	OperationID string
 	// For generation operations, Content holds the generated definition content.
 	Content string
-	// For team generation, AgentNames holds the names of workers to assign.
-	AgentNames []string
 	// Error is non-empty for operation.failed events.
 	Error string
 }
@@ -589,9 +544,8 @@ type BlockerQuestion struct {
 type Blocker struct {
 	JobID          string
 	TaskID         string
-	TeamID         string
+	GraphID        string
 	WorkerID       string
-	Team           string // human-readable team name for display
 	BlockerSummary string // short summary of what is blocked
 	Context        string // additional context from the worker
 	WhatWasTried   string // what the worker already attempted

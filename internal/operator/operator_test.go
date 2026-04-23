@@ -530,7 +530,7 @@ func TestOperatorMechanicalEvents(t *testing.T) {
 		Payload: TaskStartedPayload{
 			TaskID: "task-0",
 			JobID:  "job-1",
-			TeamID: "team-1",
+			GraphID: "team-1",
 			Title:  "Setup",
 		},
 	})
@@ -601,7 +601,7 @@ func TestEventLoop_TaskStarted_CreatesFeedEntry(t *testing.T) {
 		Payload: TaskStartedPayload{
 			TaskID: "task-1",
 			JobID:  "job-1",
-			TeamID: "bug-fix",
+			GraphID: "bug-fix",
 			Title:  "Build API",
 		},
 	})
@@ -716,7 +716,7 @@ func TestEventLoop_TaskCompleted_AssignsNextTask(t *testing.T) {
 		Payload: TaskCompletedPayload{
 			TaskID:      "task-1",
 			JobID:       "job-1",
-			TeamID:      "backend",
+			GraphID:      "backend",
 			Summary:     "First task done",
 			HasNextTask: true,
 		},
@@ -800,7 +800,7 @@ func TestEventLoop_TaskCompleted_ChecksJobComplete(t *testing.T) {
 		Payload: TaskCompletedPayload{
 			TaskID:      "task-1",
 			JobID:       "job-1",
-			TeamID:      "backend",
+			GraphID:      "backend",
 			Summary:     "All done",
 			HasNextTask: false,
 		},
@@ -904,7 +904,7 @@ func TestEventLoop_TaskCompleted_WithRecommendations(t *testing.T) {
 		Payload: TaskCompletedPayload{
 			TaskID:          "task-1",
 			JobID:           "job-1",
-			TeamID:          "backend",
+			GraphID:          "backend",
 			Summary:         "API built",
 			Recommendations: "Add caching layer for performance",
 			HasNextTask:     false,
@@ -978,7 +978,7 @@ func TestEventLoop_TaskFailed_RoutesToLLM(t *testing.T) {
 		Payload: TaskFailedPayload{
 			TaskID: "task-1",
 			JobID:  "job-1",
-			TeamID: "bug-fix",
+			GraphID: "bug-fix",
 			Error:  "compilation error in main.go",
 		},
 	})
@@ -1058,7 +1058,7 @@ func TestEventLoop_BlockerReported_RoutesToLLM(t *testing.T) {
 		Type: EventBlockerReported,
 		Payload: BlockerReportedPayload{
 			TaskID:      "task-1",
-			TeamID:      "backend",
+			GraphID:      "backend",
 			WorkerID:    "worker-1",
 			Description: "Cannot access production database",
 		},

@@ -367,11 +367,11 @@ func (m *Model) renderJobsModal() string {
 				} else {
 					midLines = append(midLines, style.Render(indicator+" "+taskTitle))
 				}
-				// Team nesting: 4-space indent, same status icon, team name in dim gray.
-				if task.TeamID != "" {
-					teamIndicator, _ := taskStatusIndicator(task.Status)
-					teamLine := "    " + DimStyle.Render(teamIndicator) + " " + TaskPendingStyle.Render(truncateStr(task.TeamID, midInnerW-7))
-					midLines = append(midLines, teamLine)
+				// Graph nesting: 4-space indent, same status icon, graph name in dim gray.
+				if task.GraphID != "" {
+					graphIndicator, _ := taskStatusIndicator(task.Status)
+					graphLine := "    " + DimStyle.Render(graphIndicator) + " " + TaskPendingStyle.Render(truncateStr(task.GraphID, midInnerW-7))
+					midLines = append(midLines, graphLine)
 				}
 			}
 		}

@@ -36,7 +36,7 @@ type wireTask struct {
 	Title           string          `json:"title"`
 	Status          string          `json:"status"`
 	WorkerID        string          `json:"worker_id,omitempty"`
-	TeamID          string          `json:"team_id,omitempty"`
+	GraphID         string          `json:"graph_id,omitempty"`
 	ParentID        string          `json:"parent_id,omitempty"`
 	SortOrder       int             `json:"sort_order"`
 	CreatedAt       time.Time       `json:"created_at"`
@@ -92,38 +92,13 @@ type wireWorker struct {
 	Hidden          bool      `json:"hidden"`
 	Disabled        bool      `json:"disabled"`
 	Source          string    `json:"source"`
-	TeamID          string    `json:"team_id,omitempty"`
 	CreatedAt       time.Time `json:"created_at"`
 	UpdatedAt       time.Time `json:"updated_at"`
-}
-
-type wireTeam struct {
-	ID          string    `json:"id"`
-	Name        string    `json:"name"`
-	Description string    `json:"description,omitempty"`
-	LeadWorker  string    `json:"lead_worker,omitempty"`
-	Skills      []string  `json:"skills"`
-	Provider    string    `json:"provider,omitempty"`
-	Model       string    `json:"model,omitempty"`
-	Culture     string    `json:"culture,omitempty"`
-	Source      string    `json:"source"`
-	IsAuto      bool      `json:"is_auto"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
-}
-
-type wireTeamView struct {
-	Team        wireTeam     `json:"team"`
-	Coordinator *wireWorker  `json:"coordinator"`
-	Workers     []wireWorker `json:"workers"`
-	IsReadOnly  bool         `json:"is_readonly"`
-	IsSystem    bool         `json:"is_system"`
 }
 
 type wireSessionSnapshot struct {
 	ID        string    `json:"id"`
 	WorkerID  string    `json:"worker_id"`
-	TeamName  string    `json:"team_name,omitempty"`
 	JobID     string    `json:"job_id,omitempty"`
 	TaskID    string    `json:"task_id,omitempty"`
 	Status    string    `json:"status"`
@@ -146,7 +121,6 @@ type wireSessionDetail struct {
 	Output         string              `json:"output,omitempty"`
 	Activities     []wireActivityItem  `json:"activities"`
 	WorkerName     string              `json:"worker_name"`
-	TeamName       string              `json:"team_name,omitempty"`
 	Task           string              `json:"task,omitempty"`
 }
 
@@ -359,45 +333,45 @@ type wireJobCreatedPayload struct {
 }
 
 type wireTaskCreatedPayload struct {
-	TaskID string `json:"task_id"`
-	JobID  string `json:"job_id"`
-	Title  string `json:"title"`
-	TeamID string `json:"team_id,omitempty"`
+	TaskID  string `json:"task_id"`
+	JobID   string `json:"job_id"`
+	Title   string `json:"title"`
+	GraphID string `json:"graph_id,omitempty"`
 }
 
 type wireTaskAssignedPayload struct {
-	TaskID string `json:"task_id"`
-	JobID  string `json:"job_id"`
-	TeamID string `json:"team_id"`
-	Title  string `json:"title"`
+	TaskID  string `json:"task_id"`
+	JobID   string `json:"job_id"`
+	GraphID string `json:"graph_id"`
+	Title   string `json:"title"`
 }
 
 type wireTaskStartedPayload struct {
-	TaskID string `json:"task_id"`
-	JobID  string `json:"job_id"`
-	TeamID string `json:"team_id"`
-	Title  string `json:"title"`
+	TaskID  string `json:"task_id"`
+	JobID   string `json:"job_id"`
+	GraphID string `json:"graph_id"`
+	Title   string `json:"title"`
 }
 
 type wireTaskCompletedPayload struct {
 	TaskID          string `json:"task_id"`
 	JobID           string `json:"job_id"`
-	TeamID          string `json:"team_id"`
+	GraphID         string `json:"graph_id"`
 	Summary         string `json:"summary"`
 	Recommendations string `json:"recommendations,omitempty"`
 	HasNextTask     bool   `json:"has_next_task"`
 }
 
 type wireTaskFailedPayload struct {
-	TaskID string `json:"task_id"`
-	JobID  string `json:"job_id"`
-	TeamID string `json:"team_id"`
-	Error  string `json:"error"`
+	TaskID  string `json:"task_id"`
+	JobID   string `json:"job_id"`
+	GraphID string `json:"graph_id"`
+	Error   string `json:"error"`
 }
 
 type wireBlockerReportedPayload struct {
 	TaskID      string   `json:"task_id"`
-	TeamID      string   `json:"team_id"`
+	GraphID     string   `json:"graph_id"`
 	WorkerID    string   `json:"worker_id"`
 	Description string   `json:"description"`
 	Questions   []string `json:"questions,omitempty"`
@@ -416,7 +390,6 @@ type wireProgressUpdatePayload struct {
 type wireSessionStartedPayload struct {
 	SessionID      string `json:"session_id"`
 	WorkerName     string `json:"worker_name"`
-	TeamName       string `json:"team_name,omitempty"`
 	Task           string `json:"task,omitempty"`
 	JobID          string `json:"job_id,omitempty"`
 	TaskID         string `json:"task_id,omitempty"`
@@ -450,10 +423,9 @@ type wireOperationCompletedPayload struct {
 }
 
 type wireOperationResult struct {
-	OperationID string   `json:"operation_id"`
-	Content     string   `json:"content,omitempty"`
-	AgentNames  []string `json:"agent_names,omitempty"`
-	Error       string   `json:"error,omitempty"`
+	OperationID string `json:"operation_id"`
+	Content     string `json:"content,omitempty"`
+	Error       string `json:"error,omitempty"`
 }
 
 type wireOperationFailedPayload struct {
@@ -520,7 +492,7 @@ func wireTaskToService(w wireTask) service.Task {
 		Title:           w.Title,
 		Status:          service.TaskStatus(w.Status),
 		WorkerID:        w.WorkerID,
-		TeamID:          w.TeamID,
+		GraphID:         w.GraphID,
 		ParentID:        w.ParentID,
 		SortOrder:       w.SortOrder,
 		CreatedAt:       w.CreatedAt,
@@ -592,51 +564,15 @@ func wireWorkerToService(w wireWorker) service.Worker {
 		Hidden:          w.Hidden,
 		Disabled:        w.Disabled,
 		Source:          w.Source,
-		TeamID:          w.TeamID,
 		CreatedAt:       w.CreatedAt,
 		UpdatedAt:       w.UpdatedAt,
 	}
-}
-
-func wireTeamToService(w wireTeam) service.Team {
-	return service.Team{
-		ID:          w.ID,
-		Name:        w.Name,
-		Description: w.Description,
-		LeadWorker:   w.LeadWorker,
-		Skills:      w.Skills,
-		Provider:    w.Provider,
-		Model:       w.Model,
-		Culture:     w.Culture,
-		Source:      w.Source,
-		IsAuto:      w.IsAuto,
-		CreatedAt:   w.CreatedAt,
-		UpdatedAt:   w.UpdatedAt,
-	}
-}
-
-func wireTeamViewToService(w wireTeamView) service.TeamView {
-	tv := service.TeamView{
-		Team:       wireTeamToService(w.Team),
-		Workers:    make([]service.Worker, 0, len(w.Workers)),
-		IsReadOnly: w.IsReadOnly,
-		IsSystem:   w.IsSystem,
-	}
-	if w.Coordinator != nil {
-		a := wireWorkerToService(*w.Coordinator)
-		tv.Coordinator = &a
-	}
-	for _, worker := range w.Workers {
-		tv.Workers = append(tv.Workers, wireWorkerToService(worker))
-	}
-	return tv
 }
 
 func wireSessionSnapshotToService(w wireSessionSnapshot) service.SessionSnapshot {
 	return service.SessionSnapshot{
 		ID:        w.ID,
 		WorkerID:  w.WorkerID,
-		TeamName:  w.TeamName,
 		JobID:     w.JobID,
 		TaskID:    w.TaskID,
 		Status:    w.Status,
@@ -663,7 +599,6 @@ func wireSessionDetailToService(w wireSessionDetail) service.SessionDetail {
 		Output:         w.Output,
 		Activities:     activities,
 		WorkerName:     w.WorkerName,
-		TeamName:       w.TeamName,
 		Task:           w.Task,
 	}
 }
@@ -926,10 +861,10 @@ func parseSSEPayload(eventType string, raw json.RawMessage) (any, error) {
 			return nil, fmt.Errorf("decoding task.created payload: %w", err)
 		}
 		return service.TaskCreatedPayload{
-			TaskID: w.TaskID,
-			JobID:  w.JobID,
-			Title:  w.Title,
-			TeamID: w.TeamID,
+			TaskID:  w.TaskID,
+			JobID:   w.JobID,
+			Title:   w.Title,
+			GraphID: w.GraphID,
 		}, nil
 
 	case service.EventTypeTaskAssigned:
@@ -938,10 +873,10 @@ func parseSSEPayload(eventType string, raw json.RawMessage) (any, error) {
 			return nil, fmt.Errorf("decoding task.assigned payload: %w", err)
 		}
 		return service.TaskAssignedPayload{
-			TaskID: w.TaskID,
-			JobID:  w.JobID,
-			TeamID: w.TeamID,
-			Title:  w.Title,
+			TaskID:  w.TaskID,
+			JobID:   w.JobID,
+			GraphID: w.GraphID,
+			Title:   w.Title,
 		}, nil
 
 	case service.EventTypeTaskStarted:
@@ -950,10 +885,10 @@ func parseSSEPayload(eventType string, raw json.RawMessage) (any, error) {
 			return nil, fmt.Errorf("decoding task.started payload: %w", err)
 		}
 		return service.TaskStartedPayload{
-			TaskID: w.TaskID,
-			JobID:  w.JobID,
-			TeamID: w.TeamID,
-			Title:  w.Title,
+			TaskID:  w.TaskID,
+			JobID:   w.JobID,
+			GraphID: w.GraphID,
+			Title:   w.Title,
 		}, nil
 
 	case service.EventTypeTaskCompleted:
@@ -964,7 +899,7 @@ func parseSSEPayload(eventType string, raw json.RawMessage) (any, error) {
 		return service.TaskCompletedPayload{
 			TaskID:          w.TaskID,
 			JobID:           w.JobID,
-			TeamID:          w.TeamID,
+			GraphID:         w.GraphID,
 			Summary:         w.Summary,
 			Recommendations: w.Recommendations,
 			HasNextTask:     w.HasNextTask,
@@ -976,10 +911,10 @@ func parseSSEPayload(eventType string, raw json.RawMessage) (any, error) {
 			return nil, fmt.Errorf("decoding task.failed payload: %w", err)
 		}
 		return service.TaskFailedPayload{
-			TaskID: w.TaskID,
-			JobID:  w.JobID,
-			TeamID: w.TeamID,
-			Error:  w.Error,
+			TaskID:  w.TaskID,
+			JobID:   w.JobID,
+			GraphID: w.GraphID,
+			Error:   w.Error,
 		}, nil
 
 	case service.EventTypeBlockerReported:
@@ -989,7 +924,7 @@ func parseSSEPayload(eventType string, raw json.RawMessage) (any, error) {
 		}
 		return service.BlockerReportedPayload{
 			TaskID:      w.TaskID,
-			TeamID:      w.TeamID,
+			GraphID:     w.GraphID,
 			WorkerID:    w.WorkerID,
 			Description: w.Description,
 			Questions:   w.Questions,
@@ -1023,7 +958,6 @@ func parseSSEPayload(eventType string, raw json.RawMessage) (any, error) {
 		return service.SessionStartedPayload{
 			SessionID:      w.SessionID,
 			WorkerName:     w.WorkerName,
-			TeamName:       w.TeamName,
 			Task:           w.Task,
 			JobID:          w.JobID,
 			TaskID:         w.TaskID,
@@ -1081,7 +1015,6 @@ func parseSSEPayload(eventType string, raw json.RawMessage) (any, error) {
 			Result: service.OperationResult{
 				OperationID: w.Result.OperationID,
 				Content:     w.Result.Content,
-				AgentNames:  w.Result.AgentNames,
 				Error:       w.Result.Error,
 			},
 		}, nil

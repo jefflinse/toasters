@@ -193,9 +193,9 @@ func (o *Operator) handleEvent(ctx context.Context, ev Event) {
 			slog.Error("invalid payload for task_started event", "payload", ev.Payload)
 			return
 		}
-		content := fmt.Sprintf("⚡ %s started task: %s", payload.TeamID, payload.Title)
+		content := fmt.Sprintf("⚡ %s started task: %s", payload.GraphID, payload.Title)
 		o.postFeedEntry(ctx, db.FeedEntryTaskStarted, content, payload.JobID)
-		slog.Info("task started", "task_id", payload.TaskID, "job_id", payload.JobID, "team_id", payload.TeamID, "title", payload.Title)
+		slog.Info("task started", "task_id", payload.TaskID, "job_id", payload.JobID, "graph_id", payload.GraphID, "title", payload.Title)
 
 	case EventTaskCompleted:
 		// Conditional: mechanical if next task queued; LLM if recommendations or job may be done.
@@ -204,9 +204,9 @@ func (o *Operator) handleEvent(ctx context.Context, ev Event) {
 			slog.Error("invalid payload for task_completed event", "payload", ev.Payload)
 			return
 		}
-		content := fmt.Sprintf("✅ %s completed task: %s", payload.TeamID, payload.Summary)
+		content := fmt.Sprintf("✅ %s completed task: %s", payload.GraphID, payload.Summary)
 		o.postFeedEntry(ctx, db.FeedEntryTaskCompleted, content, payload.JobID)
-		slog.Info("task completed", "task_id", payload.TaskID, "job_id", payload.JobID, "team_id", payload.TeamID, "summary", payload.Summary)
+		slog.Info("task completed", "task_id", payload.TaskID, "job_id", payload.JobID, "graph_id", payload.GraphID, "summary", payload.Summary)
 
 		if payload.HasNextTask {
 			// Mechanical: assign the next ready task.
@@ -214,7 +214,7 @@ func (o *Operator) handleEvent(ctx context.Context, ev Event) {
 		} else if payload.Recommendations != "" {
 			// LLM: consult scheduler about recommendations.
 			msg := fmt.Sprintf("Task %q completed by team %s. Summary: %s\n\nThe team recommends: %s\n\nPlease decide how to proceed with these recommendations.",
-				payload.TaskID, payload.TeamID, payload.Summary, payload.Recommendations)
+				payload.TaskID, payload.GraphID, payload.Summary, payload.Recommendations)
 			o.sendToLLM(ctx, msg)
 		} else {
 			// No next task and no recommendations — check if job is done.
@@ -228,12 +228,12 @@ func (o *Operator) handleEvent(ctx context.Context, ev Event) {
 			slog.Error("invalid payload for task_failed event", "payload", ev.Payload)
 			return
 		}
-		content := fmt.Sprintf("❌ %s failed task: %s", payload.TeamID, payload.Error)
+		content := fmt.Sprintf("❌ %s failed task: %s", payload.GraphID, payload.Error)
 		o.postFeedEntry(ctx, db.FeedEntryTaskFailed, content, payload.JobID)
-		slog.Warn("task failed", "task_id", payload.TaskID, "job_id", payload.JobID, "team_id", payload.TeamID, "error", payload.Error)
+		slog.Warn("task failed", "task_id", payload.TaskID, "job_id", payload.JobID, "graph_id", payload.GraphID, "error", payload.Error)
 
 		msg := fmt.Sprintf("Task %q assigned to team %s has failed with error: %s\n\nPlease decide how to proceed.",
-			payload.TaskID, payload.TeamID, payload.Error)
+			payload.TaskID, payload.GraphID, payload.Error)
 		o.sendToLLM(ctx, msg)
 
 	case EventBlockerReported:
@@ -243,20 +243,20 @@ func (o *Operator) handleEvent(ctx context.Context, ev Event) {
 			slog.Error("invalid payload for blocker_reported event", "payload", ev.Payload)
 			return
 		}
-		content := fmt.Sprintf("🚫 %s reported blocker: %s", payload.TeamID, payload.Description)
+		content := fmt.Sprintf("🚫 %s reported blocker: %s", payload.GraphID, payload.Description)
 		o.postFeedEntry(ctx, db.FeedEntryBlockerReported, content, "")
-		slog.Warn("blocker reported", "task_id", payload.TaskID, "team_id", payload.TeamID, "worker_id", payload.WorkerID, "description", payload.Description)
+		slog.Warn("blocker reported", "task_id", payload.TaskID, "graph_id", payload.GraphID, "worker_id", payload.WorkerID, "description", payload.Description)
 
 		// Surface directly to the user so they see it immediately.
 		if o.tools != nil && o.tools.systemTools != nil {
 			surfaceMsg := fmt.Sprintf("⚠️ **Blocker reported by %s:**\n\n%s\n\nPlease respond with guidance on how to proceed, or I will consult the blocker-handler to attempt resolution.",
-				payload.TeamID, payload.Description)
+				payload.GraphID, payload.Description)
 			surfaceArgs, _ := json.Marshal(map[string]string{"text": surfaceMsg})
 			_, _ = o.tools.systemTools.Execute(ctx, "surface_to_user", surfaceArgs)
 		}
 
-		msg := fmt.Sprintf("Team %s (task %q) reported a blocker: %s\n\nPlease triage this blocker and decide how to resolve it. Consider consulting the blocker-handler agent.",
-			payload.TeamID, payload.TaskID, payload.Description)
+		msg := fmt.Sprintf("Graph %s (task %q) reported a blocker: %s\n\nPlease triage this blocker and decide how to resolve it. Consider consulting the blocker-handler agent.",
+			payload.GraphID, payload.TaskID, payload.Description)
 		o.sendToLLM(ctx, msg)
 
 	case EventProgressUpdate:
@@ -292,12 +292,12 @@ func (o *Operator) handleEvent(ctx context.Context, ev Event) {
 			slog.Error("invalid payload for new_task_request event", "payload", ev.Payload)
 			return
 		}
-		content := fmt.Sprintf("Team %s requests new task: %s (reason: %s)", payload.TeamID, payload.Description, payload.Reason)
+		content := fmt.Sprintf("Graph %s requests new task: %s (reason: %s)", payload.GraphID, payload.Description, payload.Reason)
 		o.postFeedEntry(ctx, db.FeedEntrySystemEvent, content, payload.JobID)
-		slog.Info("new task request", "job_id", payload.JobID, "team_id", payload.TeamID, "description", payload.Description, "reason", payload.Reason)
+		slog.Info("new task request", "job_id", payload.JobID, "graph_id", payload.GraphID, "description", payload.Description, "reason", payload.Reason)
 
-		msg := fmt.Sprintf("Team %s recommends creating a new task for job %s: %s\n\nReason: %s\n\nPlease decide whether to create this task and assign it.",
-			payload.TeamID, payload.JobID, payload.Description, payload.Reason)
+		msg := fmt.Sprintf("Graph %s recommends creating a new task for job %s: %s\n\nReason: %s\n\nPlease decide whether to create this task and assign it.",
+			payload.GraphID, payload.JobID, payload.Description, payload.Reason)
 		o.sendToLLM(ctx, msg)
 
 	case EventUserResponse:

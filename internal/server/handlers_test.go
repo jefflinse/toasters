@@ -114,28 +114,6 @@ func (m *mockDefinitionService) ListWorkers(_ context.Context) ([]service.Worker
 func (m *mockDefinitionService) GetWorker(_ context.Context, _ string) (service.Worker, error) {
 	return service.Worker{}, nil
 }
-func (m *mockDefinitionService) ListTeams(_ context.Context) ([]service.TeamView, error) {
-	return nil, nil
-}
-func (m *mockDefinitionService) GetTeam(_ context.Context, _ string) (service.TeamView, error) {
-	return service.TeamView{}, nil
-}
-func (m *mockDefinitionService) CreateTeam(_ context.Context, _ string) (service.TeamView, error) {
-	return service.TeamView{}, nil
-}
-func (m *mockDefinitionService) DeleteTeam(_ context.Context, _ string) error { return nil }
-func (m *mockDefinitionService) SetCoordinator(_ context.Context, _, _ string) error {
-	return nil
-}
-func (m *mockDefinitionService) PromoteTeam(_ context.Context, _ string) (string, error) {
-	return "", nil
-}
-func (m *mockDefinitionService) GenerateTeam(_ context.Context, _ string) (string, error) {
-	return "", nil
-}
-func (m *mockDefinitionService) DetectCoordinator(_ context.Context, _ string) (string, error) {
-	return "", nil
-}
 
 func (m *mockJobService) List(_ context.Context, _ *service.JobListFilter) ([]service.Job, error) {
 	return nil, nil

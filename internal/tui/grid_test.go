@@ -1118,7 +1118,7 @@ func TestRenderLeftPanel_TeamNesting(t *testing.T) {
 					JobID:  jobID,
 					Title:  "Build the thing",
 					Status: service.TaskStatusInProgress,
-					TeamID: "backend-team",
+					GraphID: "backend-team",
 				},
 			},
 		}
@@ -1148,7 +1148,7 @@ func TestRenderLeftPanel_TeamNesting(t *testing.T) {
 					JobID:  jobID,
 					Title:  "Do the work",
 					Status: service.TaskStatusPending,
-					TeamID: "", // no team assigned
+					GraphID: "", // no team assigned
 				},
 			},
 		}
@@ -1191,14 +1191,14 @@ func TestRenderLeftPanel_TeamNesting(t *testing.T) {
 					JobID:  jobID,
 					Title:  "Assigned task",
 					Status: service.TaskStatusInProgress,
-					TeamID: "frontend-team",
+					GraphID: "frontend-team",
 				},
 				{
 					ID:     "task-without-team",
 					JobID:  jobID,
 					Title:  "Unassigned task",
 					Status: service.TaskStatusPending,
-					TeamID: "",
+					GraphID: "",
 				},
 			},
 		}

@@ -53,7 +53,6 @@ type focusedPanel int
 const (
 	focusChat     focusedPanel = iota
 	focusJobs     focusedPanel = iota
-	focusTeams    focusedPanel = iota
 	focusAgents   focusedPanel = iota
 	focusOperator focusedPanel = iota
 	focusMCP      focusedPanel = iota
@@ -115,7 +114,6 @@ type ModelsMsg struct {
 type SessionStartedMsg struct {
 	SessionID      string
 	WorkerName     string
-	TeamName       string // team this worker belongs to (may be empty)
 	Task           string // short human-readable description of what this worker is doing
 	JobID          string
 	TaskID         string
@@ -180,11 +178,6 @@ type GraphNodeDoneMsg struct {
 	JobID     string
 	TaskID    string
 	Status    string
-}
-
-// TeamsReloadedMsg is sent by the hot-reload watcher when the teams directory changes.
-type TeamsReloadedMsg struct {
-	Teams []service.TeamView
 }
 
 // JobsReloadedMsg is sent when jobs are reloaded (e.g. from SQLite polling).
@@ -255,13 +248,6 @@ func (m *Model) showScrollbar() tea.Cmd {
 	m.scroll.scrollbarVisible = true
 	m.scroll.lastScrollTime = time.Now()
 	return scrollbarHide()
-}
-
-// TeamsAutoDetectDoneMsg is sent when the LLM coordinator auto-detection finishes.
-type TeamsAutoDetectDoneMsg struct {
-	teamDir   string // team.Dir, used to match back
-	agentName string // matched agent name; empty if no match or error
-	err       error
 }
 
 // blockerAnswersSubmittedMsg is sent when the user has submitted answers for a blocker.

@@ -247,11 +247,11 @@ func (s *SQLiteStore) CreateTask(ctx context.Context, task *Task) error {
 	}
 
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO tasks (id, job_id, title, status, worker_id, team_id, graph_id, parent_id, sort_order,
+		`INSERT INTO tasks (id, job_id, title, status, worker_id, graph_id, parent_id, sort_order,
 		                     created_at, updated_at, summary, metadata)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		task.ID, task.JobID, task.Title, string(task.Status),
-		task.WorkerID, task.TeamID, task.GraphID, task.ParentID, task.SortOrder,
+		task.WorkerID, task.GraphID, task.ParentID, task.SortOrder,
 		task.CreatedAt.Format(time.RFC3339), task.UpdatedAt.Format(time.RFC3339),
 		task.Summary, nullableJSON(task.Metadata),
 	)
@@ -263,7 +263,7 @@ func (s *SQLiteStore) CreateTask(ctx context.Context, task *Task) error {
 
 func (s *SQLiteStore) GetTask(ctx context.Context, id string) (*Task, error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT id, job_id, title, status, worker_id, team_id, graph_id, parent_id, sort_order,
+		`SELECT id, job_id, title, status, worker_id, graph_id, parent_id, sort_order,
 		        created_at, updated_at, summary, metadata, result_summary, recommendations
 		 FROM tasks WHERE id = ?`, id)
 
@@ -272,7 +272,7 @@ func (s *SQLiteStore) GetTask(ctx context.Context, id string) (*Task, error) {
 
 func (s *SQLiteStore) ListTasksForJob(ctx context.Context, jobID string) ([]*Task, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, job_id, title, status, worker_id, team_id, graph_id, parent_id, sort_order,
+		`SELECT id, job_id, title, status, worker_id, graph_id, parent_id, sort_order,
 		        created_at, updated_at, summary, metadata, result_summary, recommendations
 		 FROM tasks WHERE job_id = ? ORDER BY sort_order, created_at`, jobID)
 	if err != nil {
@@ -324,33 +324,8 @@ func (s *SQLiteStore) CompleteTask(ctx context.Context, id string, status TaskSt
 	return checkRowsAffected(result, "task", id)
 }
 
-func (s *SQLiteStore) AssignTask(ctx context.Context, id string, teamID string) error {
-	now := time.Now().UTC().Format(time.RFC3339)
-	result, err := s.db.ExecContext(ctx,
-		"UPDATE tasks SET team_id = ?, status = ?, updated_at = ? WHERE id = ? AND status = ?",
-		teamID, string(TaskStatusInProgress), now, id, string(TaskStatusPending))
-	if err != nil {
-		return fmt.Errorf("assigning task: %w", err)
-	}
-	return checkRowsAffected(result, "task", id)
-}
-
-// PreAssignTaskTeam sets the team_id on a pending task without changing its status.
-// This is used to pre-assign a team for later execution while keeping the task pending.
-func (s *SQLiteStore) PreAssignTaskTeam(ctx context.Context, id string, teamID string) error {
-	now := time.Now().UTC().Format(time.RFC3339)
-	result, err := s.db.ExecContext(ctx,
-		"UPDATE tasks SET team_id = ?, updated_at = ? WHERE id = ? AND status = ?",
-		teamID, now, id, string(TaskStatusPending))
-	if err != nil {
-		return fmt.Errorf("pre-assigning task team: %w", err)
-	}
-	return checkRowsAffected(result, "task", id)
-}
-
-// AssignTaskToGraph is the graph-dispatch analogue of AssignTask: it sets the
-// graph_id and transitions the task to in_progress. Used by the declarative
-// graph dispatch path; the team-based path stays on AssignTask.
+// AssignTaskToGraph sets the graph_id and transitions the task to in_progress.
+// This is the task-dispatch entry point used by the graph executor.
 func (s *SQLiteStore) AssignTaskToGraph(ctx context.Context, id string, graphID string) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 	result, err := s.db.ExecContext(ctx,
@@ -363,9 +338,8 @@ func (s *SQLiteStore) AssignTaskToGraph(ctx context.Context, id string, graphID 
 }
 
 // PreAssignTaskGraph sets the graph_id on a pending task without changing its
-// status — the graph-dispatch analogue of PreAssignTaskTeam. Used when a
-// sibling task is in progress so the assignment is deferred until the sibling
-// completes.
+// status. Used when a sibling task is in progress so the assignment is
+// deferred until the sibling completes.
 func (s *SQLiteStore) PreAssignTaskGraph(ctx context.Context, id string, graphID string) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 	result, err := s.db.ExecContext(ctx,
@@ -390,7 +364,7 @@ func (s *SQLiteStore) AddTaskDependency(ctx context.Context, taskID, dependsOn s
 // GetReadyTasks returns tasks that are pending and have all dependencies completed.
 func (s *SQLiteStore) GetReadyTasks(ctx context.Context, jobID string) ([]*Task, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT t.id, t.job_id, t.title, t.status, t.worker_id, t.team_id, t.graph_id, t.parent_id, t.sort_order,
+		`SELECT t.id, t.job_id, t.title, t.status, t.worker_id, t.graph_id, t.parent_id, t.sort_order,
 		        t.created_at, t.updated_at, t.summary, t.metadata, t.result_summary, t.recommendations
 		 FROM tasks t
 		 WHERE t.job_id = ?
@@ -568,9 +542,9 @@ func (s *SQLiteStore) UpsertWorker(ctx context.Context, worker *Worker) error {
 		`INSERT INTO workers (id, name, description, mode, model, provider, temperature,
 		                      system_prompt, tools, disallowed_tools, skills,
 		                      permission_mode, permissions, mcp_servers, max_turns,
-		                      color, hidden, disabled, source, source_path, team_id,
+		                      color, hidden, disabled, source, source_path,
 		                      created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(id) DO UPDATE SET
 		     name = excluded.name,
 		     description = excluded.description,
@@ -591,7 +565,6 @@ func (s *SQLiteStore) UpsertWorker(ctx context.Context, worker *Worker) error {
 		     disabled = excluded.disabled,
 		     source = excluded.source,
 		     source_path = excluded.source_path,
-		     team_id = excluded.team_id,
 		     updated_at = excluded.updated_at`,
 		worker.ID, worker.Name, worker.Description, worker.Mode,
 		worker.Model, worker.Provider, worker.Temperature,
@@ -600,7 +573,7 @@ func (s *SQLiteStore) UpsertWorker(ctx context.Context, worker *Worker) error {
 		worker.PermissionMode, nullableJSON(worker.Permissions),
 		nullableJSON(worker.MCPServers), worker.MaxTurns,
 		worker.Color, hidden, disabled,
-		worker.Source, worker.SourcePath, worker.TeamID,
+		worker.Source, worker.SourcePath,
 		worker.CreatedAt.Format(time.RFC3339), worker.UpdatedAt.Format(time.RFC3339),
 	)
 	if err != nil {
@@ -614,7 +587,7 @@ func (s *SQLiteStore) GetWorker(ctx context.Context, id string) (*Worker, error)
 		`SELECT id, name, description, mode, model, provider, temperature,
 		        system_prompt, tools, disallowed_tools, skills,
 		        permission_mode, permissions, mcp_servers, max_turns,
-		        color, hidden, disabled, source, source_path, team_id,
+		        color, hidden, disabled, source, source_path,
 		        created_at, updated_at
 		 FROM workers WHERE id = ?`, id)
 
@@ -633,7 +606,7 @@ func (s *SQLiteStore) ListWorkers(ctx context.Context) ([]*Worker, error) {
 		`SELECT id, name, description, mode, model, provider, temperature,
 		        system_prompt, tools, disallowed_tools, skills,
 		        permission_mode, permissions, mcp_servers, max_turns,
-		        color, hidden, disabled, source, source_path, team_id,
+		        color, hidden, disabled, source, source_path,
 		        created_at, updated_at
 		 FROM workers ORDER BY name`)
 	if err != nil {
@@ -656,134 +629,6 @@ func (s *SQLiteStore) DeleteAllWorkers(ctx context.Context) error {
 	_, err := s.db.ExecContext(ctx, "DELETE FROM workers")
 	if err != nil {
 		return fmt.Errorf("deleting all workers: %w", err)
-	}
-	return nil
-}
-
-// --- Teams ---
-
-func (s *SQLiteStore) UpsertTeam(ctx context.Context, team *Team) error {
-	now := time.Now().UTC()
-	if team.CreatedAt.IsZero() {
-		team.CreatedAt = now
-	}
-	if team.UpdatedAt.IsZero() {
-		team.UpdatedAt = now
-	}
-
-	var isAuto int
-	if team.IsAuto {
-		isAuto = 1
-	}
-
-	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO teams (id, name, description, lead_worker, skills, provider, model,
-		                     culture, source, source_path, is_auto, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		 ON CONFLICT(id) DO UPDATE SET
-		     name = excluded.name,
-		     description = excluded.description,
-		     lead_worker = excluded.lead_worker,
-		     skills = excluded.skills,
-		     provider = excluded.provider,
-		     model = excluded.model,
-		     culture = excluded.culture,
-		     source = excluded.source,
-		     source_path = excluded.source_path,
-		     is_auto = excluded.is_auto,
-		     updated_at = excluded.updated_at`,
-		team.ID, team.Name, team.Description, team.LeadWorker,
-		nullableJSON(team.Skills), team.Provider, team.Model,
-		team.Culture, team.Source, team.SourcePath, isAuto,
-		team.CreatedAt.Format(time.RFC3339), team.UpdatedAt.Format(time.RFC3339),
-	)
-	if err != nil {
-		return fmt.Errorf("upserting team: %w", err)
-	}
-	return nil
-}
-
-func (s *SQLiteStore) GetTeam(ctx context.Context, id string) (*Team, error) {
-	row := s.db.QueryRowContext(ctx,
-		`SELECT id, name, description, lead_worker, skills, provider, model,
-		        culture, source, source_path, is_auto, created_at, updated_at
-		 FROM teams WHERE id = ?`, id)
-
-	t, err := scanTeam(row)
-	if err != nil {
-		if errors.Is(err, ErrNotFound) {
-			return nil, fmt.Errorf("team %q: %w", id, ErrNotFound)
-		}
-		return nil, err
-	}
-	return t, nil
-}
-
-func (s *SQLiteStore) ListTeams(ctx context.Context) ([]*Team, error) {
-	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, name, description, lead_worker, skills, provider, model,
-		        culture, source, source_path, is_auto, created_at, updated_at
-		 FROM teams ORDER BY name`)
-	if err != nil {
-		return nil, fmt.Errorf("listing teams: %w", err)
-	}
-	defer rows.Close() //nolint:errcheck
-
-	var teams []*Team
-	for rows.Next() {
-		t, err := scanTeam(rows)
-		if err != nil {
-			return nil, err
-		}
-		teams = append(teams, t)
-	}
-	return teams, rows.Err()
-}
-
-func (s *SQLiteStore) DeleteAllTeams(ctx context.Context) error {
-	_, err := s.db.ExecContext(ctx, "DELETE FROM teams")
-	if err != nil {
-		return fmt.Errorf("deleting all teams: %w", err)
-	}
-	return nil
-}
-
-// --- Team Workers ---
-
-func (s *SQLiteStore) AddTeamWorker(ctx context.Context, tw *TeamWorker) error {
-	_, err := s.db.ExecContext(ctx,
-		"INSERT INTO team_workers (team_id, worker_id, role) VALUES (?, ?, ?)",
-		tw.TeamID, tw.WorkerID, tw.Role)
-	if err != nil {
-		return fmt.Errorf("adding team worker: %w", err)
-	}
-	return nil
-}
-
-func (s *SQLiteStore) ListTeamWorkers(ctx context.Context, teamID string) ([]*TeamWorker, error) {
-	rows, err := s.db.QueryContext(ctx,
-		"SELECT team_id, worker_id, role FROM team_workers WHERE team_id = ? ORDER BY role, worker_id",
-		teamID)
-	if err != nil {
-		return nil, fmt.Errorf("listing team workers: %w", err)
-	}
-	defer rows.Close() //nolint:errcheck
-
-	var teamWorkers []*TeamWorker
-	for rows.Next() {
-		tw := &TeamWorker{}
-		if err := rows.Scan(&tw.TeamID, &tw.WorkerID, &tw.Role); err != nil {
-			return nil, fmt.Errorf("scanning team worker: %w", err)
-		}
-		teamWorkers = append(teamWorkers, tw)
-	}
-	return teamWorkers, rows.Err()
-}
-
-func (s *SQLiteStore) DeleteAllTeamWorkers(ctx context.Context) error {
-	_, err := s.db.ExecContext(ctx, "DELETE FROM team_workers")
-	if err != nil {
-		return fmt.Errorf("deleting all team workers: %w", err)
 	}
 	return nil
 }
@@ -924,15 +769,14 @@ func (s *SQLiteStore) ListRecentChatEntries(ctx context.Context, limit int) ([]*
 
 // --- Rebuild ---
 
-func (s *SQLiteStore) RebuildDefinitions(ctx context.Context, skills []*Skill, workers []*Worker, teams []*Team, teamWorkers []*TeamWorker) error {
+func (s *SQLiteStore) RebuildDefinitions(ctx context.Context, skills []*Skill, workers []*Worker) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("beginning rebuild transaction: %w", err)
 	}
 	defer tx.Rollback() //nolint:errcheck
 
-	// Delete in dependency order: team_workers first (references teams and workers).
-	for _, table := range []string{"team_workers", "workers", "teams", "skills"} {
+	for _, table := range []string{"workers", "skills"} {
 		if _, err := tx.ExecContext(ctx, "DELETE FROM "+table); err != nil {
 			return fmt.Errorf("clearing %s: %w", table, err)
 		}
@@ -979,9 +823,9 @@ func (s *SQLiteStore) RebuildDefinitions(ctx context.Context, skills []*Skill, w
 			`INSERT INTO workers (id, name, description, mode, model, provider, temperature,
 			                      system_prompt, tools, disallowed_tools, skills,
 			                      permission_mode, permissions, mcp_servers, max_turns,
-			                      color, hidden, disabled, source, source_path, team_id,
+			                      color, hidden, disabled, source, source_path,
 			                      created_at, updated_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			w.ID, w.Name, w.Description, w.Mode,
 			w.Model, w.Provider, w.Temperature,
 			w.SystemPrompt, nullableJSON(w.Tools),
@@ -989,46 +833,10 @@ func (s *SQLiteStore) RebuildDefinitions(ctx context.Context, skills []*Skill, w
 			w.PermissionMode, nullableJSON(w.Permissions),
 			nullableJSON(w.MCPServers), w.MaxTurns,
 			w.Color, hidden, disabled,
-			w.Source, w.SourcePath, w.TeamID,
+			w.Source, w.SourcePath,
 			w.CreatedAt.Format(time.RFC3339), w.UpdatedAt.Format(time.RFC3339),
 		); err != nil {
 			return fmt.Errorf("inserting worker %q: %w", w.ID, err)
-		}
-	}
-
-	// Insert teams.
-	for _, t := range teams {
-		now := time.Now().UTC()
-		if t.CreatedAt.IsZero() {
-			t.CreatedAt = now
-		}
-		if t.UpdatedAt.IsZero() {
-			t.UpdatedAt = now
-		}
-		var isAuto int
-		if t.IsAuto {
-			isAuto = 1
-		}
-		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO teams (id, name, description, lead_worker, skills, provider, model,
-			                     culture, source, source_path, is_auto, created_at, updated_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			t.ID, t.Name, t.Description, t.LeadWorker,
-			nullableJSON(t.Skills), t.Provider, t.Model,
-			t.Culture, t.Source, t.SourcePath, isAuto,
-			t.CreatedAt.Format(time.RFC3339), t.UpdatedAt.Format(time.RFC3339),
-		); err != nil {
-			return fmt.Errorf("inserting team %q: %w", t.ID, err)
-		}
-	}
-
-	// Insert team workers.
-	for _, tw := range teamWorkers {
-		if _, err := tx.ExecContext(ctx,
-			"INSERT INTO team_workers (team_id, worker_id, role) VALUES (?, ?, ?)",
-			tw.TeamID, tw.WorkerID, tw.Role,
-		); err != nil {
-			return fmt.Errorf("inserting team worker %s/%s: %w", tw.TeamID, tw.WorkerID, err)
 		}
 	}
 
@@ -1238,7 +1046,7 @@ func scanTask(s scanner) (*Task, error) {
 	var metadata sql.NullString
 
 	if err := s.Scan(&t.ID, &t.JobID, &t.Title, &status,
-		&t.WorkerID, &t.TeamID, &t.GraphID, &t.ParentID, &t.SortOrder,
+		&t.WorkerID, &t.GraphID, &t.ParentID, &t.SortOrder,
 		&createdAt, &updatedAt, &t.Summary, &metadata,
 		&t.ResultSummary, &t.Recommendations); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -1290,7 +1098,7 @@ func scanWorker(s scanner) (*Worker, error) {
 		&w.Model, &w.Provider, &temperature,
 		&w.SystemPrompt, &tools, &disallowedTools, &skills,
 		&w.PermissionMode, &permissions, &mcpServers, &maxTurns,
-		&w.Color, &hidden, &disabled, &w.Source, &w.SourcePath, &w.TeamID,
+		&w.Color, &hidden, &disabled, &w.Source, &w.SourcePath,
 		&createdAt, &updatedAt); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrNotFound
@@ -1325,31 +1133,6 @@ func scanWorker(s scanner) (*Worker, error) {
 	w.CreatedAt = parseTime(createdAt)
 	w.UpdatedAt = parseTime(updatedAt)
 	return w, nil
-}
-
-func scanTeam(s scanner) (*Team, error) {
-	t := &Team{}
-	var createdAt, updatedAt string
-	var skills sql.NullString
-	var isAuto int
-
-	if err := s.Scan(&t.ID, &t.Name, &t.Description, &t.LeadWorker,
-		&skills, &t.Provider, &t.Model,
-		&t.Culture, &t.Source, &t.SourcePath, &isAuto,
-		&createdAt, &updatedAt); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, ErrNotFound
-		}
-		return nil, fmt.Errorf("scanning team: %w", err)
-	}
-
-	if skills.Valid {
-		t.Skills = json.RawMessage(skills.String)
-	}
-	t.IsAuto = isAuto != 0
-	t.CreatedAt = parseTime(createdAt)
-	t.UpdatedAt = parseTime(updatedAt)
-	return t, nil
 }
 
 func scanFeedEntries(rows *sql.Rows) ([]*FeedEntry, error) {

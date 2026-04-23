@@ -94,9 +94,6 @@ func TestAssignTask_GraphDispatch_HappyPath(t *testing.T) {
 	if calls[0].GraphID != "bug-fix" {
 		t.Errorf("GraphID = %q, want bug-fix", calls[0].GraphID)
 	}
-	if calls[0].TeamID != "" {
-		t.Errorf("TeamID = %q, want empty (graph dispatch)", calls[0].TeamID)
-	}
 
 	// Task should be in_progress with graph_id set.
 	task, err := store.GetTask(ctx, taskID)
@@ -225,8 +222,5 @@ func TestCreateTask_PersistsGraphID(t *testing.T) {
 	}
 	if task.GraphID != "bug-fix" {
 		t.Errorf("task.GraphID = %q, want bug-fix", task.GraphID)
-	}
-	if task.TeamID != "" {
-		t.Errorf("task.TeamID = %q, want empty", task.TeamID)
 	}
 }

@@ -261,31 +261,6 @@ func (m *mockDefinitionService) ListWorkers(ctx context.Context) ([]service.Work
 func (m *mockDefinitionService) GetWorker(ctx context.Context, id string) (service.Worker, error) {
 	return service.Worker{}, service.ErrNotFound
 }
-func (m *mockDefinitionService) ListTeams(ctx context.Context) ([]service.TeamView, error) {
-	return nil, nil
-}
-func (m *mockDefinitionService) GetTeam(ctx context.Context, id string) (service.TeamView, error) {
-	return service.TeamView{}, service.ErrNotFound
-}
-func (m *mockDefinitionService) CreateTeam(ctx context.Context, name string) (service.TeamView, error) {
-	return service.TeamView{}, nil
-}
-func (m *mockDefinitionService) DeleteTeam(ctx context.Context, id string) error {
-	return nil
-}
-func (m *mockDefinitionService) SetCoordinator(ctx context.Context, teamID, agentName string) error {
-	return nil
-}
-func (m *mockDefinitionService) PromoteTeam(ctx context.Context, teamID string) (string, error) {
-	return "op-123", nil
-}
-func (m *mockDefinitionService) GenerateTeam(ctx context.Context, prompt string) (string, error) {
-	return "op-123", nil
-}
-func (m *mockDefinitionService) DetectCoordinator(ctx context.Context, teamID string) (string, error) {
-	return "op-123", nil
-}
-
 // mockJobService implements service.JobService
 type mockJobService struct{}
 

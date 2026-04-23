@@ -165,10 +165,10 @@ func (e *Executor) buildToolExecutor(workspaceDir string) runtime.ToolExecutor {
 
 // Execute runs a compiled graph with the given initial state. It applies
 // event, persistence, and logging middleware, then updates the task status
-// in the database based on the outcome. teamID is carried through to the
+// in the database based on the outcome. graphID is carried through to the
 // task_completed / task_failed events so the operator's event loop can
 // advance to the next ready task.
-func (e *Executor) Execute(ctx context.Context, graph *rhizome.CompiledGraph[*TaskState], state *TaskState, teamID string) error {
+func (e *Executor) Execute(ctx context.Context, graph *rhizome.CompiledGraph[*TaskState], state *TaskState, graphID string) error {
 	// Middleware chain, outermost → innermost:
 	//   NodeContext — inject per-node identity + sink into ctx for node bodies
 	//   Event       — one start/complete per logical execution (UI)
@@ -206,7 +206,7 @@ func (e *Executor) Execute(ctx context.Context, graph *rhizome.CompiledGraph[*Ta
 			e.eventSink.BroadcastGraphFailed(state.JobID, state.TaskID, err.Error())
 			// Advance the operator. Operator-level task_failed event is distinct
 			// from the service-level graph.failed broadcast above.
-			e.eventSink.BroadcastTaskFailed(state.JobID, state.TaskID, teamID, err.Error())
+			e.eventSink.BroadcastTaskFailed(state.JobID, state.TaskID, graphID, err.Error())
 		}
 
 		return fmt.Errorf("graph execution: %w", err)
@@ -243,10 +243,9 @@ func (e *Executor) Execute(ctx context.Context, graph *rhizome.CompiledGraph[*Ta
 
 	if e.eventSink != nil {
 		e.eventSink.BroadcastGraphCompleted(state.JobID, state.TaskID, summary)
-		// Advance the operator. Operator-level task_completed event is what
-		// drives assignNextTask — the team-lead path emits this via
-		// team_tools.completeTask.
-		e.eventSink.BroadcastTaskCompleted(state.JobID, state.TaskID, teamID, summary, hasNextTask)
+		// Advance the operator. Operator-level task_completed event drives
+		// assignNextTask.
+		e.eventSink.BroadcastTaskCompleted(state.JobID, state.TaskID, graphID, summary, hasNextTask)
 	}
 
 	return nil
@@ -262,7 +261,6 @@ type TaskRequest struct {
 
 	TaskID    string
 	TaskTitle string
-	TeamID    string
 
 	// GraphID selects a declarative graph Definition by id from the
 	// executor's GraphSource. Required.
@@ -322,5 +320,5 @@ func (e *Executor) ExecuteTask(ctx context.Context, req TaskRequest) error {
 	state.SetArtifact("job.title", req.JobTitle)
 	state.SetArtifact("job.description", req.JobDescription)
 
-	return e.Execute(ctx, graph, state, req.TeamID)
+	return e.Execute(ctx, graph, state, req.GraphID)
 }

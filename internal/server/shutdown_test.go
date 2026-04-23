@@ -305,30 +305,6 @@ func (m *shutdownTestDefinitions) ListWorkers(ctx context.Context) ([]service.Wo
 func (m *shutdownTestDefinitions) GetWorker(ctx context.Context, id string) (service.Worker, error) {
 	return service.Worker{}, nil
 }
-func (m *shutdownTestDefinitions) ListTeams(ctx context.Context) ([]service.TeamView, error) {
-	return nil, nil
-}
-func (m *shutdownTestDefinitions) GetTeam(ctx context.Context, id string) (service.TeamView, error) {
-	return service.TeamView{}, nil
-}
-func (m *shutdownTestDefinitions) CreateTeam(ctx context.Context, name string) (service.TeamView, error) {
-	return service.TeamView{}, nil
-}
-func (m *shutdownTestDefinitions) DeleteTeam(ctx context.Context, id string) error {
-	return nil
-}
-func (m *shutdownTestDefinitions) SetCoordinator(ctx context.Context, teamID, agentName string) error {
-	return nil
-}
-func (m *shutdownTestDefinitions) PromoteTeam(ctx context.Context, teamID string) (string, error) {
-	return "", nil
-}
-func (m *shutdownTestDefinitions) GenerateTeam(ctx context.Context, prompt string) (string, error) {
-	return "", nil
-}
-func (m *shutdownTestDefinitions) DetectCoordinator(ctx context.Context, teamID string) (string, error) {
-	return "", nil
-}
 
 // shutdownTestJobs implements service.JobService.
 type shutdownTestJobs struct{}

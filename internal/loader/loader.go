@@ -118,9 +118,9 @@ func (l *Loader) Load(ctx context.Context) error {
 	l.graphs = merged
 	l.graphsMu.Unlock()
 
-	// 5. Rebuild database. Teams + workers are no longer loaded from disk —
-	// graphs are the execution primitive now.
-	if err := l.store.RebuildDefinitions(ctx, skills, nil, nil, nil); err != nil {
+	// 5. Rebuild database. Workers are no longer loaded from disk — graphs
+	// are the execution primitive now.
+	if err := l.store.RebuildDefinitions(ctx, skills, nil); err != nil {
 		return fmt.Errorf("rebuilding definitions: %w", err)
 	}
 

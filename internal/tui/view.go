@@ -192,15 +192,6 @@ func (m *Model) View() tea.View {
 		return m.renderLoading()
 	}
 
-	// Teams modal takes over the full terminal as a centered overlay.
-	if m.teamsModal.show {
-		teamsView := m.renderTeamsModal()
-		v := tea.NewView(teamsView)
-		v.AltScreen = true
-		v.MouseMode = tea.MouseModeCellMotion
-		return v
-	}
-
 	// Skills modal takes over the full terminal as a centered overlay.
 	if m.skillsModal.show {
 		skillsView := m.renderSkillsModal()

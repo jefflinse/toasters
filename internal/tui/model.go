@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -152,18 +151,12 @@ type Model struct {
 	progress    progressState
 	chat        chatState
 
-	jobs         []service.Job
-	blockers     map[string]*service.Blocker // keyed by job ID
-	selectedJob  int
-	selectedTeam int
-	focused      focusedPanel
+	jobs        []service.Job
+	blockers    map[string]*service.Blocker // keyed by job ID
+	selectedJob int
+	focused     focusedPanel
 
-	teams        []service.TeamView // available teams
-	teamsDir     string             // path to the configured teams directory
-	systemPrompt string             // assembled at startup; prepended to every LLM call
-
-	// Teams modal state.
-	teamsModal teamsModalState
+	systemPrompt string // assembled at startup; prepended to every LLM call
 
 	// Skills modal state.
 	skillsModal skillsModalState
@@ -354,11 +347,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateMCPModal(msg)
 		}
 
-		// Teams modal key handling — intercept all keys when modal is open.
-		if m.teamsModal.show {
-			return m.updateTeamsModal(msg)
-		}
-
 		// Skills modal key handling — intercept all keys when modal is open.
 		if m.skillsModal.show {
 			return m.updateSkillsModal(msg)
@@ -422,7 +410,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 
 		case "tab":
-			// Cycle focus: chat → jobs → agents → teams → operator → mcp → chat.
+			// Cycle focus: chat → jobs → agents → operator → mcp → chat.
 			// Skip hidden panels.
 			// (Tab inside the slash command popup is handled above and returns early.)
 			next := m.focused
@@ -433,8 +421,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				case focusJobs:
 					next = focusAgents
 				case focusAgents:
-					next = focusTeams
-				case focusTeams:
 					next = focusOperator
 				case focusOperator:
 					next = focusMCP
@@ -444,7 +430,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					next = focusChat
 				}
 				// Skip left-panel targets when left panel is hidden.
-				if m.leftPanelHidden && (next == focusJobs || next == focusAgents || next == focusTeams) {
+				if m.leftPanelHidden && (next == focusJobs || next == focusAgents) {
 					continue
 				}
 				// Skip sidebar targets when sidebar is hidden.
@@ -461,7 +447,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, focusCmd
 
 		case "shift+tab":
-			// Reverse cycle: chat → mcp → operator → teams → agents → jobs → chat.
+			// Reverse cycle: chat → mcp → operator → agents → jobs → chat.
 			next := m.focused
 			for {
 				switch next {
@@ -470,8 +456,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				case focusMCP:
 					next = focusOperator
 				case focusOperator:
-					next = focusTeams
-				case focusTeams:
 					next = focusAgents
 				case focusAgents:
 					next = focusJobs
@@ -481,7 +465,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					next = focusChat
 				}
 				// Skip left-panel targets when left panel is hidden.
-				if m.leftPanelHidden && (next == focusJobs || next == focusAgents || next == focusTeams) {
+				if m.leftPanelHidden && (next == focusJobs || next == focusAgents) {
 					continue
 				}
 				// Skip sidebar targets when sidebar is hidden.
@@ -565,13 +549,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, nil
 			}
-			// Navigate teams when teams pane is focused.
-			if m.focused == focusTeams {
-				if len(m.teams) > 0 && m.selectedTeam > 0 {
-					m.selectedTeam--
-				}
-				return m, nil
-			}
 			// Navigate agent slots when agents pane is focused.
 			if m.focused == focusAgents {
 				if m.selectedAgentSlot > 0 {
@@ -585,13 +562,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				dj := m.displayJobs()
 				if len(dj) > 0 && m.selectedJob < len(dj)-1 {
 					m.selectedJob++
-				}
-				return m, nil
-			}
-			// Navigate teams when teams pane is focused.
-			if m.focused == focusTeams {
-				if m.selectedTeam < len(m.teams)-1 {
-					m.selectedTeam++
 				}
 				return m, nil
 			}
@@ -677,7 +647,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Toggle left panel visibility.
 			m.leftPanelHidden = !m.leftPanelHidden
 			// If hiding the panel while it's focused, switch to chat.
-			if m.leftPanelHidden && (m.focused == focusJobs || m.focused == focusTeams || m.focused == focusAgents) {
+			if m.leftPanelHidden && (m.focused == focusJobs || m.focused == focusAgents) {
 				cmds = append(cmds, m.setFocus(focusChat))
 				cmds = append(cmds, m.input.Focus())
 			}
@@ -780,28 +750,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.loadJobDetail()
 				return m, nil
 			}
-			// Open teams modal pre-selected when teams pane is focused.
-			if m.focused == focusTeams && len(m.teams) > 0 {
-				idx := m.selectedTeam
-				if idx >= len(m.teams) {
-					idx = 0
-				}
-				m.teamsModal = teamsModalState{
-					show:              true,
-					teamIdx:           idx,
-					autoDetectPending: make(map[string]bool),
-				}
-				m.reloadTeamsForModal()
-				// Clamp teamIdx after reload in case the team list changed.
-				if m.teamsModal.teamIdx >= len(m.teamsModal.teams) && len(m.teamsModal.teams) > 0 {
-					m.teamsModal.teamIdx = len(m.teamsModal.teams) - 1
-				}
-				var teamCmd tea.Cmd
-				if len(m.teamsModal.teams) > 0 {
-					teamCmd = m.maybeAutoDetectCoordinator(m.teamsModal.teams[m.teamsModal.teamIdx])
-				}
-				return m, teamCmd
-			}
 			// Open grid view when agents pane is focused.
 			if m.focused == focusAgents {
 				m.grid.showGrid = true
@@ -830,16 +778,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.cmdPopup.show = false
 					m.newSession()
 					return m, nil
-				case "/teams":
-					m.input.Reset()
-					m.cmdPopup.show = false
-					m.teamsModal = teamsModalState{show: true, autoDetectPending: make(map[string]bool)}
-					m.reloadTeamsForModal()
-					var teamCmd tea.Cmd
-					if len(m.teamsModal.teams) > 0 {
-						teamCmd = m.maybeAutoDetectCoordinator(m.teamsModal.teams[0])
-					}
-					return m, teamCmd
 				case "/skills":
 					m.input.Reset()
 					m.cmdPopup.show = false
@@ -1063,18 +1001,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			)
 		}
 
-	case TeamsReloadedMsg:
-		m.teams = msg.Teams
-		if m.selectedTeam >= len(m.teams) && len(m.teams) > 0 {
-			m.selectedTeam = len(m.teams) - 1
-		} else if len(m.teams) == 0 {
-			m.selectedTeam = 0
-		}
-		// The operator's system prompt is composed from operator.md at startup
-		// (server side) and does not change when teams reload. The operator
-		// discovers teams at runtime via the query_teams tool.
-		return m, tea.Batch(cmds...)
-
 	case JobsReloadedMsg:
 		m.jobs = msg.Jobs
 		dj := m.displayJobs()
@@ -1135,60 +1061,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.updateViewportContent()
 		return m, tea.Batch(cmds...)
 
-	case TeamsAutoDetectDoneMsg:
-		m.teamsModal.autoDetecting = false
-		// The service's DetectCoordinator already called SetCoordinator if a match was found.
-		// Just reload the teams list to reflect any changes.
-		if msg.err == nil {
-			m.reloadTeamsForModal()
-		}
-		return m, tea.Batch(cmds...)
-
-	case teamPromotedMsg:
-		m.teamsModal.promoting = false
-		if msg.err != nil {
-			slog.Error("failed to promote auto-team", "team", msg.teamName, "error", msg.err)
-			cmds = append(cmds, m.addToast("⚠ Promote failed: "+msg.err.Error(), toastWarning))
-		} else {
-			cmds = append(cmds, m.addToast("✓ Promoted '"+msg.teamName+"' to managed team", toastSuccess))
-			m.reloadTeamsForModal()
-			// Select the newly promoted team (it is no longer an auto-team after promotion).
-			for i, t := range m.teamsModal.teams {
-				if t.Name() == msg.teamName && !t.IsAuto() {
-					m.teamsModal.teamIdx = i
-					break
-				}
-			}
-		}
-		return m, tea.Batch(cmds...)
-
-	case teamGeneratedMsg:
-		m.teamsModal.generating = false
-		if msg.err != nil {
-			cmds = append(cmds, m.addToast("⚠ Team generation failed: "+msg.err.Error(), toastWarning))
-			return m, tea.Batch(cmds...)
-		}
-
-		// The service has already written the team directory and triggered a reload.
-		// Extract team name from the generated team.md content (YAML frontmatter name: field).
-		agentCount := len(msg.agentNames)
-		teamName := extractFrontmatterName(msg.content)
-
-		// Reload and select the newly created team.
-		m.reloadTeamsForModal()
-		for i, t := range m.teamsModal.teams {
-			if t.Name() == teamName {
-				m.teamsModal.teamIdx = i
-				break
-			}
-		}
-
-		cmds = append(cmds, m.addToast(
-			fmt.Sprintf("✓ Team '%s' generated with %d agents", teamName, agentCount),
-			toastSuccess,
-		))
-		return m, tea.Batch(cmds...)
-
 	case blockerAnswersSubmittedMsg:
 		// Mark answered, close modal.
 		if b, ok := m.blockers[msg.jobID]; ok {
@@ -1205,7 +1077,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.runtimeSessions[msg.SessionID] = &runtimeSlot{
 			sessionID:      msg.SessionID,
 			agentName:      msg.WorkerName,
-			teamName:       msg.TeamName,
 			task:           msg.Task,
 			jobID:          msg.JobID,
 			taskID:         msg.TaskID,
@@ -1304,7 +1175,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.MouseClickMsg:
 		// Click-to-focus: route clicks to the appropriate panel.
 		// Don't steal clicks when any overlay is active.
-		if !m.teamsModal.show && !m.skillsModal.show && !m.workersModal.show &&
+		if !m.skillsModal.show && !m.workersModal.show &&
 			!m.mcpModal.show && !m.catalogModal.show && !m.operatorModal.show &&
 			!m.blockerModal.show && !m.grid.showGrid &&
 			!m.promptModal.show && !m.outputModal.show && !m.loading {
@@ -1312,19 +1183,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			showSidebar := m.width >= minWidthForBar && !m.sidebarHidden
 			sidebarStartX := m.width - m.sbWidth
 			if showLeftPanel && msg.X < m.lpWidth {
-				// Clicked left panel — determine which of the three panes was clicked.
-				// Pane order (top to bottom): Jobs, Agents, Teams.
-				teamsPaneH := m.leftPanelTeamsPaneHeight()
+				// Clicked left panel — determine which of the two panes was clicked.
+				// Pane order (top to bottom): Jobs, Agents.
 				agentsPaneH := m.leftPanelAgentsPaneHeight()
-				teamsPaneY := m.height - teamsPaneH
-				agentsPaneY := teamsPaneY - agentsPaneH
-				if msg.Y >= teamsPaneY {
-					// Clicked Teams pane.
-					if m.focused != focusTeams {
-						cmds = append(cmds, m.setFocus(focusTeams))
-						m.input.Blur()
-					}
-				} else if msg.Y >= agentsPaneY {
+				agentsPaneY := m.height - agentsPaneH
+				if msg.Y >= agentsPaneY {
 					// Clicked Agents pane.
 					if m.focused != focusAgents {
 						cmds = append(cmds, m.setFocus(focusAgents))
@@ -1499,7 +1362,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case DefinitionsReloadedMsg:
 		slog.Info("definitions reloaded from file watcher")
-		return m, reloadTeamsCmd(m.svc)
+		return m, nil
 
 	case ConnectionLostMsg:
 		m.stats.Connected = false
@@ -1711,31 +1574,31 @@ func formatServiceEvent(ev service.Event, maxWidth int) string {
 
 	case service.EventTypeTaskAssigned:
 		if p, ok := ev.Payload.(service.TaskAssignedPayload); ok {
-			return FeedTaskStartedStyle.Render(fmt.Sprintf("➤ Task %q assigned to %s", p.Title, p.TeamID))
+			return FeedTaskStartedStyle.Render(fmt.Sprintf("➤ Task %q assigned to %s", p.Title, p.GraphID))
 		}
 		return FeedTaskStartedStyle.Render("➤ task assigned")
 
 	case service.EventTypeTaskStarted:
 		if p, ok := ev.Payload.(service.TaskStartedPayload); ok {
-			return FeedTaskStartedStyle.Render(fmt.Sprintf("⚡ %s started task: %q", p.TeamID, p.Title))
+			return FeedTaskStartedStyle.Render(fmt.Sprintf("⚡ %s started task: %q", p.GraphID, p.Title))
 		}
 		return FeedTaskStartedStyle.Render("⚡ task started")
 
 	case service.EventTypeTaskCompleted:
 		if p, ok := ev.Payload.(service.TaskCompletedPayload); ok {
-			return FeedTaskCompletedStyle.Render(fmt.Sprintf("✓ %s completed task", p.TeamID))
+			return FeedTaskCompletedStyle.Render(fmt.Sprintf("✓ %s completed task", p.GraphID))
 		}
 		return FeedTaskCompletedStyle.Render("✓ task completed")
 
 	case service.EventTypeTaskFailed:
 		if p, ok := ev.Payload.(service.TaskFailedPayload); ok {
-			return FeedTaskFailedStyle.Render(fmt.Sprintf("✗ %s failed task: %s", p.TeamID, p.Error))
+			return FeedTaskFailedStyle.Render(fmt.Sprintf("✗ %s failed task: %s", p.GraphID, p.Error))
 		}
 		return FeedTaskFailedStyle.Render("✗ task failed")
 
 	case service.EventTypeBlockerReported:
 		if p, ok := ev.Payload.(service.BlockerReportedPayload); ok {
-			text := fmt.Sprintf("🚫 %s reported blocker: %s", p.TeamID, p.Description)
+			text := fmt.Sprintf("🚫 %s reported blocker: %s", p.GraphID, p.Description)
 			if maxWidth > 4 {
 				text = wrapText(text, maxWidth-4) // account for indent
 			}
@@ -1759,16 +1622,3 @@ func formatServiceEvent(ev service.Event, maxWidth int) string {
 	}
 }
 
-// reloadTeamsCmd returns a tea.Cmd that fetches the current team list from the
-// service and delivers it as a TeamsReloadedMsg. Used by the
-// DefinitionsReloadedMsg handler to keep m.teams in sync after file changes.
-func reloadTeamsCmd(svc service.Service) tea.Cmd {
-	return func() tea.Msg {
-		teams, err := svc.Definitions().ListTeams(context.Background())
-		if err != nil {
-			slog.Warn("failed to reload teams after definitions change", "error", err)
-			return nil
-		}
-		return TeamsReloadedMsg{Teams: teams}
-	}
-}

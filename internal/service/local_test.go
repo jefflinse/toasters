@@ -38,14 +38,6 @@ type mockStore struct {
 	// GetWorker
 	getWorkerResult *db.Worker
 	getWorkerErr    error
-
-	// ListTeams
-	listTeamsResult []*db.Team
-	listTeamsErr    error
-
-	// ListTeamWorkers
-	listTeamWorkersResult []*db.TeamWorker
-	listTeamWorkersErr    error
 }
 
 // Compile-time assertion that mockStore satisfies db.Store.
@@ -65,14 +57,6 @@ func (m *mockStore) ListWorkers(_ context.Context) ([]*db.Worker, error) {
 
 func (m *mockStore) GetWorker(_ context.Context, _ string) (*db.Worker, error) {
 	return m.getWorkerResult, m.getWorkerErr
-}
-
-func (m *mockStore) ListTeams(_ context.Context) ([]*db.Team, error) {
-	return m.listTeamsResult, m.listTeamsErr
-}
-
-func (m *mockStore) ListTeamWorkers(_ context.Context, _ string) ([]*db.TeamWorker, error) {
-	return m.listTeamWorkersResult, m.listTeamWorkersErr
 }
 
 // --- Unimplemented methods ---
@@ -113,12 +97,6 @@ func (m *mockStore) UpdateTaskResult(_ context.Context, _ string, _, _ string) e
 func (m *mockStore) CompleteTask(_ context.Context, _ string, _ db.TaskStatus, _, _ string) error {
 	return fmt.Errorf("not implemented")
 }
-func (m *mockStore) AssignTask(_ context.Context, _ string, _ string) error {
-	return fmt.Errorf("not implemented")
-}
-func (m *mockStore) PreAssignTaskTeam(_ context.Context, _ string, _ string) error {
-	return fmt.Errorf("not implemented")
-}
 func (m *mockStore) AssignTaskToGraph(_ context.Context, _ string, _ string) error {
 	return fmt.Errorf("not implemented")
 }
@@ -149,21 +127,6 @@ func (m *mockStore) UpsertWorker(_ context.Context, _ *db.Worker) error {
 func (m *mockStore) DeleteAllWorkers(_ context.Context) error {
 	return fmt.Errorf("not implemented")
 }
-func (m *mockStore) UpsertTeam(_ context.Context, _ *db.Team) error {
-	return fmt.Errorf("not implemented")
-}
-func (m *mockStore) GetTeam(_ context.Context, _ string) (*db.Team, error) {
-	return nil, fmt.Errorf("not implemented")
-}
-func (m *mockStore) DeleteAllTeams(_ context.Context) error {
-	return fmt.Errorf("not implemented")
-}
-func (m *mockStore) AddTeamWorker(_ context.Context, _ *db.TeamWorker) error {
-	return fmt.Errorf("not implemented")
-}
-func (m *mockStore) DeleteAllTeamWorkers(_ context.Context) error {
-	return fmt.Errorf("not implemented")
-}
 func (m *mockStore) CreateFeedEntry(_ context.Context, _ *db.FeedEntry) error {
 	return fmt.Errorf("not implemented")
 }
@@ -173,7 +136,7 @@ func (m *mockStore) ListFeedEntries(_ context.Context, _ string, _ int) ([]*db.F
 func (m *mockStore) ListRecentFeedEntries(_ context.Context, _ int) ([]*db.FeedEntry, error) {
 	return nil, fmt.Errorf("not implemented")
 }
-func (m *mockStore) RebuildDefinitions(_ context.Context, _ []*db.Skill, _ []*db.Worker, _ []*db.Team, _ []*db.TeamWorker) error {
+func (m *mockStore) RebuildDefinitions(_ context.Context, _ []*db.Skill, _ []*db.Worker) error {
 	return fmt.Errorf("not implemented")
 }
 func (m *mockStore) CreateSession(_ context.Context, _ *db.WorkerSession) error {
@@ -440,137 +403,6 @@ func TestStripCodeFences(t *testing.T) {
 	}
 }
 
-func TestRewriteMode(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name    string
-		content string
-		mode    string
-		check   func(t *testing.T, got string)
-	}{
-		{
-			name:    "no frontmatter — prepends frontmatter",
-			content: "body content",
-			mode:    "worker",
-			check: func(t *testing.T, got string) {
-				t.Helper()
-				if !strings.HasPrefix(got, "---\n") {
-					t.Errorf("expected --- prefix, got: %q", got)
-				}
-				if !strings.Contains(got, "mode: worker") {
-					t.Errorf("expected mode: worker, got: %q", got)
-				}
-			},
-		},
-		{
-			name:    "existing mode field replaced",
-			content: "---\nname: test\nmode: lead\n---\nbody",
-			mode:    "worker",
-			check: func(t *testing.T, got string) {
-				t.Helper()
-				if strings.Contains(got, "mode: lead") {
-					t.Error("old mode should be replaced")
-				}
-				if !strings.Contains(got, "mode: worker") {
-					t.Errorf("expected mode: worker, got: %q", got)
-				}
-			},
-		},
-		{
-			name:    "missing mode field — appended",
-			content: "---\nname: test\n---\nbody",
-			mode:    "primary",
-			check: func(t *testing.T, got string) {
-				t.Helper()
-				if !strings.Contains(got, "mode: primary") {
-					t.Errorf("expected mode: primary, got: %q", got)
-				}
-				if !strings.Contains(got, "name: test") {
-					t.Error("existing fields should be preserved")
-				}
-			},
-		},
-		{
-			name:    "multiple agents — only first mode replaced",
-			content: "---\nname: agent1\nmode: worker\n---\nbody",
-			mode:    "primary",
-			check: func(t *testing.T, got string) {
-				t.Helper()
-				if !strings.Contains(got, "mode: primary") {
-					t.Errorf("expected mode: primary, got: %q", got)
-				}
-				// Should not have the old mode
-				if strings.Contains(got, "mode: worker") {
-					t.Error("old mode should be replaced")
-				}
-			},
-		},
-		{
-			name:    "body preserved after rewrite",
-			content: "---\nname: test\nmode: lead\n---\nmy body content",
-			mode:    "worker",
-			check: func(t *testing.T, got string) {
-				t.Helper()
-				if !strings.Contains(got, "my body content") {
-					t.Errorf("body should be preserved, got: %q", got)
-				}
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			got := rewriteMode(tt.content, tt.mode)
-			tt.check(t, got)
-		})
-	}
-}
-
-func TestSortWorkersByTeamKey(t *testing.T) {
-	t.Parallel()
-
-	workers := []*db.Worker{
-		{TeamID: "team-b", Name: "worker-z"},
-		{TeamID: "team-a", Name: "worker-b"},
-		{TeamID: "team-a", Name: "worker-a"},
-		{TeamID: "team-b", Name: "worker-a"},
-	}
-
-	sortWorkersByTeamKey(workers)
-
-	// Expected order: team-a/worker-a, team-a/worker-b, team-b/worker-a, team-b/worker-z
-	expected := []struct{ teamID, name string }{
-		{"team-a", "worker-a"},
-		{"team-a", "worker-b"},
-		{"team-b", "worker-a"},
-		{"team-b", "worker-z"},
-	}
-
-	for i, e := range expected {
-		if workers[i].TeamID != e.teamID || workers[i].Name != e.name {
-			t.Errorf("workers[%d] = {%s/%s}, want {%s/%s}",
-				i, workers[i].TeamID, workers[i].Name, e.teamID, e.name)
-		}
-	}
-}
-
-func TestSortWorkersByTeamKey_Empty(t *testing.T) {
-	t.Parallel()
-	// Should not panic on empty slice.
-	sortWorkersByTeamKey(nil)
-	sortWorkersByTeamKey([]*db.Worker{})
-}
-
-func TestSortWorkersByTeamKey_SingleElement(t *testing.T) {
-	t.Parallel()
-	workers := []*db.Worker{{TeamID: "t", Name: "a"}}
-	sortWorkersByTeamKey(workers)
-	if workers[0].Name != "a" {
-		t.Errorf("single element should be unchanged")
-	}
-}
 
 // ---------------------------------------------------------------------------
 // CreateSkill — filesystem tests
@@ -637,58 +469,6 @@ func TestCreateSkill_DuplicateFile(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "already exists") {
 		t.Errorf("error = %q, want 'already exists'", err.Error())
-	}
-}
-
-// ---------------------------------------------------------------------------
-// CreateTeam — filesystem tests
-// ---------------------------------------------------------------------------
-
-func TestCreateTeam_CreatesDirectoryStructure(t *testing.T) {
-	t.Parallel()
-
-	dir := t.TempDir()
-	teamsDir := filepath.Join(dir, "user", "teams")
-	svc := NewLocal(LocalConfig{
-		ConfigDir: dir,
-		TeamsDir:  teamsDir,
-		Store:     &mockStore{listTeamsErr: fmt.Errorf("no store")},
-	})
-
-	_, _ = svc.CreateTeam(context.Background(), "My Team")
-
-	teamDir := filepath.Join(teamsDir, "my-team")
-
-	// team.md should exist.
-	data, err := os.ReadFile(filepath.Join(teamDir, "team.md"))
-	if err != nil {
-		t.Fatalf("team.md not written: %v", err)
-	}
-	if !strings.Contains(string(data), "name: My Team") {
-		t.Errorf("team.md missing name, got:\n%s", string(data))
-	}
-
-	// agents/ subdirectory should exist.
-	info, err := os.Stat(filepath.Join(teamDir, "agents"))
-	if err != nil {
-		t.Fatalf("agents/ dir not created: %v", err)
-	}
-	if !info.IsDir() {
-		t.Error("agents/ should be a directory")
-	}
-}
-
-func TestCreateTeam_EmptyName(t *testing.T) {
-	t.Parallel()
-
-	dir := t.TempDir()
-	svc := NewLocal(LocalConfig{
-		ConfigDir: dir,
-		TeamsDir:  filepath.Join(dir, "user", "teams"),
-	})
-	_, err := svc.CreateTeam(context.Background(), "")
-	if err == nil {
-		t.Fatal("expected error for empty name")
 	}
 }
 
@@ -788,140 +568,6 @@ func TestDeleteSkill_RejectsPathTraversal(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "outside user directory") {
 		t.Errorf("error = %q, want 'outside user directory'", err.Error())
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Team classification helpers
-// ---------------------------------------------------------------------------
-
-func TestIsServiceReadOnlyTeam(t *testing.T) {
-	t.Parallel()
-
-	home, err := os.UserHomeDir()
-	if err != nil {
-		t.Skip("cannot determine home dir")
-	}
-
-	tests := []struct {
-		name string
-		dir  string
-		want bool
-	}{
-		{
-			name: "claude agents dir",
-			dir:  filepath.Join(home, ".claude", "agents"),
-			want: true,
-		},
-		{
-			name: "opencode agents dir",
-			dir:  filepath.Join(home, ".config", "opencode", "agents"),
-			want: true,
-		},
-		{
-			name: "opencode home agents dir",
-			dir:  filepath.Join(home, ".opencode", "agents"),
-			want: true,
-		},
-		{
-			name: "user teams dir",
-			dir:  filepath.Join(home, ".config", "toasters", "user", "teams", "my-team"),
-			want: false,
-		},
-		{
-			name: "arbitrary dir",
-			dir:  "/tmp/some-team",
-			want: false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			tv := TeamView{Team: Team{SourcePath: tt.dir}}
-			got := isServiceReadOnlyTeam(tv)
-			if got != tt.want {
-				t.Errorf("isServiceReadOnlyTeam(%q) = %v, want %v", tt.dir, got, tt.want)
-			}
-		})
-	}
-}
-
-func TestIsServiceSystemTeam(t *testing.T) {
-	t.Parallel()
-
-	configDir := "/home/user/.config/toasters"
-
-	tests := []struct {
-		name string
-		dir  string
-		want bool
-	}{
-		{
-			name: "system team",
-			dir:  filepath.Join(configDir, "system", "teams", "my-team"),
-			want: true,
-		},
-		{
-			name: "user team",
-			dir:  filepath.Join(configDir, "user", "teams", "my-team"),
-			want: false,
-		},
-		{
-			name: "unrelated dir",
-			dir:  "/tmp/my-team",
-			want: false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			tv := TeamView{Team: Team{SourcePath: tt.dir}}
-			got := isServiceSystemTeam(tv, configDir)
-			if got != tt.want {
-				t.Errorf("isServiceSystemTeam(%q) = %v, want %v", tt.dir, got, tt.want)
-			}
-		})
-	}
-}
-
-func TestIsServiceAutoTeam_IsAutoFlag(t *testing.T) {
-	t.Parallel()
-
-	tv := TeamView{
-		Team: Team{
-			SourcePath: "/tmp/some-team",
-			IsAuto:     true,
-		},
-	}
-	if !isServiceAutoTeam(tv) {
-		t.Error("team with IsAuto=true should be auto")
-	}
-}
-
-func TestIsServiceAutoTeam_MarkerFile(t *testing.T) {
-	t.Parallel()
-
-	dir := t.TempDir()
-	// Write the .auto-team marker file.
-	if err := os.WriteFile(filepath.Join(dir, ".auto-team"), nil, 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	tv := TeamView{Team: Team{SourcePath: dir, IsAuto: false}}
-	if !isServiceAutoTeam(tv) {
-		t.Error("team with .auto-team marker should be auto")
-	}
-}
-
-func TestIsServiceAutoTeam_NotAuto(t *testing.T) {
-	t.Parallel()
-
-	dir := t.TempDir()
-	tv := TeamView{Team: Team{SourcePath: dir, IsAuto: false}}
-	if isServiceAutoTeam(tv) {
-		t.Error("team without marker or flag should not be auto")
 	}
 }
 
@@ -1155,7 +801,7 @@ func TestBroadcastOperatorEvent_TaskStarted(t *testing.T) {
 		Payload: operator.TaskStartedPayload{
 			TaskID: "task-1",
 			JobID:  "job-1",
-			TeamID: "team-1",
+			GraphID: "team-1",
 			Title:  "Do the thing",
 		},
 	})
@@ -1193,7 +839,7 @@ func TestBroadcastOperatorEvent_TaskCompleted(t *testing.T) {
 		Payload: operator.TaskCompletedPayload{
 			TaskID:          "task-2",
 			JobID:           "job-2",
-			TeamID:          "team-2",
+			GraphID:          "team-2",
 			Summary:         "Done",
 			Recommendations: "Next: do X",
 			HasNextTask:     true,
@@ -1233,7 +879,7 @@ func TestBroadcastOperatorEvent_TaskFailed(t *testing.T) {
 		Payload: operator.TaskFailedPayload{
 			TaskID: "task-3",
 			JobID:  "job-3",
-			TeamID: "team-3",
+			GraphID: "team-3",
 			Error:  "something went wrong",
 		},
 	})
@@ -1267,7 +913,7 @@ func TestBroadcastOperatorEvent_BlockerReported(t *testing.T) {
 		Type: operator.EventBlockerReported,
 		Payload: operator.BlockerReportedPayload{
 			TaskID:      "task-4",
-			TeamID:      "team-4",
+			GraphID:      "team-4",
 			WorkerID:    "agent-4",
 			Description: "blocked on X",
 		},
@@ -1471,147 +1117,6 @@ func TestGetSkill_NotFound(t *testing.T) {
 	svc := NewLocal(LocalConfig{Store: store})
 
 	_, err := svc.GetSkill(context.Background(), "missing")
-	if err == nil {
-		t.Fatal("expected error")
-	}
-	if !errors.Is(err, ErrNotFound) {
-		t.Errorf("error should wrap ErrNotFound, got: %v", err)
-	}
-}
-
-func TestListWorkers_OrderingSharedThenTeamLocalThenSystem(t *testing.T) {
-	t.Parallel()
-
-	store := &mockStore{
-		listWorkersResult: []*db.Worker{
-			{ID: "sys-1", Name: "System Worker", Source: "system", TeamID: ""},
-			{ID: "team-1", Name: "Team Worker B", Source: "user", TeamID: "team-b"},
-			{ID: "shared-1", Name: "Shared Worker", Source: "user", TeamID: ""},
-			{ID: "team-2", Name: "Team Worker A", Source: "user", TeamID: "team-a"},
-		},
-	}
-
-	svc := NewLocal(LocalConfig{Store: store})
-	workers, err := svc.ListWorkers(context.Background())
-	if err != nil {
-		t.Fatalf("ListWorkers() error = %v", err)
-	}
-	if len(workers) != 4 {
-		t.Fatalf("len(workers) = %d, want 4", len(workers))
-	}
-
-	// shared first
-	if workers[0].ID != "shared-1" {
-		t.Errorf("workers[0].ID = %q, want %q", workers[0].ID, "shared-1")
-	}
-	// team-local next (sorted by team/worker key: team-a/Team Worker A < team-b/Team Worker B)
-	if workers[1].ID != "team-2" {
-		t.Errorf("workers[1].ID = %q, want %q (team-a worker)", workers[1].ID, "team-2")
-	}
-	if workers[2].ID != "team-1" {
-		t.Errorf("workers[2].ID = %q, want %q (team-b worker)", workers[2].ID, "team-1")
-	}
-	// system last
-	if workers[3].ID != "sys-1" {
-		t.Errorf("workers[3].ID = %q, want %q", workers[3].ID, "sys-1")
-	}
-}
-
-func TestGetWorker_Found(t *testing.T) {
-	t.Parallel()
-
-	store := &mockStore{
-		getWorkerResult: &db.Worker{
-			ID:   "worker-1",
-			Name: "My Worker",
-		},
-	}
-	svc := NewLocal(LocalConfig{Store: store})
-
-	w, err := svc.GetWorker(context.Background(), "worker-1")
-	if err != nil {
-		t.Fatalf("GetWorker() error = %v", err)
-	}
-	if w.ID != "worker-1" {
-		t.Errorf("ID = %q, want %q", w.ID, "worker-1")
-	}
-}
-
-func TestGetWorker_NotFound(t *testing.T) {
-	t.Parallel()
-
-	store := &mockStore{getWorkerErr: db.ErrNotFound}
-	svc := NewLocal(LocalConfig{Store: store})
-
-	_, err := svc.GetWorker(context.Background(), "missing")
-	if err == nil {
-		t.Fatal("expected error")
-	}
-	if !errors.Is(err, ErrNotFound) {
-		t.Errorf("error should wrap ErrNotFound, got: %v", err)
-	}
-}
-
-func TestListTeams_ExcludesSystemTeams(t *testing.T) {
-	t.Parallel()
-
-	store := &mockStore{
-		listTeamsResult: []*db.Team{
-			{ID: "sys-team", Name: "System Team", Source: "system"},
-			{ID: "user-team", Name: "User Team", Source: "user"},
-		},
-		listTeamWorkersResult: []*db.TeamWorker{},
-	}
-
-	svc := NewLocal(LocalConfig{Store: store})
-	teams, err := svc.ListTeams(context.Background())
-	if err != nil {
-		t.Fatalf("ListTeams() error = %v", err)
-	}
-
-	for _, tv := range teams {
-		if tv.Team.ID == "sys-team" {
-			t.Error("system team should be excluded from ListTeams")
-		}
-	}
-	if len(teams) != 1 {
-		t.Errorf("len(teams) = %d, want 1 (only user team)", len(teams))
-	}
-	if teams[0].Team.ID != "user-team" {
-		t.Errorf("teams[0].ID = %q, want %q", teams[0].Team.ID, "user-team")
-	}
-}
-
-func TestGetTeam_Found(t *testing.T) {
-	t.Parallel()
-
-	store := &mockStore{
-		listTeamsResult: []*db.Team{
-			{ID: "team-1", Name: "My Team", Source: "user"},
-		},
-		listTeamWorkersResult: []*db.TeamWorker{},
-	}
-
-	svc := NewLocal(LocalConfig{Store: store})
-	tv, err := svc.GetTeam(context.Background(), "team-1")
-	if err != nil {
-		t.Fatalf("GetTeam() error = %v", err)
-	}
-	if tv.Team.ID != "team-1" {
-		t.Errorf("Team.ID = %q, want %q", tv.Team.ID, "team-1")
-	}
-}
-
-func TestGetTeam_NotFound(t *testing.T) {
-	t.Parallel()
-
-	store := &mockStore{
-		listTeamsResult:       []*db.Team{},
-		listTeamWorkersResult: []*db.TeamWorker{},
-	}
-
-	svc := NewLocal(LocalConfig{Store: store})
-	_, err := svc.GetTeam(context.Background(), "nonexistent")
 	if err == nil {
 		t.Fatal("expected error")
 	}

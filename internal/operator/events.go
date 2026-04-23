@@ -53,39 +53,39 @@ type UserMessagePayload struct {
 
 // TaskStartedPayload carries info about a task that just started.
 type TaskStartedPayload struct {
-	TaskID string
-	JobID  string
-	TeamID string
-	Title  string
+	TaskID  string
+	JobID   string
+	GraphID string
+	Title   string
 }
 
 // TaskCompletedPayload carries the result of a completed task.
 type TaskCompletedPayload struct {
 	TaskID          string
 	JobID           string
-	TeamID          string
+	GraphID         string
 	Summary         string
-	Recommendations string // follow-up recommendations from the team
+	Recommendations string // follow-up recommendations
 	HasNextTask     bool   // whether there's a queued next task
 }
 
 // TaskFailedPayload carries information about a failed task.
 type TaskFailedPayload struct {
-	TaskID string
-	JobID  string
-	TeamID string
-	Error  string
+	TaskID  string
+	JobID   string
+	GraphID string
+	Error   string
 }
 
 // BlockerReportedPayload carries a blocker report from a worker.
 type BlockerReportedPayload struct {
 	TaskID      string
-	TeamID      string
+	GraphID     string
 	WorkerID    string
 	Description string
 }
 
-// ProgressUpdatePayload carries a progress report from a team.
+// ProgressUpdatePayload carries a progress report from a worker.
 type ProgressUpdatePayload struct {
 	TaskID   string
 	WorkerID string
@@ -99,10 +99,10 @@ type JobCompletePayload struct {
 	Summary string
 }
 
-// NewTaskRequestPayload carries a team's recommendation for a new task.
+// NewTaskRequestPayload carries a recommendation for a new task.
 type NewTaskRequestPayload struct {
 	JobID       string
-	TeamID      string
+	GraphID     string
 	Description string
 	Reason      string
 }

@@ -80,7 +80,6 @@ type Task struct {
 	Title           string
 	Status          TaskStatus
 	WorkerID        string // assigned worker (may be empty)
-	TeamID          string // assigned team (may be empty)
 	GraphID         string // assigned graph definition id (may be empty)
 	ParentID        string // DAG edge, empty for root tasks
 	SortOrder       int
@@ -138,33 +137,8 @@ type Worker struct {
 	Disabled        bool
 	Source          string // system, user, auto
 	SourcePath      string
-	TeamID          string // empty for shared agents
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
-}
-
-// Team represents a group of workers that work together.
-type Team struct {
-	ID          string
-	Name        string
-	Description string
-	LeadWorker  string          // worker ID reference
-	Skills      json.RawMessage // JSON array of team-wide skill names
-	Provider    string          // team default
-	Model       string          // team default
-	Culture     string          // team culture document / markdown body
-	Source      string          // system, user, auto
-	SourcePath  string
-	IsAuto      bool
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
-}
-
-// TeamWorker represents a worker's membership in a team.
-type TeamWorker struct {
-	TeamID   string
-	WorkerID string
-	Role     string // lead, worker
 }
 
 // FeedEntry represents a single entry in the activity feed.

@@ -403,7 +403,7 @@ func (st *SystemTools) createTask(ctx context.Context, args json.RawMessage) (st
 	}
 
 	if st.broadcaster != nil {
-		st.broadcaster.BroadcastTaskCreated(task.ID, task.JobID, task.Title, task.TeamID)
+		st.broadcaster.BroadcastTaskCreated(task.ID, task.JobID, task.Title, task.GraphID)
 	}
 
 	result, err := json.Marshal(map[string]string{"task_id": task.ID})
@@ -519,9 +519,7 @@ func (st *SystemTools) dispatchGraphTask(ctx context.Context, task *db.Task, job
 		}
 	}()
 
-	// Broadcast assignment event. TeamID carries the graph id for now so
-	// existing TUI listeners keep working — the field will be renamed in a
-	// later pass.
+	// Broadcast assignment event.
 	if st.broadcaster != nil {
 		st.broadcaster.BroadcastTaskAssigned(task.ID, task.JobID, graphID, task.Title)
 	}
@@ -633,8 +631,8 @@ func (st *SystemTools) queryJob(ctx context.Context, args json.RawMessage) (stri
 		fmt.Fprintf(&b, "\nTasks (%d):\n", len(tasks))
 		for _, task := range tasks {
 			fmt.Fprintf(&b, "  - [%s] %s (id: %s)", task.Status, task.Title, task.ID)
-			if task.TeamID != "" {
-				fmt.Fprintf(&b, " → team %s", task.TeamID)
+			if task.GraphID != "" {
+				fmt.Fprintf(&b, " → graph %s", task.GraphID)
 			}
 			b.WriteString("\n")
 		}
@@ -734,15 +732,15 @@ func (st *SystemTools) startJob(ctx context.Context, args json.RawMessage) (stri
 	}
 
 	for _, task := range tasks {
-		if task.Status == db.TaskStatusPending && task.TeamID != "" {
-			// Delegate to assignTask which handles spawning, status updates, and events.
+		if task.Status == db.TaskStatusPending && task.GraphID != "" {
+			// Delegate to assignTask which handles graph dispatch, status updates, and events.
 			assignArgs, _ := json.Marshal(map[string]string{
-				"task_id": task.ID,
-				"team_id": task.TeamID,
+				"task_id":  task.ID,
+				"graph_id": task.GraphID,
 			})
 			return st.assignTask(ctx, assignArgs)
 		}
 	}
 
-	return "", fmt.Errorf("no pending tasks with pre-assigned teams found in job %s", params.JobID)
+	return "", fmt.Errorf("no pending tasks with pre-assigned graphs found in job %s", params.JobID)
 }

@@ -36,11 +36,11 @@ const (
 	// the create_task system tool. Payload: TaskCreatedPayload.
 	EventTypeTaskCreated EventType = "task.created"
 
-	// EventTypeTaskAssigned is sent when the operator assigns a task to a team.
+	// EventTypeTaskAssigned is sent when the operator assigns a task to a graph.
 	// Payload: TaskAssignedPayload.
 	EventTypeTaskAssigned EventType = "task.assigned"
 
-	// EventTypeTaskStarted is sent when a team begins executing a task.
+	// EventTypeTaskStarted is sent when a graph begins executing a task.
 	// Payload: TaskStartedPayload.
 	EventTypeTaskStarted EventType = "task.started"
 
@@ -92,7 +92,7 @@ const (
 	EventTypeDefinitionsReloaded EventType = "definitions.reloaded"
 
 	// EventTypeOperationCompleted is sent when an async operation finishes
-	// successfully (e.g. GenerateSkill, GenerateTeam, PromoteTeam).
+	// successfully (e.g. GenerateSkill).
 	// Payload: OperationCompletedPayload. Carries OperationID.
 	EventTypeOperationCompleted EventType = "operation.completed"
 
@@ -239,50 +239,50 @@ type JobCreatedPayload struct {
 
 // TaskCreatedPayload is the payload for EventTypeTaskCreated events.
 type TaskCreatedPayload struct {
-	TaskID string
-	JobID  string
-	Title  string
-	TeamID string // may be empty if no team is pre-assigned
+	TaskID  string
+	JobID   string
+	Title   string
+	GraphID string // may be empty if no graph is pre-assigned
 }
 
 // TaskAssignedPayload is the payload for EventTypeTaskAssigned events.
 type TaskAssignedPayload struct {
-	TaskID string
-	JobID  string
-	TeamID string
-	Title  string
+	TaskID  string
+	JobID   string
+	GraphID string
+	Title   string
 }
 
 // TaskStartedPayload is the payload for EventTypeTaskStarted events.
 type TaskStartedPayload struct {
-	TaskID string
-	JobID  string
-	TeamID string
-	Title  string
+	TaskID  string
+	JobID   string
+	GraphID string
+	Title   string
 }
 
 // TaskCompletedPayload is the payload for EventTypeTaskCompleted events.
 type TaskCompletedPayload struct {
 	TaskID          string
 	JobID           string
-	TeamID          string
+	GraphID         string
 	Summary         string
-	Recommendations string // follow-up recommendations from the team
+	Recommendations string // follow-up recommendations
 	HasNextTask     bool   // whether there is a queued next task
 }
 
 // TaskFailedPayload is the payload for EventTypeTaskFailed events.
 type TaskFailedPayload struct {
-	TaskID string
-	JobID  string
-	TeamID string
-	Error  string
+	TaskID  string
+	JobID   string
+	GraphID string
+	Error   string
 }
 
 // BlockerReportedPayload is the payload for EventTypeBlockerReported events.
 type BlockerReportedPayload struct {
 	TaskID      string
-	TeamID      string
+	GraphID     string
 	WorkerID    string
 	Description string
 	Questions   []string // clarifying questions for the user
@@ -306,7 +306,6 @@ type ProgressUpdatePayload struct {
 type SessionStartedPayload struct {
 	SessionID      string
 	WorkerName     string
-	TeamName       string // may be empty
 	Task           string // short human-readable task description
 	JobID          string
 	TaskID         string
@@ -344,8 +343,7 @@ type SessionDonePayload struct {
 // The OperationID matches the value returned by the async service method that
 // started the operation (e.g. Definitions().GenerateSkill()).
 type OperationCompletedPayload struct {
-	// Kind identifies what kind of operation completed (e.g. "generate_skill",
-	// "generate_agent", "generate_team", "promote_team", "detect_coordinator").
+	// Kind identifies what kind of operation completed (e.g. "generate_skill").
 	Kind string
 	// Result carries the operation output. Fields populated depend on Kind.
 	Result OperationResult

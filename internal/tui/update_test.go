@@ -1,41 +1,10 @@
 package tui
 
 import (
-	"context"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
-
-	"github.com/jefflinse/toasters/internal/service"
 )
-
-// --------------------------------------------------------------------------
-// Mock service for reloadTeamsCmd / DefinitionsReloadedMsg tests
-// --------------------------------------------------------------------------
-
-// mockDefService implements service.DefinitionService for tests.
-// Only ListTeams is functional; all other methods will panic if called.
-type mockDefService struct {
-	service.DefinitionService // embed to satisfy interface; nil is fine since only ListTeams is used
-	listTeamsFn               func(ctx context.Context) ([]service.TeamView, error)
-}
-
-func (m *mockDefService) ListTeams(ctx context.Context) ([]service.TeamView, error) {
-	return m.listTeamsFn(ctx)
-}
-
-// mockSvcForTUI implements service.Service for TUI tests.
-// Only Definitions() is functional; other sub-interfaces will panic if called.
-type mockSvcForTUI struct {
-	defs *mockDefService
-}
-
-func (m *mockSvcForTUI) Operator() service.OperatorService      { panic("not implemented") }
-func (m *mockSvcForTUI) Definitions() service.DefinitionService { return m.defs }
-func (m *mockSvcForTUI) Jobs() service.JobService               { panic("not implemented") }
-func (m *mockSvcForTUI) Sessions() service.SessionService       { panic("not implemented") }
-func (m *mockSvcForTUI) Events() service.EventService           { panic("not implemented") }
-func (m *mockSvcForTUI) System() service.SystemService          { panic("not implemented") }
 
 // keyPress constructs a tea.KeyPressMsg for a regular printable character.
 // For characters like 'p', 'q', 'k', 'j', 'o', 'y', 'n', '[', ']', 'd', etc.
@@ -946,102 +915,3 @@ func TestUpdateCmdPopup_UnhandledKeyFallsThrough(t *testing.T) {
 	}
 }
 
-// --------------------------------------------------------------------------
-// reloadTeamsCmd tests
-// --------------------------------------------------------------------------
-
-func TestReloadTeamsCmd_Success(t *testing.T) {
-	t.Parallel()
-
-	wantTeams := []service.TeamView{
-		{Team: service.Team{Name: "alpha"}},
-		{Team: service.Team{Name: "beta"}},
-	}
-
-	svc := &mockSvcForTUI{
-		defs: &mockDefService{
-			listTeamsFn: func(_ context.Context) ([]service.TeamView, error) {
-				return wantTeams, nil
-			},
-		},
-	}
-
-	cmd := reloadTeamsCmd(svc)
-	if cmd == nil {
-		t.Fatal("reloadTeamsCmd should return a non-nil tea.Cmd")
-	}
-
-	msg := cmd()
-	got, ok := msg.(TeamsReloadedMsg)
-	if !ok {
-		t.Fatalf("expected TeamsReloadedMsg, got %T", msg)
-	}
-	if len(got.Teams) != len(wantTeams) {
-		t.Fatalf("expected %d teams, got %d", len(wantTeams), len(got.Teams))
-	}
-	for i, want := range wantTeams {
-		if got.Teams[i].Team.Name != want.Team.Name {
-			t.Errorf("team[%d]: got name %q, want %q", i, got.Teams[i].Team.Name, want.Team.Name)
-		}
-	}
-}
-
-func TestReloadTeamsCmd_Error(t *testing.T) {
-	t.Parallel()
-
-	svc := &mockSvcForTUI{
-		defs: &mockDefService{
-			listTeamsFn: func(_ context.Context) ([]service.TeamView, error) {
-				return nil, context.DeadlineExceeded
-			},
-		},
-	}
-
-	cmd := reloadTeamsCmd(svc)
-	if cmd == nil {
-		t.Fatal("reloadTeamsCmd should return a non-nil tea.Cmd even when ListTeams will fail")
-	}
-
-	msg := cmd()
-	if msg != nil {
-		t.Fatalf("expected nil msg on error, got %T: %v", msg, msg)
-	}
-}
-
-// --------------------------------------------------------------------------
-// DefinitionsReloadedMsg handler tests
-// --------------------------------------------------------------------------
-
-func TestDefinitionsReloadedMsg_ReturnsCmd(t *testing.T) {
-	t.Parallel()
-
-	wantTeams := []service.TeamView{
-		{Team: service.Team{Name: "gamma"}},
-	}
-
-	svc := &mockSvcForTUI{
-		defs: &mockDefService{
-			listTeamsFn: func(_ context.Context) ([]service.TeamView, error) {
-				return wantTeams, nil
-			},
-		},
-	}
-
-	m := newMinimalModel(t)
-	m.svc = svc
-
-	_, cmd := m.Update(DefinitionsReloadedMsg{})
-	if cmd == nil {
-		t.Fatal("DefinitionsReloadedMsg should produce a non-nil tea.Cmd (reloadTeamsCmd)")
-	}
-
-	// Execute the returned cmd — it should produce a TeamsReloadedMsg.
-	msg := cmd()
-	got, ok := msg.(TeamsReloadedMsg)
-	if !ok {
-		t.Fatalf("cmd produced %T, want TeamsReloadedMsg", msg)
-	}
-	if len(got.Teams) != 1 || got.Teams[0].Team.Name != "gamma" {
-		t.Errorf("unexpected teams in TeamsReloadedMsg: %+v", got.Teams)
-	}
-}
