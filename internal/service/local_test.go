@@ -119,6 +119,12 @@ func (m *mockStore) AssignTask(_ context.Context, _ string, _ string) error {
 func (m *mockStore) PreAssignTaskTeam(_ context.Context, _ string, _ string) error {
 	return fmt.Errorf("not implemented")
 }
+func (m *mockStore) AssignTaskToGraph(_ context.Context, _ string, _ string) error {
+	return fmt.Errorf("not implemented")
+}
+func (m *mockStore) PreAssignTaskGraph(_ context.Context, _ string, _ string) error {
+	return fmt.Errorf("not implemented")
+}
 func (m *mockStore) AddTaskDependency(_ context.Context, _, _ string) error {
 	return fmt.Errorf("not implemented")
 }

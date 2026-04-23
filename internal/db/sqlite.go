@@ -247,11 +247,11 @@ func (s *SQLiteStore) CreateTask(ctx context.Context, task *Task) error {
 	}
 
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO tasks (id, job_id, title, status, worker_id, team_id, parent_id, sort_order,
+		`INSERT INTO tasks (id, job_id, title, status, worker_id, team_id, graph_id, parent_id, sort_order,
 		                     created_at, updated_at, summary, metadata)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		task.ID, task.JobID, task.Title, string(task.Status),
-		task.WorkerID, task.TeamID, task.ParentID, task.SortOrder,
+		task.WorkerID, task.TeamID, task.GraphID, task.ParentID, task.SortOrder,
 		task.CreatedAt.Format(time.RFC3339), task.UpdatedAt.Format(time.RFC3339),
 		task.Summary, nullableJSON(task.Metadata),
 	)
@@ -263,7 +263,7 @@ func (s *SQLiteStore) CreateTask(ctx context.Context, task *Task) error {
 
 func (s *SQLiteStore) GetTask(ctx context.Context, id string) (*Task, error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT id, job_id, title, status, worker_id, team_id, parent_id, sort_order,
+		`SELECT id, job_id, title, status, worker_id, team_id, graph_id, parent_id, sort_order,
 		        created_at, updated_at, summary, metadata, result_summary, recommendations
 		 FROM tasks WHERE id = ?`, id)
 
@@ -272,7 +272,7 @@ func (s *SQLiteStore) GetTask(ctx context.Context, id string) (*Task, error) {
 
 func (s *SQLiteStore) ListTasksForJob(ctx context.Context, jobID string) ([]*Task, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, job_id, title, status, worker_id, team_id, parent_id, sort_order,
+		`SELECT id, job_id, title, status, worker_id, team_id, graph_id, parent_id, sort_order,
 		        created_at, updated_at, summary, metadata, result_summary, recommendations
 		 FROM tasks WHERE job_id = ? ORDER BY sort_order, created_at`, jobID)
 	if err != nil {
@@ -348,6 +348,35 @@ func (s *SQLiteStore) PreAssignTaskTeam(ctx context.Context, id string, teamID s
 	return checkRowsAffected(result, "task", id)
 }
 
+// AssignTaskToGraph is the graph-dispatch analogue of AssignTask: it sets the
+// graph_id and transitions the task to in_progress. Used by the declarative
+// graph dispatch path; the team-based path stays on AssignTask.
+func (s *SQLiteStore) AssignTaskToGraph(ctx context.Context, id string, graphID string) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	result, err := s.db.ExecContext(ctx,
+		"UPDATE tasks SET graph_id = ?, status = ?, updated_at = ? WHERE id = ? AND status = ?",
+		graphID, string(TaskStatusInProgress), now, id, string(TaskStatusPending))
+	if err != nil {
+		return fmt.Errorf("assigning task to graph: %w", err)
+	}
+	return checkRowsAffected(result, "task", id)
+}
+
+// PreAssignTaskGraph sets the graph_id on a pending task without changing its
+// status — the graph-dispatch analogue of PreAssignTaskTeam. Used when a
+// sibling task is in progress so the assignment is deferred until the sibling
+// completes.
+func (s *SQLiteStore) PreAssignTaskGraph(ctx context.Context, id string, graphID string) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	result, err := s.db.ExecContext(ctx,
+		"UPDATE tasks SET graph_id = ?, updated_at = ? WHERE id = ? AND status = ?",
+		graphID, now, id, string(TaskStatusPending))
+	if err != nil {
+		return fmt.Errorf("pre-assigning task graph: %w", err)
+	}
+	return checkRowsAffected(result, "task", id)
+}
+
 func (s *SQLiteStore) AddTaskDependency(ctx context.Context, taskID, dependsOn string) error {
 	_, err := s.db.ExecContext(ctx,
 		"INSERT INTO task_dependencies (task_id, depends_on) VALUES (?, ?)",
@@ -361,7 +390,7 @@ func (s *SQLiteStore) AddTaskDependency(ctx context.Context, taskID, dependsOn s
 // GetReadyTasks returns tasks that are pending and have all dependencies completed.
 func (s *SQLiteStore) GetReadyTasks(ctx context.Context, jobID string) ([]*Task, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT t.id, t.job_id, t.title, t.status, t.worker_id, t.team_id, t.parent_id, t.sort_order,
+		`SELECT t.id, t.job_id, t.title, t.status, t.worker_id, t.team_id, t.graph_id, t.parent_id, t.sort_order,
 		        t.created_at, t.updated_at, t.summary, t.metadata, t.result_summary, t.recommendations
 		 FROM tasks t
 		 WHERE t.job_id = ?
@@ -1209,7 +1238,7 @@ func scanTask(s scanner) (*Task, error) {
 	var metadata sql.NullString
 
 	if err := s.Scan(&t.ID, &t.JobID, &t.Title, &status,
-		&t.WorkerID, &t.TeamID, &t.ParentID, &t.SortOrder,
+		&t.WorkerID, &t.TeamID, &t.GraphID, &t.ParentID, &t.SortOrder,
 		&createdAt, &updatedAt, &t.Summary, &metadata,
 		&t.ResultSummary, &t.Recommendations); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {

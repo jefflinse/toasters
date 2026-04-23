@@ -81,6 +81,7 @@ type Task struct {
 	Status          TaskStatus
 	WorkerID        string // assigned worker (may be empty)
 	TeamID          string // assigned team (may be empty)
+	GraphID         string // assigned graph definition id (may be empty)
 	ParentID        string // DAG edge, empty for root tasks
 	SortOrder       int
 	CreatedAt       time.Time
