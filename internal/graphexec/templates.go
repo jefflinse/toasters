@@ -1,15 +1,15 @@
 package graphexec
 
 import (
-	"context"
-
-	"github.com/jefflinse/rhizome"
 	"github.com/jefflinse/toasters/internal/prompt"
 	"github.com/jefflinse/toasters/internal/provider"
 	"github.com/jefflinse/toasters/internal/runtime"
 )
 
-// TemplateConfig holds the shared configuration for building graph templates.
+// TemplateConfig holds the shared configuration every compiled graph needs:
+// the LLM provider, the per-workspace tool executor, the default model, the
+// prompt engine that composes role system prompts, and the role name map.
+// The declarative compiler passes this into each node's builder.
 type TemplateConfig struct {
 	// Provider is the LLM provider for all nodes.
 	Provider provider.Provider
@@ -71,182 +71,4 @@ func (r RoleMap) resolve() RoleMap {
 		r.Review = d.Review
 	}
 	return r
-}
-
-// SingleWorkerGraph builds a minimal Start -> work -> End graph.
-// One bounded agent call with the full tool set and the WorkOutput schema.
-func SingleWorkerGraph(cfg TemplateConfig, systemPrompt, initialMessage string) (*rhizome.CompiledGraph[*TaskState], error) {
-	g := rhizome.New[*TaskState]()
-
-	if err := g.AddNode("work", SingleWorkerNode(cfg, systemPrompt, initialMessage)); err != nil {
-		return nil, err
-	}
-
-	if err := g.AddEdge(rhizome.Start, "work"); err != nil {
-		return nil, err
-	}
-	if err := g.AddEdge("work", rhizome.End); err != nil {
-		return nil, err
-	}
-
-	return g.Compile()
-}
-
-// BugFixGraph builds a multi-node graph for bug fix tasks:
-//
-//	Start -> investigate -> plan -> implement -> test -> review -> End
-//	                                    ^                  |
-//	                                    |  (review_rejected)|
-//	                                    +------------------+
-//
-// The review node routes back to implement on rejection, creating a
-// revision cycle capped at 3 iterations via WithMaxNodeExecs.
-func BugFixGraph(cfg TemplateConfig) (*rhizome.CompiledGraph[*TaskState], error) {
-	g := rhizome.New[*TaskState]()
-
-	if err := g.AddNode("investigate", InvestigateNodeDynamic(cfg)); err != nil {
-		return nil, err
-	}
-	if err := g.AddNode("plan", PlanNodeDynamic(cfg)); err != nil {
-		return nil, err
-	}
-	if err := g.AddNode("implement", ImplementNodeDynamic(cfg)); err != nil {
-		return nil, err
-	}
-	if err := g.AddNode("test", TestNodeDynamic(cfg)); err != nil {
-		return nil, err
-	}
-	if err := g.AddNode("review", ReviewNodeDynamic(cfg)); err != nil {
-		return nil, err
-	}
-
-	// Linear edges: Start -> investigate -> plan -> implement -> test.
-	if err := g.AddEdge(rhizome.Start, "investigate"); err != nil {
-		return nil, err
-	}
-	if err := g.AddEdge("investigate", "plan"); err != nil {
-		return nil, err
-	}
-	if err := g.AddEdge("plan", "implement"); err != nil {
-		return nil, err
-	}
-	if err := g.AddEdge("implement", "test"); err != nil {
-		return nil, err
-	}
-
-	// Conditional: test -> review (if passed) or -> implement (if failed).
-	if err := g.AddConditionalEdge("test", func(_ context.Context, s *TaskState) (string, error) {
-		if s.Status == StatusTestsPassed {
-			return "review", nil
-		}
-		return "implement", nil // tests failed — retry implementation
-	}, "review", "implement"); err != nil {
-		return nil, err
-	}
-
-	// Conditional: review -> End (if approved) or -> implement (if rejected).
-	if err := g.AddConditionalEdge("review", func(_ context.Context, s *TaskState) (string, error) {
-		if s.Status == StatusReviewApproved {
-			return rhizome.End, nil
-		}
-		return "implement", nil
-	}, rhizome.End, "implement"); err != nil {
-		return nil, err
-	}
-
-	return g.Compile(rhizome.WithMaxNodeExecs(3))
-}
-
-// NewFeatureGraph builds a graph for new feature tasks:
-//
-//	Start -> plan -> implement -> test -> review -> End
-//	                    ^                    |
-//	                    |  (review_rejected)  |
-//	                    +--------------------+
-//
-// Skips the investigation phase (the task description is assumed to be
-// sufficient for planning). Otherwise similar to BugFixGraph.
-func NewFeatureGraph(cfg TemplateConfig) (*rhizome.CompiledGraph[*TaskState], error) {
-	g := rhizome.New[*TaskState]()
-
-	if err := g.AddNode("plan", PlanNodeDynamic(cfg)); err != nil {
-		return nil, err
-	}
-	if err := g.AddNode("implement", ImplementNodeDynamic(cfg)); err != nil {
-		return nil, err
-	}
-	if err := g.AddNode("test", TestNodeDynamic(cfg)); err != nil {
-		return nil, err
-	}
-	if err := g.AddNode("review", ReviewNodeDynamic(cfg)); err != nil {
-		return nil, err
-	}
-
-	if err := g.AddEdge(rhizome.Start, "plan"); err != nil {
-		return nil, err
-	}
-	if err := g.AddEdge("plan", "implement"); err != nil {
-		return nil, err
-	}
-	if err := g.AddEdge("implement", "test"); err != nil {
-		return nil, err
-	}
-
-	if err := g.AddConditionalEdge("test", func(_ context.Context, s *TaskState) (string, error) {
-		if s.Status == StatusTestsPassed {
-			return "review", nil
-		}
-		return "implement", nil
-	}, "review", "implement"); err != nil {
-		return nil, err
-	}
-
-	if err := g.AddConditionalEdge("review", func(_ context.Context, s *TaskState) (string, error) {
-		if s.Status == StatusReviewApproved {
-			return rhizome.End, nil
-		}
-		return "implement", nil
-	}, rhizome.End, "implement"); err != nil {
-		return nil, err
-	}
-
-	return g.Compile(rhizome.WithMaxNodeExecs(3))
-}
-
-// PrototypeGraph builds a lightweight graph for prototyping:
-//
-//	Start -> implement -> test -> End (if passed)
-//	            ^            |
-//	            |  (failed)  |
-//	            +------------+
-//
-// No investigation, planning, or review — just implement and test
-// with a retry loop. Good for quick iterations.
-func PrototypeGraph(cfg TemplateConfig) (*rhizome.CompiledGraph[*TaskState], error) {
-	g := rhizome.New[*TaskState]()
-
-	if err := g.AddNode("implement", ImplementNodeDynamic(cfg)); err != nil {
-		return nil, err
-	}
-	if err := g.AddNode("test", TestNodeDynamic(cfg)); err != nil {
-		return nil, err
-	}
-
-	if err := g.AddEdge(rhizome.Start, "implement"); err != nil {
-		return nil, err
-	}
-	if err := g.AddEdge("implement", "test"); err != nil {
-		return nil, err
-	}
-
-	if err := g.AddConditionalEdge("test", func(_ context.Context, s *TaskState) (string, error) {
-		if s.Status == StatusTestsPassed {
-			return rhizome.End, nil
-		}
-		return "implement", nil
-	}, rhizome.End, "implement"); err != nil {
-		return nil, err
-	}
-
-	return g.Compile(rhizome.WithMaxNodeExecs(3))
 }

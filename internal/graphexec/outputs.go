@@ -99,25 +99,8 @@ var reviewSchema = json.RawMessage(`{
   "required": ["approved", "feedback"]
 }`)
 
-// WorkOutput is the single-worker graph's structured output.
-type WorkOutput struct {
-	Output string `json:"output"`
-}
-
-var workSchema = json.RawMessage(`{
-  "type": "object",
-  "properties": {
-    "output": {
-      "type": "string",
-      "description": "A short summary of what was accomplished."
-    }
-  },
-  "required": ["output"]
-}`)
-
-// Status values that nodes set on TaskState so conditional edges can
-// route. Centralized here so templates and node builders agree on the
-// vocabulary.
+// Status values that nodes set on TaskState so conditional edges can route.
+// Centralized here so templates and node builders agree on the vocabulary.
 const (
 	StatusTestsPassed    = "tests_passed"
 	StatusTestsFailed    = "tests_failed"

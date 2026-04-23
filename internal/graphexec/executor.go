@@ -253,20 +253,19 @@ func (e *Executor) Execute(ctx context.Context, graph *rhizome.CompiledGraph[*Ta
 }
 
 // TaskRequest carries everything needed to execute a task through the graph
-// executor. Replaces the prior 11-positional-string signature which was
-// error-prone at call sites.
+// executor. GraphID names the declarative graph to run — required, since the
+// hard-coded template path has been retired.
 type TaskRequest struct {
 	JobID          string
-	JobType        JobType
 	JobTitle       string
 	JobDescription string
 
 	TaskID    string
 	TaskTitle string
 	TeamID    string
-	// GraphID, when set, selects a declarative graph Definition by id
-	// from the executor's GraphSource. Takes precedence over JobType —
-	// the hard-coded template path is only used when GraphID is empty.
+
+	// GraphID selects a declarative graph Definition by id from the
+	// executor's GraphSource. Required.
 	GraphID string
 
 	WorkspaceDir string
@@ -281,11 +280,13 @@ type TaskExecutor interface {
 	ExecuteTask(ctx context.Context, req TaskRequest) error
 }
 
-// ExecuteTask resolves the provider and picks a graph to run: a declarative
-// graph looked up from the GraphSource when req.GraphID is set, otherwise
-// the hard-coded template matching req.JobType. Both paths share the same
-// state, middleware, and completion handling via e.Execute.
+// ExecuteTask resolves the provider, looks up the declarative graph by id,
+// compiles it, and runs it. All dispatches go through the YAML-driven
+// catalog — there is no hard-coded template fallback.
 func (e *Executor) ExecuteTask(ctx context.Context, req TaskRequest) error {
+	if req.GraphID == "" {
+		return fmt.Errorf("ExecuteTask: graph_id is required")
+	}
 	prov, ok := e.registry.Get(req.ProviderName)
 	if !ok {
 		return fmt.Errorf("provider %q not found in registry", req.ProviderName)
@@ -304,9 +305,16 @@ func (e *Executor) ExecuteTask(ctx context.Context, req TaskRequest) error {
 		Roles:        DefaultRoles(),
 	}
 
-	graph, err := e.resolveGraph(tmplCfg, req)
+	if e.graphs == nil {
+		return fmt.Errorf("graph %q requested but no GraphSource configured", req.GraphID)
+	}
+	def := e.graphs.GraphByID(req.GraphID)
+	if def == nil {
+		return fmt.Errorf("graph %q not found", req.GraphID)
+	}
+	graph, err := Compile(def, tmplCfg, e.roles)
 	if err != nil {
-		return err
+		return fmt.Errorf("compiling graph %q: %w", req.GraphID, err)
 	}
 
 	state := NewTaskState(req.JobID, req.TaskID, req.WorkspaceDir, req.ProviderName, model)
@@ -315,50 +323,4 @@ func (e *Executor) ExecuteTask(ctx context.Context, req TaskRequest) error {
 	state.SetArtifact("job.description", req.JobDescription)
 
 	return e.Execute(ctx, graph, state, req.TeamID)
-}
-
-// resolveGraph picks the graph to run for req: the declarative graph named
-// by GraphID when set (and when a GraphSource is configured), otherwise the
-// hard-coded template matching JobType.
-func (e *Executor) resolveGraph(tmplCfg TemplateConfig, req TaskRequest) (*rhizome.CompiledGraph[*TaskState], error) {
-	if req.GraphID != "" {
-		if e.graphs == nil {
-			return nil, fmt.Errorf("graph %q requested but no GraphSource configured", req.GraphID)
-		}
-		def := e.graphs.GraphByID(req.GraphID)
-		if def == nil {
-			return nil, fmt.Errorf("graph %q not found", req.GraphID)
-		}
-		compiled, err := Compile(def, tmplCfg, e.roles)
-		if err != nil {
-			return nil, fmt.Errorf("compiling graph %q: %w", req.GraphID, err)
-		}
-		return compiled, nil
-	}
-	graph, err := buildGraphForJobType(req.JobType, tmplCfg, req)
-	if err != nil {
-		return nil, fmt.Errorf("building graph for job type %q: %w", req.JobType, err)
-	}
-	return graph, nil
-}
-
-// buildGraphForJobType picks the template. Untyped jobs default to BugFixGraph
-// so the full investigate → plan → implement → test → review cycle runs —
-// SingleWorkerGraph would bypass everything rhizome adds.
-func buildGraphForJobType(jobType JobType, tmplCfg TemplateConfig, req TaskRequest) (*rhizome.CompiledGraph[*TaskState], error) {
-	switch jobType {
-	case JobTypeNewFeature:
-		return NewFeatureGraph(tmplCfg)
-	case JobTypePrototype:
-		return PrototypeGraph(tmplCfg)
-	case JobTypeSingleWorker:
-		return SingleWorkerGraph(tmplCfg,
-			"You are a general-purpose worker. Complete the assigned task.",
-			fmt.Sprintf("Task: %s\n\nJob: %s\n%s", req.TaskTitle, req.JobTitle, req.JobDescription),
-		)
-	case JobTypeBugFix, JobTypeUnset:
-		return BugFixGraph(tmplCfg)
-	default:
-		return BugFixGraph(tmplCfg)
-	}
 }

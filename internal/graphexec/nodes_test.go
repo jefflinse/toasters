@@ -3,7 +3,6 @@ package graphexec
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -118,26 +117,6 @@ func templateConfig(responses [][]provider.StreamEvent) (TemplateConfig, *mockPr
 
 // --- Node-level tests ---
 
-func TestSingleWorkerNode_Completion(t *testing.T) {
-	cfg, _ := templateConfig([][]provider.StreamEvent{
-		completeResponse(WorkOutput{Output: "task complete"}),
-	})
-
-	node := SingleWorkerNode(cfg, "You are a worker.", "Do the task.")
-	state := NewTaskState("job-1", "task-1", "/workspace", "mock", "test-model")
-
-	result, err := node(context.Background(), state)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if result.Status != StatusCompleted {
-		t.Errorf("Status = %q, want %q", result.Status, StatusCompleted)
-	}
-	if got := result.GetArtifactString("work.output"); got != "task complete" {
-		t.Errorf("work.output = %q, want %q", got, "task complete")
-	}
-}
-
 func TestTestNode_PassedRoutesToPassed(t *testing.T) {
 	cfg, _ := templateConfig([][]provider.StreamEvent{
 		completeResponse(TestOutput{Passed: true, Summary: "all tests pass"}),
@@ -243,152 +222,10 @@ func TestImplementNode_CallsToolThenCompletes(t *testing.T) {
 	}
 }
 
-// --- Graph-level tests ---
-
-func TestBugFixGraph_HappyPath(t *testing.T) {
-	cfg, prov := templateConfig([][]provider.StreamEvent{
-		completeResponse(FindingsOutput{Summary: "found bug on line 42"}),
-		completeResponse(PlanOutput{Summary: "fix the loop bound"}),
-		completeResponse(ImplementOutput{Summary: "applied fix"}),
-		completeResponse(TestOutput{Passed: true, Summary: "all tests pass"}),
-		completeResponse(ReviewOutput{Approved: true, Feedback: "correct fix"}),
-	})
-
-	graph, err := BugFixGraph(cfg)
-	if err != nil {
-		t.Fatalf("failed to build graph: %v", err)
-	}
-
-	state := NewTaskState("job-1", "task-1", "/workspace", "mock", "test-model")
-	state.SetArtifact("task.description", "Fix the parser bug")
-
-	result, err := graph.Run(context.Background(), state)
-	if err != nil {
-		t.Fatalf("graph.Run error: %v", err)
-	}
-
-	for _, key := range []string{"investigate.findings", "plan.steps", "implement.summary", "test.results", "review.feedback"} {
-		if got := result.GetArtifactString(key); got == "" {
-			t.Errorf("expected artifact %q to be set", key)
-		}
-	}
-	if result.Status != StatusReviewApproved {
-		t.Errorf("Status = %q, want %q", result.Status, StatusReviewApproved)
-	}
-	if prov.calls != 5 {
-		t.Errorf("provider called %d times, want 5", prov.calls)
-	}
-}
-
-func TestBugFixGraph_TestFailureRetry(t *testing.T) {
-	cfg, prov := templateConfig([][]provider.StreamEvent{
-		completeResponse(FindingsOutput{Summary: "finding"}),
-		completeResponse(PlanOutput{Summary: "plan"}),
-		completeResponse(ImplementOutput{Summary: "impl 1"}),
-		completeResponse(TestOutput{Passed: false, Summary: "test failed"}),
-		completeResponse(ImplementOutput{Summary: "impl 2"}),
-		completeResponse(TestOutput{Passed: true, Summary: "tests pass"}),
-		completeResponse(ReviewOutput{Approved: true, Feedback: "good"}),
-	})
-
-	graph, err := BugFixGraph(cfg)
-	if err != nil {
-		t.Fatalf("failed to build graph: %v", err)
-	}
-
-	state := NewTaskState("job-1", "task-1", "/workspace", "mock", "test-model")
-	state.SetArtifact("task.description", "fix it")
-
-	result, err := graph.Run(context.Background(), state)
-	if err != nil {
-		t.Fatalf("graph.Run error: %v", err)
-	}
-	if result.Status != StatusReviewApproved {
-		t.Errorf("Status = %q, want %q", result.Status, StatusReviewApproved)
-	}
-	if prov.calls != 7 {
-		t.Errorf("provider called %d times, want 7", prov.calls)
-	}
-}
-
-func TestBugFixGraph_ReviewRejectionRetry(t *testing.T) {
-	cfg, prov := templateConfig([][]provider.StreamEvent{
-		completeResponse(FindingsOutput{Summary: "finding"}),
-		completeResponse(PlanOutput{Summary: "plan"}),
-		completeResponse(ImplementOutput{Summary: "impl 1"}),
-		completeResponse(TestOutput{Passed: true, Summary: "pass"}),
-		completeResponse(ReviewOutput{Approved: false, Feedback: "missing error handling"}),
-		completeResponse(ImplementOutput{Summary: "impl 2"}),
-		completeResponse(TestOutput{Passed: true, Summary: "still passes"}),
-		completeResponse(ReviewOutput{Approved: true, Feedback: "now good"}),
-	})
-
-	graph, err := BugFixGraph(cfg)
-	if err != nil {
-		t.Fatalf("failed to build graph: %v", err)
-	}
-
-	state := NewTaskState("job-1", "task-1", "/workspace", "mock", "test-model")
-	state.SetArtifact("task.description", "fix it")
-
-	result, err := graph.Run(context.Background(), state)
-	if err != nil {
-		t.Fatalf("graph.Run error: %v", err)
-	}
-	if result.Status != StatusReviewApproved {
-		t.Errorf("Status = %q, want %q", result.Status, StatusReviewApproved)
-	}
-	if prov.calls != 8 {
-		t.Errorf("provider called %d times, want 8", prov.calls)
-	}
-}
-
-func TestPrototypeGraph_CycleLimit(t *testing.T) {
-	cfg, _ := templateConfig([][]provider.StreamEvent{
-		completeResponse(ImplementOutput{Summary: "1"}),
-		completeResponse(TestOutput{Passed: false, Summary: "fail"}),
-		completeResponse(ImplementOutput{Summary: "2"}),
-		completeResponse(TestOutput{Passed: false, Summary: "fail"}),
-		completeResponse(ImplementOutput{Summary: "3"}),
-		completeResponse(TestOutput{Passed: false, Summary: "fail"}),
-	})
-
-	graph, err := PrototypeGraph(cfg)
-	if err != nil {
-		t.Fatalf("failed to build graph: %v", err)
-	}
-
-	state := NewTaskState("job-1", "task-1", "/workspace", "mock", "test-model")
-	state.SetArtifact("task.description", "build it")
-
-	_, err = graph.Run(context.Background(), state)
-	if err == nil {
-		t.Fatal("expected ErrCycleLimit")
-	}
-	if !errors.Is(err, rhizome.ErrCycleLimit) {
-		t.Errorf("error = %v, want ErrCycleLimit", err)
-	}
-}
-
-func TestSingleWorkerGraph(t *testing.T) {
-	cfg, _ := templateConfig([][]provider.StreamEvent{
-		completeResponse(WorkOutput{Output: "done"}),
-	})
-
-	graph, err := SingleWorkerGraph(cfg, "You are a worker.", "Do the work.")
-	if err != nil {
-		t.Fatalf("failed to build graph: %v", err)
-	}
-
-	state := NewTaskState("job-1", "task-1", "/workspace", "mock", "test-model")
-	result, err := graph.Run(context.Background(), state)
-	if err != nil {
-		t.Fatalf("graph.Run error: %v", err)
-	}
-	if got := result.GetArtifactString("work.output"); got != "done" {
-		t.Errorf("work.output = %q, want %q", got, "done")
-	}
-}
+// Hard-coded graph templates (BugFixGraph / NewFeatureGraph / PrototypeGraph /
+// SingleWorkerGraph) were retired in Phase 4. Equivalent end-to-end coverage
+// lives in bundled_test.go, where the YAML versions under defaults/user/graphs/
+// are loaded, compiled, and run against mock provider streams.
 
 // --- Adapters & tools ---
 
@@ -498,10 +335,15 @@ func (m *mockEventSink) BroadcastSessionText(sessionID, text string) {
 
 func TestExecutor_Execute(t *testing.T) {
 	cfg, _ := templateConfig([][]provider.StreamEvent{
-		completeResponse(WorkOutput{Output: "done"}),
+		completeResponse(FindingsOutput{Summary: "done"}),
 	})
 
-	graph, err := SingleWorkerGraph(cfg, "You are a worker.", "Do it.")
+	graph, err := Compile(&Definition{
+		ID:    "solo",
+		Entry: "work",
+		Nodes: []Node{{ID: "work", Role: "investigator"}},
+		Edges: []Edge{{From: "work", To: EndNode}},
+	}, cfg, nil)
 	if err != nil {
 		t.Fatalf("failed to build graph: %v", err)
 	}
@@ -742,9 +584,9 @@ func TestBugFixGraph_PopulatesTypedEnvelope(t *testing.T) {
 		completeResponse(ReviewOutput{Approved: true, Feedback: "ok"}),
 	})
 
-	graph, err := BugFixGraph(cfg)
+	graph, err := Compile(bugFixDef(), cfg, nil)
 	if err != nil {
-		t.Fatalf("BugFixGraph: %v", err)
+		t.Fatalf("Compile: %v", err)
 	}
 	state := NewTaskState("j", "t", "/w", "mock", "m")
 	state.SetArtifact("task.description", "fix it")
@@ -754,26 +596,26 @@ func TestBugFixGraph_PopulatesTypedEnvelope(t *testing.T) {
 		t.Fatalf("graph.Run: %v", err)
 	}
 
-	// Every role node should have recorded its typed output in the envelope
-	// under its rhizome node ID. Executed here without middleware, so the
-	// NodeContext fallback uses the role name.
+	// Every role node should have recorded its typed output in the envelope,
+	// keyed by the rhizome node id injected via the compiler's default
+	// NodeContext wrapper.
 	var findings FindingsOutput
-	if err := result.UnmarshalNodeOutput("investigator", &findings); err != nil {
-		t.Errorf("investigator output: %v", err)
+	if err := result.UnmarshalNodeOutput("investigate", &findings); err != nil {
+		t.Errorf("investigate output: %v", err)
 	} else if findings.Summary != "finding" {
 		t.Errorf("findings.Summary = %q, want %q", findings.Summary, "finding")
 	}
 
 	var test TestOutput
-	if err := result.UnmarshalNodeOutput("tester", &test); err != nil {
-		t.Errorf("tester output: %v", err)
+	if err := result.UnmarshalNodeOutput("test", &test); err != nil {
+		t.Errorf("test output: %v", err)
 	} else if !test.Passed {
 		t.Errorf("test.Passed = false, want true")
 	}
 
 	var review ReviewOutput
-	if err := result.UnmarshalNodeOutput("reviewer", &review); err != nil {
-		t.Errorf("reviewer output: %v", err)
+	if err := result.UnmarshalNodeOutput("review", &review); err != nil {
+		t.Errorf("review output: %v", err)
 	} else if !review.Approved {
 		t.Errorf("review.Approved = false, want true")
 	}
@@ -786,7 +628,7 @@ func TestBugFixGraph_PopulatesTypedEnvelope(t *testing.T) {
 
 // Compile-time interface checks.
 var (
-	_ rhizome.NodeFunc[*TaskState] = SingleWorkerNode(TemplateConfig{}, "", "")
+	_ rhizome.NodeFunc[*TaskState] = InvestigateNodeDynamic(TemplateConfig{})
 	_ EventSink                    = (*mockEventSink)(nil)
 	_ agent.Tool                   = AskUserTool()
 )

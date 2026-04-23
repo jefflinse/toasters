@@ -8,33 +8,6 @@ import (
 	"fmt"
 )
 
-// JobType selects which graph template ExecuteTask will run for a job.
-// The zero value (JobTypeUnset) routes to BugFixGraph — the full
-// investigate → plan → implement → test → review cycle — so untyped jobs
-// still exercise the rhizome pipeline end-to-end.
-type JobType string
-
-const (
-	// JobTypeUnset is the zero value; maps to BugFixGraph as the default.
-	JobTypeUnset JobType = ""
-
-	// JobTypeBugFix runs the full investigate → plan → implement → test →
-	// review cycle with review-rejection retry (capped at 3 iterations).
-	JobTypeBugFix JobType = "bug_fix"
-
-	// JobTypeNewFeature skips investigation (task description is assumed
-	// self-sufficient for planning) but otherwise mirrors BugFix.
-	JobTypeNewFeature JobType = "new_feature"
-
-	// JobTypePrototype runs implement → test with retry cycles and no
-	// investigation/planning/review. For quick iterations.
-	JobTypePrototype JobType = "prototype"
-
-	// JobTypeSingleWorker is the escape hatch: one bounded LLM node with
-	// the full tool set. Skips the multi-phase cycle entirely.
-	JobTypeSingleWorker JobType = "single_worker"
-)
-
 // TaskState is the state type for rhizome graphs (the S in Graph[S]).
 // It flows through nodes, accumulating structured artifacts at each step.
 // Each node receives the full state but builds a fresh LLM prompt from

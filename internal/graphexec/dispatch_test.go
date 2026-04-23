@@ -131,35 +131,18 @@ func TestExecuteTask_GraphIDWithoutSourceFails(t *testing.T) {
 	}
 }
 
-func TestExecuteTask_FallsBackToJobTypeWhenNoGraphID(t *testing.T) {
-	executor, mock, store := buildDispatchExecutor(t, [][]provider.StreamEvent{
-		completeResponse(ImplementOutput{Summary: "i"}),
-		completeResponse(TestOutput{Passed: true, Summary: "ok"}),
-	}, mapGraphSource{})
-
-	workspace := t.TempDir()
-	_ = store.CreateJob(context.Background(), &db.Job{
-		ID: "j1", Title: "jt", Description: "jd",
-		Status: db.JobStatusPending, WorkspaceDir: workspace,
-	})
-	_ = store.CreateTask(context.Background(), &db.Task{
-		ID: "t1", JobID: "j1", Title: "proto", Status: db.TaskStatusPending,
-	})
+func TestExecuteTask_RequiresGraphID(t *testing.T) {
+	executor, _, _ := buildDispatchExecutor(t, nil, mapGraphSource{})
 
 	err := executor.ExecuteTask(context.Background(), TaskRequest{
 		JobID:        "j1",
-		JobType:      JobTypePrototype,
-		JobTitle:     "jt",
 		TaskID:       "t1",
 		TaskTitle:    "proto",
-		WorkspaceDir: workspace,
+		WorkspaceDir: t.TempDir(),
 		ProviderName: "mock",
 		Model:        "test-model",
 	})
-	if err != nil {
-		t.Fatalf("ExecuteTask: %v", err)
-	}
-	if mock.calls != 2 {
-		t.Errorf("provider called %d times, want 2 (prototype template)", mock.calls)
+	if err == nil || !strings.Contains(err.Error(), "graph_id is required") {
+		t.Errorf("err = %v, want graph_id-required error", err)
 	}
 }
