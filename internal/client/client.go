@@ -320,6 +320,36 @@ func (s *remoteDefinitionService) GetWorker(ctx context.Context, id string) (ser
 	return wireWorkerToService(w), nil
 }
 
+// --- Graphs ---
+
+func (s *remoteDefinitionService) ListGraphs(ctx context.Context) ([]service.GraphDefinition, error) {
+	resp, err := s.c.http.get(ctx, "/api/v1/graphs")
+	if err != nil {
+		return nil, fmt.Errorf("list graphs: %w", err)
+	}
+	pr, err := decodeResponse[paginatedResponse[wireGraphDefinition]](resp)
+	if err != nil {
+		return nil, fmt.Errorf("list graphs: %w", err)
+	}
+	out := make([]service.GraphDefinition, 0, len(pr.Items))
+	for _, g := range pr.Items {
+		out = append(out, wireGraphDefinitionToService(g))
+	}
+	return out, nil
+}
+
+func (s *remoteDefinitionService) GetGraph(ctx context.Context, id string) (service.GraphDefinition, error) {
+	resp, err := s.c.http.get(ctx, fmt.Sprintf("/api/v1/graphs/%s", url.PathEscape(id)))
+	if err != nil {
+		return service.GraphDefinition{}, fmt.Errorf("get graph: %w", err)
+	}
+	g, err := decodeResponse[wireGraphDefinition](resp)
+	if err != nil {
+		return service.GraphDefinition{}, fmt.Errorf("get graph: %w", err)
+	}
+	return wireGraphDefinitionToService(g), nil
+}
+
 // ---------------------------------------------------------------------------
 // JobService
 // ---------------------------------------------------------------------------

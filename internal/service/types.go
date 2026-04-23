@@ -289,6 +289,47 @@ type Worker struct {
 }
 
 // ---------------------------------------------------------------------------
+// Graph definition types
+// ---------------------------------------------------------------------------
+
+// GraphEdgeKind classifies a graph edge: a plain forward edge or a conditional
+// edge emitted from a router. Used by dagmap renderers to style branch edges
+// distinctly from linear edges.
+type GraphEdgeKind string
+
+const (
+	// GraphEdgeStatic is an unconditional forward edge (plain `to:`).
+	GraphEdgeStatic GraphEdgeKind = "static"
+
+	// GraphEdgeConditional is a router-branch edge. Label carries a short
+	// human-readable description of the match (e.g. "true", "approved",
+	// "passed"), derived from Branch.When.
+	GraphEdgeConditional GraphEdgeKind = "conditional"
+)
+
+// GraphEdge describes one edge in a graph topology.
+type GraphEdge struct {
+	From  string        // source node id, or "" for the start edge
+	To    string        // destination node id, or "" for the end edge
+	Kind  GraphEdgeKind // static or conditional
+	Label string        // optional branch label for conditional edges
+}
+
+// GraphDefinition is the service-level projection of a compiled graph. It's
+// the minimum the TUI needs to render a topology map for a task — node ids
+// plus edge shape — without taking a dependency on internal/graphexec.
+type GraphDefinition struct {
+	ID          string
+	Name        string
+	Description string
+	Tags        []string
+	Entry       string
+	Exit        string
+	Nodes       []string
+	Edges       []GraphEdge
+}
+
+// ---------------------------------------------------------------------------
 // Chat / conversation types
 // ---------------------------------------------------------------------------
 

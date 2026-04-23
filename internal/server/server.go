@@ -171,6 +171,10 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/workers", s.listWorkers)
 	mux.HandleFunc("GET /api/v1/workers/{id}", s.getWorker)
 
+	// Graphs
+	mux.HandleFunc("GET /api/v1/graphs", s.listGraphs)
+	mux.HandleFunc("GET /api/v1/graphs/{id}", s.getGraph)
+
 	// Jobs
 	mux.HandleFunc("GET /api/v1/jobs", s.listJobs)
 	mux.HandleFunc("GET /api/v1/jobs/{id}", s.getJob)

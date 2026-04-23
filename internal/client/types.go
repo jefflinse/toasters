@@ -96,6 +96,24 @@ type wireWorker struct {
 	UpdatedAt       time.Time `json:"updated_at"`
 }
 
+type wireGraphEdge struct {
+	From  string `json:"from"`
+	To    string `json:"to"`
+	Kind  string `json:"kind"`
+	Label string `json:"label,omitempty"`
+}
+
+type wireGraphDefinition struct {
+	ID          string          `json:"id"`
+	Name        string          `json:"name,omitempty"`
+	Description string          `json:"description,omitempty"`
+	Tags        []string        `json:"tags,omitempty"`
+	Entry       string          `json:"entry"`
+	Exit        string          `json:"exit,omitempty"`
+	Nodes       []string        `json:"nodes"`
+	Edges       []wireGraphEdge `json:"edges,omitempty"`
+}
+
 type wireSessionSnapshot struct {
 	ID        string    `json:"id"`
 	WorkerID  string    `json:"worker_id"`
@@ -567,6 +585,48 @@ func wireWorkerToService(w wireWorker) service.Worker {
 		CreatedAt:       w.CreatedAt,
 		UpdatedAt:       w.UpdatedAt,
 	}
+}
+
+func wireGraphDefinitionToService(w wireGraphDefinition) service.GraphDefinition {
+	out := service.GraphDefinition{
+		ID:          w.ID,
+		Name:        w.Name,
+		Description: w.Description,
+		Tags:        w.Tags,
+		Entry:       w.Entry,
+		Exit:        w.Exit,
+		Nodes:       w.Nodes,
+	}
+	for _, e := range w.Edges {
+		out.Edges = append(out.Edges, service.GraphEdge{
+			From:  e.From,
+			To:    e.To,
+			Kind:  service.GraphEdgeKind(e.Kind),
+			Label: e.Label,
+		})
+	}
+	return out
+}
+
+func serviceGraphDefinitionToWire(d service.GraphDefinition) wireGraphDefinition {
+	out := wireGraphDefinition{
+		ID:          d.ID,
+		Name:        d.Name,
+		Description: d.Description,
+		Tags:        d.Tags,
+		Entry:       d.Entry,
+		Exit:        d.Exit,
+		Nodes:       d.Nodes,
+	}
+	for _, e := range d.Edges {
+		out.Edges = append(out.Edges, wireGraphEdge{
+			From:  e.From,
+			To:    e.To,
+			Kind:  string(e.Kind),
+			Label: e.Label,
+		})
+	}
+	return out
 }
 
 func wireSessionSnapshotToService(w wireSessionSnapshot) service.SessionSnapshot {

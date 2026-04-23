@@ -187,6 +187,11 @@ type Model struct {
 	graphTasks      map[string]*graphTaskState
 	lastGraphTaskID string
 
+	// Cache of loaded graph definitions, keyed by id. Populated by the
+	// fetchGraphs command at startup and on catalog-change events. Used to
+	// resolve a task's graph_id to a dagmap topology.
+	graphDefs map[string]service.GraphDefinition
+
 	// Agent pane state.
 	selectedAgentSlot int // which slot is highlighted in the agents pane
 
@@ -320,6 +325,7 @@ func (m *Model) Init() tea.Cmd {
 	cmds := []tea.Cmd{
 		tea.RequestWindowSize,
 		m.fetchModels(),
+		m.fetchGraphs(),
 		loadingTick(), // drive the loading screen animation
 		spinnerTick(), // drive braille spinner animations
 	}
@@ -935,6 +941,20 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		m.updateViewportContent()
+
+	case GraphsMsg:
+		if msg.Err != nil {
+			slog.Warn("ListGraphs failed; graph-map topology unavailable", "error", msg.Err)
+			return m, nil
+		}
+		if m.graphDefs == nil {
+			m.graphDefs = make(map[string]service.GraphDefinition, len(msg.Graphs))
+		}
+		// Rebuild the cache from scratch so removals are reflected.
+		m.graphDefs = make(map[string]service.GraphDefinition, len(msg.Graphs))
+		for _, g := range msg.Graphs {
+			m.graphDefs[g.ID] = g
+		}
 
 	case CatalogMsg:
 		m.catalogModal.loading = false

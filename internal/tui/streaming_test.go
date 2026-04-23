@@ -70,6 +70,12 @@ func (m *mockDefinitionService) ListWorkers(_ context.Context) ([]service.Worker
 func (m *mockDefinitionService) GetWorker(_ context.Context, _ string) (service.Worker, error) {
 	return service.Worker{}, nil
 }
+func (m *mockDefinitionService) ListGraphs(_ context.Context) ([]service.GraphDefinition, error) {
+	return nil, nil
+}
+func (m *mockDefinitionService) GetGraph(_ context.Context, _ string) (service.GraphDefinition, error) {
+	return service.GraphDefinition{}, nil
+}
 
 // mockService implements service.Service for testing.
 type mockService struct {

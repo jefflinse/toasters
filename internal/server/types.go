@@ -331,6 +331,47 @@ func workerToWire(a service.Worker) wireWorker {
 	}
 }
 
+// wireGraphEdge is the JSON wire representation of a service.GraphEdge.
+type wireGraphEdge struct {
+	From  string `json:"from"`
+	To    string `json:"to"`
+	Kind  string `json:"kind"`
+	Label string `json:"label,omitempty"`
+}
+
+// wireGraphDefinition is the JSON wire representation of a service.GraphDefinition.
+type wireGraphDefinition struct {
+	ID          string          `json:"id"`
+	Name        string          `json:"name,omitempty"`
+	Description string          `json:"description,omitempty"`
+	Tags        []string        `json:"tags,omitempty"`
+	Entry       string          `json:"entry"`
+	Exit        string          `json:"exit,omitempty"`
+	Nodes       []string        `json:"nodes"`
+	Edges       []wireGraphEdge `json:"edges,omitempty"`
+}
+
+func graphDefinitionToWire(d service.GraphDefinition) wireGraphDefinition {
+	out := wireGraphDefinition{
+		ID:          d.ID,
+		Name:        d.Name,
+		Description: d.Description,
+		Tags:        d.Tags,
+		Entry:       d.Entry,
+		Exit:        d.Exit,
+		Nodes:       d.Nodes,
+	}
+	for _, e := range d.Edges {
+		out.Edges = append(out.Edges, wireGraphEdge{
+			From:  e.From,
+			To:    e.To,
+			Kind:  string(e.Kind),
+			Label: e.Label,
+		})
+	}
+	return out
+}
+
 // wireSessionSnapshot is the JSON wire representation of a service.SessionSnapshot.
 type wireSessionSnapshot struct {
 	ID        string    `json:"id"`

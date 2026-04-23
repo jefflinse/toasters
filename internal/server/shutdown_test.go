@@ -305,6 +305,12 @@ func (m *shutdownTestDefinitions) ListWorkers(ctx context.Context) ([]service.Wo
 func (m *shutdownTestDefinitions) GetWorker(ctx context.Context, id string) (service.Worker, error) {
 	return service.Worker{}, nil
 }
+func (m *shutdownTestDefinitions) ListGraphs(ctx context.Context) ([]service.GraphDefinition, error) {
+	return nil, nil
+}
+func (m *shutdownTestDefinitions) GetGraph(ctx context.Context, id string) (service.GraphDefinition, error) {
+	return service.GraphDefinition{}, nil
+}
 
 // shutdownTestJobs implements service.JobService.
 type shutdownTestJobs struct{}

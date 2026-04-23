@@ -18,6 +18,7 @@ import (
 
 	"github.com/jefflinse/toasters/internal/config"
 	"github.com/jefflinse/toasters/internal/db"
+	"github.com/jefflinse/toasters/internal/graphexec"
 	"github.com/jefflinse/toasters/internal/hitl"
 	"github.com/jefflinse/toasters/internal/loader"
 	"github.com/jefflinse/toasters/internal/mcp"
@@ -1376,6 +1377,86 @@ func (s *LocalService) GetWorker(ctx context.Context, id string) (Worker, error)
 		return Worker{}, fmt.Errorf("getting worker %s: %w", id, err)
 	}
 	return dbWorkerToService(w), nil
+}
+
+// ListGraphs returns all loaded graph definitions, ordered by id.
+func (s *LocalService) ListGraphs(_ context.Context) ([]GraphDefinition, error) {
+	if s.cfg.GraphCatalog == nil {
+		return nil, nil
+	}
+	defs := s.cfg.GraphCatalog.Graphs()
+	out := make([]GraphDefinition, 0, len(defs))
+	for _, d := range defs {
+		out = append(out, graphexecDefinitionToService(d))
+	}
+	return out, nil
+}
+
+// GetGraph returns a single graph definition by id.
+func (s *LocalService) GetGraph(_ context.Context, id string) (GraphDefinition, error) {
+	if s.cfg.GraphCatalog == nil {
+		return GraphDefinition{}, fmt.Errorf("getting graph %s: %w", id, ErrNotFound)
+	}
+	for _, d := range s.cfg.GraphCatalog.Graphs() {
+		if d.ID == id {
+			return graphexecDefinitionToService(d), nil
+		}
+	}
+	return GraphDefinition{}, fmt.Errorf("getting graph %s: %w", id, ErrNotFound)
+}
+
+// graphexecDefinitionToService converts a graphexec.Definition (the YAML-loaded
+// internal shape) to a service.GraphDefinition (the TUI-facing DTO). The edge
+// conversion expands routers into one conditional edge per branch so renderers
+// can draw each branch distinctly.
+func graphexecDefinitionToService(d *graphexec.Definition) GraphDefinition {
+	out := GraphDefinition{
+		ID:          d.ID,
+		Name:        d.Name,
+		Description: d.Description,
+		Tags:        append([]string(nil), d.Tags...),
+		Entry:       d.Entry,
+		Exit:        d.Exit,
+	}
+	for _, n := range d.Nodes {
+		out.Nodes = append(out.Nodes, n.ID)
+	}
+	for _, e := range d.Edges {
+		if e.Router == nil {
+			out.Edges = append(out.Edges, GraphEdge{
+				From: e.From,
+				To:   mapEndSentinel(e.To),
+				Kind: GraphEdgeStatic,
+			})
+			continue
+		}
+		for _, b := range e.Router.Branches {
+			out.Edges = append(out.Edges, GraphEdge{
+				From:  e.From,
+				To:    mapEndSentinel(b.To),
+				Kind:  GraphEdgeConditional,
+				Label: fmt.Sprintf("%v", b.When),
+			})
+		}
+		if e.Router.Default != "" {
+			out.Edges = append(out.Edges, GraphEdge{
+				From:  e.From,
+				To:    mapEndSentinel(e.Router.Default),
+				Kind:  GraphEdgeConditional,
+				Label: "default",
+			})
+		}
+	}
+	return out
+}
+
+// mapEndSentinel maps the YAML "end" sentinel to the empty string so renderers
+// treat it as a terminal edge without depending on graphexec's constant.
+func mapEndSentinel(to string) string {
+	if to == graphexec.EndNode {
+		return ""
+	}
+	return to
 }
 
 

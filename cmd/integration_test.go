@@ -261,6 +261,13 @@ func (m *mockDefinitionService) ListWorkers(ctx context.Context) ([]service.Work
 func (m *mockDefinitionService) GetWorker(ctx context.Context, id string) (service.Worker, error) {
 	return service.Worker{}, service.ErrNotFound
 }
+func (m *mockDefinitionService) ListGraphs(ctx context.Context) ([]service.GraphDefinition, error) {
+	return nil, nil
+}
+func (m *mockDefinitionService) GetGraph(ctx context.Context, id string) (service.GraphDefinition, error) {
+	return service.GraphDefinition{}, service.ErrNotFound
+}
+
 // mockJobService implements service.JobService
 type mockJobService struct{}
 

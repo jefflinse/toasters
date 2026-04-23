@@ -303,6 +303,44 @@ func (s *Server) getWorker(w http.ResponseWriter, r *http.Request) {
 }
 
 // ---------------------------------------------------------------------------
+// Graphs handlers
+// ---------------------------------------------------------------------------
+
+// listGraphs handles GET /api/v1/graphs.
+func (s *Server) listGraphs(w http.ResponseWriter, r *http.Request) {
+	pg, err := parsePagination(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "bad_request", err.Error())
+		return
+	}
+
+	graphs, err := s.svc.Definitions().ListGraphs(r.Context())
+	if err != nil {
+		handleServiceError(w, r, err)
+		return
+	}
+
+	items := make([]wireGraphDefinition, 0, len(graphs))
+	for _, g := range graphs {
+		items = append(items, graphDefinitionToWire(g))
+	}
+
+	page, total := paginate(items, pg)
+	writeJSON(w, http.StatusOK, PaginatedResponse[wireGraphDefinition]{Items: page, Total: total})
+}
+
+// getGraph handles GET /api/v1/graphs/{id}.
+func (s *Server) getGraph(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	g, err := s.svc.Definitions().GetGraph(r.Context(), id)
+	if err != nil {
+		handleServiceError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, graphDefinitionToWire(g))
+}
+
+// ---------------------------------------------------------------------------
 // Jobs handlers
 // ---------------------------------------------------------------------------
 

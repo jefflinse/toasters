@@ -133,6 +133,14 @@ type DefinitionService interface {
 	// ErrNotFound if the worker does not exist.
 	GetWorker(ctx context.Context, id string) (Worker, error)
 
+	// --- Graphs (read-only) ---
+
+	// ListGraphs returns all loaded graph definitions, ordered by id.
+	ListGraphs(ctx context.Context) ([]GraphDefinition, error)
+
+	// GetGraph returns a single graph definition by id. Returns an error
+	// wrapping ErrNotFound if the graph is not loaded.
+	GetGraph(ctx context.Context, id string) (GraphDefinition, error)
 }
 
 // ---------------------------------------------------------------------------

@@ -109,6 +109,15 @@ type ModelsMsg struct {
 	Err    error
 }
 
+// GraphsMsg carries the current catalog of loaded graph definitions. Produced
+// by fetchGraphs (called at startup and when a graph definition file changes).
+// The TUI caches these by id to resolve task graph_id → topology when
+// rendering the graph map.
+type GraphsMsg struct {
+	Graphs []service.GraphDefinition
+	Err    error
+}
+
 // SessionStartedMsg is sent when a worker session starts on the server.
 // Produced by the event consumer in response to a session.started event.
 type SessionStartedMsg struct {
