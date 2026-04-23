@@ -76,19 +76,8 @@ func onEventSink(ctx context.Context) func(agent.Event) {
 		return nil
 	}
 	return func(ev agent.Event) {
-		switch ev.Kind {
-		case agent.EventKindText:
-			if ev.Text != "" {
-				nc.Sink.BroadcastSessionText(nc.SessionID, ev.Text)
-			}
-		case agent.EventKindReasoning:
-			// Reasoning is rendered separately by the TUI — prefix it so
-			// the existing session-text pipeline can distinguish if it
-			// ever grows a real channel for reasoning. For now, just log
-			// it into the stream so it appears in live output.
-			if ev.Text != "" {
-				nc.Sink.BroadcastSessionText(nc.SessionID, ev.Text)
-			}
+		if ev.Kind == agent.EventKindText && ev.Text != "" {
+			nc.Sink.BroadcastSessionText(nc.SessionID, ev.Text)
 		}
 	}
 }
@@ -119,6 +108,23 @@ func runNode[O any](
 	})
 }
 
+// recordNodeOutput writes the role node's typed output into TaskState.NodeOutputs,
+// keyed by the rhizome node ID injected via NodeContext. This is the edge
+// data-flow carrier that YAML-defined graphs (and any future consumer that
+// reads $node.output.field) will rely on. The existing Artifacts-based flow
+// stays intact for prompt composition.
+//
+// If no NodeContext is set (tests that call a node function directly without
+// going through the executor middleware) we fall back to roleName — so unit
+// tests still see the output under a stable key.
+func recordNodeOutput(ctx context.Context, state *TaskState, roleName string, v any) error {
+	id := roleName
+	if nc := NodeContextFromContext(ctx); nc != nil && nc.Node != "" {
+		id = nc.Node
+	}
+	return state.SetNodeOutput(id, v)
+}
+
 // InvestigateNodeDynamic explores the codebase with read-only tools and
 // writes findings to "investigate.findings".
 func InvestigateNodeDynamic(cfg TemplateConfig) rhizome.NodeFunc[*TaskState] {
@@ -133,6 +139,9 @@ func InvestigateNodeDynamic(cfg TemplateConfig) rhizome.NodeFunc[*TaskState] {
 		case agent.StatusCompleted:
 			state.FinalText = res.Output.Summary
 			state.SetArtifact("investigate.findings", res.Output.Summary)
+			if err := recordNodeOutput(ctx, state, roles.Investigate, res.Output); err != nil {
+				return state, err
+			}
 			return state, nil
 		case agent.StatusNeedsContext:
 			return state, fmt.Errorf("investigate node requested context: %+v", res.Required)
@@ -157,6 +166,9 @@ func PlanNodeDynamic(cfg TemplateConfig) rhizome.NodeFunc[*TaskState] {
 		case agent.StatusCompleted:
 			state.FinalText = res.Output.Summary
 			state.SetArtifact("plan.steps", res.Output.Summary)
+			if err := recordNodeOutput(ctx, state, roles.Plan, res.Output); err != nil {
+				return state, err
+			}
 			return state, nil
 		case agent.StatusNeedsContext:
 			return state, fmt.Errorf("plan node requested context: %+v", res.Required)
@@ -181,6 +193,9 @@ func ImplementNodeDynamic(cfg TemplateConfig) rhizome.NodeFunc[*TaskState] {
 		case agent.StatusCompleted:
 			state.FinalText = res.Output.Summary
 			state.SetArtifact("implement.summary", res.Output.Summary)
+			if err := recordNodeOutput(ctx, state, roles.Implement, res.Output); err != nil {
+				return state, err
+			}
 			return state, nil
 		case agent.StatusNeedsContext:
 			return state, fmt.Errorf("implement node requested context: %+v", res.Required)
@@ -211,6 +226,9 @@ func TestNodeDynamic(cfg TemplateConfig) rhizome.NodeFunc[*TaskState] {
 			} else {
 				state.Status = StatusTestsFailed
 			}
+			if err := recordNodeOutput(ctx, state, roles.Test, res.Output); err != nil {
+				return state, err
+			}
 			return state, nil
 		case agent.StatusNeedsContext:
 			return state, fmt.Errorf("test node requested context: %+v", res.Required)
@@ -240,6 +258,9 @@ func ReviewNodeDynamic(cfg TemplateConfig) rhizome.NodeFunc[*TaskState] {
 				state.Status = StatusReviewApproved
 			} else {
 				state.Status = StatusReviewRejected
+			}
+			if err := recordNodeOutput(ctx, state, roles.Review, res.Output); err != nil {
+				return state, err
 			}
 			return state, nil
 		case agent.StatusNeedsContext:
@@ -276,6 +297,9 @@ func SingleWorkerNode(cfg TemplateConfig, sysPrompt, initialMessage string) rhiz
 			state.FinalText = res.Output.Output
 			state.SetArtifact("work.output", res.Output.Output)
 			state.Status = StatusCompleted
+			if err := recordNodeOutput(ctx, state, "work", res.Output); err != nil {
+				return state, err
+			}
 			return state, nil
 		case agent.StatusNeedsContext:
 			return state, fmt.Errorf("work node requested context: %+v", res.Required)

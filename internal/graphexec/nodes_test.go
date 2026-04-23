@@ -702,6 +702,88 @@ func TestExecutor_BuildToolExecutor_ScopedPerTask(t *testing.T) {
 	}
 }
 
+// --- Typed-output envelope ---
+
+func TestTaskState_SetNodeOutputRoundTrip(t *testing.T) {
+	s := NewTaskState("j", "t", "/w", "mock", "m")
+
+	if err := s.SetNodeOutput("triage", FindingsOutput{Summary: "bug on line 42"}); err != nil {
+		t.Fatalf("SetNodeOutput: %v", err)
+	}
+
+	raw := s.GetNodeOutput("triage")
+	if len(raw) == 0 {
+		t.Fatal("GetNodeOutput returned empty")
+	}
+
+	var got FindingsOutput
+	if err := s.UnmarshalNodeOutput("triage", &got); err != nil {
+		t.Fatalf("UnmarshalNodeOutput: %v", err)
+	}
+	if got.Summary != "bug on line 42" {
+		t.Errorf("Summary = %q, want %q", got.Summary, "bug on line 42")
+	}
+}
+
+func TestTaskState_UnmarshalNodeOutputMissingNode(t *testing.T) {
+	s := NewTaskState("j", "t", "/w", "mock", "m")
+	var got FindingsOutput
+	if err := s.UnmarshalNodeOutput("missing", &got); err == nil {
+		t.Fatal("expected error for missing node output")
+	}
+}
+
+func TestBugFixGraph_PopulatesTypedEnvelope(t *testing.T) {
+	cfg, _ := templateConfig([][]provider.StreamEvent{
+		completeResponse(FindingsOutput{Summary: "finding"}),
+		completeResponse(PlanOutput{Summary: "plan"}),
+		completeResponse(ImplementOutput{Summary: "impl"}),
+		completeResponse(TestOutput{Passed: true, Summary: "pass"}),
+		completeResponse(ReviewOutput{Approved: true, Feedback: "ok"}),
+	})
+
+	graph, err := BugFixGraph(cfg)
+	if err != nil {
+		t.Fatalf("BugFixGraph: %v", err)
+	}
+	state := NewTaskState("j", "t", "/w", "mock", "m")
+	state.SetArtifact("task.description", "fix it")
+
+	result, err := graph.Run(context.Background(), state)
+	if err != nil {
+		t.Fatalf("graph.Run: %v", err)
+	}
+
+	// Every role node should have recorded its typed output in the envelope
+	// under its rhizome node ID. Executed here without middleware, so the
+	// NodeContext fallback uses the role name.
+	var findings FindingsOutput
+	if err := result.UnmarshalNodeOutput("investigator", &findings); err != nil {
+		t.Errorf("investigator output: %v", err)
+	} else if findings.Summary != "finding" {
+		t.Errorf("findings.Summary = %q, want %q", findings.Summary, "finding")
+	}
+
+	var test TestOutput
+	if err := result.UnmarshalNodeOutput("tester", &test); err != nil {
+		t.Errorf("tester output: %v", err)
+	} else if !test.Passed {
+		t.Errorf("test.Passed = false, want true")
+	}
+
+	var review ReviewOutput
+	if err := result.UnmarshalNodeOutput("reviewer", &review); err != nil {
+		t.Errorf("reviewer output: %v", err)
+	} else if !review.Approved {
+		t.Errorf("review.Approved = false, want true")
+	}
+
+	// Old artifacts path still works.
+	if got := result.GetArtifactString("investigate.findings"); got != "finding" {
+		t.Errorf("artifact investigate.findings = %q, want %q", got, "finding")
+	}
+}
+
 // Compile-time interface checks.
 var (
 	_ rhizome.NodeFunc[*TaskState] = SingleWorkerNode(TemplateConfig{}, "", "")

@@ -3,6 +3,11 @@
 // the long-lived session model with bounded, stateless LLM transformers.
 package graphexec
 
+import (
+	"encoding/json"
+	"fmt"
+)
+
 // JobType selects which graph template ExecuteTask will run for a job.
 // The zero value (JobTypeUnset) routes to BugFixGraph — the full
 // investigate → plan → implement → test → review cycle — so untyped jobs
@@ -48,9 +53,23 @@ type TaskState struct {
 
 	// Artifacts holds structured data produced by nodes. Keys are
 	// conventionally namespaced by node (e.g. "investigate.findings",
-	// "plan.steps", "review.feedback"). Values are untyped for v1;
-	// schema validation is a future concern.
+	// "plan.steps", "review.feedback"). Values are untyped — Artifacts
+	// exists to feed the prompt engine with arbitrary string fragments.
+	// Edge data-flow between nodes uses NodeOutputs below.
 	Artifacts map[string]any
+
+	// Inputs is the graph-level input payload, as raw JSON. Populated by
+	// the caller before Execute. Edge expressions that read $graph.input.*
+	// resolve against this.
+	Inputs json.RawMessage
+
+	// NodeOutputs holds each node's terminal typed output as raw JSON,
+	// keyed by node ID. This is the edge data-flow carrier: a downstream
+	// node reads an upstream node's output by unmarshaling into its own
+	// input struct, and edge expressions ($node.output.field) resolve
+	// by decoding the raw JSON. Preserves typing across the state
+	// boundary without locking every node into a single Go struct.
+	NodeOutputs map[string]json.RawMessage
 
 	// Status is set by nodes to guide conditional routing. Routers
 	// inspect this field to decide the next node. Common values:
@@ -78,6 +97,7 @@ func NewTaskState(jobID, taskID, workspaceDir, providerName, model string) *Task
 		ProviderName: providerName,
 		Model:        model,
 		Artifacts:    make(map[string]any),
+		NodeOutputs:  make(map[string]json.RawMessage),
 	}
 }
 
@@ -102,6 +122,44 @@ func (s *TaskState) GetArtifact(key string) any {
 func (s *TaskState) GetArtifactString(key string) string {
 	v, _ := s.GetArtifact(key).(string)
 	return v
+}
+
+// SetNodeOutput marshals v and stores it under nodeID. This is the canonical
+// way for a node to publish its typed terminal output into state so downstream
+// edges and nodes can read it.
+func (s *TaskState) SetNodeOutput(nodeID string, v any) error {
+	raw, err := json.Marshal(v)
+	if err != nil {
+		return fmt.Errorf("marshaling output for node %q: %w", nodeID, err)
+	}
+	if s.NodeOutputs == nil {
+		s.NodeOutputs = make(map[string]json.RawMessage)
+	}
+	s.NodeOutputs[nodeID] = raw
+	return nil
+}
+
+// GetNodeOutput returns the raw JSON published by nodeID, or nil if the node
+// has not run (or produced no output).
+func (s *TaskState) GetNodeOutput(nodeID string) json.RawMessage {
+	if s.NodeOutputs == nil {
+		return nil
+	}
+	return s.NodeOutputs[nodeID]
+}
+
+// UnmarshalNodeOutput decodes the output for nodeID into v. Returns an error
+// if the node has not produced an output yet, or if the payload does not fit
+// the target type.
+func (s *TaskState) UnmarshalNodeOutput(nodeID string, v any) error {
+	raw := s.GetNodeOutput(nodeID)
+	if len(raw) == 0 {
+		return fmt.Errorf("no output recorded for node %q", nodeID)
+	}
+	if err := json.Unmarshal(raw, v); err != nil {
+		return fmt.Errorf("unmarshaling output for node %q: %w", nodeID, err)
+	}
+	return nil
 }
 
 // maxSummaryLen caps the length of task/node summary strings stored in
