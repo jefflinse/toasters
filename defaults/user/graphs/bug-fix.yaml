@@ -1,0 +1,47 @@
+id: bug-fix
+name: Bug Fix
+description: >
+  Investigate the bug, plan a fix, implement it, run tests, and review the
+  result. Retries on test failure or review rejection, bounded by
+  max_iterations.
+tags: [kind:bugfix]
+
+entry: investigate
+exit: review
+max_iterations: 3
+
+nodes:
+  - id: investigate
+    role: investigator
+  - id: plan
+    role: planner
+  - id: implement
+    role: implementer
+  - id: test
+    role: tester
+  - id: review
+    role: reviewer
+
+edges:
+  - from: investigate
+    to: plan
+  - from: plan
+    to: implement
+  - from: implement
+    to: test
+  - from: test
+    router:
+      on: $test.output.passed
+      branches:
+        - when: true
+          to: review
+        - when: false
+          to: implement
+  - from: review
+    router:
+      on: $review.output.approved
+      branches:
+        - when: true
+          to: end
+        - when: false
+          to: implement
