@@ -61,10 +61,14 @@ func (w *Watcher) Start(ctx context.Context) error {
 			if event.Op&fsnotify.Create != 0 {
 				w.maybeWatchNewDir(event.Name)
 			}
-			// React to .md file changes (definitions) and .yaml file changes in providers/.
+			// React to .md file changes (definitions) and .yaml file changes
+			// in providers/ or {system,user}/graphs/.
 			isProviderYAML := strings.HasSuffix(event.Name, ".yaml") &&
 				strings.HasPrefix(event.Name, filepath.Join(w.loader.configDir, "providers"))
-			if strings.HasSuffix(event.Name, ".md") || isProviderYAML {
+			isGraphYAML := strings.HasSuffix(event.Name, ".yaml") &&
+				(strings.HasPrefix(event.Name, filepath.Join(w.loader.configDir, "system", "graphs")) ||
+					strings.HasPrefix(event.Name, filepath.Join(w.loader.configDir, "user", "graphs")))
+			if strings.HasSuffix(event.Name, ".md") || isProviderYAML || isGraphYAML {
 				if !debounceTimer.Stop() {
 					select {
 					case <-debounceTimer.C:
@@ -105,9 +109,11 @@ func (w *Watcher) addWatchDirs() {
 		filepath.Join(configDir, "system"),
 		filepath.Join(configDir, "system", "agents"),
 		filepath.Join(configDir, "system", "skills"),
+		filepath.Join(configDir, "system", "graphs"),
 		filepath.Join(configDir, "user", "skills"),
 		filepath.Join(configDir, "user", "agents"),
 		filepath.Join(configDir, "user", "teams"),
+		filepath.Join(configDir, "user", "graphs"),
 		filepath.Join(configDir, "providers"),
 	}
 

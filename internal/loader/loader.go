@@ -14,8 +14,9 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/jefflinse/toasters/internal/mdfmt"
 	"github.com/jefflinse/toasters/internal/db"
+	"github.com/jefflinse/toasters/internal/graphexec"
+	"github.com/jefflinse/toasters/internal/mdfmt"
 	"github.com/jefflinse/toasters/internal/prompt"
 	"github.com/jefflinse/toasters/internal/provider"
 
@@ -30,6 +31,9 @@ type Loader struct {
 
 	provMu    sync.RWMutex
 	providers []provider.ProviderConfig
+
+	graphsMu sync.RWMutex
+	graphs   []*graphexec.Definition
 }
 
 // New creates a new Loader.
@@ -48,6 +52,16 @@ func (l *Loader) Providers() []provider.ProviderConfig {
 	defer l.provMu.RUnlock()
 	out := make([]provider.ProviderConfig, len(l.providers))
 	copy(out, l.providers)
+	return out
+}
+
+// Graphs returns the most recently loaded graph definitions. User graphs
+// shadow system graphs with the same ID.
+func (l *Loader) Graphs() []*graphexec.Definition {
+	l.graphsMu.RLock()
+	defer l.graphsMu.RUnlock()
+	out := make([]*graphexec.Definition, len(l.graphs))
+	copy(out, l.graphs)
 	return out
 }
 
@@ -101,6 +115,15 @@ func (l *Loader) Load(ctx context.Context) error {
 	l.providers = provs
 	l.provMu.Unlock()
 
+	// 4a. Load graphs from system/graphs/ and user/graphs/. User graphs
+	// shadow system graphs sharing an id.
+	sysGraphs := l.loadGraphs(filepath.Join(l.configDir, "system", "graphs"))
+	userGraphs := l.loadGraphs(filepath.Join(l.configDir, "user", "graphs"))
+	merged := mergeGraphs(sysGraphs, userGraphs)
+	l.graphsMu.Lock()
+	l.graphs = merged
+	l.graphsMu.Unlock()
+
 	// 5. Rebuild database.
 	if err := l.store.RebuildDefinitions(ctx, skills, uWorkers, teams, teamWorkers); err != nil {
 		return fmt.Errorf("rebuilding definitions: %w", err)
@@ -144,6 +167,53 @@ func (l *Loader) loadProviders() []provider.ProviderConfig {
 		configs = append(configs, pc)
 	}
 	return configs
+}
+
+// loadGraphs reads all .yaml files in dir as graphexec.Definitions. Invalid
+// or oversized files are skipped with a warning so one bad graph can't
+// break the whole load.
+func (l *Loader) loadGraphs(dir string) []*graphexec.Definition {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	var graphs []*graphexec.Definition
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".yaml") {
+			continue
+		}
+		path := filepath.Join(dir, e.Name())
+		if info, err := e.Info(); err == nil && info.Size() > maxDefinitionFileSize {
+			slog.Warn("skipping oversized graph file", "path", path, "size", info.Size())
+			continue
+		}
+		def, err := graphexec.LoadDefinition(path)
+		if err != nil {
+			slog.Warn("skipping invalid graph file", "path", path, "error", err)
+			continue
+		}
+		graphs = append(graphs, def)
+	}
+	return graphs
+}
+
+// mergeGraphs composes system and user graph lists, with user entries
+// shadowing system entries of the same id. Preserves user order after
+// appending system entries that survived shadowing.
+func mergeGraphs(system, user []*graphexec.Definition) []*graphexec.Definition {
+	userIDs := make(map[string]struct{}, len(user))
+	for _, g := range user {
+		userIDs[g.ID] = struct{}{}
+	}
+	out := make([]*graphexec.Definition, 0, len(system)+len(user))
+	for _, g := range system {
+		if _, shadowed := userIDs[g.ID]; shadowed {
+			continue
+		}
+		out = append(out, g)
+	}
+	out = append(out, user...)
+	return out
 }
 
 // maxDefinitionFileSize is the maximum size (in bytes) for agent/skill/team
