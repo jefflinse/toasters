@@ -68,6 +68,7 @@ type Config struct {
 	Store                  db.Store
 	SystemEventBroadcaster SystemEventBroadcaster // optional; for broadcasting service events from system tools
 	GraphExecutor          GraphTaskExecutor      // required for task execution — tasks dispatch through the graph engine
+	GraphCatalog           GraphCatalog           // optional; backs the query_graphs system tool
 	Broker                 *hitl.Broker           // required for ask_user; shared with the graph executor so responses route to whichever path is waiting
 	PromptEngine           *prompt.Engine         // prompt engine for role-based prompt composition
 	DefaultProvider        string                 // default provider for system agents
@@ -96,7 +97,17 @@ func New(cfg Config) (*Operator, error) {
 	eventCh := make(chan Event, eventChSize)
 	var systemTools *SystemTools
 	if cfg.Store != nil {
-		systemTools = NewSystemTools(cfg.Store, cfg.PromptEngine, cfg.DefaultProvider, cfg.DefaultModel, eventCh, cfg.WorkDir, cfg.SystemEventBroadcaster, cfg.GraphExecutor)
+		systemTools = NewSystemTools(SystemToolsConfig{
+			Store:           cfg.Store,
+			PromptEngine:    cfg.PromptEngine,
+			DefaultProvider: cfg.DefaultProvider,
+			DefaultModel:    cfg.DefaultModel,
+			EventCh:         eventCh,
+			WorkDir:         cfg.WorkDir,
+			Broadcaster:     cfg.SystemEventBroadcaster,
+			GraphExecutor:   cfg.GraphExecutor,
+			GraphCatalog:    cfg.GraphCatalog,
+		})
 	}
 
 	tools := newOperatorTools(cfg.Runtime, cfg.PromptEngine, cfg.DefaultProvider, cfg.DefaultModel, cfg.Store, systemTools, cfg.WorkDir)

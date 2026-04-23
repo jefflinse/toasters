@@ -98,7 +98,12 @@ func newTestSystemTools(t *testing.T) (*SystemTools, db.Store, *mockGraphExecuto
 
 	workDir := t.TempDir()
 	t.Setenv("HOME", workDir) // Ensure workDir passes home-directory validation
-	st := NewSystemTools(store, engine, "test-provider", "test-model", eventCh, workDir, nil, gExec)
+	st := NewSystemTools(SystemToolsConfig{
+		Store: store, PromptEngine: engine,
+		DefaultProvider: "test-provider", DefaultModel: "test-model",
+		EventCh: eventCh, WorkDir: workDir,
+		GraphExecutor: gExec,
+	})
 	return st, store, gExec, eventCh, workDir
 }
 
@@ -424,10 +429,10 @@ func TestAssignTask_MissingParams(t *testing.T) {
 	assertError(t, err)
 	assertContains(t, err.Error(), "task_id is required")
 
-	// Missing team_id.
+	// Missing both team_id and graph_id.
 	_, err = st.Execute(ctx, "assign_task", json.RawMessage(`{"task_id": "t1"}`))
 	assertError(t, err)
-	assertContains(t, err.Error(), "team_id is required")
+	assertContains(t, err.Error(), "one of team_id or graph_id is required")
 }
 
 func TestQueryTeams(t *testing.T) {
@@ -617,6 +622,7 @@ func TestSystemToolDefinitions(t *testing.T) {
 		"create_task",
 		"assign_task",
 		"query_teams",
+		"query_graphs",
 		"query_job",
 		"query_job_context",
 		"surface_to_user",
@@ -916,7 +922,13 @@ func TestCreateJob_RejectsWorkDirOutsideHome(t *testing.T) {
 	t.Setenv("HOME", fakeHome)
 
 	outsideDir := t.TempDir() // A different temp dir, not under fakeHome.
-	st := NewSystemTools(store, nil, "test-provider", "test-model", eventCh, outsideDir, nil, nil)
+	st := NewSystemTools(SystemToolsConfig{
+		Store:           store,
+		DefaultProvider: "test-provider",
+		DefaultModel:    "test-model",
+		EventCh:         eventCh,
+		WorkDir:         outsideDir,
+	})
 
 	ctx := context.Background()
 	args, _ := json.Marshal(map[string]string{
@@ -940,7 +952,13 @@ func TestCreateJob_AcceptsWorkDirUnderHome(t *testing.T) {
 		t.Fatalf("creating workDir: %v", err)
 	}
 
-	st := NewSystemTools(store, nil, "test-provider", "test-model", eventCh, workDir, nil, nil)
+	st := NewSystemTools(SystemToolsConfig{
+		Store:           store,
+		DefaultProvider: "test-provider",
+		DefaultModel:    "test-model",
+		EventCh:         eventCh,
+		WorkDir:         workDir,
+	})
 
 	ctx := context.Background()
 	args, _ := json.Marshal(map[string]string{
