@@ -65,6 +65,20 @@ func (l *Loader) Graphs() []*graphexec.Definition {
 	return out
 }
 
+// GraphByID returns the graph definition with the given ID, or nil if
+// none is loaded. Satisfies graphexec.GraphSource so *Loader can be
+// passed directly into the executor.
+func (l *Loader) GraphByID(id string) *graphexec.Definition {
+	l.graphsMu.RLock()
+	defer l.graphsMu.RUnlock()
+	for _, g := range l.graphs {
+		if g.ID == id {
+			return g
+		}
+	}
+	return nil
+}
+
 // Load walks all directories, parses definitions, resolves references,
 // and rebuilds the database. It is idempotent.
 func (l *Loader) Load(ctx context.Context) error {

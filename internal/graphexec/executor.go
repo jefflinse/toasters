@@ -16,6 +16,14 @@ import (
 	"github.com/jefflinse/toasters/internal/runtime"
 )
 
+// GraphSource looks up a declarative graph Definition by ID. Implementations
+// are expected to be concurrency-safe and to hot-reload transparently (for
+// instance, backed by *loader.Loader). A nil GraphSource disables the
+// graph-dispatch path — ExecuteTask falls back to the hard-coded templates.
+type GraphSource interface {
+	GraphByID(id string) *Definition
+}
+
 // Executor wraps rhizome graph execution with toasters infrastructure.
 // It resolves providers, applies middleware for events and persistence,
 // and updates task status after execution.
@@ -26,6 +34,8 @@ type Executor struct {
 	store         db.Store
 	eventSink     EventSink
 	broker        *hitl.Broker
+	graphs        GraphSource
+	roles         *RoleRegistry
 	defaultModel  string
 	nodeTimeout   time.Duration
 	retryAttempts int
@@ -70,6 +80,15 @@ type ExecutorConfig struct {
 	// initial call. Values ≤ 1 disable retries. Defaults to rhizome's default
 	// when zero.
 	RetryAttempts int
+
+	// Graphs supplies declarative graph Definitions by ID for the
+	// graph-dispatch path. When nil (or when a TaskRequest has no GraphID),
+	// ExecuteTask falls back to the hard-coded templates.
+	Graphs GraphSource
+
+	// Roles is the role registry used to resolve a YAML node's role: field
+	// at dispatch time. When nil, NewRoleRegistry() is used.
+	Roles *RoleRegistry
 }
 
 // NewExecutor creates an Executor with the given configuration.
@@ -78,6 +97,10 @@ func NewExecutor(cfg ExecutorConfig) *Executor {
 	if retries <= 0 {
 		retries = rhizome.DefaultRetryMaxAttempts
 	}
+	roles := cfg.Roles
+	if roles == nil {
+		roles = NewRoleRegistry()
+	}
 	return &Executor{
 		registry:      cfg.Registry,
 		mcpManager:    cfg.MCPManager,
@@ -85,6 +108,8 @@ func NewExecutor(cfg ExecutorConfig) *Executor {
 		store:         cfg.Store,
 		eventSink:     cfg.EventSink,
 		broker:        cfg.Broker,
+		graphs:        cfg.Graphs,
+		roles:         roles,
 		defaultModel:  cfg.DefaultModel,
 		nodeTimeout:   cfg.NodeTimeout,
 		retryAttempts: retries,
@@ -239,6 +264,10 @@ type TaskRequest struct {
 	TaskID    string
 	TaskTitle string
 	TeamID    string
+	// GraphID, when set, selects a declarative graph Definition by id
+	// from the executor's GraphSource. Takes precedence over JobType —
+	// the hard-coded template path is only used when GraphID is empty.
+	GraphID string
 
 	WorkspaceDir string
 	ProviderName string
@@ -252,8 +281,10 @@ type TaskExecutor interface {
 	ExecuteTask(ctx context.Context, req TaskRequest) error
 }
 
-// ExecuteTask builds the appropriate graph template based on req.JobType,
-// resolves the provider, and runs it.
+// ExecuteTask resolves the provider and picks a graph to run: a declarative
+// graph looked up from the GraphSource when req.GraphID is set, otherwise
+// the hard-coded template matching req.JobType. Both paths share the same
+// state, middleware, and completion handling via e.Execute.
 func (e *Executor) ExecuteTask(ctx context.Context, req TaskRequest) error {
 	prov, ok := e.registry.Get(req.ProviderName)
 	if !ok {
@@ -273,9 +304,9 @@ func (e *Executor) ExecuteTask(ctx context.Context, req TaskRequest) error {
 		Roles:        DefaultRoles(),
 	}
 
-	graph, err := buildGraphForJobType(req.JobType, tmplCfg, req)
+	graph, err := e.resolveGraph(tmplCfg, req)
 	if err != nil {
-		return fmt.Errorf("building graph for job type %q: %w", req.JobType, err)
+		return err
 	}
 
 	state := NewTaskState(req.JobID, req.TaskID, req.WorkspaceDir, req.ProviderName, model)
@@ -284,6 +315,31 @@ func (e *Executor) ExecuteTask(ctx context.Context, req TaskRequest) error {
 	state.SetArtifact("job.description", req.JobDescription)
 
 	return e.Execute(ctx, graph, state, req.TeamID)
+}
+
+// resolveGraph picks the graph to run for req: the declarative graph named
+// by GraphID when set (and when a GraphSource is configured), otherwise the
+// hard-coded template matching JobType.
+func (e *Executor) resolveGraph(tmplCfg TemplateConfig, req TaskRequest) (*rhizome.CompiledGraph[*TaskState], error) {
+	if req.GraphID != "" {
+		if e.graphs == nil {
+			return nil, fmt.Errorf("graph %q requested but no GraphSource configured", req.GraphID)
+		}
+		def := e.graphs.GraphByID(req.GraphID)
+		if def == nil {
+			return nil, fmt.Errorf("graph %q not found", req.GraphID)
+		}
+		compiled, err := Compile(def, tmplCfg, e.roles)
+		if err != nil {
+			return nil, fmt.Errorf("compiling graph %q: %w", req.GraphID, err)
+		}
+		return compiled, nil
+	}
+	graph, err := buildGraphForJobType(req.JobType, tmplCfg, req)
+	if err != nil {
+		return nil, fmt.Errorf("building graph for job type %q: %w", req.JobType, err)
+	}
+	return graph, nil
 }
 
 // buildGraphForJobType picks the template. Untyped jobs default to BugFixGraph
