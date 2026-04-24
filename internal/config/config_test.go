@@ -87,6 +87,100 @@ task_granularity: fine
 	}
 }
 
+// --- ValidGranularity tests ---
+
+func TestValidGranularity_ValidValues(t *testing.T) {
+	for _, v := range []string{"xcoarse", "coarse", "medium", "fine", "xfine"} {
+		if got := ValidGranularity("coarse", v); got != v {
+			t.Errorf("ValidGranularity(coarse, %q) = %q, want %q", v, got, v)
+		}
+		if got := ValidGranularity("fine", v); got != v {
+			t.Errorf("ValidGranularity(fine, %q) = %q, want %q", v, got, v)
+		}
+	}
+}
+
+func TestValidGranularity_InvalidValue_DefaultsToMedium(t *testing.T) {
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	for _, v := range []string{"", "bogus", "MEDIUM"} {
+		if got := ValidGranularity("coarse", v); got != "medium" {
+			t.Errorf("ValidGranularity(coarse, %q) = %q, want %q", v, got, "medium")
+		}
+	}
+}
+
+func TestGranularityLevels_ReturnsDefensiveCopy(t *testing.T) {
+	a := GranularityLevels()
+	if len(a) != 5 {
+		t.Fatalf("expected 5 levels, got %d", len(a))
+	}
+	a[0] = "tampered"
+	b := GranularityLevels()
+	if b[0] == "tampered" {
+		t.Errorf("mutation leaked into second call — caller got a shared slice")
+	}
+}
+
+// --- SetTopLevelScalar round-trip (granularity keys) ---
+
+func TestSetTopLevelScalar_GranularityRoundTrip(t *testing.T) {
+	resetViper(t)
+
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+	configDir := filepath.Join(tmpHome, ".config", "toasters")
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	writeConfigYAML(t, configDir, "task_granularity: moderate\ncoarse_granularity: medium\nfine_granularity: medium\n")
+
+	if err := SetTopLevelScalar(configDir, "fine_granularity", "xfine"); err != nil {
+		t.Fatalf("SetTopLevelScalar(fine_granularity): %v", err)
+	}
+	if err := SetTopLevelScalar(configDir, "coarse_granularity", "xcoarse"); err != nil {
+		t.Fatalf("SetTopLevelScalar(coarse_granularity): %v", err)
+	}
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.FineGranularity != "xfine" {
+		t.Errorf("FineGranularity round-trip: got %q, want %q", cfg.FineGranularity, "xfine")
+	}
+	if cfg.CoarseGranularity != "xcoarse" {
+		t.Errorf("CoarseGranularity round-trip: got %q, want %q", cfg.CoarseGranularity, "xcoarse")
+	}
+}
+
+func TestSetTopLevelScalar_AddsMissingKey(t *testing.T) {
+	resetViper(t)
+
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+	configDir := filepath.Join(tmpHome, ".config", "toasters")
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	// No granularity keys in the starting file.
+	writeConfigYAML(t, configDir, "task_granularity: moderate\n")
+
+	if err := SetTopLevelScalar(configDir, "fine_granularity", "fine"); err != nil {
+		t.Fatalf("SetTopLevelScalar: %v", err)
+	}
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.FineGranularity != "fine" {
+		t.Errorf("got %q, want %q", cfg.FineGranularity, "fine")
+	}
+}
+
 // --- WorkspaceDir tests ---
 
 func TestWorkspaceDir_EmptyString_ReturnsDefault(t *testing.T) {

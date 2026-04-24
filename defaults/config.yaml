@@ -1,6 +1,15 @@
 # Task granularity for team leads: coarse, moderate, fine, atomic
 task_granularity: moderate
 
+# Decomposition granularity. Both levers use the same 5-value enum
+# (coarsest → finest): xcoarse, coarse, medium, fine, xfine.
+#
+# coarse_granularity — how large are the tasks coarse-decompose emits from
+# a job. fine_granularity — how finely fine-decompose slices a task into
+# subtasks / graph nodes.
+coarse_granularity: medium
+fine_granularity: medium
+
 operator:
   provider:
   model:

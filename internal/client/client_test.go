@@ -297,6 +297,12 @@ func (sys *mockSystem) SetOperatorProvider(_ context.Context, _ string, _ string
 func (sys *mockSystem) ListProviderModels(_ context.Context, _ string) ([]service.ModelInfo, error) {
 	return nil, nil
 }
+func (sys *mockSystem) GetSettings(_ context.Context) (service.Settings, error) {
+	return service.Settings{}, nil
+}
+func (sys *mockSystem) UpdateSettings(_ context.Context, _ service.Settings) error {
+	return nil
+}
 
 // ---------------------------------------------------------------------------
 // Test helper: start a real server with a mock service, return a client

@@ -116,6 +116,11 @@ type chatState struct {
 	selectedMsgIdx    int                 // currently selected message index (-1 = none)
 	expandedReasoning map[int]bool        // which entry indices have reasoning expanded
 	collapsedTools    map[int]bool        // true = expanded; absent/false = collapsed (default)
+
+	// queuedMessages holds user messages entered while the operator is
+	// mid-turn. When OperatorDoneMsg arrives, the next queued message is
+	// sent automatically.
+	queuedMessages []string
 }
 
 // Model is the root Bubble Tea model for the toasters TUI.
@@ -155,6 +160,9 @@ type Model struct {
 	// Workers modal state.
 	workersModal workersModalState
 
+	// Settings modal state (/settings).
+	settingsModal settingsModalState
+
 	// MCP modal state.
 	mcpModal mcpModalState
 
@@ -191,6 +199,14 @@ type Model struct {
 
 	lpWidth int // cached left panel width for mouse hit-testing
 	sbWidth int // cached sidebar width for mouse hit-testing
+
+	// lastLeftPanelShown tracks the visibility outcome from the last
+	// resizeComponents call so we can re-run the size math when the left
+	// panel flips between shown/hidden due to state changes (a job or
+	// worker appearing/disappearing) rather than an explicit toggle.
+	// Without this the chat viewport keeps a stale width and the
+	// scrollbar column drifts.
+	lastLeftPanelShown bool
 
 	// Collapsible panel state.
 	leftPanelHidden        bool // true when user has toggled the left panel off via ctrl+l
@@ -322,6 +338,8 @@ func (m *Model) Init() tea.Cmd {
 }
 
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	defer m.syncLeftPanelVisibility()
+
 	var cmds []tea.Cmd
 
 	switch msg := msg.(type) {
@@ -354,6 +372,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Jobs modal key handling — intercept all keys when modal is open.
 		if m.jobsModal.show {
 			return m.updateJobsModal(msg)
+		}
+
+		// Settings modal key handling — intercept all keys when modal is open.
+		if m.settingsModal.show {
+			return m.updateSettingsModal(msg)
 		}
 
 		// Graph map modal key handling — intercept all keys when modal is open.
@@ -712,9 +735,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			// focusOperator, focusChat: handled above or fall through to send.
-			// Send message on Enter when not streaming and input has content.
-			// Shift+enter inserts a newline (handled by textarea).
-			if !m.stream.streaming && strings.TrimSpace(m.input.Value()) != "" {
+			// Shift+enter inserts a newline (handled by textarea). Local
+			// slash commands execute immediately even during an operator
+			// turn; anything else goes to the queue while streaming.
+			if strings.TrimSpace(m.input.Value()) != "" {
 				text := strings.TrimSpace(m.input.Value())
 				switch text {
 				case "/exit", "/quit":
@@ -773,7 +797,22 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.cmdPopup.show = false
 					m.operatorModal = operatorModalState{show: true, loading: true}
 					return m, m.fetchConfiguredProviders()
+				case "/settings":
+					m.input.Reset()
+					m.cmdPopup.show = false
+					m.settingsModal = settingsModalState{show: true, loading: true}
+					return m, m.fetchSettings()
 				}
+
+				// Remaining cases send a message to the operator. If a turn
+				// is already in progress, queue it for auto-send on done.
+				if m.stream.streaming {
+					m.chat.queuedMessages = append(m.chat.queuedMessages, text)
+					m.input.Reset()
+					m.cmdPopup.show = false
+					return m, nil
+				}
+
 				// /job <prompt> — create a new job via the operator LLM.
 				if strings.HasPrefix(text, "/job ") {
 					prompt := strings.TrimSpace(strings.TrimPrefix(text, "/job "))
@@ -796,8 +835,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
-		// Delegate to textarea when not a special key we handle.
-		if !m.stream.streaming {
+		// Delegate to textarea only when the chat pane is focused. Typing
+		// is allowed even while the operator is streaming (the message
+		// will be queued on Enter), but when the user has tabbed over to
+		// a side pane like Jobs, keystrokes should not leak into the
+		// input box.
+		if m.focused == focusChat {
 			var cmd tea.Cmd
 			m.input, cmd = m.input.Update(msg)
 			cmds = append(cmds, cmd)
@@ -964,6 +1007,25 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.refreshOperatorStatus(),
 				m.fetchModels(),
 			)
+		}
+
+	case SettingsLoadedMsg:
+		m.settingsModal.loading = false
+		if msg.Err != nil {
+			m.settingsModal.err = msg.Err
+		} else {
+			m.settingsModal.settings = msg.Settings
+			m.settingsModal.dirty = msg.Settings
+		}
+
+	case SettingsSavedMsg:
+		m.settingsModal.saving = false
+		if msg.Err != nil {
+			m.settingsModal.err = msg.Err
+		} else {
+			m.settingsModal.settings = msg.Settings
+			m.settingsModal.dirty = msg.Settings
+			return m, m.addToast("✓ Settings saved", toastSuccess)
 		}
 
 	case JobsReloadedMsg:
@@ -1375,6 +1437,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.scroll.hasNewMessages = true
 		}
 		cmds = append(cmds, m.input.Focus())
+		// If the user queued messages while the operator was busy, send
+		// the next one automatically.
+		if len(m.chat.queuedMessages) > 0 {
+			next := m.chat.queuedMessages[0]
+			m.chat.queuedMessages = m.chat.queuedMessages[1:]
+			m.input.SetValue(next)
+			cmds = append(cmds, m.sendMessage())
+		}
 		return m, tea.Batch(cmds...)
 
 	case OperatorPromptMsg:
@@ -1403,16 +1473,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case OperatorEventMsg:
 		slog.Debug("operator event", "type", msg.Event.Type)
-		// Render visible operator events as styled system entries in the chat.
-		if line := formatServiceEvent(msg.Event, m.chatViewport.Width()); line != "" {
-			m.appendEntry(service.ChatEntry{
-				Message: service.ChatMessage{
-					Role:    service.MessageRoleAssistant,
-					Content: line,
-				},
-				Timestamp:  time.Now(),
-				ClaudeMeta: "feed-event",
-			})
+		// All job-scoped events (Job*, Task*) collapse into a single
+		// in-place job-update block per job ID. The block mutates as the
+		// job progresses and stays at its original chat position.
+		if m.upsertJobUpdateEntry(msg.Event) != nil {
 			m.updateViewportContent()
 			if !m.scroll.userScrolled {
 				m.chatViewport.GotoBottom()
@@ -1430,6 +1494,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Keep m.jobs in sync so the Jobs panel (which reads m.jobs via
 		// displayJobs) reflects the latest polled state.
 		m.jobs = msg.Jobs
+		// Re-render any job-update blocks with the fresh state — the
+		// discrete JobCompleted / TaskCompleted events race this update,
+		// so the blocks have to catch up here to avoid stale status.
+		if m.refreshJobUpdateEntries() {
+			m.updateViewportContent()
+		}
+		m.syncJobsModalFromProgress()
 		return m, nil
 
 	case logTailTickMsg:
@@ -1518,60 +1589,3 @@ func extractFrontmatterName(content string) string {
 	return ""
 }
 
-// formatServiceEvent returns a styled string for a service.Event,
-// or empty string if the event type should not be displayed in the feed.
-// maxWidth is used to word-wrap long content (e.g. blocker descriptions).
-// This is the service-layer equivalent of formatOperatorEvent (defined in helpers.go).
-func formatServiceEvent(ev service.Event, maxWidth int) string {
-	switch ev.Type {
-	case service.EventTypeJobCreated:
-		if p, ok := ev.Payload.(service.JobCreatedPayload); ok {
-			return FeedTaskStartedStyle.Render(fmt.Sprintf("📋 Job created: %q", p.Title))
-		}
-		return FeedTaskStartedStyle.Render("📋 job created")
-
-	case service.EventTypeTaskCreated:
-		if p, ok := ev.Payload.(service.TaskCreatedPayload); ok {
-			return FeedTaskStartedStyle.Render(fmt.Sprintf("◇ Task created: %q", p.Title))
-		}
-		return FeedTaskStartedStyle.Render("◇ task created")
-
-	case service.EventTypeTaskAssigned:
-		if p, ok := ev.Payload.(service.TaskAssignedPayload); ok {
-			return FeedTaskStartedStyle.Render(fmt.Sprintf("➤ Task %q assigned to %s", p.Title, p.GraphID))
-		}
-		return FeedTaskStartedStyle.Render("➤ task assigned")
-
-	case service.EventTypeTaskStarted:
-		if p, ok := ev.Payload.(service.TaskStartedPayload); ok {
-			return FeedTaskStartedStyle.Render(fmt.Sprintf("⚡ %s started task: %q", p.GraphID, p.Title))
-		}
-		return FeedTaskStartedStyle.Render("⚡ task started")
-
-	case service.EventTypeTaskCompleted:
-		if p, ok := ev.Payload.(service.TaskCompletedPayload); ok {
-			return FeedTaskCompletedStyle.Render(fmt.Sprintf("✓ %s completed task", p.GraphID))
-		}
-		return FeedTaskCompletedStyle.Render("✓ task completed")
-
-	case service.EventTypeTaskFailed:
-		if p, ok := ev.Payload.(service.TaskFailedPayload); ok {
-			return FeedTaskFailedStyle.Render(fmt.Sprintf("✗ %s failed task: %s", p.GraphID, p.Error))
-		}
-		return FeedTaskFailedStyle.Render("✗ task failed")
-
-	case service.EventTypeJobCompleted:
-		if p, ok := ev.Payload.(service.JobCompletedPayload); ok {
-			return FeedJobCompleteStyle.Render(fmt.Sprintf("✅ Job %q complete", p.Title))
-		}
-		return FeedJobCompleteStyle.Render("✅ job complete")
-
-	case service.EventTypeProgressUpdate:
-		// Progress updates are too noisy for the main feed — skip.
-		return ""
-
-	default:
-		slog.Debug("unhandled service event type in feed", "type", ev.Type)
-		return ""
-	}
-}

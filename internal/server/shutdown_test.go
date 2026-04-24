@@ -397,3 +397,9 @@ func (m *shutdownTestSystem) SetOperatorProvider(_ context.Context, _ string, _ 
 func (m *shutdownTestSystem) ListProviderModels(_ context.Context, _ string) ([]service.ModelInfo, error) {
 	return nil, nil
 }
+func (m *shutdownTestSystem) GetSettings(_ context.Context) (service.Settings, error) {
+	return service.Settings{}, nil
+}
+func (m *shutdownTestSystem) UpdateSettings(_ context.Context, _ service.Settings) error {
+	return nil
+}

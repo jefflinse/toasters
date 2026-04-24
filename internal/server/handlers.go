@@ -587,6 +587,30 @@ func (s *Server) getProgress(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, progressStateToWire(ps))
 }
 
+// getSettings handles GET /api/v1/settings.
+func (s *Server) getSettings(w http.ResponseWriter, r *http.Request) {
+	settings, err := s.svc.System().GetSettings(r.Context())
+	if err != nil {
+		handleServiceError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, settings)
+}
+
+// updateSettings handles PUT /api/v1/settings.
+func (s *Server) updateSettings(w http.ResponseWriter, r *http.Request) {
+	var req service.Settings
+	if !decodeBody(w, r, &req) {
+		return
+	}
+	if err := s.svc.System().UpdateSettings(r.Context(), req); err != nil {
+		// Validation errors are user-actionable — 400 rather than the generic 500.
+		writeError(w, http.StatusBadRequest, "bad_request", service.SanitizeErrorMessage(err.Error()))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
 // getLogs handles GET /api/v1/logs.
 func (s *Server) getLogs(w http.ResponseWriter, r *http.Request) {
 	content, err := s.svc.System().GetLogs(r.Context())

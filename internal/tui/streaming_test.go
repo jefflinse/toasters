@@ -47,6 +47,12 @@ func (m *mockSystemService) SetOperatorProvider(_ context.Context, _ string, _ s
 func (m *mockSystemService) ListProviderModels(_ context.Context, _ string) ([]service.ModelInfo, error) {
 	return nil, nil
 }
+func (m *mockSystemService) GetSettings(_ context.Context) (service.Settings, error) {
+	return service.Settings{}, nil
+}
+func (m *mockSystemService) UpdateSettings(_ context.Context, _ service.Settings) error {
+	return nil
+}
 
 // mockDefinitionService implements service.DefinitionService with no-op methods.
 type mockDefinitionService struct{}

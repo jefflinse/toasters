@@ -158,7 +158,13 @@ func (m Model) renderLeftPanel(panelWidth, panelHeight int) string {
 	hasAnyRuntime := len(sortedRT) > 0
 	if hasAnyRuntime {
 		for _, rs := range sortedRT {
-			label := rs.agentName + " · " + rs.jobID
+			// "<short-job-id>:<role>" — e.g. graph:plan for job 67cddf28-… → "67cddf28:plan".
+			role := strings.TrimPrefix(rs.agentName, "graph:")
+			shortJobID := rs.jobID
+			if len(shortJobID) > 8 {
+				shortJobID = shortJobID[:8]
+			}
+			label := shortJobID + ":" + role
 			var statusIcon string
 			if rs.status == "active" {
 				statusIcon = string(spinnerChars[m.spinnerFrame%len(spinnerChars)]) + " "

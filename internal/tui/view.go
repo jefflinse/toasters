@@ -14,6 +14,8 @@ import (
 	"github.com/charmbracelet/glamour/ansi"
 	glamourstyles "github.com/charmbracelet/glamour/styles"
 	xansi "github.com/charmbracelet/x/ansi"
+
+	"github.com/jefflinse/toasters/internal/service"
 )
 
 // loadingBarWidth is the number of cells in the bouncing bar track.
@@ -237,6 +239,15 @@ func (m *Model) View() tea.View {
 		return v
 	}
 
+	// Settings modal takes over the full terminal as a centered overlay.
+	if m.settingsModal.show {
+		settingsView := m.renderSettingsModal()
+		v := tea.NewView(settingsView)
+		v.AltScreen = true
+		v.MouseMode = tea.MouseModeCellMotion
+		return v
+	}
+
 	// Catalog modal takes over the full terminal as a centered overlay.
 	if m.catalogModal.show {
 		catalogView := m.renderCatalogModal()
@@ -377,6 +388,13 @@ func (m *Model) View() tea.View {
 			inputArea = m.renderPromptWidget(mainWidth, inputStyle)
 		} else {
 			inputArea = inputStyle.Width(mainWidth).Render(m.input.View())
+			if n := len(m.chat.queuedMessages); n > 0 {
+				label := fmt.Sprintf("  %d queued · sends when operator finishes", n)
+				if n == 1 {
+					label = "  1 queued · sends when operator finishes"
+				}
+				inputArea = lipgloss.JoinVertical(lipgloss.Left, inputArea, DimStyle.Render(label))
+			}
 		}
 		if flashLine != "" {
 			inputOrStatus = lipgloss.JoinVertical(lipgloss.Left, flashLine, inputArea)
@@ -893,6 +911,7 @@ func (m *Model) ensureMarkdownRenderer() {
 func (m *Model) resizeComponents() {
 	showSidebar := m.width >= minWidthForBar && !m.sidebarHidden
 	showLeftPanel := m.shouldShowLeftPanel()
+	m.lastLeftPanelShown = showLeftPanel
 
 	sbWidth := sidebarWidth(m.width)
 	lpWidth := m.effectiveLeftPanelWidth()
@@ -1047,6 +1066,16 @@ func (m *Model) updateViewportContent() {
 	}
 
 	for i, entry := range m.chat.entries {
+		// Structured entries render from a typed payload, bypassing the
+		// role-based message dispatch.
+		if entry.Kind == service.ChatEntryKindJobUpdate {
+			block := renderJobUpdateBlock(entry.JobUpdate, contentWidth)
+			if block != "" {
+				sb.WriteString(block + "\n\n")
+			}
+			continue
+		}
+
 		msg := entry.Message
 		// Timestamp helper.
 		var ts string

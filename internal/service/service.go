@@ -248,6 +248,15 @@ type SystemService interface {
 	// ListProviderModels returns the models available from a specific configured
 	// provider, queried live from the provider's API.
 	ListProviderModels(ctx context.Context, providerID string) ([]ModelInfo, error)
+
+	// GetSettings returns the current user-editable runtime settings (values
+	// sourced from config.yaml that the /settings surface exposes).
+	GetSettings(ctx context.Context) (Settings, error)
+
+	// UpdateSettings persists the given settings to config.yaml and applies
+	// them to the live service (e.g. refreshing the prompt engine so new
+	// worker runs use the updated values). Invalid enum values are rejected.
+	UpdateSettings(ctx context.Context, s Settings) error
 }
 
 // ---------------------------------------------------------------------------

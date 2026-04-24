@@ -20,7 +20,6 @@ func (m *Model) sendMessage() tea.Cmd {
 	}
 
 	m.input.Reset()
-	m.input.Blur()
 	m.cmdPopup.show = false
 	m.cmdPopup.filteredCmds = nil
 	m.cmdPopup.selectedIdx = 0

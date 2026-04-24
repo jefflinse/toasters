@@ -128,6 +128,12 @@ func runServe(cmd *cobra.Command, args []string) error {
 		slog.Warn("failed to load user prompt definitions", "dir", userDir, "error", err)
 	}
 	promptEngine.SetGlobal("task.granularity", config.ValidTaskGranularity(cfg.TaskGranularity))
+	if err := prompt.ApplyGranularity(promptEngine, "coarse", config.ValidGranularity("coarse", cfg.CoarseGranularity)); err != nil {
+		slog.Warn("failed to apply coarse_granularity", "error", err)
+	}
+	if err := prompt.ApplyGranularity(promptEngine, "fine", config.ValidGranularity("fine", cfg.FineGranularity)); err != nil {
+		slog.Warn("failed to apply fine_granularity", "error", err)
+	}
 	slog.Info("loaded prompt definitions", "roles", len(promptEngine.Roles()))
 
 	// Load definitions from files into DB.
@@ -206,6 +212,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 
 	// Create the LocalService first (without graphExec — it needs svc as EventSink).
 	svc := service.NewLocal(service.LocalConfig{
+		AppConfig:        cfg,
 		Store:            store,
 		Runtime:          rt,
 		MCPManager:       mcpManager,

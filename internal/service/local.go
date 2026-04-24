@@ -82,6 +82,11 @@ const maxHistoryEntries = 1000
 
 // LocalConfig holds the dependencies for LocalService.
 type LocalConfig struct {
+	// AppConfig is the loaded application config, used for serving and
+	// mutating user-editable settings (see GetSettings/UpdateSettings).
+	// Optional — if nil, the settings endpoints return defaults and
+	// UpdateSettings is a no-op that returns an error.
+	AppConfig        *config.Config
 	Store            db.Store
 	Runtime          *runtime.Runtime
 	Operator         *operator.Operator
@@ -1893,6 +1898,74 @@ func (s *LocalService) ListProviderModels(ctx context.Context, providerID string
 		models = append(models, providerModelInfoToService(m))
 	}
 	return models, nil
+}
+
+// GetSettings returns the current user-editable runtime settings. Values are
+// sourced from the in-memory config; if no config is wired (tests), sensible
+// defaults are returned.
+func (s *LocalService) GetSettings(_ context.Context) (Settings, error) {
+	if s.cfg.AppConfig == nil {
+		return Settings{
+			CoarseGranularity: config.ValidGranularity("coarse", ""),
+			FineGranularity:   config.ValidGranularity("fine", ""),
+		}, nil
+	}
+	return Settings{
+		CoarseGranularity: config.ValidGranularity("coarse", s.cfg.AppConfig.CoarseGranularity),
+		FineGranularity:   config.ValidGranularity("fine", s.cfg.AppConfig.FineGranularity),
+	}, nil
+}
+
+// UpdateSettings validates, persists, and applies the given settings.
+// Persistence writes to config.yaml in place; applying refreshes the prompt
+// engine so new worker runs pick up the change immediately. Every granularity
+// lever is validated before any write, so a bad value on one field leaves
+// the rest untouched.
+func (s *LocalService) UpdateSettings(_ context.Context, next Settings) error {
+	if s.cfg.AppConfig == nil {
+		return fmt.Errorf("settings unavailable: no app config loaded")
+	}
+	type lever struct {
+		kind     string // "coarse" or "fine"
+		yamlKey  string
+		incoming string
+		set      func(string)
+	}
+	levers := []lever{
+		{
+			kind:     "coarse",
+			yamlKey:  "coarse_granularity",
+			incoming: next.CoarseGranularity,
+			set:      func(v string) { s.cfg.AppConfig.CoarseGranularity = v },
+		},
+		{
+			kind:     "fine",
+			yamlKey:  "fine_granularity",
+			incoming: next.FineGranularity,
+			set:      func(v string) { s.cfg.AppConfig.FineGranularity = v },
+		},
+	}
+
+	// Validate first, write second — so an invalid field doesn't leave
+	// config.yaml half-updated.
+	for _, l := range levers {
+		if normalized := config.ValidGranularity(l.kind, l.incoming); normalized != l.incoming {
+			return fmt.Errorf("invalid %s %q", l.yamlKey, l.incoming)
+		}
+	}
+
+	for _, l := range levers {
+		if err := config.SetTopLevelScalar(s.cfg.ConfigDir, l.yamlKey, l.incoming); err != nil {
+			return fmt.Errorf("persisting %s: %w", l.yamlKey, err)
+		}
+		l.set(l.incoming)
+		if s.cfg.PromptEngine != nil {
+			if err := prompt.ApplyGranularity(s.cfg.PromptEngine, l.kind, l.incoming); err != nil {
+				slog.Warn("failed to refresh granularity instruction", "kind", l.kind, "error", err)
+			}
+		}
+	}
+	return nil
 }
 
 // startOperator creates and starts a new operator, replacing any existing one.

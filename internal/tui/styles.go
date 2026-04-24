@@ -33,8 +33,11 @@ var (
 			Padding(1, 1)
 
 	// ChatAreaStyle is used for the main chat message area.
+	// No left padding: user-message block borders and assistant indents
+	// render from col 0 so the block's left border (▌) lines up with the
+	// input area's thick left border (┃).
 	ChatAreaStyle = lipgloss.NewStyle().
-			Padding(1, 1, 0, 1)
+			Padding(1, 1, 0, 0)
 
 	// InputAreaStyle is used for the message input region.
 	// Thick left accent border (┃), thin top/bottom/right (─/│), proper corners.
@@ -71,21 +74,24 @@ var (
 				Foreground(ColorUser)
 
 	// UserMsgBlockStyle styles the user message content block.
+	// Left padding of 1 puts text inside the block at col 2 (border ▌ at col
+	// 0, space at col 1, text at col 2) so it aligns with where the user's
+	// input cursor sits in the input area.
 	UserMsgBlockStyle = lipgloss.NewStyle().
 				Background(ColorUserBg).
 				Foreground(compat.AdaptiveColor{Light: lipgloss.Color("232"), Dark: lipgloss.Color("252")}).
 				Border(lipgloss.ThickBorder(), false, false, false, true).
 				BorderForeground(ColorUserBorder).
-				Padding(1, 2)
+				Padding(1, 2, 1, 1)
 
 	// AssistantMsgStyle styles assistant message text.
 	AssistantMsgStyle = lipgloss.NewStyle().
 				Foreground(ColorAssistant)
 
 	// AssistantMsgIndent is the left padding (in columns) applied to assistant
-	// messages so their text aligns with user-message text inside the bordered
-	// block (border width + horizontal padding).
-	AssistantMsgIndent = 3
+	// messages so their text lands at the same column as the input area's
+	// text cursor (thick border + one space of padding = col 2).
+	AssistantMsgIndent = 2
 
 	// StreamingStyle styles the streaming indicator.
 	StreamingStyle = lipgloss.NewStyle().
@@ -297,6 +303,33 @@ var (
 	dbTaskFailedStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))  // red
 	dbTaskBlockedStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("11")) // yellow
 	dbTaskCancelledStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+
+	// JobBlockStyle is the base style for a job-update chat block. The
+	// border color is swapped per job status at render time.
+	JobBlockStyle = lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			Padding(0, 1)
+
+	// Status-accented border colors for the job block.
+	JobBlockBorderActive    = compat.AdaptiveColor{Light: lipgloss.Color("39"), Dark: lipgloss.Color("39")}   // cyan
+	JobBlockBorderDone      = compat.AdaptiveColor{Light: lipgloss.Color("34"), Dark: lipgloss.Color("76")}   // green
+	JobBlockBorderFailed    = compat.AdaptiveColor{Light: lipgloss.Color("196"), Dark: lipgloss.Color("196")} // red
+	JobBlockBorderBlocked   = compat.AdaptiveColor{Light: lipgloss.Color("208"), Dark: lipgloss.Color("214")} // amber
+	JobBlockBorderPaused    = compat.AdaptiveColor{Light: lipgloss.Color("245"), Dark: lipgloss.Color("245")} // grey
+	JobBlockBorderCancelled = compat.AdaptiveColor{Light: lipgloss.Color("240"), Dark: lipgloss.Color("240")} // dim
+
+	// JobBlockTitleStyle emphasizes the job title.
+	JobBlockTitleStyle = lipgloss.NewStyle().Bold(true)
+	// JobBlockMetaStyle dims the second-line metadata.
+	JobBlockMetaStyle = lipgloss.NewStyle().Foreground(ColorDim)
+	// JobBlockStatusDoneStyle styles the word "done" / "complete".
+	JobBlockStatusDoneStyle = lipgloss.NewStyle().Foreground(JobBlockBorderDone).Bold(true)
+	// JobBlockStatusFailedStyle styles failure words in the header.
+	JobBlockStatusFailedStyle = lipgloss.NewStyle().Foreground(JobBlockBorderFailed).Bold(true)
+	// JobBlockStatusBlockedStyle styles the word "blocked".
+	JobBlockStatusBlockedStyle = lipgloss.NewStyle().Foreground(JobBlockBorderBlocked).Bold(true)
+	// JobBlockStatusActiveStyle styles the word "running".
+	JobBlockStatusActiveStyle = lipgloss.NewStyle().Foreground(JobBlockBorderActive)
 
 	// Activity feed entry styles.
 	FeedSystemEventStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Italic(true)

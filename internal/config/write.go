@@ -45,6 +45,45 @@ func AddProvider(configDir string, entry ProviderEntry) error {
 	return nil
 }
 
+// SetTopLevelScalar updates (or creates) a top-level scalar key in config.yaml,
+// preserving unrelated content. Intended for simple runtime-editable settings
+// like coarse_granularity and fine_granularity. The value is not validated
+// here — callers should normalize first.
+func SetTopLevelScalar(configDir, key, value string) error {
+	configPath := filepath.Join(configDir, "config.yaml")
+
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return fmt.Errorf("reading config: %w", err)
+	}
+
+	var root yaml.Node
+	if err := yaml.Unmarshal(data, &root); err != nil {
+		return fmt.Errorf("parsing config: %w", err)
+	}
+
+	if root.Kind != yaml.DocumentNode || len(root.Content) == 0 {
+		return fmt.Errorf("config.yaml has unexpected structure")
+	}
+	rootMap := root.Content[0]
+	if rootMap.Kind != yaml.MappingNode {
+		return fmt.Errorf("config.yaml root is not a mapping")
+	}
+
+	setMappingValue(rootMap, key, value)
+
+	out, err := yaml.Marshal(&root)
+	if err != nil {
+		return fmt.Errorf("marshaling config: %w", err)
+	}
+
+	if err := os.WriteFile(configPath, out, 0o600); err != nil {
+		return fmt.Errorf("writing config: %w", err)
+	}
+
+	return nil
+}
+
 // SetOperatorProvider updates the operator.provider field in config.yaml.
 func SetOperatorProvider(configDir, providerID, model string) error {
 	configPath := filepath.Join(configDir, "config.yaml")

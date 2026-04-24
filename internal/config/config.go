@@ -16,12 +16,14 @@ import (
 // Providers are no longer stored here — they live in providers/*.yaml files
 // and are loaded by the Loader.
 type Config struct {
-	WorkspaceDir    string         `mapstructure:"workspace_dir"`
-	DatabasePath    string         `mapstructure:"database_path"`
-	TaskGranularity string         `mapstructure:"task_granularity"`
-	Operator        OperatorConfig `mapstructure:"operator"`
-	Agents          AgentsConfig   `mapstructure:"agents"`
-	MCP             MCPConfig      `mapstructure:"mcp"`
+	WorkspaceDir      string         `mapstructure:"workspace_dir"`
+	DatabasePath      string         `mapstructure:"database_path"`
+	TaskGranularity   string         `mapstructure:"task_granularity"`
+	CoarseGranularity string         `mapstructure:"coarse_granularity"`
+	FineGranularity   string         `mapstructure:"fine_granularity"`
+	Operator          OperatorConfig `mapstructure:"operator"`
+	Agents            AgentsConfig   `mapstructure:"agents"`
+	MCP               MCPConfig      `mapstructure:"mcp"`
 }
 
 // MCPServerConfig holds configuration for a single MCP server.
@@ -77,6 +79,8 @@ func Load() (*Config, error) {
 	viper.SetDefault("operator.model", "")
 	viper.SetDefault("operator.teams_dir", filepath.Join(home, ".config", "toasters", "user", "teams"))
 	viper.SetDefault("task_granularity", "moderate")
+	viper.SetDefault("coarse_granularity", "medium")
+	viper.SetDefault("fine_granularity", "medium")
 	viper.SetDefault("agents.defaults.provider", "")
 	viper.SetDefault("agents.defaults.model", "")
 
@@ -109,6 +113,32 @@ func ValidTaskGranularity(value string) string {
 		slog.Warn("invalid task_granularity, defaulting to moderate", "value", value)
 		return "moderate"
 	}
+}
+
+// granularityLevels lists the shared preset levels used by both
+// coarse_granularity and fine_granularity. Ordered from coarsest (most work
+// per output unit) to finest (least work per output unit).
+var granularityLevels = []string{"xcoarse", "coarse", "medium", "fine", "xfine"}
+
+// GranularityLevels returns the allowed granularity values in order from
+// coarsest to finest. Used by coarse_granularity and fine_granularity.
+func GranularityLevels() []string {
+	out := make([]string, len(granularityLevels))
+	copy(out, granularityLevels)
+	return out
+}
+
+// ValidGranularity returns value if it is one of the recognized granularity
+// presets. Otherwise it logs a warning (tagged with kind, e.g. "coarse" or
+// "fine") and returns "medium".
+func ValidGranularity(kind, value string) string {
+	for _, v := range granularityLevels {
+		if v == value {
+			return value
+		}
+	}
+	slog.Warn("invalid granularity, defaulting to medium", "kind", kind, "value", value)
+	return "medium"
 }
 
 // isPlaintextKey returns true if key is a non-empty API key value that does

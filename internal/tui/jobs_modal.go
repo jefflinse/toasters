@@ -41,6 +41,61 @@ func (m *Model) loadJobsForModal() {
 	m.jobsModal.jobs = jobs
 }
 
+// syncJobsModalFromProgress refreshes the modal's jobs/tasks/progress
+// snapshots from the model's live progress state (fed by progressPollMsg)
+// so a long-open modal reflects task progress without re-polling the
+// service. Selection is preserved by ID; if the previously selected job
+// or task is gone, the index clamps to 0.
+func (m *Model) syncJobsModalFromProgress() {
+	if !m.jobsModal.show {
+		return
+	}
+
+	var selectedJobID, selectedTaskID string
+	if len(m.jobsModal.jobs) > 0 && m.jobsModal.jobIdx < len(m.jobsModal.jobs) {
+		selectedJobID = m.jobsModal.jobs[m.jobsModal.jobIdx].ID
+		if tasks := m.jobsModal.tasks[selectedJobID]; len(tasks) > 0 && m.jobsModal.taskIdx < len(tasks) {
+			selectedTaskID = tasks[m.jobsModal.taskIdx].ID
+		}
+	}
+
+	m.jobsModal.jobs = m.progress.jobs
+	if m.jobsModal.tasks == nil {
+		m.jobsModal.tasks = make(map[string][]service.Task)
+	}
+	for id, ts := range m.progress.tasks {
+		m.jobsModal.tasks[id] = ts
+	}
+	if m.jobsModal.progress == nil {
+		m.jobsModal.progress = make(map[string][]service.ProgressReport)
+	}
+	for id, rs := range m.progress.reports {
+		m.jobsModal.progress[id] = rs
+	}
+
+	m.jobsModal.jobIdx = 0
+	if selectedJobID != "" {
+		for i, j := range m.jobsModal.jobs {
+			if j.ID == selectedJobID {
+				m.jobsModal.jobIdx = i
+				break
+			}
+		}
+	}
+
+	m.jobsModal.taskIdx = 0
+	if selectedJobID != "" && selectedTaskID != "" {
+		if tasks := m.jobsModal.tasks[selectedJobID]; len(tasks) > 0 {
+			for i, t := range tasks {
+				if t.ID == selectedTaskID {
+					m.jobsModal.taskIdx = i
+					break
+				}
+			}
+		}
+	}
+}
+
 // loadJobDetail loads tasks and recent progress for the currently selected job.
 func (m *Model) loadJobDetail() {
 	if m.jobsModal.tasks == nil {

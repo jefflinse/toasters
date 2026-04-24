@@ -33,17 +33,15 @@ break the work into the right shape and size.
 
 {{ instructions.task-specificity }}
 
-Each task must be narrow enough for a local LLM to complete in a single
-bounded execution. Favor many small tasks over few large ones.
+### Granularity target
+
+{{ instructions.coarse-granularity }}
 
 - **Too broad:** "Implement CRUD endpoints for users"
 - **Right size:** "Implement the POST /users handler with request validation"
 
 - **Too broad:** "Add authentication"
 - **Right size:** "Add JWT token validation middleware to the HTTP router"
-
-3–7 tasks is typical. If you're producing more than 10, consider whether
-some tasks can be merged or whether the job should be split further.
 
 ## Dependencies
 
