@@ -197,9 +197,10 @@ var (
 				PaddingLeft(1).PaddingRight(1)
 
 	// UnfocusedPaneStyle wraps a left-panel pane that does not have keyboard focus.
+	// Uses a hidden border so layout metrics (border size + padding) match
+	// FocusedPaneStyle and focus changes don't shift surrounding content.
 	UnfocusedPaneStyle = lipgloss.NewStyle().
-				Border(lipgloss.RoundedBorder()).
-				BorderForeground(ColorBorder).
+				Border(lipgloss.HiddenBorder()).
 				PaddingLeft(1).PaddingRight(1)
 
 	// JobSelectedStyle styles the currently selected job.

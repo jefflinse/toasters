@@ -456,7 +456,7 @@ func (m *Model) setFocus(p focusedPanel) tea.Cmd {
 		return nil
 	}
 	m.focused = p
-	if p == focusJobs || p == focusAgents || p == focusOperator || p == focusMCP {
+	if p == focusJobs || p == focusAgents {
 		m.focusAnimPanel = p
 		m.focusAnimFrames = 13 // ~1s at 80ms/tick
 		// Only arm the ticker if it isn't already running — firing a second
@@ -491,14 +491,23 @@ func (m *Model) newSession() {
 	m.input.Focus()
 }
 
+// recentCompletedJobsWindow bounds how far back the Jobs pane surfaces
+// jobs in a terminal state (completed / failed / cancelled). Anything
+// older than this falls off the list.
+const recentCompletedJobsWindow = 24 * time.Hour
+
+// maxCompletedWorkersInPane caps how many non-active runtime sessions the
+// Workers pane shows. Active sessions are always shown.
+const maxCompletedWorkersInPane = 3
+
 // displayJobs returns the filtered and sorted list of jobs for display in the left panel.
 // Rules:
-//   - Completed, failed, and cancelled jobs updated more than 24 hours ago are hidden.
+//   - Completed, failed, and cancelled jobs updated more than recentCompletedJobsWindow ago are hidden.
 //   - Sort order: Active first (by CreatedAt asc), then Paused (by CreatedAt asc),
 //     then Completed/Failed/Cancelled (by CreatedAt asc).
 func (m Model) displayJobs() []service.Job {
 	now := time.Now()
-	cutoff := now.Add(-24 * time.Hour)
+	cutoff := now.Add(-recentCompletedJobsWindow)
 
 	var active, paused, done []service.Job
 	for _, j := range m.jobs {
@@ -557,6 +566,70 @@ func (m *Model) sortedRuntimeSessions() []*runtimeSlot {
 		return strings.Compare(a.sessionID, b.sessionID) // stable tiebreaker
 	})
 	return slots
+}
+
+// displayRuntimeSessions returns the runtime sessions filtered for display
+// in the Workers pane: every active session, plus at most
+// maxCompletedWorkersInPane most-recently-ended non-active sessions.
+// Ordering matches sortedRuntimeSessions (active first by start time, then
+// terminal sessions by start time), so rendering code doesn't need to care.
+func (m *Model) displayRuntimeSessions() []*runtimeSlot {
+	all := m.sortedRuntimeSessions()
+
+	// Split active vs. terminal while preserving their existing order.
+	active := make([]*runtimeSlot, 0, len(all))
+	terminal := make([]*runtimeSlot, 0, len(all))
+	for _, rs := range all {
+		if rs.status == "active" {
+			active = append(active, rs)
+		} else {
+			terminal = append(terminal, rs)
+		}
+	}
+
+	if len(terminal) > maxCompletedWorkersInPane {
+		// Keep the most recently finished ones. Fall back to startTime when
+		// endTime is zero so sessions that never recorded an end still sort
+		// sensibly.
+		recencyOf := func(rs *runtimeSlot) time.Time {
+			if !rs.endTime.IsZero() {
+				return rs.endTime
+			}
+			return rs.startTime
+		}
+		slices.SortFunc(terminal, func(a, b *runtimeSlot) int {
+			// Most recent first.
+			return recencyOf(b).Compare(recencyOf(a))
+		})
+		terminal = terminal[:maxCompletedWorkersInPane]
+		// Re-sort the kept slice back to start-time ascending so pane
+		// ordering matches what sortedRuntimeSessions would have produced.
+		slices.SortFunc(terminal, func(a, b *runtimeSlot) int {
+			if c := a.startTime.Compare(b.startTime); c != 0 {
+				return c
+			}
+			return strings.Compare(a.sessionID, b.sessionID)
+		})
+	}
+
+	return append(active, terminal...)
+}
+
+// shouldShowLeftPanel reports whether the left panel (Jobs + Workers) should
+// be rendered. The panel is hidden when the user has toggled it off, when
+// the terminal is too narrow, or when there is nothing to show in either
+// pane.
+func (m *Model) shouldShowLeftPanel() bool {
+	if m.leftPanelHidden || m.width < minWidthForLeftPanel {
+		return false
+	}
+	if len(m.displayJobs()) > 0 {
+		return true
+	}
+	if len(m.displayRuntimeSessions()) > 0 {
+		return true
+	}
+	return false
 }
 
 // runtimeSessionsForTask returns all runtime sessions associated with the given task ID,

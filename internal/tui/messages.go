@@ -51,11 +51,9 @@ func (m *Model) addToast(message string, level toastLevel) tea.Cmd {
 type focusedPanel int
 
 const (
-	focusChat     focusedPanel = iota
-	focusJobs     focusedPanel = iota
-	focusAgents   focusedPanel = iota
-	focusOperator focusedPanel = iota
-	focusMCP      focusedPanel = iota
+	focusChat   focusedPanel = iota
+	focusJobs   focusedPanel = iota
+	focusAgents focusedPanel = iota
 )
 
 // SessionStats tracks session-level statistics displayed in the sidebar.

@@ -290,7 +290,7 @@ func (m *Model) View() tea.View {
 	}
 
 	showSidebar := m.width >= minWidthForBar && !m.sidebarHidden
-	showLeftPanel := m.width >= minWidthForLeftPanel && !m.leftPanelHidden
+	showLeftPanel := m.shouldShowLeftPanel()
 
 	sbWidth := sidebarWidth(m.width)
 	lpWidth := m.effectiveLeftPanelWidth()
@@ -892,7 +892,7 @@ func (m *Model) ensureMarkdownRenderer() {
 // resizeComponents recalculates sizes for viewport and textarea after a resize.
 func (m *Model) resizeComponents() {
 	showSidebar := m.width >= minWidthForBar && !m.sidebarHidden
-	showLeftPanel := m.width >= minWidthForLeftPanel && !m.leftPanelHidden
+	showLeftPanel := m.shouldShowLeftPanel()
 
 	sbWidth := sidebarWidth(m.width)
 	lpWidth := m.effectiveLeftPanelWidth()
