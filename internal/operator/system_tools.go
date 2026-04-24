@@ -117,46 +117,6 @@ func (st *SystemTools) Definitions() []runtime.ToolDef {
 			}`),
 		},
 		{
-			Name:        "create_task",
-			Description: "Create a new task on a job. Tasks are individual steps within a job; pre-assign one to a graph by setting graph_id (optional).",
-			Parameters: json.RawMessage(`{
-				"type": "object",
-				"properties": {
-					"job_id": {
-						"type": "string",
-						"description": "ID of the job this task belongs to"
-					},
-					"title": {
-						"type": "string",
-						"description": "Short title for the task"
-					},
-					"graph_id": {
-						"type": "string",
-						"description": "Graph to pre-assign the task to (optional). Use query_graphs to list available graphs."
-					}
-				},
-				"required": ["job_id", "title"]
-			}`),
-		},
-		{
-			Name:        "assign_task",
-			Description: "Assign a pending task to a graph. This dispatches the task to the graph execution engine. The task must be in pending status.",
-			Parameters: json.RawMessage(`{
-				"type": "object",
-				"properties": {
-					"task_id": {
-						"type": "string",
-						"description": "ID of the task to assign"
-					},
-					"graph_id": {
-						"type": "string",
-						"description": "ID of the graph to run the task through. Use query_graphs to list available graphs."
-					}
-				},
-				"required": ["task_id", "graph_id"]
-			}`),
-		},
-		{
 			Name:        "query_graphs",
 			Description: "List all available graphs with their ids, names, descriptions, and tags. Graphs are declarative, user-defined pipelines that execute a specific class of work — pick one before creating a task to target it (create_task graph_id, assign_task graph_id).",
 			Parameters: json.RawMessage(`{
@@ -224,20 +184,6 @@ func (st *SystemTools) Definitions() []runtime.ToolDef {
 				"required": ["job_id", "content"]
 			}`),
 		},
-		{
-			Name:        "start_job",
-			Description: "Start execution of a job. Finds the first pending task with a pre-assigned team and assigns it. Call this after creating all tasks to kick off work.",
-			Parameters: json.RawMessage(`{
-				"type": "object",
-				"properties": {
-					"job_id": {
-						"type": "string",
-						"description": "ID of the job to start"
-					}
-				},
-				"required": ["job_id"]
-			}`),
-		},
 	}
 }
 
@@ -246,9 +192,11 @@ func (st *SystemTools) Execute(ctx context.Context, name string, args json.RawMe
 	switch name {
 	case "create_job":
 		return st.createJob(ctx, args)
-	case "create_task":
-		return st.createTask(ctx, args)
 	case "assign_task":
+		// Retained for internal use by the operator event loop's
+		// assignNextTask, which dispatches the next ready task via the
+		// same graph-dispatch code path the retired LLM tool used. Not
+		// exposed in Definitions() — no LLM surface for it.
 		return st.assignTask(ctx, args)
 	case "query_graphs":
 		return st.queryGraphs()
@@ -260,8 +208,6 @@ func (st *SystemTools) Execute(ctx context.Context, name string, args json.RawMe
 		return st.surfaceToUser(ctx, args)
 	case "save_work_request":
 		return st.saveWorkRequest(ctx, args)
-	case "start_job":
-		return st.startJob(ctx, args)
 	default:
 		return "", fmt.Errorf("%w: %s", runtime.ErrUnknownTool, name)
 	}
@@ -362,51 +308,6 @@ func (st *SystemTools) createJob(ctx context.Context, args json.RawMessage) (str
 	}
 
 	result, err := json.Marshal(map[string]string{"job_id": job.ID})
-	if err != nil {
-		return "", fmt.Errorf("marshaling result: %w", err)
-	}
-	return string(result), nil
-}
-
-func (st *SystemTools) createTask(ctx context.Context, args json.RawMessage) (string, error) {
-	var params struct {
-		JobID   string `json:"job_id"`
-		Title   string `json:"title"`
-		GraphID string `json:"graph_id"`
-	}
-	if err := json.Unmarshal(args, &params); err != nil {
-		return "", fmt.Errorf("parsing create_task args: %w", err)
-	}
-
-	if params.JobID == "" {
-		return "", fmt.Errorf("job_id is required")
-	}
-	if params.Title == "" {
-		return "", fmt.Errorf("title is required")
-	}
-
-	taskID, err := uuid.NewV4()
-	if err != nil {
-		return "", fmt.Errorf("generating task ID: %w", err)
-	}
-
-	task := &db.Task{
-		ID:      taskID.String(),
-		JobID:   params.JobID,
-		Title:   params.Title,
-		Status:  db.TaskStatusPending,
-		GraphID: params.GraphID,
-	}
-
-	if err := st.store.CreateTask(ctx, task); err != nil {
-		return "", fmt.Errorf("creating task: %w", err)
-	}
-
-	if st.broadcaster != nil {
-		st.broadcaster.BroadcastTaskCreated(task.ID, task.JobID, task.Title, task.GraphID)
-	}
-
-	result, err := json.Marshal(map[string]string{"task_id": task.ID})
 	if err != nil {
 		return "", fmt.Errorf("marshaling result: %w", err)
 	}
@@ -714,33 +615,3 @@ func (st *SystemTools) saveWorkRequest(ctx context.Context, args json.RawMessage
 	return fmt.Sprintf("Work request saved to %s", contractHome(wrPath)), nil
 }
 
-func (st *SystemTools) startJob(ctx context.Context, args json.RawMessage) (string, error) {
-	var params struct {
-		JobID string `json:"job_id"`
-	}
-	if err := json.Unmarshal(args, &params); err != nil {
-		return "", fmt.Errorf("parsing start_job args: %w", err)
-	}
-	if params.JobID == "" {
-		return "", fmt.Errorf("job_id is required")
-	}
-
-	// Find the first pending task with a pre-assigned team.
-	tasks, err := st.store.ListTasksForJob(ctx, params.JobID)
-	if err != nil {
-		return "", fmt.Errorf("listing tasks: %w", err)
-	}
-
-	for _, task := range tasks {
-		if task.Status == db.TaskStatusPending && task.GraphID != "" {
-			// Delegate to assignTask which handles graph dispatch, status updates, and events.
-			assignArgs, _ := json.Marshal(map[string]string{
-				"task_id":  task.ID,
-				"graph_id": task.GraphID,
-			})
-			return st.assignTask(ctx, assignArgs)
-		}
-	}
-
-	return "", fmt.Errorf("no pending tasks with pre-assigned graphs found in job %s", params.JobID)
-}

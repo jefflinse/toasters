@@ -4,6 +4,7 @@ description: Writes and runs Go tests for the implemented changes.
 mode: worker
 output: test-result
 access: write
+max_turns: 50
 ---
 
 Your training data is in the past.

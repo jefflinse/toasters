@@ -34,6 +34,16 @@ type EventSink interface {
 	// SessionID convention is "graph:<TaskID>:<Node>" so the TUI's existing
 	// runtimeSlot pipeline picks it up without a special case.
 	BroadcastSessionText(sessionID, text string)
+	// BroadcastSessionToolCall carries a tool call the model issued inside
+	// a graph node. Routes through the same session.tool_call event type
+	// that worker sessions use, so the TUI's grid cards and output panel
+	// render graph-node activity without per-source special cases.
+	BroadcastSessionToolCall(sessionID, callID, name string, args json.RawMessage)
+	// BroadcastSessionToolResult carries the dispatched tool's output.
+	// CallID may be empty for graph nodes (mycelium's agent.Event does
+	// not carry the originating call id on tool-result events); the TUI
+	// renders results inline without requiring a pairing id.
+	BroadcastSessionToolResult(sessionID, callID, name, result, errMsg string)
 }
 
 type nodeContextKey struct{}

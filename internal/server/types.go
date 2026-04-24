@@ -66,11 +66,6 @@ type RespondToPromptRequest struct {
 	Response string `json:"response"`
 }
 
-// RespondToBlockerRequest is the body for POST /api/v1/operator/blockers/{jobId}/{taskId}/respond.
-type RespondToBlockerRequest struct {
-	Answers []string `json:"answers"`
-}
-
 // CreateSkillRequest is the body for POST /api/v1/skills.
 type CreateSkillRequest struct {
 	Name string `json:"name"`
@@ -785,14 +780,6 @@ type wireTaskFailedPayload struct {
 	Error   string `json:"error"`
 }
 
-type wireBlockerReportedPayload struct {
-	TaskID      string   `json:"task_id"`
-	GraphID     string   `json:"graph_id"`
-	WorkerID    string   `json:"worker_id"`
-	Description string   `json:"description"`
-	Questions   []string `json:"questions,omitempty"`
-}
-
 type wireJobCompletedPayload struct {
 	JobID   string `json:"job_id"`
 	Title   string `json:"title"`
@@ -931,11 +918,6 @@ func eventPayloadToWire(ev service.Event) any {
 		}
 	case service.TaskFailedPayload:
 		return wireTaskFailedPayload{TaskID: p.TaskID, JobID: p.JobID, GraphID: p.GraphID, Error: p.Error}
-	case service.BlockerReportedPayload:
-		return wireBlockerReportedPayload{
-			TaskID: p.TaskID, GraphID: p.GraphID, WorkerID: p.WorkerID,
-			Description: p.Description, Questions: p.Questions,
-		}
 	case service.JobCompletedPayload:
 		return wireJobCompletedPayload{JobID: p.JobID, Title: p.Title, Summary: p.Summary}
 	case service.ProgressUpdatePayload:

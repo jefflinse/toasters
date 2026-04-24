@@ -202,19 +202,6 @@ func (s *remoteOperatorService) History(ctx context.Context) ([]service.ChatEntr
 	return entries, nil
 }
 
-func (s *remoteOperatorService) RespondToBlocker(ctx context.Context, jobID string, taskID string, answers []string) error {
-	resp, err := s.c.http.post(ctx, fmt.Sprintf("/api/v1/operator/blockers/%s/%s/respond", url.PathEscape(jobID), url.PathEscape(taskID)), struct {
-		Answers []string `json:"answers"`
-	}{Answers: answers})
-	if err != nil {
-		return fmt.Errorf("respond to blocker: %w", err)
-	}
-	if err := decodeNoContent(resp); err != nil {
-		return fmt.Errorf("respond to blocker: %w", err)
-	}
-	return nil
-}
-
 // ---------------------------------------------------------------------------
 // DefinitionService
 // ---------------------------------------------------------------------------

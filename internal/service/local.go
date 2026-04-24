@@ -521,21 +521,6 @@ func (s *LocalService) BroadcastOperatorEvent(ev operator.Event) {
 			},
 		})
 
-	case operator.EventBlockerReported:
-		payload, ok := ev.Payload.(operator.BlockerReportedPayload)
-		if !ok {
-			return
-		}
-		s.broadcast(Event{
-			Type: EventTypeBlockerReported,
-			Payload: BlockerReportedPayload{
-				TaskID:      payload.TaskID,
-				GraphID:     payload.GraphID,
-				WorkerID:    payload.WorkerID,
-				Description: payload.Description,
-			},
-		})
-
 	case operator.EventJobComplete:
 		payload, ok := ev.Payload.(operator.JobCompletePayload)
 		if !ok {
@@ -729,6 +714,45 @@ func (s *LocalService) BroadcastSessionText(sessionID, text string) {
 		Type:      EventTypeSessionText,
 		SessionID: sessionID,
 		Payload:   SessionTextPayload{Text: text},
+	})
+}
+
+// BroadcastSessionToolCall emits a session.tool_call event for a graph
+// node, reusing the same event type the runtime emits for worker
+// sessions so the TUI renders graph activity identically.
+func (s *LocalService) BroadcastSessionToolCall(sessionID, callID, name string, args json.RawMessage) {
+	if name == "" {
+		return
+	}
+	s.broadcast(Event{
+		Type:      EventTypeSessionToolCall,
+		SessionID: sessionID,
+		Payload: SessionToolCallPayload{
+			ToolCall: ToolCall{
+				ID:        callID,
+				Name:      name,
+				Arguments: args,
+			},
+		},
+	})
+}
+
+// BroadcastSessionToolResult emits a session.tool_result event for a
+// graph node. CallID may be empty — mycelium's tool-result events do
+// not carry the originating call id, and the TUI tolerates an empty
+// CallID (it only uses the string for optional pairing).
+func (s *LocalService) BroadcastSessionToolResult(sessionID, callID, name, result, errMsg string) {
+	s.broadcast(Event{
+		Type:      EventTypeSessionToolResult,
+		SessionID: sessionID,
+		Payload: SessionToolResultPayload{
+			Result: ToolCallResult{
+				CallID: callID,
+				Name:   name,
+				Result: result,
+				Error:  errMsg,
+			},
+		},
 	})
 }
 
@@ -1106,39 +1130,6 @@ func (s *LocalService) History(ctx context.Context) ([]ChatEntry, error) {
 		})
 	}
 	return out, nil
-}
-
-// RespondToBlocker submits the user's answers to a blocker reported by an agent.
-func (s *LocalService) RespondToBlocker(ctx context.Context, jobID, taskID string, answers []string) error {
-	// Validate number of answers before checking operator configuration.
-	if len(answers) > maxBlockerAnswers {
-		return fmt.Errorf("too many answers: %d exceeds maximum %d", len(answers), maxBlockerAnswers)
-	}
-
-	// Validate each answer size before checking operator configuration.
-	for i, answer := range answers {
-		if len(answer) > maxResponseLen {
-			return fmt.Errorf("answer %d too large: %d bytes exceeds maximum %d", i, len(answer), maxResponseLen)
-		}
-	}
-
-	if s.cfg.Operator == nil {
-		return fmt.Errorf("operator not configured")
-	}
-
-	// Format the answers into a structured message for the operator.
-	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("Blocker response for job %s, task %s:\n", jobID, taskID))
-	for i, answer := range answers {
-		sb.WriteString(fmt.Sprintf("Answer %d: %s\n", i+1, answer))
-	}
-
-	return s.cfg.Operator.Send(ctx, operator.Event{
-		Type: operator.EventUserResponse,
-		Payload: operator.UserResponsePayload{
-			Text: sb.String(),
-		},
-	})
 }
 
 // ---------------------------------------------------------------------------

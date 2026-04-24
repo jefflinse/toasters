@@ -236,29 +236,6 @@ func (o *Operator) handleEvent(ctx context.Context, ev Event) {
 			payload.TaskID, payload.GraphID, payload.Error)
 		o.sendToLLM(ctx, msg)
 
-	case EventBlockerReported:
-		// Surface the blocker to the user and send to LLM for triage.
-		payload, ok := ev.Payload.(BlockerReportedPayload)
-		if !ok {
-			slog.Error("invalid payload for blocker_reported event", "payload", ev.Payload)
-			return
-		}
-		content := fmt.Sprintf("🚫 %s reported blocker: %s", payload.GraphID, payload.Description)
-		o.postFeedEntry(ctx, db.FeedEntryBlockerReported, content, "")
-		slog.Warn("blocker reported", "task_id", payload.TaskID, "graph_id", payload.GraphID, "worker_id", payload.WorkerID, "description", payload.Description)
-
-		// Surface directly to the user so they see it immediately.
-		if o.tools != nil && o.tools.systemTools != nil {
-			surfaceMsg := fmt.Sprintf("⚠️ **Blocker reported by %s:**\n\n%s\n\nPlease respond with guidance on how to proceed, or I will consult the blocker-handler to attempt resolution.",
-				payload.GraphID, payload.Description)
-			surfaceArgs, _ := json.Marshal(map[string]string{"text": surfaceMsg})
-			_, _ = o.tools.systemTools.Execute(ctx, "surface_to_user", surfaceArgs)
-		}
-
-		msg := fmt.Sprintf("Graph %s (task %q) reported a blocker: %s\n\nPlease triage this blocker and decide how to resolve it. Consider consulting the blocker-handler agent.",
-			payload.GraphID, payload.TaskID, payload.Description)
-		o.sendToLLM(ctx, msg)
-
 	case EventProgressUpdate:
 		// Mechanical: DB update already done by tool handler. Debug log only.
 		payload, ok := ev.Payload.(ProgressUpdatePayload)

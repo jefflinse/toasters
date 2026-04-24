@@ -903,41 +903,6 @@ func TestBroadcastOperatorEvent_TaskFailed(t *testing.T) {
 	}
 }
 
-func TestBroadcastOperatorEvent_BlockerReported(t *testing.T) {
-	t.Parallel()
-
-	svc := newTestService(t)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	ch := svc.subscribe(ctx)
-
-	svc.BroadcastOperatorEvent(operator.Event{
-		Type: operator.EventBlockerReported,
-		Payload: operator.BlockerReportedPayload{
-			TaskID:      "task-4",
-			GraphID:     "team-4",
-			WorkerID:    "agent-4",
-			Description: "blocked on X",
-		},
-	})
-
-	select {
-	case ev := <-ch:
-		if ev.Type != EventTypeBlockerReported {
-			t.Errorf("Type = %q, want %q", ev.Type, EventTypeBlockerReported)
-		}
-		payload, ok := ev.Payload.(BlockerReportedPayload)
-		if !ok {
-			t.Fatalf("Payload type = %T, want BlockerReportedPayload", ev.Payload)
-		}
-		if payload.Description != "blocked on X" {
-			t.Errorf("Description = %q, want %q", payload.Description, "blocked on X")
-		}
-	case <-time.After(time.Second):
-		t.Fatal("timed out")
-	}
-}
-
 func TestBroadcastOperatorEvent_JobComplete(t *testing.T) {
 	t.Parallel()
 
@@ -1356,95 +1321,6 @@ func TestRespondToPrompt_ResponseAtLimit(t *testing.T) {
 	// Should NOT be a size error.
 	if strings.Contains(err.Error(), "too large") {
 		t.Errorf("response at limit should not trigger size error, got: %q", err.Error())
-	}
-}
-
-func TestRespondToBlocker_TooManyAnswers(t *testing.T) {
-	t.Parallel()
-
-	svc := newTestService(t)
-
-	// Create more answers than maxBlockerAnswers (50).
-	answers := make([]string, maxBlockerAnswers+1)
-	for i := range answers {
-		answers[i] = "answer"
-	}
-
-	err := svc.RespondToBlocker(context.Background(), "job-1", "task-1", answers)
-	if err == nil {
-		t.Fatal("expected error for too many answers")
-	}
-	if !strings.Contains(err.Error(), "too many answers") {
-		t.Errorf("error = %q, want 'too many answers'", err.Error())
-	}
-	if !strings.Contains(err.Error(), fmt.Sprintf("%d", maxBlockerAnswers+1)) {
-		t.Errorf("error should include actual count %d, got: %q", maxBlockerAnswers+1, err.Error())
-	}
-	if !strings.Contains(err.Error(), fmt.Sprintf("%d", maxBlockerAnswers)) {
-		t.Errorf("error should include max count %d, got: %q", maxBlockerAnswers, err.Error())
-	}
-}
-
-func TestRespondToBlocker_AnswerTooLarge(t *testing.T) {
-	t.Parallel()
-
-	svc := newTestService(t)
-
-	// Create answers where one exceeds maxResponseLen (51200 bytes).
-	answers := []string{
-		"small answer",
-		strings.Repeat("y", maxResponseLen+1),
-		"another small answer",
-	}
-
-	err := svc.RespondToBlocker(context.Background(), "job-1", "task-1", answers)
-	if err == nil {
-		t.Fatal("expected error for oversized answer")
-	}
-	if !strings.Contains(err.Error(), "answer 1 too large") {
-		t.Errorf("error = %q, want 'answer 1 too large'", err.Error())
-	}
-	if !strings.Contains(err.Error(), fmt.Sprintf("%d", maxResponseLen+1)) {
-		t.Errorf("error should include actual size %d, got: %q", maxResponseLen+1, err.Error())
-	}
-	if !strings.Contains(err.Error(), fmt.Sprintf("%d", maxResponseLen)) {
-		t.Errorf("error should include max size %d, got: %q", maxResponseLen, err.Error())
-	}
-}
-
-func TestRespondToBlocker_AnswersAtLimit(t *testing.T) {
-	t.Parallel()
-
-	svc := newTestService(t)
-
-	// Create exactly maxBlockerAnswers answers, each at max size.
-	// This should be rejected by nil operator, not size validation.
-	answers := make([]string, maxBlockerAnswers)
-	for i := range answers {
-		answers[i] = strings.Repeat("z", maxResponseLen)
-	}
-
-	err := svc.RespondToBlocker(context.Background(), "job-1", "task-1", answers)
-	if err == nil {
-		t.Fatal("expected error (nil operator)")
-	}
-	// Should NOT be a size/count error.
-	if strings.Contains(err.Error(), "too large") || strings.Contains(err.Error(), "too many") {
-		t.Errorf("answers at limits should not trigger size/count error, got: %q", err.Error())
-	}
-}
-
-func TestRespondToBlocker_NilOperator(t *testing.T) {
-	t.Parallel()
-
-	svc := newTestService(t)
-
-	err := svc.RespondToBlocker(context.Background(), "job-1", "task-1", []string{"answer"})
-	if err == nil {
-		t.Fatal("expected error for nil operator")
-	}
-	if !strings.Contains(err.Error(), "operator not configured") {
-		t.Errorf("error = %q, want 'operator not configured'", err.Error())
 	}
 }
 

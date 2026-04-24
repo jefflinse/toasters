@@ -27,17 +27,6 @@ func toolHandlers() map[string]toolHandler {
 			}
 			return mcp.NewToolResultText(result), nil
 		},
-		"report_blocker": func(ctx context.Context, store db.Store, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			var params ReportBlockerParams
-			if err := req.BindArguments(&params); err != nil {
-				return mcp.NewToolResultError(fmt.Sprintf("invalid arguments: %v", err)), nil
-			}
-			result, err := ReportBlocker(ctx, store, params)
-			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
-			}
-			return mcp.NewToolResultText(result), nil
-		},
 		"update_task_status": func(ctx context.Context, store db.Store, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			var params UpdateTaskStatusParams
 			if err := req.BindArguments(&params); err != nil {

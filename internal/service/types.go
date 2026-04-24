@@ -564,32 +564,3 @@ type HealthStatus struct {
 	Uptime  time.Duration // time since the service started
 }
 
-// ---------------------------------------------------------------------------
-// Blocker types (used in the blocker modal)
-// ---------------------------------------------------------------------------
-
-// BlockerQuestion is a single question posed by a blocked worker, optionally
-// with a set of predefined answer choices. If Options is empty the user
-// provides a free-form text answer.
-type BlockerQuestion struct {
-	Text    string   // the question text
-	Options []string // suggested answers; empty means free-form
-	Answer  string   // the user's answer, populated after submission
-}
-
-// Blocker represents an active blocker reported by a worker that requires
-// user input before work can continue. It is the canonical type used by both
-// the service layer and the TUI blocker modal.
-type Blocker struct {
-	JobID          string
-	TaskID         string
-	GraphID        string
-	WorkerID       string
-	BlockerSummary string // short summary of what is blocked
-	Context        string // additional context from the worker
-	WhatWasTried   string // what the worker already attempted
-	WhatIsNeeded   string // what the worker needs to proceed
-	Questions      []BlockerQuestion
-	Answered       bool
-	RawBody        string // raw markdown body from the report_blocker tool call
-}

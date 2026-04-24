@@ -342,6 +342,12 @@ func (m *mockEventSink) BroadcastPrompt(requestID, question string, _ []string, 
 func (m *mockEventSink) BroadcastSessionText(sessionID, text string) {
 	m.record(fmt.Sprintf("session_text:%s:%s", sessionID, text))
 }
+func (m *mockEventSink) BroadcastSessionToolCall(sessionID, _, name string, _ json.RawMessage) {
+	m.record(fmt.Sprintf("session_tool_call:%s:%s", sessionID, name))
+}
+func (m *mockEventSink) BroadcastSessionToolResult(sessionID, _, name, _, _ string) {
+	m.record(fmt.Sprintf("session_tool_result:%s:%s", sessionID, name))
+}
 
 func TestExecutor_Execute(t *testing.T) {
 	cfg, _ := templateConfig(t, [][]provider.StreamEvent{
@@ -383,6 +389,53 @@ func TestExecutor_Execute(t *testing.T) {
 	}
 	if !has("graph_completed:") {
 		t.Error("expected graph_completed event")
+	}
+}
+
+func TestExecutor_Execute_ForwardsSessionToolEvents(t *testing.T) {
+	// Model issues one read_file call then terminates via complete.
+	cfg, _ := templateConfig(t, [][]provider.StreamEvent{
+		toolCallResponse("call-1", "read_file", `{"path":"main.go"}`),
+		summaryResp("done"),
+	})
+	cfg.ToolExecutor = &mockToolExecutor{
+		handler: func(_ context.Context, _ string, _ json.RawMessage) (string, error) {
+			return "package main", nil
+		},
+		defs: []tooldef.ToolDef{{Name: "read_file", Description: "r"}},
+	}
+
+	graph, err := Compile(&Definition{
+		ID:    "solo",
+		Entry: "work",
+		Nodes: []Node{{ID: "work", Role: "investigator"}},
+		Edges: []Edge{{From: "work", To: EndNode}},
+	}, cfg, nil)
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+
+	sink := &mockEventSink{}
+	executor := NewExecutor(ExecutorConfig{EventSink: sink})
+	state := NewTaskState("job-1", "task-1", "/workspace", "mock", "test-model")
+	if err := executor.Execute(context.Background(), graph, state, "test-team"); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	events := sink.snapshot()
+	hasPrefix := func(prefix string) bool {
+		for _, e := range events {
+			if strings.HasPrefix(e, prefix) {
+				return true
+			}
+		}
+		return false
+	}
+	if !hasPrefix("session_tool_call:graph:task-1:work:read_file") {
+		t.Errorf("missing session_tool_call event; got %v", events)
+	}
+	if !hasPrefix("session_tool_result:graph:task-1:work:read_file") {
+		t.Errorf("missing session_tool_result event; got %v", events)
 	}
 }
 

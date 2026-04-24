@@ -74,12 +74,6 @@ type OperatorService interface {
 	// Returns entries in chronological order (oldest first).
 	// The history is bounded to the most recent maxHistoryEntries entries.
 	History(ctx context.Context) ([]ChatEntry, error)
-
-	// RespondToBlocker submits the user's answers to a blocker reported by a worker.
-	// The answers are formatted and sent to the operator as a user response event.
-	// jobID and taskID identify the blocked task; answers correspond to the blocker's
-	// Questions in order.
-	RespondToBlocker(ctx context.Context, jobID, taskID string, answers []string) error
 }
 
 // ---------------------------------------------------------------------------

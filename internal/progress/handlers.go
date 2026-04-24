@@ -17,15 +17,6 @@ type ReportTaskProgressParams struct {
 	Message  string `json:"message"`
 }
 
-// ReportBlockerParams holds parameters for the report_blocker tool.
-type ReportBlockerParams struct {
-	JobID       string `json:"job_id"`
-	TaskID      string `json:"task_id"`
-	WorkerID    string `json:"worker_id"`
-	Description string `json:"description"`
-	Severity    string `json:"severity"` // "low", "medium", "high"
-}
-
 // UpdateTaskStatusParams holds parameters for the update_task_status tool.
 type UpdateTaskStatusParams struct {
 	JobID   string `json:"job_id"`
@@ -85,30 +76,6 @@ func ReportTaskProgress(ctx context.Context, store db.Store, params ReportTaskPr
 		return "", fmt.Errorf("reporting progress: %w", err)
 	}
 	return "progress reported", nil
-}
-
-// validSeverities is the set of accepted severity values for report_blocker.
-var validSeverities = map[string]bool{"low": true, "medium": true, "high": true}
-
-// ReportBlocker records a blocker that prevents a worker from proceeding.
-func ReportBlocker(ctx context.Context, store db.Store, params ReportBlockerParams) (string, error) {
-	if params.JobID == "" {
-		return "", fmt.Errorf("job_id is required")
-	}
-	if !validSeverities[params.Severity] {
-		return "", fmt.Errorf("invalid severity %q: must be one of low, medium, high", params.Severity)
-	}
-	report := &db.ProgressReport{
-		JobID:    params.JobID,
-		TaskID:   params.TaskID,
-		WorkerID: params.WorkerID,
-		Status:   "blocked",
-		Message:  fmt.Sprintf("[%s] %s", params.Severity, params.Description),
-	}
-	if err := store.ReportProgress(ctx, report); err != nil {
-		return "", fmt.Errorf("reporting blocker: %w", err)
-	}
-	return "blocker reported", nil
 }
 
 // validTaskStatuses is the set of accepted task status values.

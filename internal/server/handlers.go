@@ -18,12 +18,9 @@ const maxMessageBytes = 100_000
 // Strictly below the service layer's 51200 byte limit.
 const maxPromptBytes = 10_000
 
-// maxResponseBytes is the maximum allowed prompt/blocker response length in bytes.
+// maxResponseBytes is the maximum allowed prompt response length in bytes.
 // Strictly below the service layer's 51200 byte limit.
 const maxResponseBytes = 50_000
-
-// maxBlockerAnswers is the maximum number of blocker answers allowed.
-const maxBlockerAnswers = 50
 
 // validJobStatuses is the set of valid job status filter values.
 var validJobStatuses = map[string]bool{
@@ -124,49 +121,6 @@ func (s *Server) operatorHistory(w http.ResponseWriter, r *http.Request) {
 		Items: wireEntries,
 		Total: len(wireEntries),
 	})
-}
-
-// respondToBlocker handles POST /api/v1/operator/blockers/{jobId}/{taskId}/respond.
-func (s *Server) respondToBlocker(w http.ResponseWriter, r *http.Request) {
-	jobID := r.PathValue("jobId")
-	taskID := r.PathValue("taskId")
-	if jobID == "" || taskID == "" {
-		writeError(w, http.StatusBadRequest, "bad_request", "jobId and taskId are required")
-		return
-	}
-
-	var req RespondToBlockerRequest
-	if !decodeBody(w, r, &req) {
-		return
-	}
-	if len(req.Answers) == 0 {
-		writeError(w, http.StatusBadRequest, "bad_request", "answers array is required and must not be empty")
-		return
-	}
-	if len(req.Answers) > maxBlockerAnswers {
-		writeError(w, http.StatusBadRequest, "bad_request",
-			fmt.Sprintf("too many answers: %d exceeds maximum %d", len(req.Answers), maxBlockerAnswers))
-		return
-	}
-	for i, a := range req.Answers {
-		if strings.TrimSpace(a) == "" {
-			writeError(w, http.StatusBadRequest, "bad_request",
-				fmt.Sprintf("answer at index %d must not be empty", i))
-			return
-		}
-		if len(a) > maxResponseBytes {
-			writeError(w, http.StatusBadRequest, "bad_request",
-				fmt.Sprintf("answer at index %d too long: %d bytes exceeds maximum %d", i, len(a), maxResponseBytes))
-			return
-		}
-	}
-
-	if err := s.svc.Operator().RespondToBlocker(r.Context(), jobID, taskID, req.Answers); err != nil {
-		handleServiceError(w, r, err)
-		return
-	}
-
-	w.WriteHeader(http.StatusNoContent)
 }
 
 // ---------------------------------------------------------------------------

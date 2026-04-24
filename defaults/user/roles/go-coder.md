@@ -4,6 +4,7 @@ description: Implements and fixes Go code according to input requirements.
 mode: worker
 output: summary
 access: write
+max_turns: 50
 ---
 
 Your training data is in the past.

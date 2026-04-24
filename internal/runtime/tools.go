@@ -189,16 +189,6 @@ func (ct *CoreTools) Execute(ctx context.Context, name string, args json.RawMess
 			params.WorkerID = ct.workerID
 		}
 		return progress.ReportTaskProgress(ctx, ct.store, params)
-	case "report_blocker":
-		var params progress.ReportBlockerParams
-		if err := json.Unmarshal(args, &params); err != nil {
-			return "", fmt.Errorf("parsing report_blocker args: %w", err)
-		}
-		params.JobID, params.TaskID = ct.normalizeProgressIDs(params.JobID, params.TaskID)
-		if params.WorkerID == "" {
-			params.WorkerID = ct.workerID
-		}
-		return progress.ReportBlocker(ctx, ct.store, params)
 	case "update_task_status":
 		var params progress.UpdateTaskStatusParams
 		if err := json.Unmarshal(args, &params); err != nil {

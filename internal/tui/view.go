@@ -255,15 +255,6 @@ func (m *Model) View() tea.View {
 		return v
 	}
 
-	// Blocker modal takes over the full terminal as a centered overlay.
-	if m.blockerModal.show {
-		blockerView := m.renderBlockerModal()
-		v := tea.NewView(blockerView)
-		v.AltScreen = true
-		v.MouseMode = tea.MouseModeCellMotion
-		return v
-	}
-
 	// Log view takes over the full terminal.
 	if m.logView.show {
 		v := tea.NewView(m.renderLogView())

@@ -387,14 +387,6 @@ type wireTaskFailedPayload struct {
 	Error   string `json:"error"`
 }
 
-type wireBlockerReportedPayload struct {
-	TaskID      string   `json:"task_id"`
-	GraphID     string   `json:"graph_id"`
-	WorkerID    string   `json:"worker_id"`
-	Description string   `json:"description"`
-	Questions   []string `json:"questions,omitempty"`
-}
-
 type wireJobCompletedPayload struct {
 	JobID   string `json:"job_id"`
 	Title   string `json:"title"`
@@ -975,19 +967,6 @@ func parseSSEPayload(eventType string, raw json.RawMessage) (any, error) {
 			JobID:   w.JobID,
 			GraphID: w.GraphID,
 			Error:   w.Error,
-		}, nil
-
-	case service.EventTypeBlockerReported:
-		var w wireBlockerReportedPayload
-		if err := json.Unmarshal(raw, &w); err != nil {
-			return nil, fmt.Errorf("decoding blocker.reported payload: %w", err)
-		}
-		return service.BlockerReportedPayload{
-			TaskID:      w.TaskID,
-			GraphID:     w.GraphID,
-			WorkerID:    w.WorkerID,
-			Description: w.Description,
-			Questions:   w.Questions,
 		}, nil
 
 	case service.EventTypeJobCompleted:

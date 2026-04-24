@@ -127,14 +127,14 @@ func TestNewMCPServer_NotNil(t *testing.T) {
 	}
 }
 
-func TestNewMCPServer_HasSixTools(t *testing.T) {
+func TestNewMCPServer_HasFiveTools(t *testing.T) {
 	t.Parallel()
 	store := openTestStore(t)
 	s := NewMCPServer(store)
 
 	tools := s.ListTools()
-	if len(tools) != 6 {
-		t.Errorf("server has %d tools, want 6", len(tools))
+	if len(tools) != 5 {
+		t.Errorf("server has %d tools, want 5", len(tools))
 	}
 }
 
@@ -145,7 +145,6 @@ func TestNewMCPServer_ToolNames(t *testing.T) {
 
 	wantTools := []string{
 		"report_task_progress",
-		"report_blocker",
 		"update_task_status",
 		"request_review",
 		"query_job_context",
@@ -185,8 +184,8 @@ func TestMCPServer_ListTools(t *testing.T) {
 		t.Fatalf("result has no 'tools' array: %v", result)
 	}
 
-	if len(toolsList) != 6 {
-		t.Errorf("ListTools returned %d tools, want 6", len(toolsList))
+	if len(toolsList) != 5 {
+		t.Errorf("ListTools returned %d tools, want 5", len(toolsList))
 	}
 
 	// Collect tool names from the response.
@@ -203,7 +202,6 @@ func TestMCPServer_ListTools(t *testing.T) {
 
 	wantNames := []string{
 		"report_task_progress",
-		"report_blocker",
 		"update_task_status",
 		"request_review",
 		"query_job_context",
@@ -252,41 +250,6 @@ func TestMCPServer_ReportTaskProgress(t *testing.T) {
 	}
 	if reports[0].Message != "making progress" {
 		t.Errorf("Message = %q, want %q", reports[0].Message, "making progress")
-	}
-}
-
-func TestMCPServer_ReportBlocker(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	store := openTestStore(t)
-
-	createTestJob(t, ctx, store, "job-mcp-rb")
-
-	send, cleanup := startTestServer(t, store)
-	defer cleanup()
-
-	text, isError := callTool(t, send, 3, "report_blocker", map[string]any{
-		"job_id":      "job-mcp-rb",
-		"description": "cannot connect to database",
-		"severity":    "high",
-	})
-
-	if isError {
-		t.Fatalf("tool returned error: %s", text)
-	}
-	if text != "blocker reported" {
-		t.Errorf("result text = %q, want %q", text, "blocker reported")
-	}
-
-	reports, err := store.GetRecentProgress(ctx, "job-mcp-rb", 10)
-	if err != nil {
-		t.Fatalf("GetRecentProgress: %v", err)
-	}
-	if len(reports) != 1 {
-		t.Fatalf("expected 1 report, got %d", len(reports))
-	}
-	if reports[0].Status != "blocked" {
-		t.Errorf("Status = %q, want %q", reports[0].Status, "blocked")
 	}
 }
 
@@ -536,8 +499,8 @@ func TestMCPServer_ViaTestHelper(t *testing.T) {
 		t.Fatalf("no result in response: %v", resp)
 	}
 	toolsList, _ := result["tools"].([]any)
-	if len(toolsList) != 6 {
-		t.Errorf("expected 6 tools, got %d", len(toolsList))
+	if len(toolsList) != 5 {
+		t.Errorf("expected 5 tools, got %d", len(toolsList))
 	}
 
 	// Call report_task_progress and verify it persists.

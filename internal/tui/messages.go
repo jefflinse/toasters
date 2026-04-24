@@ -259,12 +259,6 @@ func (m *Model) showScrollbar() tea.Cmd {
 	return scrollbarHide()
 }
 
-// blockerAnswersSubmittedMsg is sent when the user has submitted answers for a blocker.
-type blockerAnswersSubmittedMsg struct {
-	jobID   string
-	blocker *service.Blocker
-}
-
 // MCPStatusMsg is sent after MCP connection completes to trigger startup toasts.
 type MCPStatusMsg struct {
 	Servers []service.MCPServerStatus

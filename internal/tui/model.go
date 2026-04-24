@@ -81,15 +81,6 @@ type outputModalState struct {
 	sessionID string // runtime session ID being viewed
 }
 
-// blockerModalState holds all state for the blocker Q&A modal.
-type blockerModalState struct {
-	show        bool
-	jobID       string
-	blocker     *service.Blocker
-	questionIdx int
-	inputText   string
-}
-
 // cmdPopupState holds all state for the slash command autocomplete popup.
 type cmdPopupState struct {
 	show         bool
@@ -152,7 +143,6 @@ type Model struct {
 	chat        chatState
 
 	jobs        []service.Job
-	blockers    map[string]*service.Blocker // keyed by job ID
 	selectedJob int
 	focused     focusedPanel
 
@@ -172,9 +162,6 @@ type Model struct {
 
 	// Operator modal state (provider picker).
 	operatorModal operatorModalState
-
-	// Blocker modal state.
-	blockerModal blockerModalState
 
 	// Jobs modal state.
 	jobsModal jobsModalState
@@ -299,7 +286,6 @@ func NewModel(cfg ModelConfig) Model {
 	}
 
 	m.jobs = []service.Job{}
-	m.blockers = make(map[string]*service.Blocker)
 	m.selectedJob = 0
 	m.focused = focusChat
 
@@ -371,11 +357,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Graph map modal key handling — intercept all keys when modal is open.
 		if m.graphMapModal.show {
 			return m.updateGraphMapModal(msg)
-		}
-
-		// Blocker modal key handling — intercept all keys when modal is open.
-		if m.blockerModal.show {
-			return m.updateBlockerModal(msg)
 		}
 
 		// Prompt mode key handling — highest priority.
@@ -732,22 +713,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case "enter":
-			// Open blocker modal when jobs pane is focused and selected job has a blocker.
+			// Open jobs modal pre-selected on current job.
 			if m.focused == focusJobs {
 				dj := m.displayJobs()
 				if len(dj) == 0 || m.selectedJob >= len(dj) {
 					return m, nil
 				}
-				selectedJob := dj[m.selectedJob]
-				if m.hasBlocker(selectedJob) {
-					m.blockerModal.show = true
-					m.blockerModal.jobID = selectedJob.ID
-					m.blockerModal.blocker = m.blockers[selectedJob.ID]
-					m.blockerModal.questionIdx = 0
-					m.blockerModal.inputText = ""
-					return m, nil
-				}
-				// Open jobs modal pre-selected on current job.
 				m.jobsModal = jobsModalState{
 					show:   true,
 					jobIdx: m.selectedJob,
@@ -1081,18 +1052,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.updateViewportContent()
 		return m, tea.Batch(cmds...)
 
-	case blockerAnswersSubmittedMsg:
-		// Mark answered, close modal.
-		if b, ok := m.blockers[msg.jobID]; ok {
-			b.Answered = true
-		}
-		m.blockerModal.show = false
-		m.blockerModal.inputText = ""
-
-		// Blocker re-spawn is handled by the operator/runtime; nothing to do here.
-		_ = m.jobByID // suppress unused warning
-		return m, nil
-
 	case SessionStartedMsg:
 		m.runtimeSessions[msg.SessionID] = &runtimeSlot{
 			sessionID:      msg.SessionID,
@@ -1197,7 +1156,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Don't steal clicks when any overlay is active.
 		if !m.skillsModal.show && !m.workersModal.show &&
 			!m.mcpModal.show && !m.catalogModal.show && !m.operatorModal.show &&
-			!m.blockerModal.show && !m.grid.showGrid &&
+			!m.grid.showGrid &&
 			!m.promptModal.show && !m.outputModal.show && !m.loading {
 			showLeftPanel := m.width >= minWidthForLeftPanel && !m.leftPanelHidden
 			showSidebar := m.width >= minWidthForBar && !m.sidebarHidden
@@ -1615,16 +1574,6 @@ func formatServiceEvent(ev service.Event, maxWidth int) string {
 			return FeedTaskFailedStyle.Render(fmt.Sprintf("✗ %s failed task: %s", p.GraphID, p.Error))
 		}
 		return FeedTaskFailedStyle.Render("✗ task failed")
-
-	case service.EventTypeBlockerReported:
-		if p, ok := ev.Payload.(service.BlockerReportedPayload); ok {
-			text := fmt.Sprintf("🚫 %s reported blocker: %s", p.GraphID, p.Description)
-			if maxWidth > 4 {
-				text = wrapText(text, maxWidth-4) // account for indent
-			}
-			return FeedBlockerReportedStyle.Render(text)
-		}
-		return FeedBlockerReportedStyle.Render("🚫 blocker reported")
 
 	case service.EventTypeJobCompleted:
 		if p, ok := ev.Payload.(service.JobCompletedPayload); ok {

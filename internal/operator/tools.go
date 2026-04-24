@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"strings"
 	"time"
 
@@ -43,24 +42,6 @@ func newOperatorTools(rt *runtime.Runtime, promptEngine *prompt.Engine, defaultP
 // Definitions returns the tool definitions available to the operator LLM.
 func (ot *operatorTools) Definitions() []runtime.ToolDef {
 	defs := []runtime.ToolDef{
-		{
-			Name:        "consult_worker",
-			Description: "Consult a specialized system worker. Spawns a fresh worker session, blocks until it completes, and returns the worker's response. Use for scheduler or blocker-handler — decomposition is automatic and not invoked through this tool.",
-			Parameters: json.RawMessage(`{
-				"type": "object",
-				"properties": {
-					"worker_name": {
-						"type": "string",
-						"description": "Name of the system worker to consult (e.g. 'scheduler', 'blocker-handler')"
-					},
-					"message": {
-						"type": "string",
-						"description": "The message or task to send to the worker"
-					}
-				},
-				"required": ["worker_name", "message"]
-			}`),
-		},
 		{
 			Name:        "surface_to_user",
 			Description: "Surface information to the user. Use this to relay important findings, summaries, or status updates that the user should see.",
@@ -170,8 +151,6 @@ func (ot *operatorTools) Definitions() []runtime.ToolDef {
 // Execute dispatches a tool call by name.
 func (ot *operatorTools) Execute(ctx context.Context, name string, args json.RawMessage) (string, error) {
 	switch name {
-	case "consult_worker":
-		return ot.consultWorker(ctx, args)
 	case "surface_to_user":
 		return ot.surfaceToUser(ctx, args)
 	case "list_jobs":
@@ -191,104 +170,6 @@ func (ot *operatorTools) Execute(ctx context.Context, name string, args json.Raw
 	default:
 		return "", fmt.Errorf("%w: %s", runtime.ErrUnknownTool, name)
 	}
-}
-
-func (ot *operatorTools) consultWorker(ctx context.Context, args json.RawMessage) (string, error) {
-	var params struct {
-		WorkerName string `json:"worker_name"`
-		Message    string `json:"message"`
-	}
-	if err := json.Unmarshal(args, &params); err != nil {
-		return "", fmt.Errorf("parsing consult_worker args: %w", err)
-	}
-
-	if params.WorkerName == "" {
-		return "", fmt.Errorf("worker_name is required")
-	}
-	if params.Message == "" {
-		return "", fmt.Errorf("message is required")
-	}
-
-	// Guard against oversized messages. System workers have their own tools
-	// to explore workspaces — the message should be a brief task description
-	// or work request, not embedded file contents.
-	const maxConsultMessageBytes = 32 * 1024 // 32 KB
-	if len(params.Message) > maxConsultMessageBytes {
-		return "", fmt.Errorf(
-			"consult_worker message too large (%d bytes, max %d): provide a brief task description only — the worker has tools to explore the workspace itself",
-			len(params.Message), maxConsultMessageBytes,
-		)
-	}
-
-	// Verify the role exists in the prompt engine and is a system role.
-	// This prevents user-defined roles from gaining system-level tools
-	// (create_job, assign_task, etc.) via consult_worker.
-	if ot.promptEngine == nil {
-		return "", fmt.Errorf("prompt engine not configured")
-	}
-	role := ot.promptEngine.Role(params.WorkerName)
-	if role == nil {
-		return "", fmt.Errorf("unknown system worker %q: no role found in prompt engine", params.WorkerName)
-	}
-	if role.Source != "system" {
-		return "", fmt.Errorf("role %q is not a system role (source: %s)", params.WorkerName, role.Source)
-	}
-
-	systemPrompt, err := ot.promptEngine.Compose(params.WorkerName, nil)
-	if err != nil {
-		return "", fmt.Errorf("composing system worker %q: %w", params.WorkerName, err)
-	}
-	declaredTools := role.Tools
-
-	slog.Info("consulting system worker",
-		"worker", params.WorkerName,
-		"provider", ot.defaultProvider,
-		"model", ot.defaultModel,
-	)
-
-	// System workers use SystemTools directly; decomposition has been moved
-	// to auto-dispatched graphs (coarse-decompose / fine-decompose) and no
-	// longer flows through consult_worker.
-	toolExecutor := runtime.ToolExecutor(ot.systemTools)
-
-	// Build the filtered tool list from the worker's declared tools. This
-	// ensures each system worker only sees the tools it's supposed to have.
-	var workerTools []runtime.ToolDef
-	if len(declaredTools) > 0 {
-		allDefs := toolExecutor.Definitions()
-		defsByName := make(map[string]runtime.ToolDef, len(allDefs))
-		for _, d := range allDefs {
-			defsByName[d.Name] = d
-		}
-		for _, name := range declaredTools {
-			if d, ok := defsByName[name]; ok {
-				workerTools = append(workerTools, d)
-			} else {
-				slog.Warn("system worker declared unknown tool, skipping",
-					"worker", params.WorkerName,
-					"tool", name,
-				)
-			}
-		}
-	}
-
-	opts := runtime.SpawnOpts{
-		WorkerID:       params.WorkerName,
-		ProviderName:   ot.defaultProvider,
-		Model:          ot.defaultModel,
-		SystemPrompt:   systemPrompt,
-		Tools:          workerTools,
-		ToolExecutor:   toolExecutor,
-		InitialMessage: params.Message,
-		WorkDir:        ot.workDir,
-	}
-
-	result, err := ot.rt.SpawnAndWait(ctx, opts)
-	if err != nil {
-		return "", fmt.Errorf("consulting worker %q: %w", params.WorkerName, err)
-	}
-
-	return result, nil
 }
 
 func (ot *operatorTools) surfaceToUser(ctx context.Context, args json.RawMessage) (string, error) {

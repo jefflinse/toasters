@@ -4,6 +4,7 @@ description: Explores the codebase to understand the problem before planning beg
 mode: worker
 output: summary
 access: readonly
+max_turns: 30
 ---
 
 Your training data is in the past.

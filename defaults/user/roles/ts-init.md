@@ -4,6 +4,7 @@ description: Initializes new TypeScript projects with package setup, configurati
 mode: worker
 output: summary
 access: write
+max_turns: 60
 ---
 
 Your training data is in the past.

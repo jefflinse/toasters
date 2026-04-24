@@ -717,21 +717,6 @@ func TestProgressToolsFillSessionJobAndTaskIDs(t *testing.T) {
 		assertEqual(t, "worker-ctx", store.lastProgress.WorkerID)
 	})
 
-	t.Run("report_blocker fills missing ids from session", func(t *testing.T) {
-		store.lastProgress = nil
-		_, err := ct.Execute(context.Background(), "report_blocker", mustJSON(t, map[string]any{
-			"description": "blocked",
-			"severity":    "medium",
-		}))
-		assertNoError(t, err)
-		if store.lastProgress == nil {
-			t.Fatal("expected progress write")
-		}
-		assertEqual(t, "job-ctx", store.lastProgress.JobID)
-		assertEqual(t, "task-ctx", store.lastProgress.TaskID)
-		assertEqual(t, "worker-ctx", store.lastProgress.WorkerID)
-	})
-
 	t.Run("request_review fills missing ids from session", func(t *testing.T) {
 		store.lastProgress = nil
 		store.lastArtifact = nil
@@ -882,7 +867,7 @@ func TestProgressToolDefinitionsIncluded(t *testing.T) {
 	}
 
 	progressTools := []string{
-		"report_task_progress", "report_blocker", "update_task_status",
+		"report_task_progress", "update_task_status",
 		"request_review", "query_job_context", "log_artifact",
 	}
 	for _, name := range progressTools {

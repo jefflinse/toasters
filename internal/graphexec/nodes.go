@@ -47,6 +47,7 @@ func RoleNode(cfg TemplateConfig, role *prompt.Role, nodeID string) rhizome.Node
 			Messages:     []provider.Message{{Role: "user", Content: buildInitialMessage(state)}},
 			Tools:        tools,
 			OutputSchema: schemaRaw,
+			MaxTurns:     role.MaxTurns,
 			OnEvent:      onEventSink(ctx),
 		})
 		closeGraphSession(ctx, cfg.Store, sess, res, runErr)
@@ -204,17 +205,32 @@ func toolsForAccess(exec runtime.ToolExecutor, access string) []agent.Tool {
 }
 
 // onEventSink returns an agent OnEvent handler that broadcasts streaming
-// text and reasoning chunks to the EventSink attached to the current
-// NodeContext, if any. No-op when no sink is configured — tests and
+// text, tool calls, and tool results to the EventSink attached to the
+// current NodeContext. No-op when no sink is configured — tests and
 // library-only uses pay nothing.
+//
+// Tool-call events route through the same session.tool_call /
+// session.tool_result service events that worker sessions emit, so the
+// TUI's existing runtimeSlot pipeline (grid cards, output panel) picks
+// them up without per-source special cases.
 func onEventSink(ctx context.Context) func(agent.Event) {
 	nc := NodeContextFromContext(ctx)
 	if nc == nil || nc.Sink == nil {
 		return nil
 	}
 	return func(ev agent.Event) {
-		if ev.Kind == agent.EventKindText && ev.Text != "" {
-			nc.Sink.BroadcastSessionText(nc.SessionID, ev.Text)
+		switch ev.Kind {
+		case agent.EventKindText:
+			if ev.Text != "" {
+				nc.Sink.BroadcastSessionText(nc.SessionID, ev.Text)
+			}
+		case agent.EventKindToolCall:
+			if ev.ToolCall == nil {
+				return
+			}
+			nc.Sink.BroadcastSessionToolCall(nc.SessionID, ev.ToolCall.ID, ev.ToolCall.Name, ev.ToolCall.Arguments)
+		case agent.EventKindToolResult:
+			nc.Sink.BroadcastSessionToolResult(nc.SessionID, "", ev.ToolName, ev.Result, "")
 		}
 	}
 }

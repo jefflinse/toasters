@@ -121,42 +121,11 @@ func (m Model) renderLeftPanel(panelWidth, panelHeight int) string {
 			} else {
 				topLines = append(topLines, JobItemStyle.Render(statusPrefix+name))
 			}
-
-			// Child items: only show for active/paused jobs (not completed).
-			if j.Status != service.JobStatusCompleted {
-				// BLOCKED child (always first if present).
-				if m.hasBlocker(j) {
-					blockerLine := "  ⚠ BLOCKED"
-					topLines = append(topLines, TaskBlockedStyle.Render(blockerLine))
-				}
-
-				// SQLite task progress summary and subitems (single lookup).
-				if tasks := m.progress.tasks[j.ID]; len(tasks) > 0 {
-					summary := renderJobProgressSummary(tasks)
-					if summary != "" {
-						topLines = append(topLines, DimStyle.Render("  ")+summary)
-					}
-					for _, task := range tasks {
-						indicator, style := taskStatusIndicator(task.Status)
-						taskLine := "  " + indicator + " " + truncateStr(task.Title, contentWidth-5)
-						topLines = append(topLines, style.Render(taskLine))
-						if task.GraphID != "" && (task.Status == service.TaskStatusInProgress || task.Status == service.TaskStatusBlocked) {
-							graphLine := "    " + style.Render(indicator) + " " + TaskPendingStyle.Render(truncateStr(task.GraphID, contentWidth-7))
-							topLines = append(topLines, graphLine)
-						}
-					}
-				}
-			}
 		}
 	}
 	// Hint line when jobs pane is focused.
 	if m.focused == focusJobs && len(displayedJobs) > 0 {
-		dj := displayedJobs
-		hint := "↑↓ · Enter → job details"
-		if m.selectedJob < len(dj) && m.hasBlocker(dj[m.selectedJob]) {
-			hint = "Enter → resolve blocker"
-		}
-		topLines = append(topLines, DimStyle.Render(hint))
+		topLines = append(topLines, DimStyle.Render("↑↓ · Enter → job details"))
 	}
 	topContent := lipgloss.NewStyle().Height(topContentH + jobsHintH).Render(
 		lipgloss.JoinVertical(lipgloss.Left, topLines...),

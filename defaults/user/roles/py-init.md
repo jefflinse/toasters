@@ -4,6 +4,7 @@ description: Initializes new Python projects with package setup, configuration, 
 mode: worker
 output: summary
 access: write
+max_turns: 60
 ---
 
 Your training data is in the past.

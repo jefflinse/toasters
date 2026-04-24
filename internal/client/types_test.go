@@ -1048,39 +1048,6 @@ func TestParseSSEPayload_TaskFailed(t *testing.T) {
 	}
 }
 
-func TestParseSSEPayload_BlockerReported(t *testing.T) {
-	t.Parallel()
-
-	raw := json.RawMessage(`{"task_id":"task-1","graph_id":"team-1","worker_id":"agent-1","description":"Need credentials","questions":["What is the API key?","Which environment?"]}`)
-	payload, err := parseSSEPayload("blocker.reported", raw)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	p, ok := payload.(service.BlockerReportedPayload)
-	if !ok {
-		t.Fatalf("payload type = %T, want BlockerReportedPayload", payload)
-	}
-	if p.TaskID != "task-1" {
-		t.Errorf("TaskID = %q, want %q", p.TaskID, "task-1")
-	}
-	if p.GraphID != "team-1" {
-		t.Errorf("GraphID = %q, want %q", p.GraphID, "team-1")
-	}
-	if p.WorkerID != "agent-1" {
-		t.Errorf("WorkerID = %q, want %q", p.WorkerID, "agent-1")
-	}
-	if p.Description != "Need credentials" {
-		t.Errorf("Description = %q, want %q", p.Description, "Need credentials")
-	}
-	if len(p.Questions) != 2 {
-		t.Fatalf("Questions len = %d, want 2", len(p.Questions))
-	}
-	if p.Questions[0] != "What is the API key?" {
-		t.Errorf("Questions[0] = %q, want %q", p.Questions[0], "What is the API key?")
-	}
-}
-
 func TestParseSSEPayload_JobCompleted(t *testing.T) {
 	t.Parallel()
 
@@ -1484,12 +1451,6 @@ func TestParseSSEPayload_AllEventTypes(t *testing.T) {
 			wantType:  "service.TaskFailedPayload",
 		},
 		{
-			name:      "blocker.reported",
-			eventType: "blocker.reported",
-			raw:       json.RawMessage(`{"task_id":"t","graph_id":"tm","worker_id":"a","description":"d"}`),
-			wantType:  "service.BlockerReportedPayload",
-		},
-		{
 			name:      "job.completed",
 			eventType: "job.completed",
 			raw:       json.RawMessage(`{"job_id":"j","title":"T","summary":"s"}`),
@@ -1605,8 +1566,6 @@ func typeString(v any) string {
 		return "service.TaskCompletedPayload"
 	case service.TaskFailedPayload:
 		return "service.TaskFailedPayload"
-	case service.BlockerReportedPayload:
-		return "service.BlockerReportedPayload"
 	case service.JobCompletedPayload:
 		return "service.JobCompletedPayload"
 	case service.ProgressUpdatePayload:

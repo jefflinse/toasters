@@ -52,10 +52,6 @@ const (
 	// Payload: TaskFailedPayload.
 	EventTypeTaskFailed EventType = "task.failed"
 
-	// EventTypeBlockerReported is sent when a worker reports a blocker.
-	// Payload: BlockerReportedPayload.
-	EventTypeBlockerReported EventType = "blocker.reported"
-
 	// EventTypeJobCompleted is sent when an entire job finishes.
 	// Payload: JobCompletedPayload.
 	EventTypeJobCompleted EventType = "job.completed"
@@ -277,15 +273,6 @@ type TaskFailedPayload struct {
 	JobID   string
 	GraphID string
 	Error   string
-}
-
-// BlockerReportedPayload is the payload for EventTypeBlockerReported events.
-type BlockerReportedPayload struct {
-	TaskID      string
-	GraphID     string
-	WorkerID    string
-	Description string
-	Questions   []string // clarifying questions for the user
 }
 
 // JobCompletedPayload is the payload for EventTypeJobCompleted events.

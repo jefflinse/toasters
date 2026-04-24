@@ -234,7 +234,6 @@ func translateEvent(ev service.Event) tea.Msg {
 		service.EventTypeTaskStarted,
 		service.EventTypeTaskCompleted,
 		service.EventTypeTaskFailed,
-		service.EventTypeBlockerReported,
 		service.EventTypeJobCompleted:
 		// These are forwarded as OperatorEventMsg for feed display.
 		return OperatorEventMsg{Event: ev}

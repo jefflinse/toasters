@@ -52,8 +52,15 @@ type Role struct {
 	// Access selects the toolset a graph node built from this role gets at
 	// run time. One of "readonly" (default), "write", "test", or "all".
 	Access string `yaml:"access"`
-	Body   string `yaml:"-"` // template text after frontmatter
-	Source string `yaml:"-"` // "system" or "user" — set by LoadDir caller
+	// MaxTurns bounds the number of model round-trips (assistant →
+	// tool-dispatch → assistant …) in a single node execution. Zero falls
+	// back to the mycelium default (agent.DefaultMaxTurns = 20). Roles
+	// with heavy tool-call budgets — scaffolders, coders, testers —
+	// should set this higher; pure analytical roles (investigator,
+	// planner, reviewer) are fine at the default.
+	MaxTurns int    `yaml:"max_turns"`
+	Body     string `yaml:"-"` // template text after frontmatter
+	Source   string `yaml:"-"` // "system" or "user" — set by LoadDir caller
 }
 
 // Toolchain is language/framework knowledge with typed variables.

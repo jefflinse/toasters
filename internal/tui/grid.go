@@ -533,12 +533,6 @@ func activityLabel(toolName string, args json.RawMessage) string {
 			return "progress: (no message)"
 		}
 		return "progress: " + trunc(msg, 28)
-	case "report_blocker":
-		desc := str("description")
-		if desc == "" {
-			return "blocker: (no description)"
-		}
-		return "blocker: " + trunc(desc, 28)
 	case "web_fetch":
 		u := str("url")
 		if parsed, err := url.Parse(u); err == nil && parsed.Host != "" {

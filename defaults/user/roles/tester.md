@@ -4,6 +4,7 @@ description: Runs relevant tests and reports pass/fail.
 mode: worker
 output: test-result
 access: test
+max_turns: 40
 ---
 
 Your training data is in the past.

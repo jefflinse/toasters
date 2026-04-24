@@ -4,6 +4,7 @@ description: Implements and fixes Go TUI code using Bubble Tea and the Charm eco
 mode: worker
 output: summary
 access: write
+max_turns: 50
 ---
 
 Your training data is in the past.

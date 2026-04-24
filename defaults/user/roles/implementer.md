@@ -4,6 +4,7 @@ description: Applies the plan to the codebase, producing concrete changes.
 mode: worker
 output: summary
 access: write
+max_turns: 50
 ---
 
 Your training data is in the past.

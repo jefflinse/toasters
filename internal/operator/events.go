@@ -29,15 +29,14 @@ func trySendEvent(ctx context.Context, ch chan<- Event, ev Event) {
 type EventType string
 
 const (
-	EventUserMessage     EventType = "user_message"
-	EventTaskStarted     EventType = "task_started"
-	EventTaskCompleted   EventType = "task_completed"
-	EventTaskFailed      EventType = "task_failed"
-	EventBlockerReported EventType = "blocker_reported"
-	EventProgressUpdate  EventType = "progress_update"
-	EventJobComplete     EventType = "job_complete"
-	EventNewTaskRequest  EventType = "new_task_request"
-	EventUserResponse    EventType = "user_response" // response to an ask_user prompt
+	EventUserMessage    EventType = "user_message"
+	EventTaskStarted    EventType = "task_started"
+	EventTaskCompleted  EventType = "task_completed"
+	EventTaskFailed     EventType = "task_failed"
+	EventProgressUpdate EventType = "progress_update"
+	EventJobComplete    EventType = "job_complete"
+	EventNewTaskRequest EventType = "new_task_request"
+	EventUserResponse   EventType = "user_response" // response to an ask_user prompt
 )
 
 // Event is a typed message sent to the operator event loop.
@@ -75,14 +74,6 @@ type TaskFailedPayload struct {
 	JobID   string
 	GraphID string
 	Error   string
-}
-
-// BlockerReportedPayload carries a blocker report from a worker.
-type BlockerReportedPayload struct {
-	TaskID      string
-	GraphID     string
-	WorkerID    string
-	Description string
 }
 
 // ProgressUpdatePayload carries a progress report from a worker.

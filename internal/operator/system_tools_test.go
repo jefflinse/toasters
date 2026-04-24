@@ -111,6 +111,27 @@ func newTestSystemTools(t *testing.T) (*SystemTools, db.Store, *mockGraphExecuto
 	return st, store, gExec, eventCh, workDir
 }
 
+// seedTask creates a task row directly via the store — used by tests that
+// previously relied on the retired create_task tool for setup.
+func seedTask(t *testing.T, store db.Store, jobID, title, graphID string) string {
+	t.Helper()
+	id, err := uuid.NewV4()
+	if err != nil {
+		t.Fatalf("uuid: %v", err)
+	}
+	task := &db.Task{
+		ID:      id.String(),
+		JobID:   jobID,
+		Title:   title,
+		Status:  db.TaskStatusPending,
+		GraphID: graphID,
+	}
+	if err := store.CreateTask(context.Background(), task); err != nil {
+		t.Fatalf("store.CreateTask: %v", err)
+	}
+	return task.ID
+}
+
 // --- Tests ---
 
 func TestCreateJob(t *testing.T) {
@@ -174,97 +195,6 @@ func TestCreateJob_MissingParams(t *testing.T) {
 	assertContains(t, err.Error(), "description is required")
 }
 
-func TestCreateTask(t *testing.T) {
-	st, store, _, _, _ := newTestSystemTools(t)
-	ctx := context.Background()
-
-	// First create a job.
-	jobResult, err := st.Execute(ctx, "create_job", json.RawMessage(`{
-		"title": "Test job",
-		"description": "A test job"
-	}`))
-	assertNoError(t, err)
-
-	var jobRes map[string]string
-	if err := json.Unmarshal([]byte(jobResult), &jobRes); err != nil {
-		t.Fatalf("parsing job result: %v", err)
-	}
-	jobID := jobRes["job_id"]
-
-	// Create a task on the job.
-	taskResult, err := st.Execute(ctx, "create_task", json.RawMessage(`{
-		"job_id": "`+jobID+`",
-		"title": "Implement feature X"
-	}`))
-	assertNoError(t, err)
-
-	var taskRes map[string]string
-	if err := json.Unmarshal([]byte(taskResult), &taskRes); err != nil {
-		t.Fatalf("parsing task result: %v", err)
-	}
-	taskID := taskRes["task_id"]
-	if taskID == "" {
-		t.Fatal("expected non-empty task_id")
-	}
-
-	// Verify task in DB.
-	task, err := store.GetTask(ctx, taskID)
-	assertNoError(t, err)
-	assertEqual(t, "Implement feature X", task.Title)
-	assertEqual(t, jobID, task.JobID)
-	assertEqual(t, string(db.TaskStatusPending), string(task.Status))
-}
-
-func TestCreateTask_WithGraphID(t *testing.T) {
-	st, store, _, _, _ := newTestSystemTools(t)
-	ctx := context.Background()
-
-	// Create a job.
-	jobResult, err := st.Execute(ctx, "create_job", json.RawMessage(`{
-		"title": "Test job",
-		"description": "A test job"
-	}`))
-	assertNoError(t, err)
-
-	var jobRes map[string]string
-	if err := json.Unmarshal([]byte(jobResult), &jobRes); err != nil {
-		t.Fatalf("parsing job result: %v", err)
-	}
-	jobID := jobRes["job_id"]
-
-	// Create a task with pre-assigned graph.
-	taskResult, err := st.Execute(ctx, "create_task", json.RawMessage(`{
-		"job_id": "`+jobID+`",
-		"title": "Review code",
-		"graph_id": "bug-fix"
-	}`))
-	assertNoError(t, err)
-
-	var taskRes map[string]string
-	if err := json.Unmarshal([]byte(taskResult), &taskRes); err != nil {
-		t.Fatalf("parsing task result: %v", err)
-	}
-
-	task, err := store.GetTask(ctx, taskRes["task_id"])
-	assertNoError(t, err)
-	assertEqual(t, "bug-fix", task.GraphID)
-}
-
-func TestCreateTask_MissingParams(t *testing.T) {
-	st, _, _, _, _ := newTestSystemTools(t)
-	ctx := context.Background()
-
-	// Missing job_id.
-	_, err := st.Execute(ctx, "create_task", json.RawMessage(`{"title": "task"}`))
-	assertError(t, err)
-	assertContains(t, err.Error(), "job_id is required")
-
-	// Missing title.
-	_, err = st.Execute(ctx, "create_task", json.RawMessage(`{"job_id": "j1"}`))
-	assertError(t, err)
-	assertContains(t, err.Error(), "title is required")
-}
-
 func TestAssignTask(t *testing.T) {
 	st, store, gExec, eventCh, _ := newTestSystemTools(t)
 	ctx := context.Background()
@@ -282,17 +212,7 @@ func TestAssignTask(t *testing.T) {
 	}
 	jobID := jobRes["job_id"]
 
-	taskResult, err := st.Execute(ctx, "create_task", json.RawMessage(`{
-		"job_id": "`+jobID+`",
-		"title": "Build API"
-	}`))
-	assertNoError(t, err)
-
-	var taskRes map[string]string
-	if err := json.Unmarshal([]byte(taskResult), &taskRes); err != nil {
-		t.Fatalf("parsing task result: %v", err)
-	}
-	taskID := taskRes["task_id"]
+	taskID := seedTask(t, store, jobID, "Build API", "")
 
 	// Assign the task to a graph.
 	result, err := st.Execute(ctx, "assign_task", json.RawMessage(`{
@@ -350,17 +270,7 @@ func TestAssignTask_NotPending(t *testing.T) {
 	}
 	jobID := jobRes["job_id"]
 
-	taskResult, err := st.Execute(ctx, "create_task", json.RawMessage(`{
-		"job_id": "`+jobID+`",
-		"title": "Build API"
-	}`))
-	assertNoError(t, err)
-
-	var taskRes map[string]string
-	if err := json.Unmarshal([]byte(taskResult), &taskRes); err != nil {
-		t.Fatalf("parsing task result: %v", err)
-	}
-	taskID := taskRes["task_id"]
+	taskID := seedTask(t, store, jobID, "Build API", "")
 
 	// Move task to in_progress manually.
 	if err := store.UpdateTaskStatus(ctx, taskID, db.TaskStatusInProgress, ""); err != nil {
@@ -409,25 +319,11 @@ func TestQueryJob(t *testing.T) {
 	jobID := jobRes["job_id"]
 
 	// Create two tasks.
-	_, err = st.Execute(ctx, "create_task", json.RawMessage(`{
-		"job_id": "`+jobID+`",
-		"title": "Setup project"
-	}`))
-	assertNoError(t, err)
-
-	task2Result, err := st.Execute(ctx, "create_task", json.RawMessage(`{
-		"job_id": "`+jobID+`",
-		"title": "Build API",
-		"graph_id": "bug-fix"
-	}`))
-	assertNoError(t, err)
+	seedTask(t, store, jobID, "Setup project", "")
+	task2ID := seedTask(t, store, jobID, "Build API", "bug-fix")
 
 	// Move second task to in_progress.
-	var task2Res map[string]string
-	if err := json.Unmarshal([]byte(task2Result), &task2Res); err != nil {
-		t.Fatalf("parsing task result: %v", err)
-	}
-	if err := store.UpdateTaskStatus(ctx, task2Res["task_id"], db.TaskStatusInProgress, ""); err != nil {
+	if err := store.UpdateTaskStatus(ctx, task2ID, db.TaskStatusInProgress, ""); err != nil {
 		t.Fatalf("updating task status: %v", err)
 	}
 
@@ -508,14 +404,11 @@ func TestSystemToolDefinitions(t *testing.T) {
 
 	expectedTools := []string{
 		"create_job",
-		"create_task",
-		"assign_task",
 		"query_graphs",
 		"query_job",
 		"query_job_context",
 		"surface_to_user",
 		"save_work_request",
-		"start_job",
 	}
 
 	if len(defs) != len(expectedTools) {
@@ -573,17 +466,7 @@ func TestAssignTask_PromotesJobToActive(t *testing.T) {
 	assertEqual(t, string(db.JobStatusPending), string(job.Status))
 
 	// Create a task on the job.
-	taskResult, err := st.Execute(ctx, "create_task", json.RawMessage(`{
-		"job_id": "`+jobID+`",
-		"title": "Do the work"
-	}`))
-	assertNoError(t, err)
-
-	var taskRes map[string]string
-	if err := json.Unmarshal([]byte(taskResult), &taskRes); err != nil {
-		t.Fatalf("parsing task result: %v", err)
-	}
-	taskID := taskRes["task_id"]
+	taskID := seedTask(t, store, jobID, "Do the work", "")
 
 	// Assign the task — this is the operation that must promote the job.
 	_, err = st.Execute(ctx, "assign_task", json.RawMessage(`{
@@ -642,17 +525,7 @@ func TestAssignTask_UpdateJobStatusFailureIsNonFatal(t *testing.T) {
 	}
 	jobID := jobRes["job_id"]
 
-	taskResult, err := st.Execute(ctx, "create_task", json.RawMessage(`{
-		"job_id": "`+jobID+`",
-		"title": "Build API"
-	}`))
-	assertNoError(t, err)
-
-	var taskRes map[string]string
-	if err := json.Unmarshal([]byte(taskResult), &taskRes); err != nil {
-		t.Fatalf("parsing task result: %v", err)
-	}
-	taskID := taskRes["task_id"]
+	taskID := seedTask(t, store, jobID, "Build API", "")
 
 	// Swap in a store wrapper that fails UpdateJobStatus.
 	st.store = &failingUpdateJobStatusStore{
@@ -735,7 +608,7 @@ func TestQueryJobContext_InDefinitions(t *testing.T) {
 // the case was missing from the switch statement. Without the fix, this test
 // fails with an ErrUnknownTool error.
 func TestQueryJobContext_Execute_ValidJobID(t *testing.T) {
-	st, _, _, _, _ := newTestSystemTools(t)
+	st, store, _, _, _ := newTestSystemTools(t)
 	ctx := context.Background()
 
 	// Create a job with tasks via the existing create_job/create_task tools.
@@ -752,18 +625,8 @@ func TestQueryJobContext_Execute_ValidJobID(t *testing.T) {
 	jobID := jobRes["job_id"]
 
 	// Create two tasks so the response is non-trivial.
-	_, err = st.Execute(ctx, "create_task", json.RawMessage(`{
-		"job_id": "`+jobID+`",
-		"title": "First task"
-	}`))
-	assertNoError(t, err)
-
-	_, err = st.Execute(ctx, "create_task", json.RawMessage(`{
-		"job_id": "`+jobID+`",
-		"title": "Second task",
-		"graph_id": "bug-fix"
-	}`))
-	assertNoError(t, err)
+	seedTask(t, store, jobID, "First task", "")
+	seedTask(t, store, jobID, "Second task", "bug-fix")
 
 	// Execute query_job_context — must not return ErrUnknownTool.
 	result, err := st.Execute(ctx, "query_job_context", json.RawMessage(`{"job_id": "`+jobID+`"}`))
@@ -866,7 +729,7 @@ func TestCreateJob_AcceptsWorkDirUnderHome(t *testing.T) {
 // validates the job's WorkspaceDir from the database before spawning agents.
 // This guards against tampered database entries or jobs created before validation.
 func TestAssignTask_RejectsJobWithWorkspaceDirOutsideHome(t *testing.T) {
-	st, _, _, _, _ := newTestSystemTools(t)
+	st, store, _, _, _ := newTestSystemTools(t)
 	ctx := context.Background()
 
 	// Create a job normally (passes validation because newTestSystemTools sets HOME=workDir).
@@ -883,17 +746,7 @@ func TestAssignTask_RejectsJobWithWorkspaceDirOutsideHome(t *testing.T) {
 	jobID := jobRes["job_id"]
 
 	// Create a task.
-	taskResult, err := st.Execute(ctx, "create_task", json.RawMessage(`{
-		"job_id": "`+jobID+`",
-		"title": "Build API"
-	}`))
-	assertNoError(t, err)
-
-	var taskRes map[string]string
-	if err := json.Unmarshal([]byte(taskResult), &taskRes); err != nil {
-		t.Fatalf("parsing task result: %v", err)
-	}
-	taskID := taskRes["task_id"]
+	taskID := seedTask(t, store, jobID, "Build API", "")
 
 	// Now tamper with the job's WorkspaceDir in the database to point outside HOME.
 	// We do this by changing HOME to a different directory, simulating a tampered DB.

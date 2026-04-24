@@ -6,8 +6,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/jefflinse/toasters/internal/service"
 )
 
 // --------------------------------------------------------------------------
@@ -597,20 +595,6 @@ func TestActivityLabel(t *testing.T) {
 			want:     "query: job context",
 		},
 
-		// --- report_blocker ---
-		{
-			name:     "report_blocker with description",
-			toolName: "report_blocker",
-			args:     json.RawMessage(`{"description": "dependency missing"}`),
-			want:     "blocker: dependency missing",
-		},
-		{
-			name:     "report_blocker with empty args returns sentinel",
-			toolName: "report_blocker",
-			args:     json.RawMessage(`{}`),
-			want:     "blocker: (no description)",
-		},
-
 		// --- log_artifact ---
 		{
 			name:     "log_artifact with name",
@@ -1085,136 +1069,6 @@ func TestRenderAgentCard(t *testing.T) {
 
 		if !strings.Contains(result, "runtime") {
 			t.Errorf("expected 'runtime' fallback label when agentName is empty, got:\n%s", result)
-		}
-	})
-}
-
-// --------------------------------------------------------------------------
-// TestRenderLeftPanel_TeamNesting
-// --------------------------------------------------------------------------
-
-func TestRenderLeftPanel_TeamNesting(t *testing.T) {
-	t.Parallel()
-
-	// renderLeftPanel requires a reasonably complete Model to avoid nil-pointer
-	// panics in the rendering path (sortedRuntimeSessions, displayJobs, etc.).
-	// We use newMinimalModel and set only the fields the function reads.
-
-	t.Run("task with TeamID produces a nested team line", func(t *testing.T) {
-		t.Parallel()
-		m := newMinimalModel(t)
-		m.width = 200
-		m.height = 40
-
-		// Set up a job with one task that has a TeamID.
-		jobID := "job-team-test"
-		m.jobs = []service.Job{
-			{ID: jobID, Title: "Test Job", Status: service.JobStatusActive},
-		}
-		m.progress.tasks = map[string][]service.Task{
-			jobID: {
-				{
-					ID:      "task-1",
-					JobID:   jobID,
-					Title:   "Build the thing",
-					Status:  service.TaskStatusInProgress,
-					GraphID: "backend-team",
-				},
-			},
-		}
-
-		result := stripANSI(m.renderLeftPanel(40, 40))
-
-		// The team line should contain the TeamID.
-		if !strings.Contains(result, "backend-team") {
-			t.Errorf("expected 'backend-team' nested team line in left panel output, got:\n%s", result)
-		}
-	})
-
-	t.Run("task without TeamID does not produce an extra team line", func(t *testing.T) {
-		t.Parallel()
-		m := newMinimalModel(t)
-		m.width = 200
-		m.height = 40
-
-		jobID := "job-no-team"
-		m.jobs = []service.Job{
-			{ID: jobID, Title: "No Team Job", Status: service.JobStatusActive},
-		}
-		m.progress.tasks = map[string][]service.Task{
-			jobID: {
-				{
-					ID:      "task-2",
-					JobID:   jobID,
-					Title:   "Do the work",
-					Status:  service.TaskStatusPending,
-					GraphID: "", // no team assigned
-				},
-			},
-		}
-
-		result := stripANSI(m.renderLeftPanel(40, 40))
-
-		// The task title should appear, but no extra team-nesting line.
-		if !strings.Contains(result, "Do the work") {
-			t.Errorf("expected task title 'Do the work' in output, got:\n%s", result)
-		}
-		// There should be no team indicator line (no "backend-team" or similar).
-		// We verify by checking the line count: task with no TeamID should produce
-		// exactly 1 line (the task line), not 2.
-		lines := strings.Split(result, "\n")
-		taskLineCount := 0
-		for _, line := range lines {
-			if strings.Contains(line, "Do the work") {
-				taskLineCount++
-			}
-		}
-		if taskLineCount != 1 {
-			t.Errorf("expected exactly 1 line containing 'Do the work', got %d", taskLineCount)
-		}
-	})
-
-	t.Run("two tasks: one with TeamID and one without", func(t *testing.T) {
-		t.Parallel()
-		m := newMinimalModel(t)
-		m.width = 200
-		m.height = 40
-
-		jobID := "job-mixed"
-		m.jobs = []service.Job{
-			{ID: jobID, Title: "Mixed Job", Status: service.JobStatusActive},
-		}
-		m.progress.tasks = map[string][]service.Task{
-			jobID: {
-				{
-					ID:      "task-with-team",
-					JobID:   jobID,
-					Title:   "Assigned task",
-					Status:  service.TaskStatusInProgress,
-					GraphID: "frontend-team",
-				},
-				{
-					ID:      "task-without-team",
-					JobID:   jobID,
-					Title:   "Unassigned task",
-					Status:  service.TaskStatusPending,
-					GraphID: "",
-				},
-			},
-		}
-
-		result := stripANSI(m.renderLeftPanel(40, 40))
-
-		// The team line should appear for the assigned task.
-		if !strings.Contains(result, "frontend-team") {
-			t.Errorf("expected 'frontend-team' in output for assigned task, got:\n%s", result)
-		}
-		// Both task titles should appear.
-		if !strings.Contains(result, "Assigned task") {
-			t.Errorf("expected 'Assigned task' in output, got:\n%s", result)
-		}
-		if !strings.Contains(result, "Unassigned task") {
-			t.Errorf("expected 'Unassigned task' in output, got:\n%s", result)
 		}
 	})
 }

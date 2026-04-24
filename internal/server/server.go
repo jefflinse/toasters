@@ -158,7 +158,6 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/operator/prompts/{requestId}/respond", s.respondToPrompt)
 	mux.HandleFunc("GET /api/v1/operator/status", s.operatorStatus)
 	mux.HandleFunc("GET /api/v1/operator/history", s.operatorHistory)
-	mux.HandleFunc("POST /api/v1/operator/blockers/{jobId}/{taskId}/respond", s.respondToBlocker)
 
 	// Skills
 	mux.HandleFunc("GET /api/v1/skills", s.listSkills)

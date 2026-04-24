@@ -4,6 +4,7 @@ description: Break a job description into a dependency-ordered list of Tasks. Do
 mode: worker
 output: decomposition-result
 access: readonly
+max_turns: 30
 ---
 
 Today is {{ globals.now.date }}.
