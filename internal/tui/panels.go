@@ -101,7 +101,7 @@ func (m Model) renderLeftPanel(panelWidth, panelHeight int) string {
 	// --- Top pane: Jobs ---
 	var topLines []string
 	jobsTitle := gradientText("Jobs", [3]uint8{0, 200, 200}, [3]uint8{175, 50, 200})
-	if m.focused == focusJobs && m.focusAnimFrames > 0 {
+	if m.focused == focusJobs {
 		jobsTitle = rainbowText("Jobs", m.spinnerFrame)
 	}
 	topLines = append(topLines, jobsTitle)
@@ -119,7 +119,7 @@ func (m Model) renderLeftPanel(panelWidth, panelHeight int) string {
 			if snap == nil {
 				continue
 			}
-			topLines = append(topLines, renderJobUpdateBlock(snap, contentWidth, i == m.selectedJob))
+			topLines = append(topLines, renderJobUpdateBlock(snap, contentWidth, i == m.selectedJob, m.spinnerFrame))
 		}
 	}
 	// Hint line when jobs pane is focused.
@@ -138,7 +138,7 @@ func (m Model) renderLeftPanel(panelWidth, panelHeight int) string {
 	// --- Bottom pane: Agents ---
 	var agentLines []string
 	agentsTitle := gradientText("Workers", [3]uint8{50, 130, 255}, [3]uint8{0, 200, 200})
-	if m.focused == focusAgents && m.focusAnimFrames > 0 {
+	if m.focused == focusAgents {
 		agentsTitle = rainbowText("Workers", m.spinnerFrame)
 	}
 	agentLines = append(agentLines, agentsTitle)

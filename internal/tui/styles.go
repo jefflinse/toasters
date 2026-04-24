@@ -237,20 +237,34 @@ var (
 			BorderForeground(ColorAccent).
 			Padding(0, 1)
 
-	// ModalPanelStyle styles an unfocused panel within a modal.
+	// ModalPanelStyle styles an unfocused panel within a modal. Pure
+	// padding (no border) whose frame dimensions match ModalFocusedPanel
+	// so focus flips don't shift surrounding content. Plain padding
+	// plays nicely with .Background() when screens tint themselves —
+	// the padding cells reliably paint with the style's bg, which
+	// HiddenBorder glyphs do not in lipgloss v2.
+	//
+	// Horizontal frame: 2+2 = 4. Vertical frame: 1+1 = 2. Matches the
+	// focused style below (1 border + 1 padding on each side).
 	ModalPanelStyle = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(ColorBorder)
+			Padding(1, 2)
 
 	// ModalFocusedPanel styles the focused panel within a modal.
 	ModalFocusedPanel = lipgloss.NewStyle().
 				Border(lipgloss.RoundedBorder()).
-				BorderForeground(ColorAccent)
+				BorderForeground(ColorAccent).
+				Padding(0, 1)
 
 	// ModalSelectedStyle highlights the selected item in a modal panel.
 	ModalSelectedStyle = lipgloss.NewStyle().
 				Background(lipgloss.Color("#333333")).
 				Bold(true)
+
+	// JobsScreenBgStyle tints the entire Jobs screen a subtle navy so it
+	// reads as visually distinct from the main screen. Kept low-saturation
+	// so syntax/status colors remain legible over it.
+	JobsScreenBgStyle = lipgloss.NewStyle().
+				Background(lipgloss.Color("#0d1b2a"))
 
 	// ModalReadOnlyStyle dims read-only entries in a modal.
 	ModalReadOnlyStyle = lipgloss.NewStyle().

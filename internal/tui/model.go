@@ -209,18 +209,13 @@ type Model struct {
 	lastLeftPanelShown bool
 
 	// Collapsible panel state.
-	leftPanelHidden        bool // true when user has toggled the left panel off via ctrl+l
-	sidebarHidden          bool // true when user has toggled the sidebar off via ctrl+b
+	leftPanelHidden        bool // true when user has toggled the left panel off via ctrl+j
+	sidebarHidden          bool // true when user has toggled the sidebar off via ctrl+o
 	leftPanelWidthOverride int  // 0 = use default computed width; >0 = user-resized width
 
 	// Shared spinner animation frame counter.
 	spinnerFrame   int
 	spinnerRunning bool // true while the spinnerTick loop is live; prevents double-arming
-
-	// Focus burst animation: plays rainbowText on the newly-focused sidebar tile
-	// for focusAnimFramesTotal ticks, then stops.
-	focusAnimPanel  focusedPanel // which panel is currently animating
-	focusAnimFrames int          // frames remaining (counts down from 13 to 0)
 
 	// Toast notification state.
 	toasts      []toast
@@ -639,8 +634,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmd := m.openLogView()
 			return m, cmd
 
-		case "ctrl+l":
-			// Toggle left panel visibility.
+		case "ctrl+j":
+			// Toggle left panel (Jobs + Workers) visibility.
 			m.leftPanelHidden = !m.leftPanelHidden
 			// If hiding the panel while it's focused, switch to chat.
 			if m.leftPanelHidden && (m.focused == focusJobs || m.focused == focusAgents) {
@@ -650,8 +645,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.resizeComponents()
 			return m, tea.Batch(cmds...)
 
-		case "ctrl+b":
-			// Toggle sidebar visibility.
+		case "ctrl+o":
+			// Toggle right sidebar (Operator stats) visibility.
 			m.sidebarHidden = !m.sidebarHidden
 			m.resizeComponents()
 			return m, tea.Batch(cmds...)
@@ -727,7 +722,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				m.loadJobsForModal()
 				m.loadJobDetail()
-				return m, nil
+				var tickCmd tea.Cmd
+				if !m.spinnerRunning {
+					m.spinnerRunning = true
+					tickCmd = spinnerTick()
+				}
+				return m, tickCmd
 			}
 			// Open grid view when agents pane is focused.
 			if m.focused == focusAgents {
@@ -775,7 +775,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if len(m.jobsModal.jobs) > 0 {
 						m.loadJobDetail()
 					}
-					return m, nil
+					var tickCmd tea.Cmd
+					if !m.spinnerRunning {
+						m.spinnerRunning = true
+						tickCmd = spinnerTick()
+					}
+					return m, tickCmd
 				case "/graphmap":
 					m.input.Reset()
 					m.cmdPopup.show = false
@@ -1259,10 +1264,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case spinnerTickMsg:
 		m.spinnerFrame++
-		if m.focusAnimFrames > 0 {
-			m.focusAnimFrames--
-		}
-		// Re-arm only if something is animating: operator streaming or any agent running.
+		// Re-arm as long as something is animating: operator streaming, any
+		// worker running, any displayed job still active/pending, or a
+		// sidebar panel whose title rainbow-cycles while focused. Animating
+		// indicators should keep moving even when the pane isn't focused.
 		needTick := m.stream.streaming
 		if !needTick {
 			for _, rs := range m.runtimeSessions {
@@ -1272,7 +1277,19 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		}
-		if !needTick && m.focusAnimFrames > 0 {
+		if !needTick {
+			for _, j := range m.displayJobs() {
+				if j.Status == service.JobStatusActive || j.Status == service.JobStatusPending {
+					needTick = true
+					break
+				}
+			}
+		}
+		if !needTick && (m.focused == focusJobs || m.focused == focusAgents) {
+			needTick = true
+		}
+		// Jobs modal's focused panel also rainbow-cycles its title.
+		if !needTick && m.jobsModal.show {
 			needTick = true
 		}
 		if needTick {
@@ -1501,6 +1518,17 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.updateViewportContent()
 		}
 		m.syncJobsModalFromProgress()
+		// Kick the spinner ticker if we see animated state but the tick
+		// isn't running — handles TUI reconnect mid-job and any other
+		// path where active state arrives without sendMessage arming it.
+		if !m.spinnerRunning {
+			for _, j := range m.displayJobs() {
+				if j.Status == service.JobStatusActive || j.Status == service.JobStatusPending {
+					m.spinnerRunning = true
+					return m, spinnerTick()
+				}
+			}
+		}
 		return m, nil
 
 	case logTailTickMsg:

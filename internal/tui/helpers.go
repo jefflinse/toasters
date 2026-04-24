@@ -510,7 +510,12 @@ func (m *Model) buildJobSnapshot(jobID string) *service.JobSnapshot {
 // When selected is true, the border is drawn thick instead of rounded so
 // the block reads as the current selection — useful when the block is
 // used in a list context like the Jobs pane.
-func renderJobUpdateBlock(snap *service.JobSnapshot, width int, selected bool) string {
+//
+// spinnerFrame animates the glyph for active/pending jobs. Pass
+// m.spinnerFrame from callers rendered on every tick (sidebar). Callers
+// whose output is cached longer (e.g. chat viewport) can pass any value —
+// they'll just see a fixed frame until the viewport is rebuilt.
+func renderJobUpdateBlock(snap *service.JobSnapshot, width int, selected bool, spinnerFrame int) string {
 	if snap == nil {
 		return ""
 	}
@@ -523,6 +528,11 @@ func renderJobUpdateBlock(snap *service.JobSnapshot, width int, selected bool) s
 	}
 
 	glyph, statusWord, statusStyle, borderColor := jobStatusDecoration(snap)
+	// Active/pending jobs show the same braille spinner used for running
+	// workers in the Workers pane rather than a static dot.
+	if snap.Status == service.JobStatusActive || snap.Status == service.JobStatusPending {
+		glyph = string(spinnerChars[spinnerFrame%len(spinnerChars)])
+	}
 
 	// Line 1: "<glyph> <title>                              <status>"
 	titlePrefix := glyph + " "
@@ -690,25 +700,18 @@ func (m *Model) hasConversation() bool {
 	return false
 }
 
-// setFocus changes the focused panel and triggers the title burst animation
-// if the panel is actually changing. Returns a spinnerTick cmd to ensure the
-// ticker is running during the animation window.
+// setFocus changes the focused panel and arms the spinner tick if moving to
+// a panel whose title should animate (rainbow-cycle while focused). The
+// ticker is single-armed — a second spinnerTick while one is live would
+// double-increment spinnerFrame and run the animation at 2×+ speed.
 func (m *Model) setFocus(p focusedPanel) tea.Cmd {
 	if p == m.focused {
 		return nil
 	}
 	m.focused = p
-	if p == focusJobs || p == focusAgents {
-		m.focusAnimPanel = p
-		m.focusAnimFrames = 13 // ~1s at 80ms/tick
-		// Only arm the ticker if it isn't already running — firing a second
-		// spinnerTick() while one is live would create a second concurrent loop,
-		// causing spinnerFrame to increment twice per tick and the animation to
-		// run at double (or more) speed.
-		if !m.spinnerRunning {
-			m.spinnerRunning = true
-			return spinnerTick()
-		}
+	if (p == focusJobs || p == focusAgents) && !m.spinnerRunning {
+		m.spinnerRunning = true
+		return spinnerTick()
 	}
 	return nil
 }
@@ -745,8 +748,9 @@ const maxCompletedWorkersInPane = 3
 // displayJobs returns the filtered and sorted list of jobs for display in the left panel.
 // Rules:
 //   - Completed, failed, and cancelled jobs updated more than recentCompletedJobsWindow ago are hidden.
-//   - Sort order: Active first (by CreatedAt asc), then Paused (by CreatedAt asc),
-//     then Completed/Failed/Cancelled (by CreatedAt asc).
+//   - Sort order: Active first, then Paused, then Completed/Failed/Cancelled.
+//     Within each group, most-recently-updated (or created, if updated is zero)
+//     is first, so the freshest activity floats to the top.
 func (m Model) displayJobs() []service.Job {
 	now := time.Now()
 	cutoff := now.Add(-recentCompletedJobsWindow)
@@ -765,6 +769,24 @@ func (m Model) displayJobs() []service.Job {
 			active = append(active, j)
 		}
 	}
+
+	// Most-recent first within each group. Fall back to CreatedAt when
+	// UpdatedAt is zero (test fixtures, freshly-created jobs before the
+	// first event).
+	byFreshnessDesc := func(a, b service.Job) int {
+		at := a.UpdatedAt
+		if at.IsZero() {
+			at = a.CreatedAt
+		}
+		bt := b.UpdatedAt
+		if bt.IsZero() {
+			bt = b.CreatedAt
+		}
+		return bt.Compare(at) // descending
+	}
+	slices.SortStableFunc(active, byFreshnessDesc)
+	slices.SortStableFunc(paused, byFreshnessDesc)
+	slices.SortStableFunc(done, byFreshnessDesc)
 
 	result := make([]service.Job, 0, len(active)+len(paused)+len(done))
 	result = append(result, active...)
