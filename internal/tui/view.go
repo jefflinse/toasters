@@ -712,54 +712,62 @@ func looksLikeMarkdown(s string) bool {
 	return false
 }
 
+// outputModalLines returns the displayable lines for content in the fullscreen
+// output modal: markdown-rendered (if detected), split into rendered lines, with
+// tool-event lines dim-styled. Shared between renderOutputModal (view path) and
+// refreshOutputModalIfShowing (auto-tail path) so both reason about the same
+// line count — earlier the refresh used the RAW line count, which caused the
+// scroll to get yanked around whenever the markdown expansion ratio was large.
+func (m *Model) outputModalLines(content string) []string {
+	cleanContent := xansi.Strip(content)
+	var lines []string
+	if m.outputMdRender != nil && looksLikeMarkdown(cleanContent) {
+		rendered, err := m.outputMdRender.Render(cleanContent)
+		if err == nil {
+			lines = strings.Split(strings.TrimRight(rendered, "\n"), "\n")
+		} else {
+			slog.Warn("outputMdRender failed, falling back to plain text", "error", err)
+		}
+	}
+	if lines == nil {
+		lines = strings.Split(cleanContent, "\n")
+	}
+	for i, line := range lines {
+		stripped := xansi.Strip(line)
+		trimmed := strings.TrimSpace(stripped)
+		if strings.HasPrefix(trimmed, "⚙") || strings.HasPrefix(trimmed, "→") {
+			lines[i] = DimStyle.Render(stripped)
+		}
+	}
+	return lines
+}
+
+// outputModalDims returns the modal's total and visible line heights, matching
+// the layout used by renderOutputModal. Kept in sync with the render path so
+// the auto-tail clamp can reason about the same bounds.
+func (m *Model) outputModalDims() (modalH, visibleH int) {
+	modalH = m.height - 4
+	if modalH < 10 {
+		modalH = 10
+	}
+	visibleH = modalH - 4 // title + footer + borders
+	return
+}
+
 // renderOutputModal renders a fullscreen scrollable modal for agent output.
 // Unlike renderScrollableModal, it uses nearly the full terminal dimensions,
 // renders markdown when detected, and applies distinct styling to tool event lines.
 func (m *Model) renderOutputModal(title, content string, scroll int) (string, int) {
 	modalW := m.width - 4
-	modalH := m.height - 4
+	modalH, visibleH := m.outputModalDims()
 	if modalW < 40 {
 		modalW = 40
-	}
-	if modalH < 10 {
-		modalH = 10
 	}
 
 	innerW := modalW - 4 // account for border + padding
 
-	// Step 1: Strip any pre-existing ANSI escape codes from the raw content so
-	// that DimStyle.Render() and Glamour start from clean text. Without this,
-	// escape sequences embedded in the content (e.g. from tool output) appear
-	// as literal text in the viewport.
-	cleanContent := xansi.Strip(content)
+	allLines := m.outputModalLines(content)
 
-	// Step 2: Optionally render markdown on the clean content, then split into lines.
-	var allLines []string
-	if m.outputMdRender != nil && looksLikeMarkdown(cleanContent) {
-		rendered, err := m.outputMdRender.Render(cleanContent)
-		if err == nil {
-			allLines = strings.Split(strings.TrimRight(rendered, "\n"), "\n")
-		} else {
-			slog.Warn("outputMdRender failed, falling back to plain text", "error", err)
-		}
-	}
-	if allLines == nil {
-		allLines = strings.Split(cleanContent, "\n")
-	}
-
-	// Step 3: Apply dim styling to tool event lines AFTER markdown rendering,
-	// so DimStyle ANSI codes are never fed into Glamour (which would render
-	// them as literal text).
-	for i, line := range allLines {
-		stripped := xansi.Strip(line)
-		trimmed := strings.TrimSpace(stripped)
-		if strings.HasPrefix(trimmed, "⚙") || strings.HasPrefix(trimmed, "→") {
-			allLines[i] = DimStyle.Render(stripped)
-		}
-	}
-
-	// Compute scroll bounds.
-	visibleH := modalH - 4 // -4 for title + footer + borders
 	maxScroll := len(allLines) - visibleH
 	if maxScroll < 0 {
 		maxScroll = 0

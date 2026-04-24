@@ -61,7 +61,15 @@ func (m Model) renderLeftPanel(panelWidth, panelHeight int) string {
 	// Count active runtime sessions for the agents pane.
 	sortedRT := m.sortedRuntimeSessions()
 	agentCount := len(sortedRT)
-	bottomContentH := 1 + agentCount // "Workers" header + one line per agent
+	// Each active worker with activity gets one extra "↳ <last-activity>" line
+	// below it so users can see what it's doing without opening the grid.
+	activityLineCount := 0
+	for _, rs := range sortedRT {
+		if rs.status == "active" {
+			activityLineCount++
+		}
+	}
+	bottomContentH := 1 + agentCount + activityLineCount // "Workers" header + one line per agent (+ activity line for active workers)
 	if agentCount == 0 {
 		bottomContentH = 2 // header + "No workers running"
 	}
@@ -162,6 +170,21 @@ func (m Model) renderLeftPanel(panelWidth, panelHeight int) string {
 				agentLines = append(agentLines, DimStyle.Render("⚡"+statusIcon+truncateStr(label, contentWidth-4)))
 			} else {
 				agentLines = append(agentLines, line)
+				// Show last activity for active workers so users can see what
+				// they're doing without opening the grid. bottomContentH is
+				// sized above to reserve a row per active worker; do not skip
+				// the append when there is no activity yet, or the height
+				// reservation won't match the rendered content.
+				const indent = "  ↳ "
+				activityText := "waiting for activity…"
+				if n := len(rs.activities); n > 0 {
+					activityText = rs.activities[n-1].label
+				}
+				maxActivityW := contentWidth - len([]rune(indent))
+				if maxActivityW < 1 {
+					maxActivityW = 1
+				}
+				agentLines = append(agentLines, DimStyle.Render(indent+truncateStr(activityText, maxActivityW)))
 			}
 		}
 	}
@@ -187,12 +210,19 @@ func (m Model) renderLeftPanel(panelWidth, panelHeight int) string {
 }
 
 // leftPanelAgentsPaneHeight returns the rendered height of the Agents bottom pane
-// in the left panel, for use in mouse hit-testing.
+// in the left panel, for use in mouse hit-testing. Must stay in sync with the
+// height math inside renderLeftPanel.
 func (m *Model) leftPanelAgentsPaneHeight() int {
 	paneFrameV := FocusedPaneStyle.GetVerticalBorderSize()
 	sortedRT := m.sortedRuntimeSessions()
 	agentCount := len(sortedRT)
-	bottomContentH := 1 + agentCount
+	activityLineCount := 0
+	for _, rs := range sortedRT {
+		if rs.status == "active" {
+			activityLineCount++
+		}
+	}
+	bottomContentH := 1 + agentCount + activityLineCount
 	if agentCount == 0 {
 		bottomContentH = 2
 	}

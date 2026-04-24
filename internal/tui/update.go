@@ -35,14 +35,19 @@ func (m *Model) updatePromptModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 }
 
 // updateOutputModal handles key events when the output modal is visible.
+// Any upward movement sets userScrolled so new session events don't yank the
+// view back to the bottom; the view-path clamp (renderOutputModal) is what
+// ultimately bounds the forward-moving keys.
 func (m *Model) updateOutputModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc", "o", "q":
 		m.outputModal.show = false
 		m.outputModal.sessionID = ""
+		m.outputModal.userScrolled = false
 	case "up", "k":
 		if m.outputModal.scroll > 0 {
 			m.outputModal.scroll--
+			m.outputModal.userScrolled = true
 		}
 	case "down", "j":
 		m.outputModal.scroll++
@@ -51,8 +56,16 @@ func (m *Model) updateOutputModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if m.outputModal.scroll < 0 {
 			m.outputModal.scroll = 0
 		}
+		m.outputModal.userScrolled = true
 	case "ctrl+d":
 		m.outputModal.scroll += 10
+	case "g":
+		m.outputModal.scroll = 0
+		m.outputModal.userScrolled = true
+	case "G", "end":
+		// Jump to bottom; renderOutputModal will clamp to maxScroll.
+		m.outputModal.scroll = 1 << 30
+		m.outputModal.userScrolled = false
 	}
 	return m, nil
 }
@@ -84,6 +97,7 @@ func (m *Model) updateGrid(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				m.outputModal.content = output
 				m.outputModal.scroll = len(strings.Split(output, "\n")) // auto-tail: start at bottom
 				m.outputModal.sessionID = rs.sessionID
+				m.outputModal.userScrolled = false
 			}
 		}
 		return m, nil

@@ -75,10 +75,11 @@ type promptModalState struct {
 
 // outputModalState holds all state for the output-viewing modal overlay.
 type outputModalState struct {
-	show      bool
-	content   string // the full output text being displayed
-	scroll    int    // scroll offset in lines
-	sessionID string // runtime session ID being viewed
+	show         bool
+	content      string // the full output text being displayed
+	scroll       int    // scroll offset in lines
+	sessionID    string // runtime session ID being viewed
+	userScrolled bool   // true when the user has scrolled away from the bottom; suppresses auto-tail on new events
 }
 
 // cmdPopupState holds all state for the slash command autocomplete popup.
@@ -1494,25 +1495,27 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // refreshOutputModalIfShowing updates the output modal's content if it is
 // currently displaying the given session, and applies an auto-tail policy.
 // Called from session text/reasoning/tool_call/tool_result message handlers.
+//
+// Auto-tail only fires when the user hasn't scrolled back (userScrolled=false).
+// Line counting uses the same markdown-rendered view the render path sees, so
+// the clamp matches what the user is actually looking at — an earlier bug
+// computed bounds on raw content lines and yanked the scroll position around
+// whenever markdown expansion changed the line count.
 func (m *Model) refreshOutputModalIfShowing(sessionID string, slot *runtimeSlot) {
 	if !m.outputModal.show || m.outputModal.sessionID != sessionID {
 		return
 	}
 	m.outputModal.content = composeSlotContent(slot)
-	allLines := strings.Split(m.outputModal.content, "\n")
-	modalH := m.height - 4
-	if modalH < 10 {
-		modalH = 10
+	if m.outputModal.userScrolled {
+		return
 	}
-	// NOTE: maxScroll is computed on raw content lines; after markdown rendering
-	// the actual rendered line count may differ. This is an approximation for auto-tail.
-	maxScroll := len(allLines) - (modalH - 4)
+	allLines := m.outputModalLines(m.outputModal.content)
+	_, visibleH := m.outputModalDims()
+	maxScroll := len(allLines) - visibleH
 	if maxScroll < 0 {
 		maxScroll = 0
 	}
-	if m.outputModal.scroll >= maxScroll-2 {
-		m.outputModal.scroll = maxScroll
-	}
+	m.outputModal.scroll = maxScroll
 }
 
 // composeSlotContent returns the runtime slot's rendered body for the
