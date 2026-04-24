@@ -36,7 +36,9 @@ If the repo has no tests or you cannot determine how to run them, set
 
 ## Reporting the outcome
 
-Call `complete` with a JSON payload:
+{{ instructions.call-complete }}
+
+The `complete` payload has these fields:
 
 - `passed` — `true` if every test ran passed; `false` otherwise.
 - `summary` — short description of what ran. On failure, include the

@@ -39,7 +39,9 @@ Do not assume behavior — verify it.
 
 ## Reporting the outcome
 
-Call `complete` with a JSON payload:
+{{ instructions.call-complete }}
+
+The `complete` payload has these fields:
 
 - `passed` — `true` when every test case passed; `false` if any case
   failed or was blocked.

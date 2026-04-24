@@ -59,6 +59,13 @@ type TaskState struct {
 	// recently executed node. Useful for extracting the node's
 	// conversational output.
 	FinalText string
+
+	// ExitNode is the node id whose output is the graph's terminal
+	// output. Set by ExecuteTask from Definition.Exit; the executor
+	// reads NodeOutputs[ExitNode] and surfaces it on task-completion
+	// events so auto-dispatch consumers (decomposition) can read the
+	// graph's structured output without re-running it.
+	ExitNode string
 }
 
 // NewTaskState creates a TaskState with the required identity and workspace fields.

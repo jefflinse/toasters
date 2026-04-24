@@ -56,3 +56,12 @@ If the findings leave a genuine scope question you cannot resolve (e.g.
 acceptable?"), call the `ask_user` tool with a concise question and 2–4
 suggested options. Do not ask about implementation details you could
 decide yourself — save `ask_user` for scope and intent.
+
+## Output
+
+{{ instructions.call-complete }}
+
+Put the full plan (numbered list, file paths, signatures) in the
+`summary` field of the `complete` call. The implementer reads that
+field verbatim — if you wrote the plan as prose outside the tool call,
+it is discarded.

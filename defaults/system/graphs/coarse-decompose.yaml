@@ -1,0 +1,19 @@
+id: coarse-decompose
+name: Coarse Decompose
+description: >
+  Break a job description into a dependency-ordered list of Tasks. The
+  service auto-dispatches this graph on job creation; its structured
+  output is consumed to create Task rows in the database. Does not pick
+  graphs — fine-decompose runs per-task afterwards.
+tags: [kind:decompose, scope:coarse, system:true]
+
+entry: decompose
+exit: decompose
+
+nodes:
+  - id: decompose
+    role: coarse-decomposer
+
+edges:
+  - from: decompose
+    to: end

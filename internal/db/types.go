@@ -13,14 +13,13 @@ var ErrNotFound = errors.New("not found")
 type JobStatus string
 
 const (
-	JobStatusPending     JobStatus = "pending"
-	JobStatusSettingUp   JobStatus = "setting_up"
-	JobStatusDecomposing JobStatus = "decomposing"
-	JobStatusActive      JobStatus = "active"
-	JobStatusPaused      JobStatus = "paused"
-	JobStatusCompleted   JobStatus = "completed"
-	JobStatusFailed      JobStatus = "failed"
-	JobStatusCancelled   JobStatus = "cancelled"
+	JobStatusPending   JobStatus = "pending"
+	JobStatusSettingUp JobStatus = "setting_up"
+	JobStatusActive    JobStatus = "active"
+	JobStatusPaused    JobStatus = "paused"
+	JobStatusCompleted JobStatus = "completed"
+	JobStatusFailed    JobStatus = "failed"
+	JobStatusCancelled JobStatus = "cancelled"
 )
 
 // TaskStatus represents the lifecycle state of a task.
@@ -83,6 +82,7 @@ type Task struct {
 	GraphID         string // assigned graph definition id (may be empty)
 	ParentID        string // DAG edge, empty for root tasks
 	SortOrder       int
+	DecomposeDepth  int // times this task (or its ancestors) has been split by fine-decompose
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
 	Summary         string          // completion summary or failure reason

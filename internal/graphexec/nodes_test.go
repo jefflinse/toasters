@@ -14,6 +14,7 @@ import (
 	"github.com/jefflinse/mycelium/agent"
 	"github.com/jefflinse/rhizome"
 
+	"github.com/jefflinse/toasters/internal/db"
 	"github.com/jefflinse/toasters/internal/hitl"
 	"github.com/jefflinse/toasters/internal/prompt"
 	"github.com/jefflinse/toasters/internal/provider"
@@ -114,12 +115,16 @@ func toolCallResponse(id, name, argsJSON string) []provider.StreamEvent {
 	}
 }
 
-// testEngine returns a prompt engine loaded with the standard user defaults
-// (roles + schemas). Tests call this to get a ready-to-use engine without
-// hand-rolling role files in every test.
+// testEngine returns a prompt engine loaded with the standard system and
+// user defaults (roles + schemas + instructions + toolchains). Tests call
+// this to get a ready-to-use engine without hand-rolling role files in
+// every test.
 func testEngine(t testing.TB) *prompt.Engine {
 	t.Helper()
 	e := prompt.NewEngine()
+	if err := e.LoadDir("../../defaults/system", "system"); err != nil {
+		t.Fatalf("LoadDir system defaults: %v", err)
+	}
 	if err := e.LoadDir("../../defaults/user", "user"); err != nil {
 		t.Fatalf("LoadDir user defaults: %v", err)
 	}
@@ -325,11 +330,11 @@ func (m *mockEventSink) BroadcastGraphCompleted(_, _, summary string) {
 func (m *mockEventSink) BroadcastGraphFailed(_, _, errMsg string) {
 	m.record(fmt.Sprintf("graph_failed:%s", errMsg))
 }
-func (m *mockEventSink) BroadcastTaskCompleted(_, _, teamID, _ string, hasNextTask bool) {
-	m.record(fmt.Sprintf("task_completed:%s:%v", teamID, hasNextTask))
+func (m *mockEventSink) BroadcastTaskCompleted(_, _, graphID, _ string, _ json.RawMessage, hasNextTask bool) {
+	m.record(fmt.Sprintf("task_completed:%s:%v", graphID, hasNextTask))
 }
-func (m *mockEventSink) BroadcastTaskFailed(_, _, teamID, errMsg string) {
-	m.record(fmt.Sprintf("task_failed:%s:%s", teamID, errMsg))
+func (m *mockEventSink) BroadcastTaskFailed(_, _, graphID, errMsg string) {
+	m.record(fmt.Sprintf("task_failed:%s:%s", graphID, errMsg))
 }
 func (m *mockEventSink) BroadcastPrompt(requestID, question string, _ []string, source string) {
 	m.record(fmt.Sprintf("prompt:%s:%s:%s", source, requestID, question))
@@ -624,6 +629,115 @@ func TestBugFixGraph_PopulatesTypedEnvelope(t *testing.T) {
 	if got := result.GetArtifactString("investigate.summary"); got != "finding" {
 		t.Errorf("artifact investigate.summary = %q, want %q", got, "finding")
 	}
+}
+
+// --- Session persistence ---
+
+func TestRoleNode_PersistsSessionTranscript(t *testing.T) {
+	store := openInMemoryStore(t)
+
+	cfg, _ := templateConfig(t, [][]provider.StreamEvent{
+		summaryResp("investigation complete"),
+	})
+	cfg.Store = store
+
+	role := cfg.PromptEngine.Role("investigator")
+	if role == nil {
+		t.Fatal("investigator not loaded")
+	}
+	node := RoleNode(cfg, role, "investigate")
+	state := NewTaskState("job-1", "task-1", "/workspace", "mock", "test-model")
+
+	if _, err := node(context.Background(), state); err != nil {
+		t.Fatalf("node run: %v", err)
+	}
+
+	// Look up the worker_sessions row by task_id.
+	sessions, err := store.ListSessionsForTask(context.Background(), "task-1")
+	if err != nil {
+		t.Fatalf("querying sessions: %v", err)
+	}
+	if len(sessions) != 1 {
+		t.Fatalf("want 1 session row, got %d", len(sessions))
+	}
+	sess := sessions[0]
+	if sess.WorkerID != "graph:investigate" {
+		t.Errorf("worker_id = %q, want graph:investigate", sess.WorkerID)
+	}
+	if sess.Status != "completed" {
+		t.Errorf("status = %q, want completed", sess.Status)
+	}
+
+	// Transcript must contain the user message and the assistant tool call.
+	msgs, err := store.ListSessionMessages(context.Background(), sess.ID)
+	if err != nil {
+		t.Fatalf("listing messages: %v", err)
+	}
+	if len(msgs) < 2 {
+		t.Fatalf("want >=2 session messages, got %d", len(msgs))
+	}
+	hasAssistantCall := false
+	for _, m := range msgs {
+		if m.Role == "assistant" && m.ToolCalls != "" {
+			hasAssistantCall = true
+		}
+	}
+	if !hasAssistantCall {
+		t.Error("transcript missing assistant message with tool call")
+	}
+}
+
+func TestRoleNode_PersistsSessionOnMissingTerminal(t *testing.T) {
+	store := openInMemoryStore(t)
+
+	// Assistant replies with plain text, no tool calls → ErrNoTerminalTool.
+	textOnly := []provider.StreamEvent{
+		{Type: provider.EventText, Text: "here is the plan as prose — forgot to call complete"},
+	}
+	cfg, _ := templateConfig(t, [][]provider.StreamEvent{textOnly})
+	cfg.Store = store
+
+	role := cfg.PromptEngine.Role("planner")
+	node := RoleNode(cfg, role, "plan")
+	state := NewTaskState("job-1", "task-1", "/workspace", "mock", "test-model")
+
+	_, err := node(context.Background(), state)
+	if err == nil {
+		t.Fatal("expected ErrNoTerminalTool propagation")
+	}
+	if !strings.Contains(err.Error(), "terminal") && !strings.Contains(err.Error(), "tool") {
+		t.Logf("err = %v", err) // informational
+	}
+
+	// Transcript must still land in the DB so the failure is debuggable.
+	sessions, err := store.ListSessionsForTask(context.Background(), "task-1")
+	if err != nil {
+		t.Fatalf("querying sessions: %v", err)
+	}
+	if len(sessions) != 1 {
+		t.Fatalf("want 1 session row even on failure, got %d", len(sessions))
+	}
+	if sessions[0].Status != "failed" {
+		t.Errorf("status = %q, want failed", sessions[0].Status)
+	}
+	msgs, err := store.ListSessionMessages(context.Background(), sessions[0].ID)
+	if err != nil {
+		t.Fatalf("listing messages: %v", err)
+	}
+	if len(msgs) == 0 {
+		t.Fatal("expected transcript messages even on failure")
+	}
+}
+
+func openInMemoryStore(t *testing.T) db.Store {
+	t.Helper()
+	path := t.TempDir() + "/sessions.db"
+	store, err := db.Open(path)
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	return store
 }
 
 // Compile-time interface checks.

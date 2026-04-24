@@ -141,7 +141,7 @@ func (m *Model) updateJobsModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if m.jobsModal.focus == 0 && len(m.jobsModal.jobs) > 0 && m.jobsModal.jobIdx < len(m.jobsModal.jobs) {
 			job := m.jobsModal.jobs[m.jobsModal.jobIdx]
 			if job.Status == service.JobStatusActive || job.Status == service.JobStatusPending ||
-				job.Status == service.JobStatusSettingUp || job.Status == service.JobStatusDecomposing {
+				job.Status == service.JobStatusSettingUp {
 				m.jobsModal.confirmCancel = true
 			}
 		}
@@ -266,8 +266,6 @@ func (m *Model) renderJobsModal() string {
 				icon = "✗"
 			case service.JobStatusSettingUp:
 				icon = "⚙"
-			case service.JobStatusDecomposing:
-				icon = "◈"
 			default:
 				icon = "·"
 			}
@@ -326,8 +324,6 @@ func (m *Model) renderJobsModal() string {
 			statusStr = lipgloss.NewStyle().Foreground(lipgloss.Color("11")).Render(string(selectedJob.Status))
 		case service.JobStatusSettingUp:
 			statusStr = lipgloss.NewStyle().Foreground(lipgloss.Color("178")).Render(string(selectedJob.Status))
-		case service.JobStatusDecomposing:
-			statusStr = lipgloss.NewStyle().Foreground(lipgloss.Color("38")).Render(string(selectedJob.Status))
 		default:
 			statusStr = DimStyle.Render(string(selectedJob.Status))
 		}
@@ -522,7 +518,7 @@ func (m *Model) renderJobsModal() string {
 	cancelHint := "[Ctrl+X] Cancel Job"
 	canCancel := selectedJob != nil &&
 		(selectedJob.Status == service.JobStatusActive || selectedJob.Status == service.JobStatusPending ||
-			selectedJob.Status == service.JobStatusSettingUp || selectedJob.Status == service.JobStatusDecomposing)
+			selectedJob.Status == service.JobStatusSettingUp)
 	if !canCancel {
 		cancelHint = DimStyle.Render(cancelHint)
 	}

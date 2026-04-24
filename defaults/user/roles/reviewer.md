@@ -51,7 +51,9 @@ and clean, approve it.
 
 ## Reporting the decision
 
-Call `complete` with a JSON payload:
+{{ instructions.call-complete }}
+
+The `complete` payload has these fields:
 
 - `approved` — `true` when the implementation satisfies the plan and
   needs no further revision; `false` when the work needs changes.

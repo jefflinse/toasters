@@ -141,25 +141,145 @@ func TestBundled_Prototype_HitsCycleCap(t *testing.T) {
 }
 
 func TestBundled_AllGraphsCompile(t *testing.T) {
-	entries, err := defaults.UserFiles.ReadDir("user/graphs")
-	if err != nil {
-		t.Fatalf("ReadDir: %v", err)
-	}
-	if len(entries) == 0 {
-		t.Fatal("no bundled graphs found — expected at least one")
+	cfg, _ := templateConfig(t, nil)
+
+	type catalog struct {
+		root     string
+		fs       func(path string) ([]byte, error)
+		readDir  func(path string) ([]string, error)
+		loadFunc func(*testing.T, string) *Definition
 	}
 
-	cfg, _ := templateConfig(t, nil)
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".yaml") {
-			continue
-		}
-		t.Run(e.Name(), func(t *testing.T) {
-			name := strings.TrimSuffix(e.Name(), ".yaml")
-			def := loadBundled(t, name)
-			if _, err := Compile(def, cfg, nil); err != nil {
-				t.Errorf("Compile %s: %v", name, err)
+	userCat := catalog{
+		root: "user/graphs",
+		readDir: func(p string) ([]string, error) {
+			entries, err := defaults.UserFiles.ReadDir(p)
+			if err != nil {
+				return nil, err
 			}
-		})
+			names := make([]string, 0, len(entries))
+			for _, e := range entries {
+				if !e.IsDir() && strings.HasSuffix(e.Name(), ".yaml") {
+					names = append(names, e.Name())
+				}
+			}
+			return names, nil
+		},
+		loadFunc: loadBundled,
 	}
+	sysCat := catalog{
+		root: "system/graphs",
+		readDir: func(p string) ([]string, error) {
+			entries, err := defaults.SystemFiles.ReadDir(p)
+			if err != nil {
+				return nil, err
+			}
+			names := make([]string, 0, len(entries))
+			for _, e := range entries {
+				if !e.IsDir() && strings.HasSuffix(e.Name(), ".yaml") {
+					names = append(names, e.Name())
+				}
+			}
+			return names, nil
+		},
+		loadFunc: loadBundledSystem,
+	}
+
+	for _, c := range []catalog{userCat, sysCat} {
+		names, err := c.readDir(c.root)
+		if err != nil {
+			t.Fatalf("ReadDir %s: %v", c.root, err)
+		}
+		if len(names) == 0 {
+			t.Fatalf("no bundled graphs found under %s", c.root)
+		}
+		for _, name := range names {
+			file := name
+			t.Run(c.root+"/"+file, func(t *testing.T) {
+				id := strings.TrimSuffix(file, ".yaml")
+				def := c.loadFunc(t, id)
+				if _, err := Compile(def, cfg, nil); err != nil {
+					t.Errorf("Compile %s/%s: %v", c.root, id, err)
+				}
+			})
+		}
+	}
+}
+
+// --- system/graphs/coarse-decompose & fine-decompose run-through ---
+
+func TestBundled_CoarseDecompose_EmitsTasks(t *testing.T) {
+	def := loadBundledSystem(t, "coarse-decompose")
+	cfg, _ := templateConfig(t, [][]provider.StreamEvent{
+		completeJSON(`{
+		  "tasks": [
+		    {"title": "t1", "description": "do first thing", "depends_on": []},
+		    {"title": "t2", "description": "do second thing", "depends_on": [0]}
+		  ],
+		  "reason": "split by layer"
+		}`),
+	})
+	compiled, err := Compile(def, cfg, nil)
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+
+	state := NewTaskState("j", "t", "/w", "mock", "test-model")
+	state.SetArtifact("job.description", "build X")
+	state.ExitNode = def.Exit
+
+	result, err := compiled.Run(context.Background(), state)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	out := exitNodeOutput(result)
+	if len(out) == 0 {
+		t.Fatal("no exit-node output recorded")
+	}
+	if !strings.Contains(string(out), `"t1"`) || !strings.Contains(string(out), `"t2"`) {
+		t.Errorf("output missing task titles: %s", out)
+	}
+}
+
+func TestBundled_FineDecompose_EmitsGraphID(t *testing.T) {
+	def := loadBundledSystem(t, "fine-decompose")
+	cfg, _ := templateConfig(t, [][]provider.StreamEvent{
+		completeJSON(`{"graph_id":"go-feature","reason":"Go implementation task"}`),
+	})
+	compiled, err := Compile(def, cfg, nil)
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+
+	state := NewTaskState("j", "t", "/w", "mock", "test-model")
+	state.SetArtifact("task.description", "implement thing in Go")
+	state.ExitNode = def.Exit
+
+	result, err := compiled.Run(context.Background(), state)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	out := exitNodeOutput(result)
+	if !strings.Contains(string(out), `"go-feature"`) {
+		t.Errorf("output missing graph_id: %s", out)
+	}
+}
+
+// loadBundledSystem reads a bundled graph from defaults/system/graphs/.
+func loadBundledSystem(t *testing.T, name string) *Definition {
+	t.Helper()
+	path := "system/graphs/" + name + ".yaml"
+	f, err := defaults.SystemFiles.Open(path)
+	if err != nil {
+		t.Fatalf("open %s: %v", path, err)
+	}
+	defer func() { _ = f.Close() }()
+
+	def, err := ParseDefinitionReader(f)
+	if err != nil {
+		t.Fatalf("parse %s: %v", path, err)
+	}
+	return def
 }

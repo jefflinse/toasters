@@ -45,21 +45,17 @@ func (ot *operatorTools) Definitions() []runtime.ToolDef {
 	defs := []runtime.ToolDef{
 		{
 			Name:        "consult_worker",
-			Description: "Consult a specialized system worker. Spawns a fresh worker session, blocks until it completes, and returns the worker's response. Use this to delegate analysis, planning, or review tasks.",
+			Description: "Consult a specialized system worker. Spawns a fresh worker session, blocks until it completes, and returns the worker's response. Use for scheduler or blocker-handler — decomposition is automatic and not invoked through this tool.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
 					"worker_name": {
 						"type": "string",
-						"description": "Name of the system worker to consult (e.g. 'decomposer', 'scheduler', 'blocker-handler')"
+						"description": "Name of the system worker to consult (e.g. 'scheduler', 'blocker-handler')"
 					},
 					"message": {
 						"type": "string",
 						"description": "The message or task to send to the worker"
-					},
-					"job_id": {
-						"type": "string",
-						"description": "Optional job ID. Required when consulting the decomposer — sets the job status to decomposing."
 					}
 				},
 				"required": ["worker_name", "message"]
@@ -157,10 +153,11 @@ func (ot *operatorTools) Definitions() []runtime.ToolDef {
 		}`),
 	})
 
-	// Append create_job, create_task, assign_task, save_work_request, and
-	// start_job from SystemTools so the operator can create jobs, persist
-	// work requests, and act directly on decomposer output.
-	wantFromSystem := map[string]bool{"create_job": true, "create_task": true, "assign_task": true, "save_work_request": true, "start_job": true}
+	// Append create_job and save_work_request from SystemTools so the operator
+	// can create jobs and persist work requests. Task creation and graph
+	// assignment are no longer operator-driven — coarse-decompose and
+	// fine-decompose handle those automatically after create_job.
+	wantFromSystem := map[string]bool{"create_job": true, "save_work_request": true}
 	for _, td := range ot.systemTools.Definitions() {
 		if wantFromSystem[td.Name] {
 			defs = append(defs, td)
@@ -187,14 +184,8 @@ func (ot *operatorTools) Execute(ctx context.Context, name string, args json.Raw
 		return ot.setupWorkspace(ctx, args)
 	case "create_job":
 		return ot.systemTools.Execute(ctx, "create_job", args)
-	case "create_task":
-		return ot.systemTools.Execute(ctx, "create_task", args)
-	case "assign_task":
-		return ot.systemTools.Execute(ctx, "assign_task", args)
 	case "save_work_request":
 		return ot.systemTools.Execute(ctx, "save_work_request", args)
-	case "start_job":
-		return ot.systemTools.Execute(ctx, "start_job", args)
 	case "ask_user":
 		return ot.askUser(ctx, args)
 	default:
@@ -206,7 +197,6 @@ func (ot *operatorTools) consultWorker(ctx context.Context, args json.RawMessage
 	var params struct {
 		WorkerName string `json:"worker_name"`
 		Message    string `json:"message"`
-		JobID      string `json:"job_id"` // optional; used to update job status for decomposer
 	}
 	if err := json.Unmarshal(args, &params); err != nil {
 		return "", fmt.Errorf("parsing consult_worker args: %w", err)
@@ -230,17 +220,6 @@ func (ot *operatorTools) consultWorker(ctx context.Context, args json.RawMessage
 		)
 	}
 
-	// When consulting the decomposer, transition the job to decomposing status.
-	if isDecomposer(params.WorkerName) && params.JobID != "" {
-		if err := ot.store.UpdateJobStatus(ctx, params.JobID, db.JobStatusDecomposing); err != nil {
-			slog.Warn("failed to set job status to decomposing",
-				"job_id", params.JobID,
-				"error", err,
-			)
-			// non-fatal: continue with the decomposer session regardless
-		}
-	}
-
 	// Verify the role exists in the prompt engine and is a system role.
 	// This prevents user-defined roles from gaining system-level tools
 	// (create_job, assign_task, etc.) via consult_worker.
@@ -260,57 +239,22 @@ func (ot *operatorTools) consultWorker(ctx context.Context, args json.RawMessage
 		return "", fmt.Errorf("composing system worker %q: %w", params.WorkerName, err)
 	}
 	declaredTools := role.Tools
-	workerProvider := ot.defaultProvider
-	workerModel := ot.defaultModel
 
 	slog.Info("consulting system worker",
 		"worker", params.WorkerName,
-		"provider", workerProvider,
-		"model", workerModel,
+		"provider", ot.defaultProvider,
+		"model", ot.defaultModel,
 	)
 
-	// Determine tool executor and work directory. The decomposer uses CoreTools
-	// (built by the runtime, which includes spawn_worker) with query_graphs as
-	// an extra-tools overlay. All other system workers get SystemTools directly.
-	var toolExecutor runtime.ToolExecutor
-	var extraTools runtime.ToolExecutor
-	workDir := ot.workDir
-
-	if isDecomposer(params.WorkerName) {
-		// Decomposer: don't set toolExecutor so the runtime builds CoreTools
-		// (including spawn_worker). Layer query_graphs on top as ExtraTools.
-		extraTools = &queryGraphsExecutor{systemTools: ot.systemTools}
-
-		// Use the job's workspace directory so spawned explorers operate
-		// in the right location.
-		if params.JobID != "" {
-			job, jobErr := ot.store.GetJob(ctx, params.JobID)
-			if jobErr == nil && job.WorkspaceDir != "" {
-				workDir = job.WorkspaceDir
-			}
-		}
-	} else {
-		toolExecutor = ot.systemTools
-	}
+	// System workers use SystemTools directly; decomposition has been moved
+	// to auto-dispatched graphs (coarse-decompose / fine-decompose) and no
+	// longer flows through consult_worker.
+	toolExecutor := runtime.ToolExecutor(ot.systemTools)
 
 	// Build the filtered tool list from the worker's declared tools. This
 	// ensures each system worker only sees the tools it's supposed to have.
-	//
-	// For the decomposer, we use DisallowedTools instead of Tools because
-	// spawn_worker comes from CoreTools (built by the runtime), and its
-	// definition isn't available yet. We deny everything except spawn_worker
-	// so the decomposer sees only spawn_worker + query_graphs (from ExtraTools).
 	var workerTools []runtime.ToolDef
-	var disallowedTools []string
-
-	if isDecomposer(params.WorkerName) {
-		// Block file and shell tools — the decomposer delegates exploration
-		// to Explorer workers via spawn_worker.
-		disallowedTools = []string{
-			"read_file", "write_file", "edit_file", "glob", "grep",
-			"shell", "web_fetch", "report_task_progress",
-		}
-	} else if len(declaredTools) > 0 {
+	if len(declaredTools) > 0 {
 		allDefs := toolExecutor.Definitions()
 		defsByName := make(map[string]runtime.ToolDef, len(allDefs))
 		for _, d := range allDefs {
@@ -329,16 +273,14 @@ func (ot *operatorTools) consultWorker(ctx context.Context, args json.RawMessage
 	}
 
 	opts := runtime.SpawnOpts{
-		WorkerID:        params.WorkerName,
-		ProviderName:    workerProvider,
-		Model:           workerModel,
-		SystemPrompt:    systemPrompt,
-		Tools:           workerTools,
-		DisallowedTools: disallowedTools,
-		ToolExecutor:    toolExecutor,
-		ExtraTools:      extraTools,
-		InitialMessage:  params.Message,
-		WorkDir:         workDir,
+		WorkerID:       params.WorkerName,
+		ProviderName:   ot.defaultProvider,
+		Model:          ot.defaultModel,
+		SystemPrompt:   systemPrompt,
+		Tools:          workerTools,
+		ToolExecutor:   toolExecutor,
+		InitialMessage: params.Message,
+		WorkDir:        ot.workDir,
 	}
 
 	result, err := ot.rt.SpawnAndWait(ctx, opts)

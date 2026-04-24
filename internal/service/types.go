@@ -25,8 +25,6 @@ const (
 	JobStatusPending JobStatus = "pending"
 	// JobStatusSettingUp means the job is being initialised (workspace, context).
 	JobStatusSettingUp JobStatus = "setting_up"
-	// JobStatusDecomposing means the decomposer is breaking the job into tasks.
-	JobStatusDecomposing JobStatus = "decomposing"
 	// JobStatusActive means at least one task is currently being worked on.
 	JobStatusActive JobStatus = "active"
 	// JobStatusPaused means the job is temporarily suspended.

@@ -32,10 +32,14 @@ func TestRun_FirstRun(t *testing.T) {
 	assertDirExists(t, filepath.Join(configDir, "system", "roles"))
 	assertDirExists(t, filepath.Join(configDir, "system", "skills"))
 	assertFileExists(t, filepath.Join(configDir, "system", "roles", "operator.md"))
-	assertFileExists(t, filepath.Join(configDir, "system", "roles", "decomposer.md"))
+	assertFileExists(t, filepath.Join(configDir, "system", "roles", "coarse-decomposer.md"))
+	assertFileExists(t, filepath.Join(configDir, "system", "roles", "fine-decomposer.md"))
 	assertFileExists(t, filepath.Join(configDir, "system", "roles", "scheduler.md"))
 	assertFileExists(t, filepath.Join(configDir, "system", "roles", "blocker-handler.md"))
 	assertFileExists(t, filepath.Join(configDir, "system", "skills", "orchestration.md"))
+	assertFileExists(t, filepath.Join(configDir, "system", "schemas", "decomposition-result.yaml"))
+	assertFileExists(t, filepath.Join(configDir, "system", "graphs", "coarse-decompose.yaml"))
+	assertFileExists(t, filepath.Join(configDir, "system", "graphs", "fine-decompose.yaml"))
 
 	// Verify user/ structure was created.
 	assertDirExists(t, filepath.Join(configDir, "user", "skills"))

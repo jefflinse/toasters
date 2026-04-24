@@ -12,19 +12,23 @@ import (
 
 // Tool name constants for building allowlists.
 const (
-	ToolReadFile  = "read_file"
-	ToolWriteFile = "write_file"
-	ToolEditFile  = "edit_file"
-	ToolGlob      = "glob"
-	ToolGrep      = "grep"
-	ToolShell     = "shell"
-	ToolWebFetch  = "web_fetch"
+	ToolReadFile    = "read_file"
+	ToolWriteFile   = "write_file"
+	ToolEditFile    = "edit_file"
+	ToolGlob        = "glob"
+	ToolGrep        = "grep"
+	ToolShell       = "shell"
+	ToolWebFetch    = "web_fetch"
+	ToolQueryGraphs = "query_graphs"
 )
 
 // Common tool sets for node builders.
 var (
-	// ReadOnlyTools allows only non-mutating tools.
-	ReadOnlyTools = []string{ToolReadFile, ToolGlob, ToolGrep}
+	// ReadOnlyTools allows only non-mutating tools. Includes query_graphs
+	// because it's informational — decomposition roles need it, and it
+	// is harmless to expose to other read-only roles that will not call
+	// it.
+	ReadOnlyTools = []string{ToolReadFile, ToolGlob, ToolGrep, ToolQueryGraphs}
 
 	// WriteTools allows mutation plus reading.
 	WriteTools = []string{ToolReadFile, ToolWriteFile, ToolEditFile, ToolGlob, ToolGrep, ToolShell}

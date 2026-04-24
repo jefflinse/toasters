@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/jefflinse/mycelium/agent"
@@ -37,7 +38,9 @@ func RoleNode(cfg TemplateConfig, role *prompt.Role, nodeID string) rhizome.Node
 
 		tools := toolsForAccess(cfg.ToolExecutor, role.Access)
 
-		res, err := agent.Run(ctx, agent.Config[json.RawMessage]{
+		sess := openGraphSession(ctx, cfg.Store, state, effectiveNodeID(ctx, nodeID), sysPrompt, toolNamesOf(tools), cfg)
+
+		res, runErr := agent.Run(ctx, agent.Config[json.RawMessage]{
 			Provider:     cfg.Provider,
 			Model:        cfg.Model,
 			System:       sysPrompt,
@@ -46,8 +49,14 @@ func RoleNode(cfg TemplateConfig, role *prompt.Role, nodeID string) rhizome.Node
 			OutputSchema: schemaRaw,
 			OnEvent:      onEventSink(ctx),
 		})
-		if err != nil {
-			return state, fmt.Errorf("role %q: %w", role.Name, err)
+		closeGraphSession(ctx, cfg.Store, sess, res, runErr)
+
+		if runErr != nil {
+			if tail := lastAssistantText(res.History); tail != "" {
+				slog.Warn("role node failed without a terminal tool call",
+					"role", role.Name, "node", nodeID, "error", runErr, "tail_chars", len(tail))
+			}
+			return state, fmt.Errorf("role %q: %w", role.Name, runErr)
 		}
 
 		switch res.Status {

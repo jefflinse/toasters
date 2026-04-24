@@ -44,7 +44,9 @@ changes) and confirm results.
 
 ## Reporting the outcome
 
-Call `complete` with a JSON payload:
+{{ instructions.call-complete }}
+
+The `complete` payload has these fields:
 
 - `passed` — `true` when every test ran passed; `false` otherwise.
 - `summary` — short description of what was added and the run result. On

@@ -593,7 +593,8 @@ func (s *LocalService) BroadcastDefinitionsReloaded() {
 
 // BroadcastJobCreated broadcasts a job.created event. Implements
 // operator.SystemEventBroadcaster — called by SystemTools.createJob after the
-// new job is persisted.
+// new job is persisted. Also kicks off coarse-decompose automatically when
+// the job has a description and the graph executor is wired.
 func (s *LocalService) BroadcastJobCreated(jobID, title, description string) {
 	s.broadcast(Event{
 		Type: EventTypeJobCreated,
@@ -603,11 +604,15 @@ func (s *LocalService) BroadcastJobCreated(jobID, title, description string) {
 			Description: description,
 		},
 	})
+	if strings.TrimSpace(description) != "" {
+		s.dispatchCoarseDecompose(jobID, title, description)
+	}
 }
 
 // BroadcastTaskCreated broadcasts a task.created event. Implements
 // operator.SystemEventBroadcaster — called by SystemTools.createTask after the
-// new task is persisted.
+// new task is persisted. When the new task has no graph_id set, the service
+// automatically dispatches fine-decompose to pick one.
 func (s *LocalService) BroadcastTaskCreated(taskID, jobID, title, graphID string) {
 	s.broadcast(Event{
 		Type: EventTypeTaskCreated,
@@ -618,6 +623,34 @@ func (s *LocalService) BroadcastTaskCreated(taskID, jobID, title, graphID string
 			GraphID: graphID,
 		},
 	})
+	if graphID == "" {
+		s.dispatchFineDecomposeForTask(taskID)
+	}
+}
+
+// dispatchFineDecomposeForTask resolves the parent task and its job
+// before handing off to dispatchFineDecompose. Separated out so
+// BroadcastTaskCreated stays terse and only pays DB cost when the task
+// actually needs decomposition.
+func (s *LocalService) dispatchFineDecomposeForTask(taskID string) {
+	if s.cfg.Store == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(s.ctx, 5*time.Second)
+	defer cancel()
+	task, err := s.cfg.Store.GetTask(ctx, taskID)
+	if err != nil {
+		slog.Warn("fine-decompose lookup failed; task missing",
+			"task_id", taskID, "error", err)
+		return
+	}
+	job, err := s.cfg.Store.GetJob(ctx, task.JobID)
+	if err != nil {
+		slog.Warn("fine-decompose lookup failed; job missing",
+			"task_id", taskID, "error", err)
+		return
+	}
+	s.dispatchFineDecompose(task, job)
 }
 
 // BroadcastTaskAssigned broadcasts a task.assigned event. Implements
@@ -718,8 +751,13 @@ func (s *LocalService) BroadcastPrompt(requestID, question string, options []str
 
 // BroadcastTaskCompleted signals task completion to the operator's event loop
 // so it can advance to the next ready task. Called by graphexec.Executor
-// after a graph finishes successfully.
-func (s *LocalService) BroadcastTaskCompleted(jobID, taskID, graphID, summary string, hasNextTask bool) {
+// after a graph finishes successfully. When the completed graph is a
+// decomposition graph, the service consumes the output itself and creates
+// follow-up tasks in the database instead of forwarding to the operator.
+func (s *LocalService) BroadcastTaskCompleted(jobID, taskID, graphID, summary string, output json.RawMessage, hasNextTask bool) {
+	if s.handleDecompositionCompleted(jobID, taskID, graphID, output) {
+		return
+	}
 	op := s.currentOperator()
 	if op == nil {
 		slog.Warn("graph task completed but operator unavailable; next task will not auto-advance",
@@ -774,6 +812,21 @@ func (s *LocalService) currentOperator() *operator.Operator {
 	s.opMu.Lock()
 	defer s.opMu.Unlock()
 	return s.cfg.Operator
+}
+
+// handleDecompositionCompleted consumes task-completion events for the
+// two decomposition graphs. Returns true when it fully handled the event
+// (caller should not forward to the operator). Returns false when the
+// completed graph is not a decomposition graph — the caller continues
+// with its normal forwarding path.
+func (s *LocalService) handleDecompositionCompleted(jobID, taskID, graphID string, output json.RawMessage) bool {
+	if !isDecompositionGraph(graphID) {
+		return false
+	}
+	slog.Info("decomposition graph completed",
+		"graph_id", graphID, "job_id", jobID, "task_id", taskID, "output_bytes", len(output))
+	s.consumeDecompositionOutput(graphID, taskID, output)
+	return true
 }
 
 // BroadcastSessionStarted bridges a runtime session into the unified service
@@ -1561,7 +1614,7 @@ func (s *localJobService) Cancel(ctx context.Context, id string) error {
 	}
 
 	switch dbJob.Status {
-	case db.JobStatusActive, db.JobStatusPending, db.JobStatusSettingUp, db.JobStatusDecomposing:
+	case db.JobStatusActive, db.JobStatusPending, db.JobStatusSettingUp:
 		// cancellable
 	default:
 		return fmt.Errorf("job %s cannot be cancelled (status: %s)", id, dbJob.Status)

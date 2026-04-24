@@ -19,6 +19,14 @@ func (m mapGraphSource) GraphByID(id string) *Definition {
 	return nil
 }
 
+func (m mapGraphSource) Graphs() []*Definition {
+	defs := make([]*Definition, 0, len(m))
+	for _, d := range m {
+		defs = append(defs, d)
+	}
+	return defs
+}
+
 func openTestStoreForDispatch(t *testing.T) db.Store {
 	t.Helper()
 	path := t.TempDir() + "/test.db"

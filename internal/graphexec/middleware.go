@@ -2,6 +2,7 @@ package graphexec
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"time"
@@ -23,8 +24,8 @@ type EventSink interface {
 	BroadcastGraphNodeCompleted(jobID, taskID, node, status string)
 	BroadcastGraphCompleted(jobID, taskID, summary string)
 	BroadcastGraphFailed(jobID, taskID, errMsg string)
-	BroadcastTaskCompleted(jobID, taskID, teamID, summary string, hasNextTask bool)
-	BroadcastTaskFailed(jobID, taskID, teamID, errMsg string)
+	BroadcastTaskCompleted(jobID, taskID, graphID, summary string, output json.RawMessage, hasNextTask bool)
+	BroadcastTaskFailed(jobID, taskID, graphID, errMsg string)
 	// BroadcastPrompt surfaces a HITL question that originated inside a
 	// graph node (via rhizome.Interrupt). Source is typically
 	// "graph:<node>" so the TUI can render an attribution hint.

@@ -44,3 +44,11 @@ Keep the summary under 300 words — the reviewer reads it to orient.
 Do not add error handling, fallbacks, or validation for scenarios that
 cannot happen. Do not add comments that restate what the code does — only
 comment where the *why* is non-obvious.
+
+## Output
+
+{{ instructions.call-complete }}
+
+Put your change summary in the `summary` field of the `complete` call.
+The reviewer and tester read that field verbatim — if you described the
+changes as prose outside the tool call, it is discarded.

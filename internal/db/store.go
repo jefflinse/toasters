@@ -52,6 +52,7 @@ type Store interface {
 	CreateSession(ctx context.Context, session *WorkerSession) error
 	UpdateSession(ctx context.Context, id string, update SessionUpdate) error
 	GetActiveSessions(ctx context.Context) ([]*WorkerSession, error)
+	ListSessionsForTask(ctx context.Context, taskID string) ([]*WorkerSession, error)
 
 	// Session transcripts
 	AppendSessionMessage(ctx context.Context, msg *SessionMessage) error

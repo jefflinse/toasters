@@ -23,11 +23,15 @@ type Schema struct {
 	Fields      map[string]FieldDef `yaml:"fields"`
 }
 
-// FieldDef describes a single field in a Schema.
+// FieldDef describes a single field in a Schema. Simple fields only need
+// Type + Description + Required. For arrays, set Type: "array" and declare
+// Items. For nested objects, set Type: "object" and declare Properties.
 type FieldDef struct {
-	Type        string `yaml:"type"`
-	Description string `yaml:"description"`
-	Required    bool   `yaml:"required"`
+	Type        string              `yaml:"type"`
+	Description string              `yaml:"description"`
+	Required    bool                `yaml:"required"`
+	Items       *FieldDef           `yaml:"items,omitempty"`
+	Properties  map[string]FieldDef `yaml:"properties,omitempty"`
 }
 
 // DefaultSchemaName is the schema used when a role omits `output:`. The
@@ -69,26 +73,7 @@ func (s *Schema) ToJSONSchema() (json.RawMessage, error) {
 	if len(s.Fields) == 0 {
 		return nil, fmt.Errorf("schema %q has no fields", s.Name)
 	}
-	props := make(map[string]any, len(s.Fields))
-	var required []string
-	names := make([]string, 0, len(s.Fields))
-	for name := range s.Fields {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	for _, name := range names {
-		f := s.Fields[name]
-		entry := map[string]any{
-			"type": jsonType(f.Type),
-		}
-		if f.Description != "" {
-			entry["description"] = strings.TrimSpace(f.Description)
-		}
-		props[name] = entry
-		if f.Required {
-			required = append(required, name)
-		}
-	}
+	props, required := fieldsToProperties(s.Fields)
 	doc := map[string]any{
 		"type":       "object",
 		"properties": props,
@@ -97,6 +82,50 @@ func (s *Schema) ToJSONSchema() (json.RawMessage, error) {
 		doc["required"] = required
 	}
 	return json.Marshal(doc)
+}
+
+// fieldsToProperties converts a Schema.Fields map into a JSON Schema
+// properties object plus the required-name list. Handles nested objects
+// (via Properties) and arrays (via Items) recursively.
+func fieldsToProperties(fields map[string]FieldDef) (map[string]any, []string) {
+	props := make(map[string]any, len(fields))
+	var required []string
+	names := make([]string, 0, len(fields))
+	for name := range fields {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		props[name] = fieldToSchema(fields[name])
+		if fields[name].Required {
+			required = append(required, name)
+		}
+	}
+	return props, required
+}
+
+// fieldToSchema produces the JSON Schema fragment for a single field.
+func fieldToSchema(f FieldDef) map[string]any {
+	t := jsonType(f.Type)
+	entry := map[string]any{"type": t}
+	if f.Description != "" {
+		entry["description"] = strings.TrimSpace(f.Description)
+	}
+	switch t {
+	case "array":
+		if f.Items != nil {
+			entry["items"] = fieldToSchema(*f.Items)
+		}
+	case "object":
+		if len(f.Properties) > 0 {
+			nestedProps, nestedReq := fieldsToProperties(f.Properties)
+			entry["properties"] = nestedProps
+			if len(nestedReq) > 0 {
+				entry["required"] = nestedReq
+			}
+		}
+	}
+	return entry
 }
 
 // jsonType normalizes short type names (bool, int, …) to their JSON Schema
@@ -112,6 +141,10 @@ func jsonType(t string) string {
 		return "number"
 	case "string", "text":
 		return "string"
+	case "array", "list":
+		return "array"
+	case "object", "map":
+		return "object"
 	case "":
 		return "string"
 	default:

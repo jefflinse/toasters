@@ -111,8 +111,6 @@ func (m Model) renderLeftPanel(panelWidth, panelHeight int) string {
 				statusPrefix = "✓ "
 			case service.JobStatusSettingUp:
 				statusPrefix = "⚙ "
-			case service.JobStatusDecomposing:
-				statusPrefix = "◈ "
 			default:
 				statusPrefix = "· "
 			}

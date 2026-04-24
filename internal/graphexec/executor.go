@@ -2,6 +2,7 @@ package graphexec
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"time"
@@ -19,9 +20,13 @@ import (
 // GraphSource looks up a declarative graph Definition by ID. Implementations
 // are expected to be concurrency-safe and to hot-reload transparently (for
 // instance, backed by *loader.Loader). A nil GraphSource disables the
-// graph-dispatch path — ExecuteTask falls back to the hard-coded templates.
+// graph-dispatch path.
 type GraphSource interface {
 	GraphByID(id string) *Definition
+	// Graphs returns all loaded definitions. Used by query_graphs to
+	// surface the catalog to decomposition roles. Order is
+	// implementation-defined; callers should not assume stability.
+	Graphs() []*Definition
 }
 
 // Executor wraps rhizome graph execution with toasters infrastructure.
@@ -152,15 +157,38 @@ func (e *Executor) interruptHandler(ctx context.Context, req rhizome.InterruptRe
 // directory. Mirrors the per-spawn pattern used by runtime.SpawnWorker
 // (runtime/runtime.go). CoreTools construction is cheap — no I/O.
 func (e *Executor) buildToolExecutor(workspaceDir string) runtime.ToolExecutor {
-	coreTools := runtime.NewCoreTools(workspaceDir,
+	coreOpts := []runtime.CoreToolsOption{
 		runtime.WithShell(true),
 		runtime.WithStore(e.store),
-	)
+	}
+	if e.graphs != nil {
+		coreOpts = append(coreOpts, runtime.WithGraphCatalog(graphSourceCatalog{e.graphs}))
+	}
+	coreTools := runtime.NewCoreTools(workspaceDir, coreOpts...)
 	if e.mcpManager != nil && len(e.mcpManager.Tools()) > 0 {
 		truncating := mcp.NewTruncatingCaller(e.mcpManager, mcp.DefaultMaxResultLen)
 		return runtime.NewCompositeTools(coreTools, truncating, mcp.ToRuntimeToolDefs(e.mcpManager.Tools()))
 	}
 	return coreTools
+}
+
+// graphSourceCatalog adapts a GraphSource to the runtime.GraphCatalog
+// interface query_graphs expects. Kept in graphexec so runtime stays
+// independent of Definition.
+type graphSourceCatalog struct{ src GraphSource }
+
+func (c graphSourceCatalog) Graphs() []runtime.GraphSummary {
+	defs := c.src.Graphs()
+	out := make([]runtime.GraphSummary, 0, len(defs))
+	for _, d := range defs {
+		out = append(out, runtime.GraphSummary{
+			ID:          d.ID,
+			Name:        d.Name,
+			Description: d.Description,
+			Tags:        d.Tags,
+		})
+	}
+	return out
 }
 
 // Execute runs a compiled graph with the given initial state. It applies
@@ -244,8 +272,11 @@ func (e *Executor) Execute(ctx context.Context, graph *rhizome.CompiledGraph[*Ta
 	if e.eventSink != nil {
 		e.eventSink.BroadcastGraphCompleted(state.JobID, state.TaskID, summary)
 		// Advance the operator. Operator-level task_completed event drives
-		// assignNextTask.
-		e.eventSink.BroadcastTaskCompleted(state.JobID, state.TaskID, graphID, summary, hasNextTask)
+		// assignNextTask. Also carries the exit node's raw JSON output so
+		// auto-dispatch consumers (e.g. decomposition) can parse it without
+		// re-running the graph.
+		exitOutput := exitNodeOutput(result)
+		e.eventSink.BroadcastTaskCompleted(state.JobID, state.TaskID, graphID, summary, exitOutput, hasNextTask)
 	}
 
 	return nil
@@ -300,6 +331,7 @@ func (e *Executor) ExecuteTask(ctx context.Context, req TaskRequest) error {
 		ToolExecutor: e.buildToolExecutor(req.WorkspaceDir),
 		Model:        model,
 		PromptEngine: e.promptEngine,
+		Store:        e.store,
 	}
 
 	if e.graphs == nil {
@@ -318,6 +350,18 @@ func (e *Executor) ExecuteTask(ctx context.Context, req TaskRequest) error {
 	state.SetArtifact("task.description", req.TaskTitle)
 	state.SetArtifact("job.title", req.JobTitle)
 	state.SetArtifact("job.description", req.JobDescription)
+	state.ExitNode = def.Exit
 
 	return e.Execute(ctx, graph, state, req.GraphID)
+}
+
+// exitNodeOutput returns the raw JSON output of the graph's exit node, or
+// nil when no exit node is recorded or the node produced no output. Nodes
+// that produce their output through the NodeContext middleware key into
+// NodeOutputs under the rhizome node id, matching Definition.Exit.
+func exitNodeOutput(state *TaskState) json.RawMessage {
+	if state == nil || state.ExitNode == "" {
+		return nil
+	}
+	return state.GetNodeOutput(state.ExitNode)
 }

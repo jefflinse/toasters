@@ -1720,8 +1720,15 @@ func TestOperatorToolDefinitions(t *testing.T) {
 	tools := newTestOperatorTools(t, nil)
 	defs := tools.Definitions()
 
-	if len(defs) != 12 {
-		t.Fatalf("want 12 tool definitions, got %d", len(defs))
+	// create_task, assign_task, and start_job were retired when
+	// decomposition moved into coarse/fine-decompose graphs.
+	expected := []string{
+		"consult_worker", "surface_to_user", "list_jobs", "query_job",
+		"query_graphs", "setup_workspace", "create_job",
+		"save_work_request", "ask_user",
+	}
+	if len(defs) != len(expected) {
+		t.Fatalf("want %d tool definitions, got %d", len(expected), len(defs))
 	}
 
 	names := make(map[string]bool)
@@ -1729,9 +1736,9 @@ func TestOperatorToolDefinitions(t *testing.T) {
 		names[d.Name] = true
 	}
 
-	for _, expected := range []string{"consult_worker", "surface_to_user", "list_jobs", "query_job", "query_graphs", "setup_workspace", "create_job", "create_task", "assign_task", "save_work_request", "start_job", "ask_user"} {
-		if !names[expected] {
-			t.Errorf("expected %s in definitions", expected)
+	for _, name := range expected {
+		if !names[name] {
+			t.Errorf("expected %s in definitions", name)
 		}
 	}
 }

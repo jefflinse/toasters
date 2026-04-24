@@ -1,6 +1,7 @@
 package graphexec
 
 import (
+	"github.com/jefflinse/toasters/internal/db"
 	"github.com/jefflinse/toasters/internal/prompt"
 	"github.com/jefflinse/toasters/internal/provider"
 	"github.com/jefflinse/toasters/internal/runtime"
@@ -25,4 +26,10 @@ type TemplateConfig struct {
 	// output schema. Required in production; node builders surface a clear
 	// error when nil at run time.
 	PromptEngine *prompt.Engine
+
+	// Store persists each node's LLM conversation to `worker_sessions` +
+	// `session_messages` so post-hoc debugging (including failures where
+	// the model never called `complete`) can read the full transcript via
+	// SQLite. Optional — when nil, graph nodes skip persistence.
+	Store db.Store
 }
