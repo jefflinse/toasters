@@ -259,6 +259,9 @@ func (p *OpenAIProvider) streamResponse(ctx context.Context, req *http.Request, 
 				}
 			}
 
+			if choice.Delta.Reasoning != "" {
+				ch <- StreamEvent{Type: EventReasoning, Text: choice.Delta.Reasoning}
+			}
 			if choice.Delta.Content != "" {
 				ch <- StreamEvent{Type: EventText, Text: choice.Delta.Content}
 			}
@@ -493,6 +496,7 @@ type openAIChoice struct {
 type openAIDelta struct {
 	Content   string           `json:"content"`
 	Role      string           `json:"role,omitempty"`
+	Reasoning string           `json:"reasoning,omitempty"` // LM Studio, OpenRouter
 	ToolCalls []openAIToolCall `json:"tool_calls,omitempty"`
 }
 

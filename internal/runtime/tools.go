@@ -391,11 +391,24 @@ func (ct *CoreTools) Definitions() []ToolDef {
 
 // queryGraphs renders the loaded graph catalog as markdown. Used by
 // decomposition roles to see graph ids, names, descriptions, and tags.
+//
+// Graphs tagged `system:true` are filtered out — those are meta-graphs
+// (coarse-decompose, fine-decompose) that implement the decomposition
+// flow itself, not candidate dispatch targets. Listing them would
+// invite a decomposer to assign decomposition-of-decomposition, which
+// is nonsense.
 func (ct *CoreTools) queryGraphs() (string, error) {
 	if ct.graphCatalog == nil {
 		return "No graphs are currently loaded.", nil
 	}
-	graphs := ct.graphCatalog.Graphs()
+	all := ct.graphCatalog.Graphs()
+	graphs := make([]GraphSummary, 0, len(all))
+	for _, g := range all {
+		if graphHasTag(g.Tags, "system:true") {
+			continue
+		}
+		graphs = append(graphs, g)
+	}
 	if len(graphs) == 0 {
 		return "No graphs are currently loaded.", nil
 	}
@@ -415,6 +428,19 @@ func (ct *CoreTools) queryGraphs() (string, error) {
 		}
 	}
 	return b.String(), nil
+}
+
+// graphHasTag reports whether a graph's tag list contains an exact
+// match for the given tag string. Tags are simple strings today
+// ("language:go", "system:true", …); matching is byte-equal, not a
+// namespace-aware lookup.
+func graphHasTag(tags []string, want string) bool {
+	for _, t := range tags {
+		if t == want {
+			return true
+		}
+	}
+	return false
 }
 
 // DefinitionsByName returns tool definitions keyed by tool name.

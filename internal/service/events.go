@@ -70,6 +70,11 @@ const (
 	// Payload: SessionTextPayload. Carries SessionID.
 	EventTypeSessionText EventType = "session.text"
 
+	// EventTypeSessionReasoning carries streamed reasoning (chain-of-
+	// thought) chunks from a session whose provider exposes a separate
+	// reasoning channel. Payload: SessionReasoningPayload. Carries SessionID.
+	EventTypeSessionReasoning EventType = "session.reasoning"
+
 	// EventTypeSessionToolCall is sent when a worker invokes a tool.
 	// Payload: SessionToolCallPayload. Carries SessionID.
 	EventTypeSessionToolCall EventType = "session.tool_call"
@@ -304,6 +309,13 @@ type SessionStartedPayload struct {
 // Text tokens from a worker session are delivered here (not batched — the TUI
 // accumulates them into the session's output buffer).
 type SessionTextPayload struct {
+	Text string
+}
+
+// SessionReasoningPayload is the payload for EventTypeSessionReasoning
+// events. Carries a reasoning (chain-of-thought) chunk from a session
+// whose provider exposes one.
+type SessionReasoningPayload struct {
 	Text string
 }
 

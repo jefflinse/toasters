@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jefflinse/mycelium/agent"
 	"github.com/jefflinse/rhizome"
 )
 
@@ -63,6 +64,49 @@ func TestRoleRegistry_NamesSorted(t *testing.T) {
 			t.Errorf("Names() not sorted: %q > %q", names[i-1], names[i])
 		}
 	}
+}
+
+func TestToolsForRole_OptsInViaFrontmatterTools(t *testing.T) {
+	cfg, _ := templateConfig(t, nil)
+
+	// Investigator is readonly access, declares no extra tools — must
+	// NOT see query_graphs.
+	investigator := cfg.PromptEngine.Role("investigator")
+	if investigator == nil {
+		t.Fatal("investigator not loaded")
+	}
+	tools := toolsForRole(cfg.ToolExecutor, investigator)
+	for _, tool := range tools {
+		if tool.Name == "query_graphs" {
+			t.Error("investigator sees query_graphs but did not declare it")
+		}
+	}
+
+	// Fine-decomposer is readonly access and opts into query_graphs via
+	// its frontmatter `tools:` list — must see it.
+	fine := cfg.PromptEngine.Role("fine-decomposer")
+	if fine == nil {
+		t.Fatal("fine-decomposer not loaded")
+	}
+	tools = toolsForRole(cfg.ToolExecutor, fine)
+	found := false
+	for _, tool := range tools {
+		if tool.Name == "query_graphs" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("fine-decomposer did not see query_graphs despite frontmatter opt-in; tools: %v", toolNames(tools))
+	}
+}
+
+func toolNames(tools []agent.Tool) []string {
+	out := make([]string, 0, len(tools))
+	for _, t := range tools {
+		out = append(out, t.Name)
+	}
+	return out
 }
 
 func TestResolveSchema_DefaultsToSummary(t *testing.T) {

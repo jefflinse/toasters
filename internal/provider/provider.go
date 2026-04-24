@@ -39,11 +39,12 @@ type (
 // Stream event type constants — re-exported from mycelium so callers can
 // keep writing provider.EventText etc.
 const (
-	EventText     = mcp.EventText
-	EventToolCall = mcp.EventToolCall
-	EventUsage    = mcp.EventUsage
-	EventDone     = mcp.EventDone
-	EventError    = mcp.EventError
+	EventText      = mcp.EventText
+	EventReasoning = mcp.EventReasoning
+	EventToolCall  = mcp.EventToolCall
+	EventUsage     = mcp.EventUsage
+	EventDone      = mcp.EventDone
+	EventError     = mcp.EventError
 )
 
 // ChatCompletion is a convenience function that sends a non-streaming request

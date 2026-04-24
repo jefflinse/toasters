@@ -263,7 +263,11 @@ func runServe(cmd *cobra.Command, args []string) error {
 		textFlush := func(text string) {
 			svc.BroadcastOperatorText(text, "")
 		}
+		reasoningFlush := func(text string) {
+			svc.BroadcastOperatorText("", text)
+		}
 		batcher := newTextBatcher(16*time.Millisecond, textFlush)
+		reasoningBatcher := newTextBatcher(16*time.Millisecond, reasoningFlush)
 
 		var opErr error
 		op, opErr = operator.New(operator.Config{
@@ -283,10 +287,14 @@ func runServe(cmd *cobra.Command, args []string) error {
 			OnText: func(text string) {
 				batcher.Add(text)
 			},
+			OnReasoning: func(text string) {
+				reasoningBatcher.Add(text)
+			},
 			OnEvent: func(event operator.Event) {
 				svc.BroadcastOperatorEvent(event)
 			},
 			OnTurnDone: func(tokensIn, tokensOut, reasoningTokens int) {
+				reasoningBatcher.Flush()
 				batcher.Flush()
 				svc.BroadcastOperatorDone(cfg.Operator.Model, tokensIn, tokensOut, reasoningTokens)
 			},

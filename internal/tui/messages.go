@@ -137,6 +137,14 @@ type SessionTextMsg struct {
 	Text      string
 }
 
+// SessionReasoningMsg carries a chunk of streamed reasoning (chain-of-
+// thought) from an agent session. Produced by the event consumer in
+// response to a session.reasoning event.
+type SessionReasoningMsg struct {
+	SessionID string
+	Text      string
+}
+
 // SessionToolCallMsg is sent when an agent session invokes a tool.
 // Produced by the event consumer in response to a session.tool_call event.
 type SessionToolCallMsg struct {

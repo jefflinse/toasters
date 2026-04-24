@@ -737,6 +737,20 @@ func (s *LocalService) BroadcastSessionToolCall(sessionID, callID, name string, 
 	})
 }
 
+// BroadcastSessionReasoning emits a session.reasoning event for a
+// graph node. Routes through its own event type so the TUI can style
+// reasoning differently from plain output text.
+func (s *LocalService) BroadcastSessionReasoning(sessionID, text string) {
+	if text == "" {
+		return
+	}
+	s.broadcast(Event{
+		Type:      EventTypeSessionReasoning,
+		SessionID: sessionID,
+		Payload:   SessionReasoningPayload{Text: text},
+	})
+}
+
 // BroadcastSessionToolResult emits a session.tool_result event for a
 // graph node. CallID may be empty — mycelium's tool-result events do
 // not carry the originating call id, and the TUI tolerates an empty
@@ -1909,7 +1923,11 @@ func (s *LocalService) startOperator(p provider.Provider, providerID, model stri
 	textFlush := func(text string) {
 		s.BroadcastOperatorText(text, "")
 	}
+	reasoningFlush := func(text string) {
+		s.BroadcastOperatorText("", text)
+	}
 	batcher := newTextBatcher(16*time.Millisecond, textFlush)
+	reasoningBatcher := newTextBatcher(16*time.Millisecond, reasoningFlush)
 
 	op, err := operator.New(operator.Config{
 		Runtime:                s.cfg.Runtime,
@@ -1929,10 +1947,14 @@ func (s *LocalService) startOperator(p provider.Provider, providerID, model stri
 		OnText: func(text string) {
 			batcher.Add(text)
 		},
+		OnReasoning: func(text string) {
+			reasoningBatcher.Add(text)
+		},
 		OnEvent: func(event operator.Event) {
 			s.BroadcastOperatorEvent(event)
 		},
 		OnTurnDone: func(tokensIn, tokensOut, reasoningTokens int) {
+			reasoningBatcher.Flush()
 			batcher.Flush()
 			s.BroadcastOperatorDone(model, tokensIn, tokensOut, reasoningTokens)
 		},

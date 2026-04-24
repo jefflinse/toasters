@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 
 	"github.com/jefflinse/mycelium/agent"
@@ -36,9 +37,24 @@ func RoleNode(cfg TemplateConfig, role *prompt.Role, nodeID string) rhizome.Node
 			return state, fmt.Errorf("composing prompt for role %q: %w", role.Name, err)
 		}
 
-		tools := toolsForAccess(cfg.ToolExecutor, role.Access)
+		tools := toolsForRole(cfg.ToolExecutor, role)
 
 		sess := openGraphSession(ctx, cfg.Store, state, effectiveNodeID(ctx, nodeID), sysPrompt, toolNamesOf(tools), cfg)
+
+		// onEvent fans out: forward to the TUI sink AND accumulate reasoning
+		// locally so it can be persisted as its own session_messages row.
+		// Reasoning is not part of agent.Result.History by design, so we
+		// capture it here or it's lost.
+		baseOnEvent := onEventSink(ctx)
+		var reasoningBuf strings.Builder
+		onEvent := func(ev agent.Event) {
+			if ev.Kind == agent.EventKindReasoning {
+				reasoningBuf.WriteString(ev.Text)
+			}
+			if baseOnEvent != nil {
+				baseOnEvent(ev)
+			}
+		}
 
 		res, runErr := agent.Run(ctx, agent.Config[json.RawMessage]{
 			Provider:     cfg.Provider,
@@ -48,9 +64,9 @@ func RoleNode(cfg TemplateConfig, role *prompt.Role, nodeID string) rhizome.Node
 			Tools:        tools,
 			OutputSchema: schemaRaw,
 			MaxTurns:     role.MaxTurns,
-			OnEvent:      onEventSink(ctx),
+			OnEvent:      onEvent,
 		})
-		closeGraphSession(ctx, cfg.Store, sess, res, runErr)
+		closeGraphSession(ctx, cfg.Store, sess, res, runErr, reasoningBuf.String())
 
 		if runErr != nil {
 			if tail := lastAssistantText(res.History); tail != "" {
@@ -186,22 +202,59 @@ func buildInitialMessage(state *TaskState) string {
 	return strings.Join(parts, "\n\n")
 }
 
-// toolsForAccess picks a tool allowlist based on the role's declared
-// access level. Read-only roles also get the mid-loop ask_user tool so
-// they can surface clarifying questions; write/test roles do not, by
-// convention: the user should not be asked to choose between variants of
-// "run this or that command."
-func toolsForAccess(exec runtime.ToolExecutor, access string) []agent.Tool {
-	switch strings.ToLower(strings.TrimSpace(access)) {
-	case "write":
-		return AdaptTools(exec, WriteTools)
-	case "test":
-		return AdaptTools(exec, TestTools)
-	case "all":
-		return AdaptTools(exec, nil)
-	default: // "", "readonly", "read-only"
-		return append([]agent.Tool{AskUserTool()}, AdaptTools(exec, ReadOnlyTools)...)
+// toolsForRole picks the tool list a graph node gets based on its role.
+// The `access:` frontmatter field selects a base allowlist (readonly /
+// write / test / all); any tool names in the role's `tools:` frontmatter
+// list are merged in as explicit opt-ins on top.
+//
+// Read-only roles also get the mid-loop ask_user tool so they can
+// surface clarifying questions. Write/test roles do not by convention:
+// the user should not be asked to choose between variants of "run this
+// or that command."
+//
+// Opt-in is how narrow-use tools like query_graphs stay off most roles'
+// radar while remaining available to the one role that needs them
+// (fine-decomposer). Keeping the surface small matters for local-model
+// ergonomics.
+func toolsForRole(exec runtime.ToolExecutor, role *prompt.Role) []agent.Tool {
+	access := strings.ToLower(strings.TrimSpace(role.Access))
+	var adapted []agent.Tool
+	if access == "all" {
+		adapted = AdaptTools(exec, nil)
+	} else {
+		allow := baseAllowlistForAccess(access)
+		for _, t := range role.Tools {
+			if !slices.Contains(allow, t) {
+				allow = append(allow, t)
+			}
+		}
+		adapted = AdaptTools(exec, allow)
 	}
+	if isReadOnlyAccess(access) {
+		return append([]agent.Tool{AskUserTool()}, adapted...)
+	}
+	return adapted
+}
+
+// baseAllowlistForAccess returns a fresh copy of the allowlist for an
+// access level. Returning a copy means callers may mutate (e.g.
+// append role-declared opt-ins) without aliasing the package-level
+// slice.
+func baseAllowlistForAccess(access string) []string {
+	switch access {
+	case "write":
+		return append([]string(nil), WriteTools...)
+	case "test":
+		return append([]string(nil), TestTools...)
+	default:
+		return append([]string(nil), ReadOnlyTools...)
+	}
+}
+
+// isReadOnlyAccess reports whether the (already-normalized) access
+// value selects the readonly preset. The empty string is the default.
+func isReadOnlyAccess(access string) bool {
+	return access == "" || access == "readonly" || access == "read-only"
 }
 
 // onEventSink returns an agent OnEvent handler that broadcasts streaming
@@ -223,6 +276,10 @@ func onEventSink(ctx context.Context) func(agent.Event) {
 		case agent.EventKindText:
 			if ev.Text != "" {
 				nc.Sink.BroadcastSessionText(nc.SessionID, ev.Text)
+			}
+		case agent.EventKindReasoning:
+			if ev.Text != "" {
+				nc.Sink.BroadcastSessionReasoning(nc.SessionID, ev.Text)
 			}
 		case agent.EventKindToolCall:
 			if ev.ToolCall == nil {

@@ -323,6 +323,14 @@ func (p *AnthropicProvider) streamResponse(ctx context.Context, req *http.Reques
 				if parsed.Delta.Text != "" {
 					ch <- StreamEvent{Type: EventText, Text: parsed.Delta.Text}
 				}
+			case "thinking_delta":
+				if parsed.Delta.Thinking != "" {
+					ch <- StreamEvent{Type: EventReasoning, Text: parsed.Delta.Thinking}
+				}
+			case "signature_delta":
+				// Ignored — the cryptographic signature Anthropic
+				// attaches to thinking blocks has no consumer-facing
+				// use here.
 			case "input_json_delta":
 				if acc, ok := toolBlocks[parsed.Index]; ok {
 					acc.InputBuf.WriteString(parsed.Delta.PartialJSON)

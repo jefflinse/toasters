@@ -234,6 +234,7 @@ type runtimeSlot struct {
 	taskID         string
 	status         string // "active", "completed", "failed", "cancelled"
 	output         strings.Builder
+	reasoning      strings.Builder // streamed chain-of-thought; only set when the provider emits reasoning events
 	startTime      time.Time
 	endTime        time.Time      // set when session completes; zero while active
 	systemPrompt   string         // the system prompt given to the LLM
@@ -1076,6 +1077,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.refreshOutputModalIfShowing(msg.SessionID, slot)
 		return m, nil
 
+	case SessionReasoningMsg:
+		slot, ok := m.runtimeSessions[msg.SessionID]
+		if !ok {
+			return m, nil
+		}
+		slot.reasoning.WriteString(msg.Text)
+		m.refreshOutputModalIfShowing(msg.SessionID, slot)
+		return m, nil
+
 	case SessionToolCallMsg:
 		slot, ok := m.runtimeSessions[msg.SessionID]
 		if !ok {
@@ -1483,12 +1493,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // refreshOutputModalIfShowing updates the output modal's content if it is
 // currently displaying the given session, and applies an auto-tail policy.
-// Called from session text/tool_call/tool_result message handlers.
+// Called from session text/reasoning/tool_call/tool_result message handlers.
 func (m *Model) refreshOutputModalIfShowing(sessionID string, slot *runtimeSlot) {
 	if !m.outputModal.show || m.outputModal.sessionID != sessionID {
 		return
 	}
-	m.outputModal.content = slot.output.String()
+	m.outputModal.content = composeSlotContent(slot)
 	allLines := strings.Split(m.outputModal.content, "\n")
 	modalH := m.height - 4
 	if modalH < 10 {
@@ -1503,6 +1513,27 @@ func (m *Model) refreshOutputModalIfShowing(sessionID string, slot *runtimeSlot)
 	if m.outputModal.scroll >= maxScroll-2 {
 		m.outputModal.scroll = maxScroll
 	}
+}
+
+// composeSlotContent returns the runtime slot's rendered body for the
+// output modal. When the underlying provider emitted reasoning, a
+// dimmed "⟳ thinking" section is prepended above the regular output;
+// otherwise the output is returned verbatim.
+func composeSlotContent(slot *runtimeSlot) string {
+	out := slot.output.String()
+	reasoning := slot.reasoning.String()
+	if reasoning == "" {
+		return out
+	}
+	var b strings.Builder
+	b.WriteString(ReasoningHeaderStyle.Render("⟳ thinking"))
+	b.WriteString("\n")
+	b.WriteString(ReasoningStyle.Render(reasoning))
+	if out != "" {
+		b.WriteString("\n\n")
+		b.WriteString(out)
+	}
+	return b.String()
 }
 
 // extractFrontmatterName extracts the name: field from a YAML frontmatter block.

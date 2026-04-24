@@ -804,6 +804,10 @@ type wireSessionTextPayload struct {
 	Text string `json:"text"`
 }
 
+type wireSessionReasoningPayload struct {
+	Text string `json:"text"`
+}
+
 type wireSessionToolCallPayload struct {
 	ToolCall wireToolCall `json:"tool_call"`
 }
@@ -930,6 +934,8 @@ func eventPayloadToWire(ev service.Event) any {
 		}
 	case service.SessionTextPayload:
 		return wireSessionTextPayload{Text: p.Text}
+	case service.SessionReasoningPayload:
+		return wireSessionReasoningPayload{Text: p.Text}
 	case service.SessionToolCallPayload:
 		return wireSessionToolCallPayload{
 			ToolCall: wireToolCall{

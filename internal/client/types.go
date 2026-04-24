@@ -411,6 +411,10 @@ type wireSessionTextPayload struct {
 	Text string `json:"text"`
 }
 
+type wireSessionReasoningPayload struct {
+	Text string `json:"text"`
+}
+
 type wireSessionToolCallPayload struct {
 	ToolCall wireToolCall `json:"tool_call"`
 }
@@ -1010,6 +1014,15 @@ func parseSSEPayload(eventType string, raw json.RawMessage) (any, error) {
 			return nil, fmt.Errorf("decoding session.text payload: %w", err)
 		}
 		return service.SessionTextPayload{
+			Text: w.Text,
+		}, nil
+
+	case service.EventTypeSessionReasoning:
+		var w wireSessionReasoningPayload
+		if err := json.Unmarshal(raw, &w); err != nil {
+			return nil, fmt.Errorf("decoding session.reasoning payload: %w", err)
+		}
+		return service.SessionReasoningPayload{
 			Text: w.Text,
 		}, nil
 

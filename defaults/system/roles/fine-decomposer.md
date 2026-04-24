@@ -4,6 +4,8 @@ description: Pick a graph for a single Task, or reject the task as too broad and
 mode: worker
 output: decomposition-result
 access: readonly
+tools:
+  - query_graphs
 ---
 
 Today is {{ globals.now.date }}.

@@ -142,6 +142,7 @@ func templateConfig(t testing.TB, responses [][]provider.StreamEvent) (TemplateC
 			{Name: "glob", Description: "Find files"},
 			{Name: "grep", Description: "Search files"},
 			{Name: "shell", Description: "Run a command"},
+			{Name: "query_graphs", Description: "List available graphs"},
 		},
 	}
 	return TemplateConfig{
@@ -342,6 +343,9 @@ func (m *mockEventSink) BroadcastPrompt(requestID, question string, _ []string, 
 func (m *mockEventSink) BroadcastSessionText(sessionID, text string) {
 	m.record(fmt.Sprintf("session_text:%s:%s", sessionID, text))
 }
+func (m *mockEventSink) BroadcastSessionReasoning(sessionID, text string) {
+	m.record(fmt.Sprintf("session_reasoning:%s:%s", sessionID, text))
+}
 func (m *mockEventSink) BroadcastSessionToolCall(sessionID, _, name string, _ json.RawMessage) {
 	m.record(fmt.Sprintf("session_tool_call:%s:%s", sessionID, name))
 }
@@ -436,6 +440,52 @@ func TestExecutor_Execute_ForwardsSessionToolEvents(t *testing.T) {
 	}
 	if !hasPrefix("session_tool_result:graph:task-1:work:read_file") {
 		t.Errorf("missing session_tool_result event; got %v", events)
+	}
+}
+
+func TestExecutor_Execute_ForwardsSessionReasoning(t *testing.T) {
+	// Provider emits a reasoning chunk before the terminal complete.
+	reasoning := []provider.StreamEvent{
+		{Type: provider.EventReasoning, Text: "pondering the task..."},
+	}
+	// Glue the reasoning chunk to the same turn as the complete call.
+	firstTurn := append(reasoning, []provider.StreamEvent{
+		{Type: provider.EventToolCall, ToolCall: &provider.ToolCall{
+			ID:        "call-complete",
+			Name:      "complete",
+			Arguments: json.RawMessage(`{"summary":"done"}`),
+		}},
+	}...)
+	cfg, _ := templateConfig(t, [][]provider.StreamEvent{firstTurn})
+
+	graph, err := Compile(&Definition{
+		ID:    "solo",
+		Entry: "work",
+		Nodes: []Node{{ID: "work", Role: "investigator"}},
+		Edges: []Edge{{From: "work", To: EndNode}},
+	}, cfg, nil)
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+
+	sink := &mockEventSink{}
+	executor := NewExecutor(ExecutorConfig{EventSink: sink})
+	state := NewTaskState("job-1", "task-1", "/workspace", "mock", "test-model")
+	if err := executor.Execute(context.Background(), graph, state, "test-team"); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	events := sink.snapshot()
+	want := "session_reasoning:graph:task-1:work:pondering the task..."
+	found := false
+	for _, e := range events {
+		if e == want {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("missing session_reasoning event; got %v", events)
 	}
 }
 

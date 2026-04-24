@@ -22,13 +22,13 @@ const (
 	ToolQueryGraphs = "query_graphs"
 )
 
-// Common tool sets for node builders.
+// Common tool sets for node builders. Roles that need tools outside
+// their access base (e.g. fine-decomposer needing query_graphs under
+// readonly access) opt in via the role frontmatter's `tools:` list —
+// see toolsForRole in nodes.go.
 var (
-	// ReadOnlyTools allows only non-mutating tools. Includes query_graphs
-	// because it's informational — decomposition roles need it, and it
-	// is harmless to expose to other read-only roles that will not call
-	// it.
-	ReadOnlyTools = []string{ToolReadFile, ToolGlob, ToolGrep, ToolQueryGraphs}
+	// ReadOnlyTools allows only non-mutating, workspace-oriented tools.
+	ReadOnlyTools = []string{ToolReadFile, ToolGlob, ToolGrep}
 
 	// WriteTools allows mutation plus reading.
 	WriteTools = []string{ToolReadFile, ToolWriteFile, ToolEditFile, ToolGlob, ToolGrep, ToolShell}

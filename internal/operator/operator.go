@@ -52,9 +52,10 @@ type Operator struct {
 	broker *hitl.Broker
 
 	// Callbacks — set at construction time via Config, immutable after New().
-	onText     func(text string)                                  // called with streamed text from the operator LLM
-	onEvent    func(event Event)                                  // called when the event loop processes an event
-	onTurnDone func(tokensIn, tokensOut, reasoningTokens int)     // called when the operator finishes processing a user message turn
+	onText      func(text string)                              // called with streamed text from the operator LLM
+	onReasoning func(text string)                              // called with streamed reasoning chunks; optional
+	onEvent     func(event Event)                              // called when the event loop processes an event
+	onTurnDone  func(tokensIn, tokensOut, reasoningTokens int) // called when the operator finishes processing a user message turn
 	onPrompt   func(requestID, question string, options []string) // called when the operator calls ask_user
 }
 
@@ -74,6 +75,7 @@ type Config struct {
 	DefaultProvider        string                 // default provider for system agents
 	DefaultModel           string                 // default model for system agents
 	OnText                 func(text string)      // called with streamed text from the operator LLM
+	OnReasoning            func(text string)      // called with streamed reasoning (chain-of-thought) chunks; optional
 	OnEvent                func(event Event)      // called when the event loop processes an event
 	// OnTurnDone is called when the operator finishes processing a user
 	// message turn. tokensIn / tokensOut / reasoningTokens are the totals
@@ -126,6 +128,7 @@ func New(cfg Config) (*Operator, error) {
 		provTools:    provTools,
 		broker:       cfg.Broker,
 		onText:       cfg.OnText,
+		onReasoning:  cfg.OnReasoning,
 		onEvent:      cfg.OnEvent,
 		onTurnDone:   cfg.OnTurnDone,
 		onPrompt:     cfg.OnPrompt,
@@ -658,6 +661,12 @@ func (o *Operator) collectResponse(ctx context.Context, eventCh <-chan provider.
 				textBuf.WriteString(ev.Text)
 				o.emitText(ev.Text)
 
+			case provider.EventReasoning:
+				// Reasoning is surfaced but not folded into the
+				// assistant message — matches the mycelium/provider
+				// contract and every upstream API's behavior.
+				o.emitReasoning(ev.Text)
+
 			case provider.EventToolCall:
 				if ev.ToolCall != nil {
 					toolCalls = append(toolCalls, *ev.ToolCall)
@@ -683,6 +692,13 @@ func (o *Operator) collectResponse(ctx context.Context, eventCh <-chan provider.
 func (o *Operator) emitText(text string) {
 	if o.onText != nil {
 		o.onText(text)
+	}
+}
+
+// emitReasoning calls the OnReasoning callback if set.
+func (o *Operator) emitReasoning(text string) {
+	if o.onReasoning != nil {
+		o.onReasoning(text)
 	}
 }
 

@@ -131,6 +131,16 @@ func translateEvent(ev service.Event) tea.Msg {
 			Text:      p.Text,
 		}
 
+	case service.EventTypeSessionReasoning:
+		p, ok := ev.Payload.(service.SessionReasoningPayload)
+		if !ok {
+			return nil
+		}
+		return SessionReasoningMsg{
+			SessionID: ev.SessionID,
+			Text:      p.Text,
+		}
+
 	case service.EventTypeSessionToolCall:
 		p, ok := ev.Payload.(service.SessionToolCallPayload)
 		if !ok {

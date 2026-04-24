@@ -69,14 +69,36 @@ func openGraphSession(ctx context.Context, store db.Store, state *TaskState, nod
 // marks the session failed even when a terminal-status Result came back,
 // so transcripts for ErrNoTerminalTool / ErrMaxTurnsExceeded are still
 // queryable.
-func closeGraphSession(ctx context.Context, store db.Store, sess *graphSession, res agent.Result[json.RawMessage], runErr error) {
+//
+// reasoning carries the accumulated chain-of-thought captured via the
+// agent's OnEvent callback. Mycelium does not fold reasoning into
+// Result.History (the model never sees its own reasoning on the next
+// turn), so RoleNode collects it separately and hands it in here.
+// Non-empty reasoning is persisted as the first session_messages row
+// with role="reasoning" so post-hoc debuggers see the pre-answer
+// thinking before the assistant/tool turns.
+func closeGraphSession(ctx context.Context, store db.Store, sess *graphSession, res agent.Result[json.RawMessage], runErr error, reasoning string) {
 	if store == nil || sess == nil || sess.id == "" {
 		return
 	}
-	for i, msg := range res.History {
+	seq := 0
+	if reasoning != "" {
+		seq++
+		if err := store.AppendSessionMessage(ctx, &db.SessionMessage{
+			SessionID: sess.id,
+			Seq:       seq,
+			Role:      "reasoning",
+			Content:   reasoning,
+		}); err != nil {
+			slog.Warn("graph session: failed to append reasoning",
+				"session_id", sess.id, "error", err)
+		}
+	}
+	for _, msg := range res.History {
+		seq++
 		sm := &db.SessionMessage{
 			SessionID:  sess.id,
-			Seq:        i + 1,
+			Seq:        seq,
 			Role:       msg.Role,
 			Content:    msg.Content,
 			ToolCallID: msg.ToolCallID,

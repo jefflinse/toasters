@@ -34,6 +34,10 @@ type EventSink interface {
 	// SessionID convention is "graph:<TaskID>:<Node>" so the TUI's existing
 	// runtimeSlot pipeline picks it up without a special case.
 	BroadcastSessionText(sessionID, text string)
+	// BroadcastSessionReasoning carries streamed reasoning (chain-of-thought)
+	// from a graph node. Routes through a session.reasoning event; the TUI
+	// renders it alongside the node's text output with its own style.
+	BroadcastSessionReasoning(sessionID, text string)
 	// BroadcastSessionToolCall carries a tool call the model issued inside
 	// a graph node. Routes through the same session.tool_call event type
 	// that worker sessions use, so the TUI's grid cards and output panel
