@@ -506,7 +506,11 @@ func (m *Model) buildJobSnapshot(jobID string) *service.JobSnapshot {
 // the block should occupy. The block renders two content rows — a header
 // line with a status glyph + title + status word, and a meta line with a
 // short id and task rollup — so its total height is fixed at 4 rows.
-func renderJobUpdateBlock(snap *service.JobSnapshot, width int) string {
+//
+// When selected is true, the border is drawn thick instead of rounded so
+// the block reads as the current selection — useful when the block is
+// used in a list context like the Jobs pane.
+func renderJobUpdateBlock(snap *service.JobSnapshot, width int, selected bool) string {
 	if snap == nil {
 		return ""
 	}
@@ -549,12 +553,16 @@ func renderJobUpdateBlock(snap *service.JobSnapshot, width int) string {
 	line2 := JobBlockMetaStyle.Render(truncateStr(meta, innerW))
 
 	body := line1 + "\n" + line2
+	style := JobBlockStyle
+	if selected {
+		style = style.Border(lipgloss.ThickBorder())
+	}
 	// In lipgloss v2, Width() sets the total outer width (content + padding +
 	// border), so we pass the full available width and let the style subtract
 	// its own frame internally. Passing anything smaller produces a content
 	// area narrower than the body lines we just built, which wraps them onto
 	// extra rows.
-	return JobBlockStyle.
+	return style.
 		BorderForeground(borderColor).
 		Width(width).
 		Render(body)

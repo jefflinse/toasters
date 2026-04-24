@@ -1069,7 +1069,7 @@ func (m *Model) updateViewportContent() {
 		// Structured entries render from a typed payload, bypassing the
 		// role-based message dispatch.
 		if entry.Kind == service.ChatEntryKindJobUpdate {
-			block := renderJobUpdateBlock(entry.JobUpdate, contentWidth)
+			block := renderJobUpdateBlock(entry.JobUpdate, contentWidth, false)
 			if block != "" {
 				sb.WriteString(block + "\n\n")
 			}

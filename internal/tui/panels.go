@@ -108,28 +108,18 @@ func (m Model) renderLeftPanel(panelWidth, panelHeight int) string {
 	if len(displayedJobs) == 0 {
 		topLines = append(topLines, PlaceholderPaneStyle.Render("No jobs"))
 	} else {
+		// Render each job as the same bordered block used in the chat
+		// stream, keyed by status and with live task counts. Blocks stack
+		// with touching borders — a TUI has no sub-row spacing, so the
+		// choice is zero-gap (cards stacked) or a full row between them;
+		// zero-gap keeps the list dense without losing distinctness since
+		// each block still has its own status-colored border.
 		for i, j := range displayedJobs {
-			// Job name row with status prefix icon.
-			var statusPrefix string
-			switch j.Status {
-			case service.JobStatusActive:
-				statusPrefix = "▶ "
-			case service.JobStatusPaused:
-				statusPrefix = "⏸ "
-			case service.JobStatusCompleted:
-				statusPrefix = "✓ "
-			case service.JobStatusSettingUp:
-				statusPrefix = "⚙ "
-			default:
-				statusPrefix = "· "
+			snap := m.buildJobSnapshot(j.ID)
+			if snap == nil {
+				continue
 			}
-			name := truncateStr(j.Title, contentWidth-len([]rune(statusPrefix))-1)
-			selected := i == m.selectedJob
-			if selected {
-				topLines = append(topLines, JobSelectedStyle.Render(statusPrefix+name))
-			} else {
-				topLines = append(topLines, JobItemStyle.Render(statusPrefix+name))
-			}
+			topLines = append(topLines, renderJobUpdateBlock(snap, contentWidth, i == m.selectedJob))
 		}
 	}
 	// Hint line when jobs pane is focused.
