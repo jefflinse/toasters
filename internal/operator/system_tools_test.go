@@ -98,40 +98,38 @@ func newTestSystemTools(t *testing.T) (*SystemTools, db.Store, *mockGraphExecuto
 
 	workDir := t.TempDir()
 	t.Setenv("HOME", workDir) // Ensure workDir passes home-directory validation
-	st := NewSystemTools(store, engine, "test-provider", "test-model", eventCh, workDir, nil, gExec)
+	st := NewSystemTools(SystemToolsConfig{
+		Store: store, PromptEngine: engine,
+		DefaultProvider: "test-provider", DefaultModel: "test-model",
+		EventCh: eventCh, WorkDir: workDir,
+		GraphExecutor: gExec,
+		GraphCatalog: stubCatalog{graphs: []*graphexec.Definition{
+			{ID: "bug-fix", Name: "Bug Fix"},
+			{ID: "new-feature", Name: "New Feature"},
+		}},
+	})
 	return st, store, gExec, eventCh, workDir
 }
 
-// seedTeam inserts a team, its lead worker, and team membership into the store.
-func seedTeam(t *testing.T, ctx context.Context, store db.Store, teamID, teamName, leadWorkerID string) {
+// seedTask creates a task row directly via the store — used by tests that
+// previously relied on the retired create_task tool for setup.
+func seedTask(t *testing.T, store db.Store, jobID, title, graphID string) string {
 	t.Helper()
-
-	if err := store.UpsertWorker(ctx, &db.Worker{
-		ID:           leadWorkerID,
-		Name:         leadWorkerID + "-name",
-		Description:  "Test lead worker",
-		Mode:         "lead",
-		SystemPrompt: "You are a test lead.",
-	}); err != nil {
-		t.Fatalf("upserting worker: %v", err)
+	id, err := uuid.NewV4()
+	if err != nil {
+		t.Fatalf("uuid: %v", err)
 	}
-
-	if err := store.UpsertTeam(ctx, &db.Team{
-		ID:          teamID,
-		Name:        teamName,
-		Description: "A test team",
-		LeadWorker:  leadWorkerID,
-	}); err != nil {
-		t.Fatalf("upserting team: %v", err)
+	task := &db.Task{
+		ID:      id.String(),
+		JobID:   jobID,
+		Title:   title,
+		Status:  db.TaskStatusPending,
+		GraphID: graphID,
 	}
-
-	if err := store.AddTeamWorker(ctx, &db.TeamWorker{
-		TeamID:   teamID,
-		WorkerID: leadWorkerID,
-		Role:     "lead",
-	}); err != nil {
-		t.Fatalf("adding team worker: %v", err)
+	if err := store.CreateTask(context.Background(), task); err != nil {
+		t.Fatalf("store.CreateTask: %v", err)
 	}
+	return task.ID
 }
 
 // --- Tests ---
@@ -197,103 +195,9 @@ func TestCreateJob_MissingParams(t *testing.T) {
 	assertContains(t, err.Error(), "description is required")
 }
 
-func TestCreateTask(t *testing.T) {
-	st, store, _, _, _ := newTestSystemTools(t)
-	ctx := context.Background()
-
-	// First create a job.
-	jobResult, err := st.Execute(ctx, "create_job", json.RawMessage(`{
-		"title": "Test job",
-		"description": "A test job"
-	}`))
-	assertNoError(t, err)
-
-	var jobRes map[string]string
-	if err := json.Unmarshal([]byte(jobResult), &jobRes); err != nil {
-		t.Fatalf("parsing job result: %v", err)
-	}
-	jobID := jobRes["job_id"]
-
-	// Create a task on the job.
-	taskResult, err := st.Execute(ctx, "create_task", json.RawMessage(`{
-		"job_id": "`+jobID+`",
-		"title": "Implement feature X"
-	}`))
-	assertNoError(t, err)
-
-	var taskRes map[string]string
-	if err := json.Unmarshal([]byte(taskResult), &taskRes); err != nil {
-		t.Fatalf("parsing task result: %v", err)
-	}
-	taskID := taskRes["task_id"]
-	if taskID == "" {
-		t.Fatal("expected non-empty task_id")
-	}
-
-	// Verify task in DB.
-	task, err := store.GetTask(ctx, taskID)
-	assertNoError(t, err)
-	assertEqual(t, "Implement feature X", task.Title)
-	assertEqual(t, jobID, task.JobID)
-	assertEqual(t, string(db.TaskStatusPending), string(task.Status))
-}
-
-func TestCreateTask_WithTeamID(t *testing.T) {
-	st, store, _, _, _ := newTestSystemTools(t)
-	ctx := context.Background()
-
-	// Create a job.
-	jobResult, err := st.Execute(ctx, "create_job", json.RawMessage(`{
-		"title": "Test job",
-		"description": "A test job"
-	}`))
-	assertNoError(t, err)
-
-	var jobRes map[string]string
-	if err := json.Unmarshal([]byte(jobResult), &jobRes); err != nil {
-		t.Fatalf("parsing job result: %v", err)
-	}
-	jobID := jobRes["job_id"]
-
-	// Create a task with pre-assigned team.
-	taskResult, err := st.Execute(ctx, "create_task", json.RawMessage(`{
-		"job_id": "`+jobID+`",
-		"title": "Review code",
-		"team_id": "backend-team"
-	}`))
-	assertNoError(t, err)
-
-	var taskRes map[string]string
-	if err := json.Unmarshal([]byte(taskResult), &taskRes); err != nil {
-		t.Fatalf("parsing task result: %v", err)
-	}
-
-	task, err := store.GetTask(ctx, taskRes["task_id"])
-	assertNoError(t, err)
-	assertEqual(t, "backend-team", task.TeamID)
-}
-
-func TestCreateTask_MissingParams(t *testing.T) {
-	st, _, _, _, _ := newTestSystemTools(t)
-	ctx := context.Background()
-
-	// Missing job_id.
-	_, err := st.Execute(ctx, "create_task", json.RawMessage(`{"title": "task"}`))
-	assertError(t, err)
-	assertContains(t, err.Error(), "job_id is required")
-
-	// Missing title.
-	_, err = st.Execute(ctx, "create_task", json.RawMessage(`{"job_id": "j1"}`))
-	assertError(t, err)
-	assertContains(t, err.Error(), "title is required")
-}
-
 func TestAssignTask(t *testing.T) {
 	st, store, gExec, eventCh, _ := newTestSystemTools(t)
 	ctx := context.Background()
-
-	// Seed a team.
-	seedTeam(t, ctx, store, "backend", "Backend Team", "lead-agent")
 
 	// Create a job and task.
 	jobResult, err := st.Execute(ctx, "create_job", json.RawMessage(`{
@@ -308,31 +212,21 @@ func TestAssignTask(t *testing.T) {
 	}
 	jobID := jobRes["job_id"]
 
-	taskResult, err := st.Execute(ctx, "create_task", json.RawMessage(`{
-		"job_id": "`+jobID+`",
-		"title": "Build API"
-	}`))
-	assertNoError(t, err)
+	taskID := seedTask(t, store, jobID, "Build API", "")
 
-	var taskRes map[string]string
-	if err := json.Unmarshal([]byte(taskResult), &taskRes); err != nil {
-		t.Fatalf("parsing task result: %v", err)
-	}
-	taskID := taskRes["task_id"]
-
-	// Assign the task.
+	// Assign the task to a graph.
 	result, err := st.Execute(ctx, "assign_task", json.RawMessage(`{
 		"task_id": "`+taskID+`",
-		"team_id": "backend"
+		"graph_id": "bug-fix"
 	}`))
 	assertNoError(t, err)
-	assertContains(t, result, "Backend Team")
+	assertContains(t, result, "bug-fix")
 
 	// Verify task status changed to in_progress.
 	task, err := store.GetTask(ctx, taskID)
 	assertNoError(t, err)
 	assertEqual(t, string(db.TaskStatusInProgress), string(task.Status))
-	assertEqual(t, "backend", task.TeamID)
+	assertEqual(t, "bug-fix", task.GraphID)
 
 	// Wait for the async graph dispatch and verify the request shape.
 	gExec.waitForGraphCall(t)
@@ -342,23 +236,13 @@ func TestAssignTask(t *testing.T) {
 	}
 	assertEqual(t, taskID, calls[0].TaskID)
 	assertEqual(t, jobID, calls[0].JobID)
-	assertEqual(t, "backend", calls[0].TeamID)
+	assertEqual(t, "bug-fix", calls[0].GraphID)
 	assertEqual(t, "Build API", calls[0].TaskTitle)
 
 	// Verify the job's workspace directory was propagated.
 	job, err := store.GetJob(ctx, jobID)
 	assertNoError(t, err)
 	assertEqual(t, job.WorkspaceDir, calls[0].WorkspaceDir)
-
-	// Verify feed entry was created inline (no event sent to channel).
-	entries, err := store.ListRecentFeedEntries(ctx, 10)
-	assertNoError(t, err)
-	if len(entries) != 1 {
-		t.Fatalf("want 1 feed entry, got %d", len(entries))
-	}
-	assertEqual(t, string(db.FeedEntryTaskStarted), string(entries[0].EntryType))
-	assertContains(t, entries[0].Content, "backend")
-	assertContains(t, entries[0].Content, "Build API")
 
 	// Verify no event was sent to the channel (inline handling, no self-send).
 	select {
@@ -373,9 +257,6 @@ func TestAssignTask_NotPending(t *testing.T) {
 	st, store, _, _, _ := newTestSystemTools(t)
 	ctx := context.Background()
 
-	// Seed a team.
-	seedTeam(t, ctx, store, "backend", "Backend Team", "lead-agent")
-
 	// Create a job and task.
 	jobResult, err := st.Execute(ctx, "create_job", json.RawMessage(`{
 		"title": "Test job",
@@ -389,17 +270,7 @@ func TestAssignTask_NotPending(t *testing.T) {
 	}
 	jobID := jobRes["job_id"]
 
-	taskResult, err := st.Execute(ctx, "create_task", json.RawMessage(`{
-		"job_id": "`+jobID+`",
-		"title": "Build API"
-	}`))
-	assertNoError(t, err)
-
-	var taskRes map[string]string
-	if err := json.Unmarshal([]byte(taskResult), &taskRes); err != nil {
-		t.Fatalf("parsing task result: %v", err)
-	}
-	taskID := taskRes["task_id"]
+	taskID := seedTask(t, store, jobID, "Build API", "")
 
 	// Move task to in_progress manually.
 	if err := store.UpdateTaskStatus(ctx, taskID, db.TaskStatusInProgress, ""); err != nil {
@@ -409,7 +280,7 @@ func TestAssignTask_NotPending(t *testing.T) {
 	// Try to assign — should fail.
 	_, err = st.Execute(ctx, "assign_task", json.RawMessage(`{
 		"task_id": "`+taskID+`",
-		"team_id": "backend"
+		"graph_id": "bug-fix"
 	}`))
 	assertError(t, err)
 	assertContains(t, err.Error(), "not pending")
@@ -420,80 +291,14 @@ func TestAssignTask_MissingParams(t *testing.T) {
 	ctx := context.Background()
 
 	// Missing task_id.
-	_, err := st.Execute(ctx, "assign_task", json.RawMessage(`{"team_id": "t1"}`))
+	_, err := st.Execute(ctx, "assign_task", json.RawMessage(`{"graph_id": "bug-fix"}`))
 	assertError(t, err)
 	assertContains(t, err.Error(), "task_id is required")
 
-	// Missing team_id.
+	// Missing graph_id.
 	_, err = st.Execute(ctx, "assign_task", json.RawMessage(`{"task_id": "t1"}`))
 	assertError(t, err)
-	assertContains(t, err.Error(), "team_id is required")
-}
-
-func TestQueryTeams(t *testing.T) {
-	st, store, _, _, _ := newTestSystemTools(t)
-	ctx := context.Background()
-
-	// Seed two teams.
-	seedTeam(t, ctx, store, "backend", "Backend Team", "backend-lead")
-
-	// Add a second team with a worker.
-	if err := store.UpsertWorker(ctx, &db.Worker{
-		ID:   "frontend-lead",
-		Name: "Frontend Lead",
-		Mode: "lead",
-	}); err != nil {
-		t.Fatalf("upserting worker: %v", err)
-	}
-	if err := store.UpsertWorker(ctx, &db.Worker{
-		ID:   "frontend-worker",
-		Name: "Frontend Worker",
-		Mode: "worker",
-	}); err != nil {
-		t.Fatalf("upserting worker: %v", err)
-	}
-	if err := store.UpsertTeam(ctx, &db.Team{
-		ID:          "frontend",
-		Name:        "Frontend Team",
-		Description: "Handles UI work",
-		LeadWorker:  "frontend-lead",
-	}); err != nil {
-		t.Fatalf("upserting team: %v", err)
-	}
-	if err := store.AddTeamWorker(ctx, &db.TeamWorker{
-		TeamID:   "frontend",
-		WorkerID: "frontend-lead",
-		Role:     "lead",
-	}); err != nil {
-		t.Fatalf("adding team worker: %v", err)
-	}
-	if err := store.AddTeamWorker(ctx, &db.TeamWorker{
-		TeamID:   "frontend",
-		WorkerID: "frontend-worker",
-		Role:     "worker",
-	}); err != nil {
-		t.Fatalf("adding team worker: %v", err)
-	}
-
-	result, err := st.Execute(ctx, "query_teams", json.RawMessage(`{}`))
-	assertNoError(t, err)
-
-	assertContains(t, result, "Backend Team")
-	assertContains(t, result, "backend")
-	assertContains(t, result, "Frontend Team")
-	assertContains(t, result, "Handles UI work")
-	assertContains(t, result, "frontend-lead")
-	assertContains(t, result, "Members: 2")
-	assertContains(t, result, "Members: 1")
-}
-
-func TestQueryTeams_Empty(t *testing.T) {
-	st, _, _, _, _ := newTestSystemTools(t)
-	ctx := context.Background()
-
-	result, err := st.Execute(ctx, "query_teams", json.RawMessage(`{}`))
-	assertNoError(t, err)
-	assertEqual(t, "No teams available.", result)
+	assertContains(t, err.Error(), "graph_id is required")
 }
 
 func TestQueryJob(t *testing.T) {
@@ -514,25 +319,11 @@ func TestQueryJob(t *testing.T) {
 	jobID := jobRes["job_id"]
 
 	// Create two tasks.
-	_, err = st.Execute(ctx, "create_task", json.RawMessage(`{
-		"job_id": "`+jobID+`",
-		"title": "Setup project"
-	}`))
-	assertNoError(t, err)
-
-	task2Result, err := st.Execute(ctx, "create_task", json.RawMessage(`{
-		"job_id": "`+jobID+`",
-		"title": "Build API",
-		"team_id": "backend"
-	}`))
-	assertNoError(t, err)
+	seedTask(t, store, jobID, "Setup project", "")
+	task2ID := seedTask(t, store, jobID, "Build API", "bug-fix")
 
 	// Move second task to in_progress.
-	var task2Res map[string]string
-	if err := json.Unmarshal([]byte(task2Result), &task2Res); err != nil {
-		t.Fatalf("parsing task result: %v", err)
-	}
-	if err := store.UpdateTaskStatus(ctx, task2Res["task_id"], db.TaskStatusInProgress, ""); err != nil {
+	if err := store.UpdateTaskStatus(ctx, task2ID, db.TaskStatusInProgress, ""); err != nil {
 		t.Fatalf("updating task status: %v", err)
 	}
 
@@ -546,7 +337,6 @@ func TestQueryJob(t *testing.T) {
 	assertContains(t, result, "Build API")
 	assertContains(t, result, string(db.TaskStatusPending))
 	assertContains(t, result, string(db.TaskStatusInProgress))
-	assertContains(t, result, "backend")
 	assertContains(t, result, "Tasks (2)")
 }
 
@@ -614,14 +404,11 @@ func TestSystemToolDefinitions(t *testing.T) {
 
 	expectedTools := []string{
 		"create_job",
-		"create_task",
-		"assign_task",
-		"query_teams",
+		"query_graphs",
 		"query_job",
 		"query_job_context",
 		"surface_to_user",
 		"save_work_request",
-		"start_job",
 	}
 
 	if len(defs) != len(expectedTools) {
@@ -660,8 +447,6 @@ func TestAssignTask_PromotesJobToActive(t *testing.T) {
 	ctx := context.Background()
 
 	// Seed a team so assign_task can look it up.
-	seedTeam(t, ctx, store, "backend", "Backend Team", "lead-agent")
-
 	// Create a job — it starts as "pending".
 	jobResult, err := st.Execute(ctx, "create_job", json.RawMessage(`{
 		"title": "Regression test job",
@@ -681,22 +466,12 @@ func TestAssignTask_PromotesJobToActive(t *testing.T) {
 	assertEqual(t, string(db.JobStatusPending), string(job.Status))
 
 	// Create a task on the job.
-	taskResult, err := st.Execute(ctx, "create_task", json.RawMessage(`{
-		"job_id": "`+jobID+`",
-		"title": "Do the work"
-	}`))
-	assertNoError(t, err)
-
-	var taskRes map[string]string
-	if err := json.Unmarshal([]byte(taskResult), &taskRes); err != nil {
-		t.Fatalf("parsing task result: %v", err)
-	}
-	taskID := taskRes["task_id"]
+	taskID := seedTask(t, store, jobID, "Do the work", "")
 
 	// Assign the task — this is the operation that must promote the job.
 	_, err = st.Execute(ctx, "assign_task", json.RawMessage(`{
 		"task_id": "`+taskID+`",
-		"team_id": "backend"
+		"graph_id": "bug-fix"
 	}`))
 	assertNoError(t, err)
 
@@ -737,8 +512,6 @@ func TestAssignTask_UpdateJobStatusFailureIsNonFatal(t *testing.T) {
 	ctx := context.Background()
 
 	// Seed a team.
-	seedTeam(t, ctx, store, "backend", "Backend Team", "lead-agent")
-
 	// Create a job and task via the real store.
 	jobResult, err := st.Execute(ctx, "create_job", json.RawMessage(`{
 		"title": "Test job",
@@ -752,17 +525,7 @@ func TestAssignTask_UpdateJobStatusFailureIsNonFatal(t *testing.T) {
 	}
 	jobID := jobRes["job_id"]
 
-	taskResult, err := st.Execute(ctx, "create_task", json.RawMessage(`{
-		"job_id": "`+jobID+`",
-		"title": "Build API"
-	}`))
-	assertNoError(t, err)
-
-	var taskRes map[string]string
-	if err := json.Unmarshal([]byte(taskResult), &taskRes); err != nil {
-		t.Fatalf("parsing task result: %v", err)
-	}
-	taskID := taskRes["task_id"]
+	taskID := seedTask(t, store, jobID, "Build API", "")
 
 	// Swap in a store wrapper that fails UpdateJobStatus.
 	st.store = &failingUpdateJobStatusStore{
@@ -773,16 +536,16 @@ func TestAssignTask_UpdateJobStatusFailureIsNonFatal(t *testing.T) {
 	// Assign the task — must succeed despite UpdateJobStatus failing.
 	result, err := st.Execute(ctx, "assign_task", json.RawMessage(`{
 		"task_id": "`+taskID+`",
-		"team_id": "backend"
+		"graph_id": "bug-fix"
 	}`))
 	assertNoError(t, err)
-	assertContains(t, result, "Backend Team")
+	assertContains(t, result, "bug-fix")
 
 	// The task must still be assigned (in_progress) in the real store.
 	task, err := store.GetTask(ctx, taskID)
 	assertNoError(t, err)
 	assertEqual(t, string(db.TaskStatusInProgress), string(task.Status))
-	assertEqual(t, "backend", task.TeamID)
+	assertEqual(t, "bug-fix", task.GraphID)
 
 	// The spawner must still have been called.
 	calls := spawner.getCalls()
@@ -845,7 +608,7 @@ func TestQueryJobContext_InDefinitions(t *testing.T) {
 // the case was missing from the switch statement. Without the fix, this test
 // fails with an ErrUnknownTool error.
 func TestQueryJobContext_Execute_ValidJobID(t *testing.T) {
-	st, _, _, _, _ := newTestSystemTools(t)
+	st, store, _, _, _ := newTestSystemTools(t)
 	ctx := context.Background()
 
 	// Create a job with tasks via the existing create_job/create_task tools.
@@ -862,18 +625,8 @@ func TestQueryJobContext_Execute_ValidJobID(t *testing.T) {
 	jobID := jobRes["job_id"]
 
 	// Create two tasks so the response is non-trivial.
-	_, err = st.Execute(ctx, "create_task", json.RawMessage(`{
-		"job_id": "`+jobID+`",
-		"title": "First task"
-	}`))
-	assertNoError(t, err)
-
-	_, err = st.Execute(ctx, "create_task", json.RawMessage(`{
-		"job_id": "`+jobID+`",
-		"title": "Second task",
-		"team_id": "backend"
-	}`))
-	assertNoError(t, err)
+	seedTask(t, store, jobID, "First task", "")
+	seedTask(t, store, jobID, "Second task", "bug-fix")
 
 	// Execute query_job_context — must not return ErrUnknownTool.
 	result, err := st.Execute(ctx, "query_job_context", json.RawMessage(`{"job_id": "`+jobID+`"}`))
@@ -916,7 +669,13 @@ func TestCreateJob_RejectsWorkDirOutsideHome(t *testing.T) {
 	t.Setenv("HOME", fakeHome)
 
 	outsideDir := t.TempDir() // A different temp dir, not under fakeHome.
-	st := NewSystemTools(store, nil, "test-provider", "test-model", eventCh, outsideDir, nil, nil)
+	st := NewSystemTools(SystemToolsConfig{
+		Store:           store,
+		DefaultProvider: "test-provider",
+		DefaultModel:    "test-model",
+		EventCh:         eventCh,
+		WorkDir:         outsideDir,
+	})
 
 	ctx := context.Background()
 	args, _ := json.Marshal(map[string]string{
@@ -940,7 +699,13 @@ func TestCreateJob_AcceptsWorkDirUnderHome(t *testing.T) {
 		t.Fatalf("creating workDir: %v", err)
 	}
 
-	st := NewSystemTools(store, nil, "test-provider", "test-model", eventCh, workDir, nil, nil)
+	st := NewSystemTools(SystemToolsConfig{
+		Store:           store,
+		DefaultProvider: "test-provider",
+		DefaultModel:    "test-model",
+		EventCh:         eventCh,
+		WorkDir:         workDir,
+	})
 
 	ctx := context.Background()
 	args, _ := json.Marshal(map[string]string{
@@ -967,9 +732,6 @@ func TestAssignTask_RejectsJobWithWorkspaceDirOutsideHome(t *testing.T) {
 	st, store, _, _, _ := newTestSystemTools(t)
 	ctx := context.Background()
 
-	// Seed a team.
-	seedTeam(t, ctx, store, "backend", "Backend Team", "lead-agent")
-
 	// Create a job normally (passes validation because newTestSystemTools sets HOME=workDir).
 	jobResult, err := st.Execute(ctx, "create_job", json.RawMessage(`{
 		"title": "Test job",
@@ -984,17 +746,7 @@ func TestAssignTask_RejectsJobWithWorkspaceDirOutsideHome(t *testing.T) {
 	jobID := jobRes["job_id"]
 
 	// Create a task.
-	taskResult, err := st.Execute(ctx, "create_task", json.RawMessage(`{
-		"job_id": "`+jobID+`",
-		"title": "Build API"
-	}`))
-	assertNoError(t, err)
-
-	var taskRes map[string]string
-	if err := json.Unmarshal([]byte(taskResult), &taskRes); err != nil {
-		t.Fatalf("parsing task result: %v", err)
-	}
-	taskID := taskRes["task_id"]
+	taskID := seedTask(t, store, jobID, "Build API", "")
 
 	// Now tamper with the job's WorkspaceDir in the database to point outside HOME.
 	// We do this by changing HOME to a different directory, simulating a tampered DB.
@@ -1003,7 +755,7 @@ func TestAssignTask_RejectsJobWithWorkspaceDirOutsideHome(t *testing.T) {
 	// Assign the task — should fail because the job's WorkspaceDir is now outside HOME.
 	_, err = st.Execute(ctx, "assign_task", json.RawMessage(`{
 		"task_id": "`+taskID+`",
-		"team_id": "backend"
+		"graph_id": "bug-fix"
 	}`))
 	assertError(t, err)
 	assertContains(t, err.Error(), "workspace validation failed")

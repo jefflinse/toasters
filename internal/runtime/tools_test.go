@@ -717,21 +717,6 @@ func TestProgressToolsFillSessionJobAndTaskIDs(t *testing.T) {
 		assertEqual(t, "worker-ctx", store.lastProgress.WorkerID)
 	})
 
-	t.Run("report_blocker fills missing ids from session", func(t *testing.T) {
-		store.lastProgress = nil
-		_, err := ct.Execute(context.Background(), "report_blocker", mustJSON(t, map[string]any{
-			"description": "blocked",
-			"severity":    "medium",
-		}))
-		assertNoError(t, err)
-		if store.lastProgress == nil {
-			t.Fatal("expected progress write")
-		}
-		assertEqual(t, "job-ctx", store.lastProgress.JobID)
-		assertEqual(t, "task-ctx", store.lastProgress.TaskID)
-		assertEqual(t, "worker-ctx", store.lastProgress.WorkerID)
-	})
-
 	t.Run("request_review fills missing ids from session", func(t *testing.T) {
 		store.lastProgress = nil
 		store.lastArtifact = nil
@@ -882,7 +867,7 @@ func TestProgressToolDefinitionsIncluded(t *testing.T) {
 	}
 
 	progressTools := []string{
-		"report_task_progress", "report_blocker", "update_task_status",
+		"report_task_progress", "update_task_status",
 		"request_review", "query_job_context", "log_artifact",
 	}
 	for _, name := range progressTools {
@@ -1065,5 +1050,53 @@ func assertNotContains(t *testing.T, s, substr string) {
 	t.Helper()
 	if strings.Contains(s, substr) {
 		t.Fatalf("expected %q to NOT contain %q", s, substr)
+	}
+}
+
+// --- query_graphs ---
+
+type stubGraphCatalog struct{ graphs []GraphSummary }
+
+func (s stubGraphCatalog) Graphs() []GraphSummary { return s.graphs }
+
+func TestQueryGraphs_FiltersSystemGraphs(t *testing.T) {
+	cat := stubGraphCatalog{graphs: []GraphSummary{
+		{ID: "go-feature", Name: "Go Feature", Description: "Build a Go feature.", Tags: []string{"language:go"}},
+		{ID: "coarse-decompose", Name: "Coarse Decompose", Description: "Break a job description into Tasks.", Tags: []string{"system:true"}},
+		{ID: "fine-decompose", Name: "Fine Decompose", Description: "Pick a graph for a Task.", Tags: []string{"system:true"}},
+		{ID: "python-bugfix", Name: "Python Bug Fix", Description: "Fix a bug in Python.", Tags: []string{"language:python"}},
+	}}
+	ct := NewCoreTools(t.TempDir(), WithGraphCatalog(cat))
+
+	out, err := ct.Execute(context.Background(), "query_graphs", nil)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	for _, want := range []string{"go-feature", "python-bugfix"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("expected user graph %q in output; got:\n%s", want, out)
+		}
+	}
+	for _, forbidden := range []string{"coarse-decompose", "fine-decompose", "Break a job description"} {
+		if strings.Contains(out, forbidden) {
+			t.Errorf("system graph %q leaked into query_graphs output:\n%s", forbidden, out)
+		}
+	}
+}
+
+func TestQueryGraphs_OnlySystemGraphsReturnsEmpty(t *testing.T) {
+	cat := stubGraphCatalog{graphs: []GraphSummary{
+		{ID: "coarse-decompose", Tags: []string{"system:true"}},
+		{ID: "fine-decompose", Tags: []string{"system:true"}},
+	}}
+	ct := NewCoreTools(t.TempDir(), WithGraphCatalog(cat))
+
+	out, err := ct.Execute(context.Background(), "query_graphs", nil)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !strings.Contains(out, "No graphs are currently loaded.") {
+		t.Errorf("expected empty-catalog sentinel when only system graphs remain; got:\n%s", out)
 	}
 }

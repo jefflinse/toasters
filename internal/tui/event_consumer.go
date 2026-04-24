@@ -114,7 +114,6 @@ func translateEvent(ev service.Event) tea.Msg {
 		return SessionStartedMsg{
 			SessionID:      p.SessionID,
 			WorkerName:     p.WorkerName,
-			TeamName:       p.TeamName,
 			Task:           p.Task,
 			JobID:          p.JobID,
 			TaskID:         p.TaskID,
@@ -128,6 +127,16 @@ func translateEvent(ev service.Event) tea.Msg {
 			return nil
 		}
 		return SessionTextMsg{
+			SessionID: ev.SessionID,
+			Text:      p.Text,
+		}
+
+	case service.EventTypeSessionReasoning:
+		p, ok := ev.Payload.(service.SessionReasoningPayload)
+		if !ok {
+			return nil
+		}
+		return SessionReasoningMsg{
 			SessionID: ev.SessionID,
 			Text:      p.Text,
 		}
@@ -165,10 +174,10 @@ func translateEvent(ev service.Event) tea.Msg {
 		return SessionDoneMsg{
 			SessionID:  ev.SessionID,
 			WorkerName: p.WorkerName,
-			JobID:     p.JobID,
-			TaskID:    p.TaskID,
-			FinalText: p.FinalText,
-			Status:    p.Status,
+			JobID:      p.JobID,
+			TaskID:     p.TaskID,
+			FinalText:  p.FinalText,
+			Status:     p.Status,
 		}
 
 	case service.EventTypeGraphNodeStarted:
@@ -235,7 +244,6 @@ func translateEvent(ev service.Event) tea.Msg {
 		service.EventTypeTaskStarted,
 		service.EventTypeTaskCompleted,
 		service.EventTypeTaskFailed,
-		service.EventTypeBlockerReported,
 		service.EventTypeJobCompleted:
 		// These are forwarded as OperatorEventMsg for feed display.
 		return OperatorEventMsg{Event: ev}
@@ -266,14 +274,6 @@ func handleOperationCompleted(p service.OperationCompletedPayload) tea.Msg {
 	switch p.Kind {
 	case "generate_skill":
 		return skillGeneratedMsg{content: p.Result.Content}
-	case "generate_team":
-		return teamGeneratedMsg{content: p.Result.Content, agentNames: p.Result.AgentNames}
-	case "promote_team":
-		return teamPromotedMsg{teamName: p.Result.Content}
-	case "detect_coordinator":
-		// The service already called SetCoordinator; send TeamsAutoDetectDoneMsg
-		// so the modal clears its autoDetecting flag and reloads.
-		return TeamsAutoDetectDoneMsg{agentName: p.Result.Content}
 	default:
 		slog.Debug("unhandled operation.completed kind", "kind", p.Kind)
 		return nil
@@ -287,12 +287,6 @@ func handleOperationFailed(p service.OperationFailedPayload) tea.Msg {
 	switch p.Kind {
 	case "generate_skill":
 		return skillGeneratedMsg{err: err}
-	case "generate_team":
-		return teamGeneratedMsg{err: err}
-	case "promote_team":
-		return teamPromotedMsg{err: err}
-	case "detect_coordinator":
-		return TeamsAutoDetectDoneMsg{err: err}
 	default:
 		slog.Debug("unhandled operation.failed kind", "kind", p.Kind)
 		return nil

@@ -129,11 +129,6 @@ func sendInitialAppReady(svc service.Service, p *atomic.Pointer[tea.Program], se
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	initialTeams, err := svc.Definitions().ListTeams(ctx)
-	if err != nil {
-		slog.Warn("failed to list teams during startup", "error", err)
-	}
-
 	// Pull operator status so the sidebar shows the canonical model name and
 	// endpoint URL from the server config (rather than whatever ListModels
 	// happens to return first).
@@ -159,7 +154,6 @@ func sendInitialAppReady(svc service.Service, p *atomic.Pointer[tea.Program], se
 	time.Sleep(200 * time.Millisecond)
 
 	if prog := p.Load(); prog != nil {
-		prog.Send(tui.TeamsReloadedMsg{Teams: initialTeams})
 		greeting := "Connected to " + serverAddr
 		if operatorDisabled {
 			greeting = ""

@@ -5,8 +5,6 @@ import (
 
 	"charm.land/bubbles/v2/textarea"
 	"charm.land/bubbles/v2/viewport"
-
-	"github.com/jefflinse/toasters/internal/service"
 )
 
 // newMinimalModel returns a Model with only the fields needed to exercise
@@ -30,7 +28,6 @@ func newMinimalModel(t *testing.T) Model {
 			expandedReasoning: make(map[int]bool),
 			collapsedTools:    make(map[int]bool),
 		},
-		blockers:        make(map[string]*service.Blocker),
 		runtimeSessions: make(map[string]*runtimeSlot),
 	}
 }

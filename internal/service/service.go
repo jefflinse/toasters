@@ -24,8 +24,8 @@ type Service interface {
 	// the operator LLM conversation.
 	Operator() OperatorService
 
-	// Definitions returns the sub-interface for managing skills, workers, and
-	// teams (CRUD, generation, promotion, coordinator detection).
+	// Definitions returns the sub-interface for managing skills and workers
+	// (CRUD, LLM-powered skill generation).
 	Definitions() DefinitionService
 
 	// Jobs returns the sub-interface for listing, inspecting, and cancelling jobs.
@@ -74,25 +74,19 @@ type OperatorService interface {
 	// Returns entries in chronological order (oldest first).
 	// The history is bounded to the most recent maxHistoryEntries entries.
 	History(ctx context.Context) ([]ChatEntry, error)
-
-	// RespondToBlocker submits the user's answers to a blocker reported by a worker.
-	// The answers are formatted and sent to the operator as a user response event.
-	// jobID and taskID identify the blocked task; answers correspond to the blocker's
-	// Questions in order.
-	RespondToBlocker(ctx context.Context, jobID, taskID string, answers []string) error
 }
 
 // ---------------------------------------------------------------------------
 // DefinitionService
 // ---------------------------------------------------------------------------
 
-// DefinitionService manages skills, workers, and teams. It covers all CRUD
-// operations, LLM-powered generation, team promotion, and coordinator detection.
+// DefinitionService manages skills and workers. It covers all CRUD operations
+// and LLM-powered skill generation.
 //
-// Generation and promotion operations are async: they return an operationID
-// immediately and push operation.completed or operation.failed events via the
-// event stream when done. The TUI should show a "generating…" indicator and
-// update its state when the event arrives.
+// Generation operations are async: they return an operationID immediately and
+// push operation.completed or operation.failed events via the event stream
+// when done. The TUI should show a "generating…" indicator and update its
+// state when the event arrives.
 type DefinitionService interface {
 	// --- Skills ---
 
@@ -126,75 +120,21 @@ type DefinitionService interface {
 	// --- Workers (read-only) ---
 
 	// ListWorkers returns all workers known to the service. The ordering is:
-	// shared (non-team) workers alphabetically, then team-local workers by
-	// "team/worker", then system workers alphabetically.
+	// user workers alphabetically, then system workers alphabetically.
 	ListWorkers(ctx context.Context) ([]Worker, error)
 
 	// GetWorker returns a single worker by ID. Returns an error wrapping
 	// ErrNotFound if the worker does not exist.
 	GetWorker(ctx context.Context, id string) (Worker, error)
 
-	// --- Teams ---
+	// --- Graphs (read-only) ---
 
-	// ListTeams returns all non-system teams as TeamView values (team + resolved
-	// coordinator + worker members). System teams (Source == "system") are excluded.
-	ListTeams(ctx context.Context) ([]TeamView, error)
+	// ListGraphs returns all loaded graph definitions, ordered by id.
+	ListGraphs(ctx context.Context) ([]GraphDefinition, error)
 
-	// GetTeam returns a single team as a TeamView by team ID. Returns an error
-	// wrapping ErrNotFound if the team does not exist.
-	GetTeam(ctx context.Context, id string) (TeamView, error)
-
-	// CreateTeam creates a new team directory with the given name under the user
-	// teams directory. Returns the created TeamView. Triggers a definition reload.
-	CreateTeam(ctx context.Context, name string) (TeamView, error)
-
-	// DeleteTeam deletes the team directory for the given team ID. Read-only
-	// teams (auto-detected from well-known directories) and system teams cannot
-	// be deleted and return an error. If the team is an auto-team, a dismiss
-	// marker is written so bootstrap does not re-create it on next startup.
-	// Triggers a definition reload.
-	DeleteTeam(ctx context.Context, id string) error
-
-	// SetCoordinator updates the team so that the worker with the given name is
-	// the coordinator. It rewrites team.md's lead: field and updates mode: in
-	// all worker files in the team's agents/ directory. Returns an error if the
-	// team is read-only or if the worker is not found in the team. Triggers a
-	// definition reload.
-	SetCoordinator(ctx context.Context, teamID string, workerName string) error
-
-	// PromoteTeam promotes an auto-detected team to a fully managed team.
-	// Returns an operationID immediately. When the promotion completes, an
-	// operation.completed event is pushed with Kind == "promote_team" and
-	// Result.Content set to the team name. Triggers a definition reload.
-	//
-	// Promotion logic branches on team type:
-	//   - Read-only auto-teams (e.g. ~/.claude/agents): copies worker files into
-	//     a new managed team directory under ~/.config/toasters/user/teams/.
-	//   - Bootstrap auto-teams (in user/teams/ with .auto-team marker): replaces
-	//     the agents/ symlink with a real directory and writes team.md.
-	//
-	// On failure, an operation.failed event is pushed with the error message.
-	PromoteTeam(ctx context.Context, teamID string) (operationID string, err error)
-
-	// GenerateTeam asks the LLM to generate a team definition for the given
-	// prompt, selecting workers from the available pool. Returns an operationID
-	// immediately. When the generation completes, an operation.completed event
-	// is pushed with Kind == "generate_team", Result.Content set to the team.md
-	// content, and Result.AgentNames set to the worker names to assign.
-	// The implementation writes the team directory and triggers a reload.
-	//
-	// On failure, an operation.failed event is pushed with the error message.
-	GenerateTeam(ctx context.Context, prompt string) (operationID string, err error)
-
-	// DetectCoordinator asks the LLM to pick the best coordinator for the team
-	// from its current workers. Returns an operationID immediately. When
-	// detection completes, an operation.completed event is pushed with
-	// Kind == "detect_coordinator" and Result.Content set to the detected worker
-	// name (empty if no match). The implementation calls SetCoordinator if a
-	// match is found.
-	//
-	// On failure, an operation.failed event is pushed with the error message.
-	DetectCoordinator(ctx context.Context, teamID string) (operationID string, err error)
+	// GetGraph returns a single graph definition by id. Returns an error
+	// wrapping ErrNotFound if the graph is not loaded.
+	GetGraph(ctx context.Context, id string) (GraphDefinition, error)
 }
 
 // ---------------------------------------------------------------------------
@@ -233,7 +173,7 @@ type JobService interface {
 
 // SessionService provides read-only access to worker sessions plus the ability
 // to cancel them. Session creation is handled by the runtime when the operator
-// assigns tasks to teams.
+// assigns tasks to graphs.
 type SessionService interface {
 	// List returns all currently active worker sessions as snapshots. Snapshots
 	// carry real-time token counts from the in-process runtime (not the DB

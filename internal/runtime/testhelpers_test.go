@@ -90,9 +90,9 @@ func (s *noopStore) UpdateTaskResult(_ context.Context, _, _, _ string) error { 
 func (s *noopStore) CompleteTask(_ context.Context, _ string, _ db.TaskStatus, _, _ string) error {
 	return nil
 }
-func (s *noopStore) AssignTask(_ context.Context, _, _ string) error        { return nil }
-func (s *noopStore) PreAssignTaskTeam(_ context.Context, _, _ string) error { return nil }
-func (s *noopStore) AddTaskDependency(_ context.Context, _, _ string) error { return nil }
+func (s *noopStore) AssignTaskToGraph(_ context.Context, _, _ string) error  { return nil }
+func (s *noopStore) PreAssignTaskGraph(_ context.Context, _, _ string) error { return nil }
+func (s *noopStore) AddTaskDependency(_ context.Context, _, _ string) error  { return nil }
 func (s *noopStore) GetReadyTasks(_ context.Context, _ string) ([]*db.Task, error) {
 	return nil, nil
 }
@@ -100,31 +100,22 @@ func (s *noopStore) ReportProgress(_ context.Context, _ *db.ProgressReport) erro
 func (s *noopStore) GetRecentProgress(_ context.Context, _ string, _ int) ([]*db.ProgressReport, error) {
 	return nil, nil
 }
-func (s *noopStore) UpsertSkill(_ context.Context, _ *db.Skill) error        { return nil }
-func (s *noopStore) GetSkill(_ context.Context, _ string) (*db.Skill, error) { return nil, nil }
-func (s *noopStore) ListSkills(_ context.Context) ([]*db.Skill, error)       { return nil, nil }
-func (s *noopStore) DeleteAllSkills(_ context.Context) error                 { return nil }
+func (s *noopStore) UpsertSkill(_ context.Context, _ *db.Skill) error          { return nil }
+func (s *noopStore) GetSkill(_ context.Context, _ string) (*db.Skill, error)   { return nil, nil }
+func (s *noopStore) ListSkills(_ context.Context) ([]*db.Skill, error)         { return nil, nil }
+func (s *noopStore) DeleteAllSkills(_ context.Context) error                   { return nil }
 func (s *noopStore) UpsertWorker(_ context.Context, _ *db.Worker) error        { return nil }
 func (s *noopStore) GetWorker(_ context.Context, _ string) (*db.Worker, error) { return nil, nil }
 func (s *noopStore) ListWorkers(_ context.Context) ([]*db.Worker, error)       { return nil, nil }
 func (s *noopStore) DeleteAllWorkers(_ context.Context) error                  { return nil }
-func (s *noopStore) UpsertTeam(_ context.Context, _ *db.Team) error            { return nil }
-func (s *noopStore) GetTeam(_ context.Context, _ string) (*db.Team, error)     { return nil, nil }
-func (s *noopStore) ListTeams(_ context.Context) ([]*db.Team, error)           { return nil, nil }
-func (s *noopStore) DeleteAllTeams(_ context.Context) error                    { return nil }
-func (s *noopStore) AddTeamWorker(_ context.Context, _ *db.TeamWorker) error   { return nil }
-func (s *noopStore) ListTeamWorkers(_ context.Context, _ string) ([]*db.TeamWorker, error) {
-	return nil, nil
-}
-func (s *noopStore) DeleteAllTeamWorkers(_ context.Context) error              { return nil }
-func (s *noopStore) CreateFeedEntry(_ context.Context, _ *db.FeedEntry) error { return nil }
+func (s *noopStore) CreateFeedEntry(_ context.Context, _ *db.FeedEntry) error  { return nil }
 func (s *noopStore) ListFeedEntries(_ context.Context, _ string, _ int) ([]*db.FeedEntry, error) {
 	return nil, nil
 }
 func (s *noopStore) ListRecentFeedEntries(_ context.Context, _ int) ([]*db.FeedEntry, error) {
 	return nil, nil
 }
-func (s *noopStore) RebuildDefinitions(_ context.Context, _ []*db.Skill, _ []*db.Worker, _ []*db.Team, _ []*db.TeamWorker) error {
+func (s *noopStore) RebuildDefinitions(_ context.Context, _ []*db.Skill, _ []*db.Worker) error {
 	return nil
 }
 func (s *noopStore) CreateSession(_ context.Context, _ *db.WorkerSession) error { return nil }
@@ -132,6 +123,9 @@ func (s *noopStore) UpdateSession(_ context.Context, _ string, _ db.SessionUpdat
 	return nil
 }
 func (s *noopStore) GetActiveSessions(_ context.Context) ([]*db.WorkerSession, error) {
+	return nil, nil
+}
+func (s *noopStore) ListSessionsForTask(_ context.Context, _ string) ([]*db.WorkerSession, error) {
 	return nil, nil
 }
 func (s *noopStore) LogArtifact(_ context.Context, _ *db.Artifact) error { return nil }

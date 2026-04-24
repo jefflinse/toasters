@@ -1,116 +1,51 @@
-// Package provider defines a unified interface for LLM providers with
-// channel-based streaming. It supports OpenAI-compatible and Anthropic
-// backends behind a common abstraction, with a registry for managing
-// multiple configured providers.
+// Package provider hosts the concrete LLM provider implementations
+// (Anthropic, OpenAI-compatible) plus the Registry used to resolve
+// providers by name at runtime.
+//
+// The wire-level interface and types (Provider, ChatRequest, Message,
+// StreamEvent, ToolCall, Usage, ModelInfo) are defined by
+// github.com/jefflinse/mycelium/provider. This package re-exports them
+// as aliases so existing callers — and this package's own concrete
+// implementations — keep working unchanged; callers may also import
+// mycelium/provider directly. The alias layer is intentional: it keeps
+// mycelium as the single source of truth for the wire types while this
+// package remains the home of Toasters-specific provider plumbing
+// (Registry, ProviderConfig, concrete HTTP clients).
 package provider
 
 import (
 	"context"
-	"encoding/json"
 	"strings"
+
+	mcp "github.com/jefflinse/mycelium/provider"
 )
 
-// Provider abstracts LLM provider differences behind a common streaming interface.
-type Provider interface {
-	// ChatStream sends messages and streams the response via a channel.
-	// The channel is always closed by the provider when done.
-	// An event with Type EventError is terminal -- no more events follow (except channel close).
-	// An event with Type EventDone signals successful completion.
-	ChatStream(ctx context.Context, req ChatRequest) (<-chan StreamEvent, error)
+// Type aliases — mycelium/provider is authoritative.
+type (
+	Provider    = mcp.Provider
+	ChatRequest = mcp.ChatRequest
+	Message     = mcp.Message
+	ToolCall    = mcp.ToolCall
+	// Tool is an alias for mycelium's ToolDef so call sites may keep
+	// writing provider.Tool{...}. Name mismatch is intentional — Toasters
+	// historically called this Tool; mycelium calls it ToolDef.
+	Tool        = mcp.ToolDef
+	Usage       = mcp.Usage
+	ModelInfo   = mcp.ModelInfo
+	StreamEvent = mcp.StreamEvent
+	EventType   = mcp.EventType
+)
 
-	// Models returns available models from this provider.
-	Models(ctx context.Context) ([]ModelInfo, error)
-
-	// Name returns the provider identifier (e.g. "anthropic", "openai", "lmstudio").
-	Name() string
-}
-
-// EventType identifies the kind of stream event.
-type EventType string
-
+// Stream event type constants — re-exported from mycelium so callers can
+// keep writing provider.EventText etc.
 const (
-	EventText     EventType = "text"
-	EventToolCall EventType = "tool_call"
-	EventUsage    EventType = "usage"
-	EventDone     EventType = "done"
-	EventError    EventType = "error"
+	EventText      = mcp.EventText
+	EventReasoning = mcp.EventReasoning
+	EventToolCall  = mcp.EventToolCall
+	EventUsage     = mcp.EventUsage
+	EventDone      = mcp.EventDone
+	EventError     = mcp.EventError
 )
-
-// StreamEvent is a discriminated union for streaming events.
-type StreamEvent struct {
-	Type     EventType
-	Text     string    // populated for EventText
-	ToolCall *ToolCall // populated for EventToolCall (complete tool call)
-	Usage    *Usage    // populated for EventUsage
-	Error    error     // populated for EventError
-
-	// Reasoning carries chain-of-thought text (populated for EventText when
-	// the provider supports extended thinking).
-	Reasoning string
-
-	// Model carries the model name from the response (may be set on any event).
-	Model string
-
-	// StopReason carries the stop reason from message_delta (e.g. "end_turn", "tool_use").
-	StopReason string
-}
-
-// ChatRequest contains all parameters for a chat completion request.
-type ChatRequest struct {
-	Model       string
-	Messages    []Message
-	Tools       []Tool
-	System      string // system prompt
-	MaxTokens   int
-	Temperature *float64
-	Stop        []string
-}
-
-// Message represents a chat message.
-type Message struct {
-	Role       string // "system", "user", "assistant", "tool"
-	Content    string
-	ToolCalls  []ToolCall
-	ToolCallID string // for tool result messages
-}
-
-// ToolCall represents a tool invocation by the LLM.
-type ToolCall struct {
-	ID        string
-	Name      string
-	Arguments json.RawMessage
-}
-
-// Tool defines a tool available to the LLM.
-type Tool struct {
-	Name        string
-	Description string
-	Parameters  json.RawMessage // JSON Schema
-}
-
-// Usage tracks token consumption.
-type Usage struct {
-	InputTokens  int
-	OutputTokens int
-}
-
-// ModelInfo describes an available model.
-type ModelInfo struct {
-	ID                  string
-	Name                string
-	Provider            string
-	State               string // "loaded", "not-loaded", "available", etc.
-	MaxContextLength    int    // max context window the model supports (0 if unknown)
-	LoadedContextLength int    // actual context length configured for the loaded model (0 if unknown or not loaded)
-}
-
-// ContextLength returns the effective context length — loaded if available, otherwise max.
-func (m ModelInfo) ContextLength() int {
-	if m.LoadedContextLength > 0 {
-		return m.LoadedContextLength
-	}
-	return m.MaxContextLength
-}
 
 // ChatCompletion is a convenience function that sends a non-streaming request
 // by collecting the full stream into a string. It extracts system messages from

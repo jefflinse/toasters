@@ -76,8 +76,8 @@ func TestWireTaskToService(t *testing.T) {
 		JobID:           "job-1",
 		Title:           "Write tests",
 		Status:          "in_progress",
-		WorkerID:         "agent-1",
-		TeamID:          "team-1",
+		WorkerID:        "agent-1",
+		GraphID:         "team-1",
 		ParentID:        "task-0",
 		SortOrder:       3,
 		CreatedAt:       testTime,
@@ -112,8 +112,8 @@ func TestWireTaskToService(t *testing.T) {
 	if got.WorkerID != "agent-1" {
 		t.Errorf("WorkerID = %q, want %q", got.WorkerID, "agent-1")
 	}
-	if got.TeamID != "team-1" {
-		t.Errorf("TeamID = %q, want %q", got.TeamID, "team-1")
+	if got.GraphID != "team-1" {
+		t.Errorf("GraphID = %q, want %q", got.GraphID, "team-1")
 	}
 	if got.ParentID != "task-0" {
 		t.Errorf("ParentID = %q, want %q", got.ParentID, "task-0")
@@ -152,8 +152,8 @@ func TestWireTaskToService_OptionalFieldsEmpty(t *testing.T) {
 	if got.WorkerID != "" {
 		t.Errorf("WorkerID = %q, want empty", got.WorkerID)
 	}
-	if got.TeamID != "" {
-		t.Errorf("TeamID = %q, want empty", got.TeamID)
+	if got.GraphID != "" {
+		t.Errorf("GraphID = %q, want empty", got.GraphID)
 	}
 	if got.Metadata != nil {
 		t.Errorf("Metadata = %v, want nil", got.Metadata)
@@ -229,7 +229,6 @@ func TestWireWorkerToService(t *testing.T) {
 		Hidden:          true,
 		Disabled:        false,
 		Source:          "user",
-		TeamID:          "team-1",
 		CreatedAt:       testTime,
 		UpdatedAt:       testTime,
 	}
@@ -276,9 +275,6 @@ func TestWireWorkerToService(t *testing.T) {
 	if len(got.Skills) != 1 || got.Skills[0] != "testing" {
 		t.Errorf("Skills = %v, want [testing]", got.Skills)
 	}
-	if got.TeamID != "team-1" {
-		t.Errorf("TeamID = %q, want %q", got.TeamID, "team-1")
-	}
 	if got.Color != "#ff0000" {
 		t.Errorf("Color = %q, want %q", got.Color, "#ff0000")
 	}
@@ -317,271 +313,12 @@ func TestWireWorkerToService_NilOptionalFields(t *testing.T) {
 	}
 }
 
-func TestWireTeamToService(t *testing.T) {
-	t.Parallel()
-
-	w := wireTeam{
-		ID:          "team-1",
-		Name:        "backend",
-		Description: "Backend team",
-		LeadWorker:   "agent-1",
-		Skills:      []string{"testing", "code-review"},
-		Provider:    "anthropic",
-		Model:       "claude-sonnet-4-6",
-		Culture:     "We write clean code.",
-		Source:      "user",
-		IsAuto:      true,
-		CreatedAt:   testTime,
-		UpdatedAt:   testTime,
-	}
-
-	data, err := json.Marshal(w)
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
-
-	var decoded wireTeam
-	if err := json.Unmarshal(data, &decoded); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-
-	got := wireTeamToService(decoded)
-
-	if got.ID != "team-1" {
-		t.Errorf("ID = %q, want %q", got.ID, "team-1")
-	}
-	if got.Name != "backend" {
-		t.Errorf("Name = %q, want %q", got.Name, "backend")
-	}
-	if !got.IsAuto {
-		t.Error("IsAuto = false, want true")
-	}
-	if len(got.Skills) != 2 || got.Skills[0] != "testing" || got.Skills[1] != "code-review" {
-		t.Errorf("Skills = %v, want [testing code-review]", got.Skills)
-	}
-	if got.LeadWorker != "agent-1" {
-		t.Errorf("LeadWorker = %q, want %q", got.LeadWorker, "agent-1")
-	}
-	if got.Culture != "We write clean code." {
-		t.Errorf("Culture = %q, want %q", got.Culture, "We write clean code.")
-	}
-	if got.Provider != "anthropic" {
-		t.Errorf("Provider = %q, want %q", got.Provider, "anthropic")
-	}
-	if got.Model != "claude-sonnet-4-6" {
-		t.Errorf("Model = %q, want %q", got.Model, "claude-sonnet-4-6")
-	}
-}
-
-func TestWireTeamViewToService_WithCoordinator(t *testing.T) {
-	t.Parallel()
-
-	coord := wireWorker{
-		ID:        "agent-lead",
-		Name:      "lead",
-		Mode:      "lead",
-		Source:    "user",
-		CreatedAt: testTime,
-		UpdatedAt: testTime,
-	}
-	w := wireTeamView{
-		Team: wireTeam{
-			ID:        "team-1",
-			Name:      "backend",
-			Source:    "user",
-			CreatedAt: testTime,
-			UpdatedAt: testTime,
-		},
-		Coordinator: &coord,
-		Workers: []wireWorker{
-			{
-				ID:        "agent-w1",
-				Name:      "worker-1",
-				Mode:      "worker",
-				Source:    "user",
-				CreatedAt: testTime,
-				UpdatedAt: testTime,
-			},
-		},
-	}
-
-	data, err := json.Marshal(w)
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
-
-	var decoded wireTeamView
-	if err := json.Unmarshal(data, &decoded); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-
-	got := wireTeamViewToService(decoded)
-
-	if got.Team.ID != "team-1" {
-		t.Errorf("Team.ID = %q, want %q", got.Team.ID, "team-1")
-	}
-	if got.Coordinator == nil {
-		t.Fatal("Coordinator is nil, want non-nil")
-	}
-	if got.Coordinator.ID != "agent-lead" {
-		t.Errorf("Coordinator.ID = %q, want %q", got.Coordinator.ID, "agent-lead")
-	}
-	if got.Coordinator.Name != "lead" {
-		t.Errorf("Coordinator.Name = %q, want %q", got.Coordinator.Name, "lead")
-	}
-	if len(got.Workers) != 1 {
-		t.Fatalf("Workers len = %d, want 1", len(got.Workers))
-	}
-	if got.Workers[0].ID != "agent-w1" {
-		t.Errorf("Workers[0].ID = %q, want %q", got.Workers[0].ID, "agent-w1")
-	}
-}
-
-func TestWireTeamViewToService_NilCoordinator(t *testing.T) {
-	t.Parallel()
-
-	w := wireTeamView{
-		Team: wireTeam{
-			ID:        "team-2",
-			Name:      "frontend",
-			Source:    "auto",
-			IsAuto:    true,
-			CreatedAt: testTime,
-			UpdatedAt: testTime,
-		},
-		Coordinator: nil,
-		Workers:     []wireWorker{},
-	}
-
-	got := wireTeamViewToService(w)
-
-	if got.Coordinator != nil {
-		t.Errorf("Coordinator = %v, want nil", got.Coordinator)
-	}
-	if len(got.Workers) != 0 {
-		t.Errorf("Workers len = %d, want 0", len(got.Workers))
-	}
-	if !got.Team.IsAuto {
-		t.Error("Team.IsAuto = false, want true")
-	}
-}
-
-func TestWireTeamViewToService_ReadOnlyAndSystemFlags(t *testing.T) {
-	t.Parallel()
-
-	// Test with both flags true.
-	w := wireTeamView{
-		Team: wireTeam{
-			ID:        "team-ro",
-			Name:      "claude-code",
-			Source:    "auto",
-			IsAuto:    true,
-			CreatedAt: testTime,
-			UpdatedAt: testTime,
-		},
-		Coordinator: nil,
-		Workers:     []wireWorker{},
-		IsReadOnly:  true,
-		IsSystem:    false,
-	}
-
-	data, err := json.Marshal(w)
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
-
-	var decoded wireTeamView
-	if err := json.Unmarshal(data, &decoded); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-
-	got := wireTeamViewToService(decoded)
-
-	if !got.IsReadOnly {
-		t.Error("IsReadOnly = false, want true")
-	}
-	if got.IsSystem {
-		t.Error("IsSystem = true, want false")
-	}
-
-	// Test with both flags false.
-	w2 := wireTeamView{
-		Team: wireTeam{
-			ID:        "team-user",
-			Name:      "my-team",
-			Source:    "user",
-			IsAuto:    false,
-			CreatedAt: testTime,
-			UpdatedAt: testTime,
-		},
-		Coordinator: nil,
-		Workers:     []wireWorker{},
-		IsReadOnly:  false,
-		IsSystem:    false,
-	}
-
-	data2, err := json.Marshal(w2)
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
-
-	var decoded2 wireTeamView
-	if err := json.Unmarshal(data2, &decoded2); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-
-	got2 := wireTeamViewToService(decoded2)
-
-	if got2.IsReadOnly {
-		t.Error("IsReadOnly = true, want false")
-	}
-	if got2.IsSystem {
-		t.Error("IsSystem = true, want false")
-	}
-
-	// Test with IsSystem true.
-	w3 := wireTeamView{
-		Team: wireTeam{
-			ID:        "team-sys",
-			Name:      "system-team",
-			Source:    "system",
-			IsAuto:    false,
-			CreatedAt: testTime,
-			UpdatedAt: testTime,
-		},
-		Coordinator: nil,
-		Workers:     []wireWorker{},
-		IsReadOnly:  false,
-		IsSystem:    true,
-	}
-
-	data3, err := json.Marshal(w3)
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
-
-	var decoded3 wireTeamView
-	if err := json.Unmarshal(data3, &decoded3); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-
-	got3 := wireTeamViewToService(decoded3)
-
-	if got3.IsReadOnly {
-		t.Error("IsReadOnly = true, want false")
-	}
-	if !got3.IsSystem {
-		t.Error("IsSystem = false, want true")
-	}
-}
-
 func TestWireSessionSnapshotToService(t *testing.T) {
 	t.Parallel()
 
 	w := wireSessionSnapshot{
 		ID:        "sess-1",
-		WorkerID:   "agent-1",
-		TeamName:  "backend",
+		WorkerID:  "agent-1",
 		JobID:     "job-1",
 		TaskID:    "task-1",
 		Status:    "active",
@@ -610,9 +347,6 @@ func TestWireSessionSnapshotToService(t *testing.T) {
 	if got.WorkerID != "agent-1" {
 		t.Errorf("WorkerID = %q, want %q", got.WorkerID, "agent-1")
 	}
-	if got.TeamName != "backend" {
-		t.Errorf("TeamName = %q, want %q", got.TeamName, "backend")
-	}
 	if got.TokensIn != 1500 {
 		t.Errorf("TokensIn = %d, want 1500", got.TokensIn)
 	}
@@ -633,7 +367,7 @@ func TestWireSessionDetailToService(t *testing.T) {
 	w := wireSessionDetail{
 		Snapshot: wireSessionSnapshot{
 			ID:        "sess-1",
-			WorkerID:   "agent-1",
+			WorkerID:  "agent-1",
 			Status:    "completed",
 			StartTime: testTime,
 			TokensIn:  100,
@@ -647,8 +381,7 @@ func TestWireSessionDetailToService(t *testing.T) {
 			{Label: "write: foo_test.go", ToolName: "write_file"},
 		},
 		WorkerName: "test-writer",
-		TeamName:  "backend",
-		Task:      "Write unit tests",
+		Task:       "Write unit tests",
 	}
 
 	data, err := json.Marshal(w)
@@ -689,9 +422,6 @@ func TestWireSessionDetailToService(t *testing.T) {
 	}
 	if got.WorkerName != "test-writer" {
 		t.Errorf("WorkerName = %q, want %q", got.WorkerName, "test-writer")
-	}
-	if got.TeamName != "backend" {
-		t.Errorf("TeamName = %q, want %q", got.TeamName, "backend")
 	}
 	if got.Task != "Write unit tests" {
 		t.Errorf("Task = %q, want %q", got.Task, "Write unit tests")
@@ -979,7 +709,7 @@ func TestWireWorkerSessionToService(t *testing.T) {
 	cost := 0.0042
 	w := wireWorkerSession{
 		ID:        "sess-1",
-		WorkerID:   "agent-1",
+		WorkerID:  "agent-1",
 		JobID:     "job-1",
 		TaskID:    "task-1",
 		Status:    "completed",
@@ -1038,7 +768,7 @@ func TestWireWorkerSessionToService_NilOptionalFields(t *testing.T) {
 
 	w := wireWorkerSession{
 		ID:        "sess-2",
-		WorkerID:   "agent-2",
+		WorkerID:  "agent-2",
 		Status:    "active",
 		StartedAt: testTime,
 	}
@@ -1219,7 +949,7 @@ func TestParseSSEPayload_OperatorPrompt_WithoutPendingDispatch(t *testing.T) {
 func TestParseSSEPayload_TaskAssigned(t *testing.T) {
 	t.Parallel()
 
-	raw := json.RawMessage(`{"task_id":"task-1","job_id":"job-1","team_id":"team-1","title":"Write tests"}`)
+	raw := json.RawMessage(`{"task_id":"task-1","job_id":"job-1","graph_id":"team-1","title":"Write tests"}`)
 	payload, err := parseSSEPayload("task.assigned", raw)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -1235,8 +965,8 @@ func TestParseSSEPayload_TaskAssigned(t *testing.T) {
 	if p.JobID != "job-1" {
 		t.Errorf("JobID = %q, want %q", p.JobID, "job-1")
 	}
-	if p.TeamID != "team-1" {
-		t.Errorf("TeamID = %q, want %q", p.TeamID, "team-1")
+	if p.GraphID != "team-1" {
+		t.Errorf("GraphID = %q, want %q", p.GraphID, "team-1")
 	}
 	if p.Title != "Write tests" {
 		t.Errorf("Title = %q, want %q", p.Title, "Write tests")
@@ -1246,7 +976,7 @@ func TestParseSSEPayload_TaskAssigned(t *testing.T) {
 func TestParseSSEPayload_TaskStarted(t *testing.T) {
 	t.Parallel()
 
-	raw := json.RawMessage(`{"task_id":"task-1","job_id":"job-1","team_id":"team-1","title":"Write tests"}`)
+	raw := json.RawMessage(`{"task_id":"task-1","job_id":"job-1","graph_id":"team-1","title":"Write tests"}`)
 	payload, err := parseSSEPayload("task.started", raw)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -1262,8 +992,8 @@ func TestParseSSEPayload_TaskStarted(t *testing.T) {
 	if p.JobID != "job-1" {
 		t.Errorf("JobID = %q, want %q", p.JobID, "job-1")
 	}
-	if p.TeamID != "team-1" {
-		t.Errorf("TeamID = %q, want %q", p.TeamID, "team-1")
+	if p.GraphID != "team-1" {
+		t.Errorf("GraphID = %q, want %q", p.GraphID, "team-1")
 	}
 	if p.Title != "Write tests" {
 		t.Errorf("Title = %q, want %q", p.Title, "Write tests")
@@ -1273,7 +1003,7 @@ func TestParseSSEPayload_TaskStarted(t *testing.T) {
 func TestParseSSEPayload_TaskCompleted(t *testing.T) {
 	t.Parallel()
 
-	raw := json.RawMessage(`{"task_id":"task-1","job_id":"job-1","team_id":"team-1","summary":"All done","recommendations":"Ship it","has_next_task":true}`)
+	raw := json.RawMessage(`{"task_id":"task-1","job_id":"job-1","graph_id":"team-1","summary":"All done","recommendations":"Ship it","has_next_task":true}`)
 	payload, err := parseSSEPayload("task.completed", raw)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -1300,7 +1030,7 @@ func TestParseSSEPayload_TaskCompleted(t *testing.T) {
 func TestParseSSEPayload_TaskFailed(t *testing.T) {
 	t.Parallel()
 
-	raw := json.RawMessage(`{"task_id":"task-1","job_id":"job-1","team_id":"team-1","error":"compilation failed"}`)
+	raw := json.RawMessage(`{"task_id":"task-1","job_id":"job-1","graph_id":"team-1","error":"compilation failed"}`)
 	payload, err := parseSSEPayload("task.failed", raw)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -1315,39 +1045,6 @@ func TestParseSSEPayload_TaskFailed(t *testing.T) {
 	}
 	if p.Error != "compilation failed" {
 		t.Errorf("Error = %q, want %q", p.Error, "compilation failed")
-	}
-}
-
-func TestParseSSEPayload_BlockerReported(t *testing.T) {
-	t.Parallel()
-
-	raw := json.RawMessage(`{"task_id":"task-1","team_id":"team-1","worker_id":"agent-1","description":"Need credentials","questions":["What is the API key?","Which environment?"]}`)
-	payload, err := parseSSEPayload("blocker.reported", raw)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	p, ok := payload.(service.BlockerReportedPayload)
-	if !ok {
-		t.Fatalf("payload type = %T, want BlockerReportedPayload", payload)
-	}
-	if p.TaskID != "task-1" {
-		t.Errorf("TaskID = %q, want %q", p.TaskID, "task-1")
-	}
-	if p.TeamID != "team-1" {
-		t.Errorf("TeamID = %q, want %q", p.TeamID, "team-1")
-	}
-	if p.WorkerID != "agent-1" {
-		t.Errorf("WorkerID = %q, want %q", p.WorkerID, "agent-1")
-	}
-	if p.Description != "Need credentials" {
-		t.Errorf("Description = %q, want %q", p.Description, "Need credentials")
-	}
-	if len(p.Questions) != 2 {
-		t.Fatalf("Questions len = %d, want 2", len(p.Questions))
-	}
-	if p.Questions[0] != "What is the API key?" {
-		t.Errorf("Questions[0] = %q, want %q", p.Questions[0], "What is the API key?")
 	}
 }
 
@@ -1414,7 +1111,6 @@ func TestParseSSEPayload_SessionStarted(t *testing.T) {
 	raw := json.RawMessage(`{
 		"session_id":"sess-1",
 		"worker_name":"test-writer",
-		"team_name":"backend",
 		"task":"Write unit tests",
 		"job_id":"job-1",
 		"task_id":"task-1",
@@ -1435,9 +1131,6 @@ func TestParseSSEPayload_SessionStarted(t *testing.T) {
 	}
 	if p.WorkerName != "test-writer" {
 		t.Errorf("WorkerName = %q, want %q", p.WorkerName, "test-writer")
-	}
-	if p.TeamName != "backend" {
-		t.Errorf("TeamName = %q, want %q", p.TeamName, "backend")
 	}
 	if p.Task != "Write unit tests" {
 		t.Errorf("Task = %q, want %q", p.Task, "Write unit tests")
@@ -1576,7 +1269,6 @@ func TestParseSSEPayload_OperationCompleted(t *testing.T) {
 		"result":{
 			"operation_id":"op-1",
 			"content":"---\nname: test-skill\n---\nYou are a skill.",
-			"agent_names":["agent-1","agent-2"],
 			"error":""
 		}
 	}`)
@@ -1597,12 +1289,6 @@ func TestParseSSEPayload_OperationCompleted(t *testing.T) {
 	}
 	if p.Result.Content == "" {
 		t.Error("Result.Content is empty, want non-empty")
-	}
-	if len(p.Result.AgentNames) != 2 {
-		t.Fatalf("Result.AgentNames len = %d, want 2", len(p.Result.AgentNames))
-	}
-	if p.Result.AgentNames[0] != "agent-1" {
-		t.Errorf("Result.AgentNames[0] = %q, want %q", p.Result.AgentNames[0], "agent-1")
 	}
 }
 
@@ -1743,32 +1429,26 @@ func TestParseSSEPayload_AllEventTypes(t *testing.T) {
 		{
 			name:      "task.assigned",
 			eventType: "task.assigned",
-			raw:       json.RawMessage(`{"task_id":"t","job_id":"j","team_id":"tm","title":"T"}`),
+			raw:       json.RawMessage(`{"task_id":"t","job_id":"j","graph_id":"tm","title":"T"}`),
 			wantType:  "service.TaskAssignedPayload",
 		},
 		{
 			name:      "task.started",
 			eventType: "task.started",
-			raw:       json.RawMessage(`{"task_id":"t","job_id":"j","team_id":"tm","title":"T"}`),
+			raw:       json.RawMessage(`{"task_id":"t","job_id":"j","graph_id":"tm","title":"T"}`),
 			wantType:  "service.TaskStartedPayload",
 		},
 		{
 			name:      "task.completed",
 			eventType: "task.completed",
-			raw:       json.RawMessage(`{"task_id":"t","job_id":"j","team_id":"tm","summary":"s","has_next_task":false}`),
+			raw:       json.RawMessage(`{"task_id":"t","job_id":"j","graph_id":"tm","summary":"s","has_next_task":false}`),
 			wantType:  "service.TaskCompletedPayload",
 		},
 		{
 			name:      "task.failed",
 			eventType: "task.failed",
-			raw:       json.RawMessage(`{"task_id":"t","job_id":"j","team_id":"tm","error":"e"}`),
+			raw:       json.RawMessage(`{"task_id":"t","job_id":"j","graph_id":"tm","error":"e"}`),
 			wantType:  "service.TaskFailedPayload",
-		},
-		{
-			name:      "blocker.reported",
-			eventType: "blocker.reported",
-			raw:       json.RawMessage(`{"task_id":"t","team_id":"tm","worker_id":"a","description":"d"}`),
-			wantType:  "service.BlockerReportedPayload",
 		},
 		{
 			name:      "job.completed",
@@ -1886,8 +1566,6 @@ func typeString(v any) string {
 		return "service.TaskCompletedPayload"
 	case service.TaskFailedPayload:
 		return "service.TaskFailedPayload"
-	case service.BlockerReportedPayload:
-		return "service.BlockerReportedPayload"
 	case service.JobCompletedPayload:
 		return "service.JobCompletedPayload"
 	case service.ProgressUpdatePayload:

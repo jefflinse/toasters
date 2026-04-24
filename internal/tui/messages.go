@@ -53,7 +53,6 @@ type focusedPanel int
 const (
 	focusChat     focusedPanel = iota
 	focusJobs     focusedPanel = iota
-	focusTeams    focusedPanel = iota
 	focusAgents   focusedPanel = iota
 	focusOperator focusedPanel = iota
 	focusMCP      focusedPanel = iota
@@ -110,12 +109,20 @@ type ModelsMsg struct {
 	Err    error
 }
 
+// GraphsMsg carries the current catalog of loaded graph definitions. Produced
+// by fetchGraphs (called at startup and when a graph definition file changes).
+// The TUI caches these by id to resolve task graph_id → topology when
+// rendering the graph map.
+type GraphsMsg struct {
+	Graphs []service.GraphDefinition
+	Err    error
+}
+
 // SessionStartedMsg is sent when a worker session starts on the server.
 // Produced by the event consumer in response to a session.started event.
 type SessionStartedMsg struct {
 	SessionID      string
 	WorkerName     string
-	TeamName       string // team this worker belongs to (may be empty)
 	Task           string // short human-readable description of what this worker is doing
 	JobID          string
 	TaskID         string
@@ -126,6 +133,14 @@ type SessionStartedMsg struct {
 // SessionTextMsg carries a chunk of streamed text from an agent session.
 // Produced by the event consumer in response to a session.text event.
 type SessionTextMsg struct {
+	SessionID string
+	Text      string
+}
+
+// SessionReasoningMsg carries a chunk of streamed reasoning (chain-of-
+// thought) from an agent session. Produced by the event consumer in
+// response to a session.reasoning event.
+type SessionReasoningMsg struct {
 	SessionID string
 	Text      string
 }
@@ -154,10 +169,10 @@ type SessionToolResultMsg struct {
 type SessionDoneMsg struct {
 	SessionID  string
 	WorkerName string
-	JobID     string
-	TaskID    string
-	FinalText string
-	Status    string // "completed", "failed", "cancelled"
+	JobID      string
+	TaskID     string
+	FinalText  string
+	Status     string // "completed", "failed", "cancelled"
 }
 
 // GraphNodeStartedMsg is sent when a rhizome graph node begins executing.
@@ -180,11 +195,6 @@ type GraphNodeDoneMsg struct {
 	JobID     string
 	TaskID    string
 	Status    string
-}
-
-// TeamsReloadedMsg is sent by the hot-reload watcher when the teams directory changes.
-type TeamsReloadedMsg struct {
-	Teams []service.TeamView
 }
 
 // JobsReloadedMsg is sent when jobs are reloaded (e.g. from SQLite polling).
@@ -255,19 +265,6 @@ func (m *Model) showScrollbar() tea.Cmd {
 	m.scroll.scrollbarVisible = true
 	m.scroll.lastScrollTime = time.Now()
 	return scrollbarHide()
-}
-
-// TeamsAutoDetectDoneMsg is sent when the LLM coordinator auto-detection finishes.
-type TeamsAutoDetectDoneMsg struct {
-	teamDir   string // team.Dir, used to match back
-	agentName string // matched agent name; empty if no match or error
-	err       error
-}
-
-// blockerAnswersSubmittedMsg is sent when the user has submitted answers for a blocker.
-type blockerAnswersSubmittedMsg struct {
-	jobID   string
-	blocker *service.Blocker
 }
 
 // MCPStatusMsg is sent after MCP connection completes to trigger startup toasts.

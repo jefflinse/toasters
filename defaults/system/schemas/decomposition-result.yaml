@@ -1,0 +1,56 @@
+name: decomposition-result
+description: >
+  Output of a decomposition graph. One schema covers three valid shapes
+  depending on what the decomposer decided:
+    1. coarse-decompose success  → {tasks: [...]}
+    2. fine-decompose success    → {graph_id: "<id>"}
+    3. fine-decompose rejection  → {rejected: true, reason, tasks: [...]}
+  Every field is optional; the service branches on which ones are
+  populated after parsing.
+fields:
+  tasks:
+    type: array
+    description: >
+      List of subtasks produced by decomposition. Populated by
+      coarse-decompose, and by fine-decompose when it rejects the input
+      task as too broad.
+    items:
+      type: object
+      properties:
+        title:
+          type: string
+          description: Short, action-oriented label for the task.
+          required: true
+        description:
+          type: string
+          description: >
+            Self-contained description. Include enough context (file
+            paths, constraints, expected outcome) that downstream graph
+            execution can proceed without re-deriving intent.
+          required: true
+        depends_on:
+          type: array
+          description: >
+            Zero-based indices into this tasks array naming tasks that
+            must complete before this one can start. Empty for
+            independent tasks.
+          items:
+            type: integer
+  graph_id:
+    type: string
+    description: >
+      When fine-decompose selected a graph for the task, the id of the
+      chosen graph. Omit for coarse-decompose or for rejections.
+  rejected:
+    type: boolean
+    description: >
+      true when fine-decompose rejected the input task as too broad and
+      emitted subtasks in `tasks` instead of selecting a graph. Omit
+      otherwise.
+  reason:
+    type: string
+    description: >
+      Human-readable explanation of the decomposition result. For
+      rejections this is why the task was split; for successful
+      coarse/fine output this is a brief narrative of the decision.
+    required: true

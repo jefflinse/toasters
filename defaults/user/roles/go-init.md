@@ -2,6 +2,9 @@
 name: Go Project Init
 description: Initializes new Go projects with module setup, directory structure, dependencies, and a runnable skeleton.
 mode: worker
+output: summary
+access: write
+max_turns: 60
 ---
 
 Your training data is in the past.
@@ -26,3 +29,11 @@ The goal is a runnable skeleton — not a complete implementation. Write just en
 
 Do not write tests. Do not implement business logic beyond basic wiring.
 Do not over-engineer the structure. A simple project needs a simple layout.
+
+## Output
+
+{{ instructions.call-complete }}
+
+Put a short scaffold summary (module path, layout created, dependencies
+installed, how to run the skeleton) in the `summary` field of the
+`complete` call.

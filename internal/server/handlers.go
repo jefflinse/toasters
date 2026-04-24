@@ -18,12 +18,9 @@ const maxMessageBytes = 100_000
 // Strictly below the service layer's 51200 byte limit.
 const maxPromptBytes = 10_000
 
-// maxResponseBytes is the maximum allowed prompt/blocker response length in bytes.
+// maxResponseBytes is the maximum allowed prompt response length in bytes.
 // Strictly below the service layer's 51200 byte limit.
 const maxResponseBytes = 50_000
-
-// maxBlockerAnswers is the maximum number of blocker answers allowed.
-const maxBlockerAnswers = 50
 
 // validJobStatuses is the set of valid job status filter values.
 var validJobStatuses = map[string]bool{
@@ -124,49 +121,6 @@ func (s *Server) operatorHistory(w http.ResponseWriter, r *http.Request) {
 		Items: wireEntries,
 		Total: len(wireEntries),
 	})
-}
-
-// respondToBlocker handles POST /api/v1/operator/blockers/{jobId}/{taskId}/respond.
-func (s *Server) respondToBlocker(w http.ResponseWriter, r *http.Request) {
-	jobID := r.PathValue("jobId")
-	taskID := r.PathValue("taskId")
-	if jobID == "" || taskID == "" {
-		writeError(w, http.StatusBadRequest, "bad_request", "jobId and taskId are required")
-		return
-	}
-
-	var req RespondToBlockerRequest
-	if !decodeBody(w, r, &req) {
-		return
-	}
-	if len(req.Answers) == 0 {
-		writeError(w, http.StatusBadRequest, "bad_request", "answers array is required and must not be empty")
-		return
-	}
-	if len(req.Answers) > maxBlockerAnswers {
-		writeError(w, http.StatusBadRequest, "bad_request",
-			fmt.Sprintf("too many answers: %d exceeds maximum %d", len(req.Answers), maxBlockerAnswers))
-		return
-	}
-	for i, a := range req.Answers {
-		if strings.TrimSpace(a) == "" {
-			writeError(w, http.StatusBadRequest, "bad_request",
-				fmt.Sprintf("answer at index %d must not be empty", i))
-			return
-		}
-		if len(a) > maxResponseBytes {
-			writeError(w, http.StatusBadRequest, "bad_request",
-				fmt.Sprintf("answer at index %d too long: %d bytes exceeds maximum %d", i, len(a), maxResponseBytes))
-			return
-		}
-	}
-
-	if err := s.svc.Operator().RespondToBlocker(r.Context(), jobID, taskID, req.Answers); err != nil {
-		handleServiceError(w, r, err)
-		return
-	}
-
-	w.WriteHeader(http.StatusNoContent)
 }
 
 // ---------------------------------------------------------------------------
@@ -303,147 +257,41 @@ func (s *Server) getWorker(w http.ResponseWriter, r *http.Request) {
 }
 
 // ---------------------------------------------------------------------------
-// Teams handlers
+// Graphs handlers
 // ---------------------------------------------------------------------------
 
-// listTeams handles GET /api/v1/teams.
-func (s *Server) listTeams(w http.ResponseWriter, r *http.Request) {
+// listGraphs handles GET /api/v1/graphs.
+func (s *Server) listGraphs(w http.ResponseWriter, r *http.Request) {
 	pg, err := parsePagination(r)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "bad_request", err.Error())
 		return
 	}
 
-	teams, err := s.svc.Definitions().ListTeams(r.Context())
+	graphs, err := s.svc.Definitions().ListGraphs(r.Context())
 	if err != nil {
 		handleServiceError(w, r, err)
 		return
 	}
 
-	wireTeams := make([]wireTeamView, 0, len(teams))
-	for _, t := range teams {
-		wireTeams = append(wireTeams, teamViewToWire(t))
+	items := make([]wireGraphDefinition, 0, len(graphs))
+	for _, g := range graphs {
+		items = append(items, graphDefinitionToWire(g))
 	}
 
-	page, total := paginate(wireTeams, pg)
-	writeJSON(w, http.StatusOK, PaginatedResponse[wireTeamView]{Items: page, Total: total})
+	page, total := paginate(items, pg)
+	writeJSON(w, http.StatusOK, PaginatedResponse[wireGraphDefinition]{Items: page, Total: total})
 }
 
-// getTeam handles GET /api/v1/teams/{id}.
-func (s *Server) getTeam(w http.ResponseWriter, r *http.Request) {
+// getGraph handles GET /api/v1/graphs/{id}.
+func (s *Server) getGraph(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	tv, err := s.svc.Definitions().GetTeam(r.Context(), id)
+	g, err := s.svc.Definitions().GetGraph(r.Context(), id)
 	if err != nil {
 		handleServiceError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, teamViewToWire(tv))
-}
-
-// createTeam handles POST /api/v1/teams.
-func (s *Server) createTeam(w http.ResponseWriter, r *http.Request) {
-	var req CreateTeamRequest
-	if !decodeBody(w, r, &req) {
-		return
-	}
-	if strings.TrimSpace(req.Name) == "" {
-		writeError(w, http.StatusBadRequest, "bad_request", "name is required")
-		return
-	}
-
-	tv, err := s.svc.Definitions().CreateTeam(r.Context(), req.Name)
-	if err != nil {
-		handleServiceError(w, r, err)
-		return
-	}
-
-	w.Header().Set("Location", fmt.Sprintf("/api/v1/teams/%s", tv.Team.ID))
-	writeJSON(w, http.StatusCreated, teamViewToWire(tv))
-}
-
-// deleteTeam handles DELETE /api/v1/teams/{id}.
-func (s *Server) deleteTeam(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	if err := s.svc.Definitions().DeleteTeam(r.Context(), id); err != nil {
-		handleServiceError(w, r, err)
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
-}
-
-// setCoordinator handles PUT /api/v1/teams/{id}/coordinator.
-func (s *Server) setCoordinator(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-
-	var req SetCoordinatorRequest
-	if !decodeBody(w, r, &req) {
-		return
-	}
-	if strings.TrimSpace(req.WorkerName) == "" {
-		writeError(w, http.StatusBadRequest, "bad_request", "worker_name is required")
-		return
-	}
-
-	if err := s.svc.Definitions().SetCoordinator(r.Context(), id, req.WorkerName); err != nil {
-		handleServiceError(w, r, err)
-		return
-	}
-
-	w.WriteHeader(http.StatusNoContent)
-}
-
-// promoteTeam handles POST /api/v1/teams/{id}/promote.
-func (s *Server) promoteTeam(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-
-	opID, err := s.svc.Definitions().PromoteTeam(r.Context(), id)
-	if err != nil {
-		setRetryAfterIfRateLimited(w, err)
-		handleServiceError(w, r, err)
-		return
-	}
-
-	writeJSON(w, http.StatusAccepted, AsyncResponse{OperationID: opID})
-}
-
-// generateTeam handles POST /api/v1/teams/generate.
-func (s *Server) generateTeam(w http.ResponseWriter, r *http.Request) {
-	var req GenerateRequest
-	if !decodeBody(w, r, &req) {
-		return
-	}
-	if strings.TrimSpace(req.Prompt) == "" {
-		writeError(w, http.StatusBadRequest, "bad_request", "prompt is required")
-		return
-	}
-	if len(req.Prompt) > maxPromptBytes {
-		writeError(w, http.StatusBadRequest, "bad_request",
-			fmt.Sprintf("prompt too long: %d bytes exceeds maximum %d", len(req.Prompt), maxPromptBytes))
-		return
-	}
-
-	opID, err := s.svc.Definitions().GenerateTeam(r.Context(), req.Prompt)
-	if err != nil {
-		setRetryAfterIfRateLimited(w, err)
-		handleServiceError(w, r, err)
-		return
-	}
-
-	writeJSON(w, http.StatusAccepted, AsyncResponse{OperationID: opID})
-}
-
-// detectCoordinator handles POST /api/v1/teams/{id}/detect-coordinator.
-func (s *Server) detectCoordinator(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-
-	opID, err := s.svc.Definitions().DetectCoordinator(r.Context(), id)
-	if err != nil {
-		setRetryAfterIfRateLimited(w, err)
-		handleServiceError(w, r, err)
-		return
-	}
-
-	writeJSON(w, http.StatusAccepted, AsyncResponse{OperationID: opID})
+	writeJSON(w, http.StatusOK, graphDefinitionToWire(g))
 }
 
 // ---------------------------------------------------------------------------

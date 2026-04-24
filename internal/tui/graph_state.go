@@ -1,6 +1,8 @@
 // Graph task state: accumulates topology + per-node phase from the graph
 // lifecycle events (GraphNodeStarted / GraphNodeDone) so the graph map
-// modal can render live data for an ongoing run.
+// modal can render live data for an ongoing run. The topology itself is
+// resolved from the loaded graph-definition catalog via the task's
+// graph_id.
 package tui
 
 import (
@@ -11,34 +13,88 @@ import (
 type graphTaskState struct {
 	jobID    string
 	taskID   string
-	jobType  string
+	graphID  string
 	topology dagmap.Topology
 	nodes    dagmap.NodeStates
 }
 
-// topologyForJobType maps the service.Job.Type string onto a dagmap topology.
-// Unknown types fall back to BugFix, matching graphexec's JobTypeUnset default.
-func topologyForJobType(t string) dagmap.Topology {
-	switch t {
-	case "new_feature":
-		return dagmap.NewFeature()
-	case "prototype":
-		return dagmap.Prototype()
-	case "single_worker":
-		return dagmap.SingleWorker()
-	default:
-		return dagmap.BugFix()
-	}
-}
-
-// jobTypeByID returns the Type string for a known job, or "" if not found.
-func (m *Model) jobTypeByID(jobID string) string {
-	for i := range m.jobs {
-		if m.jobs[i].ID == jobID {
-			return m.jobs[i].Type
+// taskGraphID returns the graph id assigned to (jobID, taskID) from the
+// progress state, or "" if the task is not known.
+func (m *Model) taskGraphID(jobID, taskID string) string {
+	for _, task := range m.progress.tasks[jobID] {
+		if task.ID == taskID {
+			return task.GraphID
 		}
 	}
 	return ""
+}
+
+// topologyForGraphID resolves a graph id to a dagmap topology via the cached
+// definitions. Returns ok=false if the graph isn't loaded yet — the caller
+// should fall back to an empty topology that renders "waiting for graph
+// definition…".
+func (m *Model) topologyForGraphID(graphID string) (dagmap.Topology, bool) {
+	if graphID == "" {
+		return dagmap.Topology{}, false
+	}
+	def, ok := m.graphDefs[graphID]
+	if !ok {
+		return dagmap.Topology{}, false
+	}
+	return graphDefinitionToTopology(def), true
+}
+
+// graphDefinitionToTopology converts a service-level graph definition into
+// the dagmap topology shape, inserting synthetic Start/End edges so the
+// renderer has a root and sink.
+func graphDefinitionToTopology(def service.GraphDefinition) dagmap.Topology {
+	topology := dagmap.Topology{
+		Nodes: append([]string(nil), def.Nodes...),
+	}
+	// Start → Entry.
+	if def.Entry != "" {
+		topology.Edges = append(topology.Edges, dagmap.Edge{
+			From: dagmap.StartName,
+			To:   def.Entry,
+			Kind: dagmap.EdgeStatic,
+		})
+	}
+	// Body edges. Service edges use "" for the "end" sentinel; dagmap uses
+	// its own EndName.
+	for _, e := range def.Edges {
+		to := e.To
+		if to == "" {
+			to = dagmap.EndName
+		}
+		kind := dagmap.EdgeStatic
+		if e.Kind == service.GraphEdgeConditional {
+			kind = dagmap.EdgeConditional
+		}
+		topology.Edges = append(topology.Edges, dagmap.Edge{
+			From:  e.From,
+			To:    to,
+			Kind:  kind,
+			Label: e.Label,
+		})
+	}
+	// Exit → End (only if the exit doesn't already have an outgoing edge).
+	if def.Exit != "" && !hasEdgeFrom(topology.Edges, def.Exit) {
+		topology.Edges = append(topology.Edges, dagmap.Edge{
+			From: def.Exit,
+			To:   dagmap.EndName,
+			Kind: dagmap.EdgeStatic,
+		})
+	}
+	return topology
+}
+
+func hasEdgeFrom(edges []dagmap.Edge, from string) bool {
+	for _, e := range edges {
+		if e.From == from {
+			return true
+		}
+	}
+	return false
 }
 
 // recordGraphNodeStarted marks a node as running inside its task's graph
@@ -71,15 +127,27 @@ func (m *Model) ensureGraphTaskState(jobID, taskID string) *graphTaskState {
 	}
 	gts, ok := m.graphTasks[taskID]
 	if !ok {
-		jobType := m.jobTypeByID(jobID)
+		graphID := m.taskGraphID(jobID, taskID)
+		topology, _ := m.topologyForGraphID(graphID)
 		gts = &graphTaskState{
 			jobID:    jobID,
 			taskID:   taskID,
-			jobType:  jobType,
-			topology: topologyForJobType(jobType),
+			graphID:  graphID,
+			topology: topology,
 			nodes:    make(dagmap.NodeStates),
 		}
 		m.graphTasks[taskID] = gts
+		return gts
+	}
+	// If we created the state before the graph id or definition was
+	// known, fill them in now that we might have the data.
+	if gts.graphID == "" {
+		gts.graphID = m.taskGraphID(jobID, taskID)
+	}
+	if len(gts.topology.Nodes) == 0 && gts.graphID != "" {
+		if topology, ok := m.topologyForGraphID(gts.graphID); ok {
+			gts.topology = topology
+		}
 	}
 	return gts
 }
@@ -92,8 +160,3 @@ func (m *Model) activeGraphTaskState() *graphTaskState {
 	}
 	return m.graphTasks[m.lastGraphTaskID]
 }
-
-// Compile-time assertion that service.Job still carries a Type field — if
-// the field is renamed or retyped, this call fails and points us at
-// jobTypeByID to update.
-var _ = func() string { var j service.Job; return j.Type }()

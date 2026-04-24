@@ -33,20 +33,9 @@ func Run(configDir string, systemFS embed.FS, defaultConfig []byte) error {
 		return fmt.Errorf("first-run bootstrap: %w", err)
 	}
 
-	if err := upgradeMigration(configDir); err != nil {
-		return fmt.Errorf("upgrade migration: %w", err)
-	}
-
 	if err := providerIDMigration(configDir); err != nil {
 		return fmt.Errorf("provider ID migration: %w", err)
 	}
-
-	// Auto-team detection disabled — the legacy agent import system from
-	// Claude Code, OpenCode, etc. is being replaced by the new role-based
-	// prompt engine. Re-enable by uncommenting the call below.
-	// if err := autoTeamDetection(configDir); err != nil {
-	// 	return fmt.Errorf("auto-team detection: %w", err)
-	// }
 
 	if err := migrateDatabase(configDir); err != nil {
 		return fmt.Errorf("database migration: %w", err)
@@ -110,116 +99,6 @@ func firstRun(configDir string, systemFS embed.FS, defaultConfig []byte) error {
 			}
 		}
 		slog.Info("Initialized toasters config", "dir", configDir)
-	}
-
-	return nil
-}
-
-// upgradeMigration moves the old top-level teams/ directory to user/teams/
-// and generates basic team.md files where missing.
-func upgradeMigration(configDir string) error {
-	oldTeamsDir := filepath.Join(configDir, "teams")
-	newTeamsDir := filepath.Join(configDir, "user", "teams")
-
-	// Only migrate if the old teams/ dir exists and user/teams/ does not.
-	if !dirExists(oldTeamsDir) {
-		return nil
-	}
-	if dirExists(newTeamsDir) {
-		// Both exist — ambiguous state. Don't touch either.
-		return nil
-	}
-
-	// Ensure user/ parent directories exist (but NOT user/teams/ — the rename
-	// will create that).
-	for _, dir := range []string{
-		filepath.Join(configDir, "user", "skills"),
-		filepath.Join(configDir, "user", "agents"),
-	} {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return fmt.Errorf("creating %s: %w", dir, err)
-		}
-	}
-
-	// Move teams/ → user/teams/. The user/ parent was created above.
-	if err := os.Rename(oldTeamsDir, newTeamsDir); err != nil {
-		return fmt.Errorf("moving teams to user/teams: %w", err)
-	}
-
-	// Generate basic team.md for any team directory that lacks one.
-	entries, err := os.ReadDir(newTeamsDir)
-	if err != nil {
-		return fmt.Errorf("reading user/teams: %w", err)
-	}
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		teamMD := filepath.Join(newTeamsDir, entry.Name(), "team.md")
-		if fileExists(teamMD) {
-			continue
-		}
-		if err := generateBasicTeamMD(teamMD, entry.Name()); err != nil {
-			return fmt.Errorf("generating team.md for %s: %w", entry.Name(), err)
-		}
-	}
-
-	slog.Info("Migrated teams to new layout", "from", oldTeamsDir, "to", newTeamsDir)
-	return nil
-}
-
-// autoTeamDetection checks for agent directories from other tools and creates
-// symlinked auto-team entries under user/teams/.
-func autoTeamDetection(configDir string) error {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return fmt.Errorf("getting home directory: %w", err)
-	}
-
-	autoTeams := []struct {
-		name      string
-		sourceDir string
-	}{
-		{"auto-claude", filepath.Join(home, ".claude", "agents")},
-		{"auto-opencode", filepath.Join(home, ".config", "opencode", "agents")},
-		{"auto-opencode-home", filepath.Join(home, ".opencode", "agents")},
-	}
-
-	teamsDir := filepath.Join(configDir, "user", "teams")
-
-	for _, at := range autoTeams {
-		if !dirExists(at.sourceDir) {
-			continue
-		}
-
-		teamDir := filepath.Join(teamsDir, at.name)
-		if dirExists(teamDir) {
-			// Already set up — skip for idempotency.
-			continue
-		}
-
-		// Skip if the user previously dismissed this auto-team.
-		if IsAutoTeamDismissed(teamsDir, at.name) {
-			continue
-		}
-
-		if err := os.MkdirAll(teamDir, 0o755); err != nil {
-			return fmt.Errorf("creating auto-team dir %s: %w", at.name, err)
-		}
-
-		// Create .auto-team marker file.
-		markerPath := filepath.Join(teamDir, ".auto-team")
-		if err := os.WriteFile(markerPath, nil, 0o644); err != nil {
-			return fmt.Errorf("creating .auto-team marker for %s: %w", at.name, err)
-		}
-
-		// Create agents/ symlink pointing to the source directory.
-		linkPath := filepath.Join(teamDir, "agents")
-		if err := os.Symlink(at.sourceDir, linkPath); err != nil {
-			return fmt.Errorf("creating agents symlink for %s: %w", at.name, err)
-		}
-
-		slog.Info("Detected auto-team", "name", at.name, "source", at.sourceDir)
 	}
 
 	return nil
@@ -538,8 +417,7 @@ func ensureDirectories(configDir string) error {
 func userDirs(configDir string) []string {
 	return []string{
 		filepath.Join(configDir, "user", "skills"),
-		filepath.Join(configDir, "user", "agents"),
-		filepath.Join(configDir, "user", "teams"),
+		filepath.Join(configDir, "user", "graphs"),
 		filepath.Join(configDir, "user", "roles"),
 		filepath.Join(configDir, "user", "toolchains"),
 		filepath.Join(configDir, "user", "instructions"),
@@ -604,68 +482,6 @@ func copyEmbeddedFS(fsys embed.FS, root, destDir string) error {
 		}
 		return os.WriteFile(target, data, 0o644)
 	})
-}
-
-// generateBasicTeamMD writes a minimal team.md file using the directory name
-// as the team name.
-func generateBasicTeamMD(path, dirName string) error {
-	name := humanizeDirName(dirName)
-	// Use yaml.Marshal for safe YAML encoding of the name.
-	type teamFrontmatter struct {
-		Name        string `yaml:"name"`
-		Description string `yaml:"description"`
-	}
-	fm := teamFrontmatter{
-		Name:        name,
-		Description: fmt.Sprintf("Team %s (migrated from legacy layout)", name),
-	}
-	data, err := yaml.Marshal(&fm)
-	if err != nil {
-		return fmt.Errorf("marshaling team frontmatter: %w", err)
-	}
-	content := fmt.Sprintf("---\n%s---\n", string(data))
-	return os.WriteFile(path, []byte(content), 0o644)
-}
-
-// abbreviations maps lowercase words to their preferred casing for common
-// abbreviations that should not be simple title-cased.
-var abbreviations = map[string]string{
-	"qa":     "QA",
-	"ci":     "CI",
-	"cd":     "CD",
-	"api":    "API",
-	"ui":     "UI",
-	"ux":     "UX",
-	"db":     "DB",
-	"ml":     "ML",
-	"ai":     "AI",
-	"sre":    "SRE",
-	"devops": "DevOps",
-}
-
-// humanizeDirName converts a kebab-case directory name to a human-readable name.
-// Common abbreviations (QA, CI, API, etc.) are uppercased; other words are title-cased.
-// e.g. "dev-team" → "Dev Team", "qa" → "QA", "api-gateway" → "API Gateway".
-func humanizeDirName(name string) string {
-	parts := strings.Split(name, "-")
-	for i, p := range parts {
-		if len(p) == 0 {
-			continue
-		}
-		if replacement, ok := abbreviations[strings.ToLower(p)]; ok {
-			parts[i] = replacement
-		} else {
-			parts[i] = strings.ToUpper(p[:1]) + p[1:]
-		}
-	}
-	return strings.Join(parts, " ")
-}
-
-// IsAutoTeamDismissed reports whether the named auto-team has been dismissed
-// by the user. A dismiss marker is an empty file at
-// <teamsDir>/.dismissed/<name>.
-func IsAutoTeamDismissed(teamsDir, name string) bool {
-	return fileExists(filepath.Join(teamsDir, ".dismissed", name))
 }
 
 // dirExists reports whether path exists and is a directory.

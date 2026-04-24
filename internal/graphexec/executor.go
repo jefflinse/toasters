@@ -2,6 +2,7 @@ package graphexec
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"time"
@@ -16,6 +17,18 @@ import (
 	"github.com/jefflinse/toasters/internal/runtime"
 )
 
+// GraphSource looks up a declarative graph Definition by ID. Implementations
+// are expected to be concurrency-safe and to hot-reload transparently (for
+// instance, backed by *loader.Loader). A nil GraphSource disables the
+// graph-dispatch path.
+type GraphSource interface {
+	GraphByID(id string) *Definition
+	// Graphs returns all loaded definitions. Used by query_graphs to
+	// surface the catalog to decomposition roles. Order is
+	// implementation-defined; callers should not assume stability.
+	Graphs() []*Definition
+}
+
 // Executor wraps rhizome graph execution with toasters infrastructure.
 // It resolves providers, applies middleware for events and persistence,
 // and updates task status after execution.
@@ -26,6 +39,8 @@ type Executor struct {
 	store         db.Store
 	eventSink     EventSink
 	broker        *hitl.Broker
+	graphs        GraphSource
+	roles         *RoleRegistry
 	defaultModel  string
 	nodeTimeout   time.Duration
 	retryAttempts int
@@ -70,6 +85,15 @@ type ExecutorConfig struct {
 	// initial call. Values ≤ 1 disable retries. Defaults to rhizome's default
 	// when zero.
 	RetryAttempts int
+
+	// Graphs supplies declarative graph Definitions by ID for the
+	// graph-dispatch path. When nil (or when a TaskRequest has no GraphID),
+	// ExecuteTask falls back to the hard-coded templates.
+	Graphs GraphSource
+
+	// Roles is the role registry used to resolve a YAML node's role: field
+	// at dispatch time. When nil, NewRoleRegistry() is used.
+	Roles *RoleRegistry
 }
 
 // NewExecutor creates an Executor with the given configuration.
@@ -78,6 +102,10 @@ func NewExecutor(cfg ExecutorConfig) *Executor {
 	if retries <= 0 {
 		retries = rhizome.DefaultRetryMaxAttempts
 	}
+	roles := cfg.Roles
+	if roles == nil {
+		roles = NewRoleRegistry()
+	}
 	return &Executor{
 		registry:      cfg.Registry,
 		mcpManager:    cfg.MCPManager,
@@ -85,6 +113,8 @@ func NewExecutor(cfg ExecutorConfig) *Executor {
 		store:         cfg.Store,
 		eventSink:     cfg.EventSink,
 		broker:        cfg.Broker,
+		graphs:        cfg.Graphs,
+		roles:         roles,
 		defaultModel:  cfg.DefaultModel,
 		nodeTimeout:   cfg.NodeTimeout,
 		retryAttempts: retries,
@@ -127,10 +157,14 @@ func (e *Executor) interruptHandler(ctx context.Context, req rhizome.InterruptRe
 // directory. Mirrors the per-spawn pattern used by runtime.SpawnWorker
 // (runtime/runtime.go). CoreTools construction is cheap — no I/O.
 func (e *Executor) buildToolExecutor(workspaceDir string) runtime.ToolExecutor {
-	coreTools := runtime.NewCoreTools(workspaceDir,
+	coreOpts := []runtime.CoreToolsOption{
 		runtime.WithShell(true),
 		runtime.WithStore(e.store),
-	)
+	}
+	if e.graphs != nil {
+		coreOpts = append(coreOpts, runtime.WithGraphCatalog(graphSourceCatalog{e.graphs}))
+	}
+	coreTools := runtime.NewCoreTools(workspaceDir, coreOpts...)
 	if e.mcpManager != nil && len(e.mcpManager.Tools()) > 0 {
 		truncating := mcp.NewTruncatingCaller(e.mcpManager, mcp.DefaultMaxResultLen)
 		return runtime.NewCompositeTools(coreTools, truncating, mcp.ToRuntimeToolDefs(e.mcpManager.Tools()))
@@ -138,12 +172,31 @@ func (e *Executor) buildToolExecutor(workspaceDir string) runtime.ToolExecutor {
 	return coreTools
 }
 
+// graphSourceCatalog adapts a GraphSource to the runtime.GraphCatalog
+// interface query_graphs expects. Kept in graphexec so runtime stays
+// independent of Definition.
+type graphSourceCatalog struct{ src GraphSource }
+
+func (c graphSourceCatalog) Graphs() []runtime.GraphSummary {
+	defs := c.src.Graphs()
+	out := make([]runtime.GraphSummary, 0, len(defs))
+	for _, d := range defs {
+		out = append(out, runtime.GraphSummary{
+			ID:          d.ID,
+			Name:        d.Name,
+			Description: d.Description,
+			Tags:        d.Tags,
+		})
+	}
+	return out
+}
+
 // Execute runs a compiled graph with the given initial state. It applies
 // event, persistence, and logging middleware, then updates the task status
-// in the database based on the outcome. teamID is carried through to the
+// in the database based on the outcome. graphID is carried through to the
 // task_completed / task_failed events so the operator's event loop can
 // advance to the next ready task.
-func (e *Executor) Execute(ctx context.Context, graph *rhizome.CompiledGraph[*TaskState], state *TaskState, teamID string) error {
+func (e *Executor) Execute(ctx context.Context, graph *rhizome.CompiledGraph[*TaskState], state *TaskState, graphID string) error {
 	// Middleware chain, outermost → innermost:
 	//   NodeContext — inject per-node identity + sink into ctx for node bodies
 	//   Event       — one start/complete per logical execution (UI)
@@ -181,7 +234,7 @@ func (e *Executor) Execute(ctx context.Context, graph *rhizome.CompiledGraph[*Ta
 			e.eventSink.BroadcastGraphFailed(state.JobID, state.TaskID, err.Error())
 			// Advance the operator. Operator-level task_failed event is distinct
 			// from the service-level graph.failed broadcast above.
-			e.eventSink.BroadcastTaskFailed(state.JobID, state.TaskID, teamID, err.Error())
+			e.eventSink.BroadcastTaskFailed(state.JobID, state.TaskID, graphID, err.Error())
 		}
 
 		return fmt.Errorf("graph execution: %w", err)
@@ -218,27 +271,31 @@ func (e *Executor) Execute(ctx context.Context, graph *rhizome.CompiledGraph[*Ta
 
 	if e.eventSink != nil {
 		e.eventSink.BroadcastGraphCompleted(state.JobID, state.TaskID, summary)
-		// Advance the operator. Operator-level task_completed event is what
-		// drives assignNextTask — the team-lead path emits this via
-		// team_tools.completeTask.
-		e.eventSink.BroadcastTaskCompleted(state.JobID, state.TaskID, teamID, summary, hasNextTask)
+		// Advance the operator. Operator-level task_completed event drives
+		// assignNextTask. Also carries the exit node's raw JSON output so
+		// auto-dispatch consumers (e.g. decomposition) can parse it without
+		// re-running the graph.
+		exitOutput := exitNodeOutput(result)
+		e.eventSink.BroadcastTaskCompleted(state.JobID, state.TaskID, graphID, summary, exitOutput, hasNextTask)
 	}
 
 	return nil
 }
 
 // TaskRequest carries everything needed to execute a task through the graph
-// executor. Replaces the prior 11-positional-string signature which was
-// error-prone at call sites.
+// executor. GraphID names the declarative graph to run — required, since the
+// hard-coded template path has been retired.
 type TaskRequest struct {
 	JobID          string
-	JobType        JobType
 	JobTitle       string
 	JobDescription string
 
 	TaskID    string
 	TaskTitle string
-	TeamID    string
+
+	// GraphID selects a declarative graph Definition by id from the
+	// executor's GraphSource. Required.
+	GraphID string
 
 	WorkspaceDir string
 	ProviderName string
@@ -252,9 +309,13 @@ type TaskExecutor interface {
 	ExecuteTask(ctx context.Context, req TaskRequest) error
 }
 
-// ExecuteTask builds the appropriate graph template based on req.JobType,
-// resolves the provider, and runs it.
+// ExecuteTask resolves the provider, looks up the declarative graph by id,
+// compiles it, and runs it. All dispatches go through the YAML-driven
+// catalog — there is no hard-coded template fallback.
 func (e *Executor) ExecuteTask(ctx context.Context, req TaskRequest) error {
+	if req.GraphID == "" {
+		return fmt.Errorf("ExecuteTask: graph_id is required")
+	}
 	prov, ok := e.registry.Get(req.ProviderName)
 	if !ok {
 		return fmt.Errorf("provider %q not found in registry", req.ProviderName)
@@ -270,39 +331,37 @@ func (e *Executor) ExecuteTask(ctx context.Context, req TaskRequest) error {
 		ToolExecutor: e.buildToolExecutor(req.WorkspaceDir),
 		Model:        model,
 		PromptEngine: e.promptEngine,
-		Roles:        DefaultRoles(),
+		Store:        e.store,
 	}
 
-	graph, err := buildGraphForJobType(req.JobType, tmplCfg, req)
+	if e.graphs == nil {
+		return fmt.Errorf("graph %q requested but no GraphSource configured", req.GraphID)
+	}
+	def := e.graphs.GraphByID(req.GraphID)
+	if def == nil {
+		return fmt.Errorf("graph %q not found", req.GraphID)
+	}
+	graph, err := Compile(def, tmplCfg, e.roles)
 	if err != nil {
-		return fmt.Errorf("building graph for job type %q: %w", req.JobType, err)
+		return fmt.Errorf("compiling graph %q: %w", req.GraphID, err)
 	}
 
 	state := NewTaskState(req.JobID, req.TaskID, req.WorkspaceDir, req.ProviderName, model)
 	state.SetArtifact("task.description", req.TaskTitle)
 	state.SetArtifact("job.title", req.JobTitle)
 	state.SetArtifact("job.description", req.JobDescription)
+	state.ExitNode = def.Exit
 
-	return e.Execute(ctx, graph, state, req.TeamID)
+	return e.Execute(ctx, graph, state, req.GraphID)
 }
 
-// buildGraphForJobType picks the template. Untyped jobs default to BugFixGraph
-// so the full investigate → plan → implement → test → review cycle runs —
-// SingleWorkerGraph would bypass everything rhizome adds.
-func buildGraphForJobType(jobType JobType, tmplCfg TemplateConfig, req TaskRequest) (*rhizome.CompiledGraph[*TaskState], error) {
-	switch jobType {
-	case JobTypeNewFeature:
-		return NewFeatureGraph(tmplCfg)
-	case JobTypePrototype:
-		return PrototypeGraph(tmplCfg)
-	case JobTypeSingleWorker:
-		return SingleWorkerGraph(tmplCfg,
-			"You are a general-purpose worker. Complete the assigned task.",
-			fmt.Sprintf("Task: %s\n\nJob: %s\n%s", req.TaskTitle, req.JobTitle, req.JobDescription),
-		)
-	case JobTypeBugFix, JobTypeUnset:
-		return BugFixGraph(tmplCfg)
-	default:
-		return BugFixGraph(tmplCfg)
+// exitNodeOutput returns the raw JSON output of the graph's exit node, or
+// nil when no exit node is recorded or the node produced no output. Nodes
+// that produce their output through the NodeContext middleware key into
+// NodeOutputs under the rhizome node id, matching Definition.Exit.
+func exitNodeOutput(state *TaskState) json.RawMessage {
+	if state == nil || state.ExitNode == "" {
+		return nil
 	}
+	return state.GetNodeOutput(state.ExitNode)
 }

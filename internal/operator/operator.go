@@ -52,9 +52,10 @@ type Operator struct {
 	broker *hitl.Broker
 
 	// Callbacks — set at construction time via Config, immutable after New().
-	onText     func(text string)                                  // called with streamed text from the operator LLM
-	onEvent    func(event Event)                                  // called when the event loop processes an event
-	onTurnDone func(tokensIn, tokensOut, reasoningTokens int)     // called when the operator finishes processing a user message turn
+	onText      func(text string)                              // called with streamed text from the operator LLM
+	onReasoning func(text string)                              // called with streamed reasoning chunks; optional
+	onEvent     func(event Event)                              // called when the event loop processes an event
+	onTurnDone  func(tokensIn, tokensOut, reasoningTokens int) // called when the operator finishes processing a user message turn
 	onPrompt   func(requestID, question string, options []string) // called when the operator calls ask_user
 }
 
@@ -68,11 +69,13 @@ type Config struct {
 	Store                  db.Store
 	SystemEventBroadcaster SystemEventBroadcaster // optional; for broadcasting service events from system tools
 	GraphExecutor          GraphTaskExecutor      // required for task execution — tasks dispatch through the graph engine
+	GraphCatalog           GraphCatalog           // optional; backs the query_graphs system tool
 	Broker                 *hitl.Broker           // required for ask_user; shared with the graph executor so responses route to whichever path is waiting
 	PromptEngine           *prompt.Engine         // prompt engine for role-based prompt composition
 	DefaultProvider        string                 // default provider for system agents
 	DefaultModel           string                 // default model for system agents
 	OnText                 func(text string)      // called with streamed text from the operator LLM
+	OnReasoning            func(text string)      // called with streamed reasoning (chain-of-thought) chunks; optional
 	OnEvent                func(event Event)      // called when the event loop processes an event
 	// OnTurnDone is called when the operator finishes processing a user
 	// message turn. tokensIn / tokensOut / reasoningTokens are the totals
@@ -96,7 +99,17 @@ func New(cfg Config) (*Operator, error) {
 	eventCh := make(chan Event, eventChSize)
 	var systemTools *SystemTools
 	if cfg.Store != nil {
-		systemTools = NewSystemTools(cfg.Store, cfg.PromptEngine, cfg.DefaultProvider, cfg.DefaultModel, eventCh, cfg.WorkDir, cfg.SystemEventBroadcaster, cfg.GraphExecutor)
+		systemTools = NewSystemTools(SystemToolsConfig{
+			Store:           cfg.Store,
+			PromptEngine:    cfg.PromptEngine,
+			DefaultProvider: cfg.DefaultProvider,
+			DefaultModel:    cfg.DefaultModel,
+			EventCh:         eventCh,
+			WorkDir:         cfg.WorkDir,
+			Broadcaster:     cfg.SystemEventBroadcaster,
+			GraphExecutor:   cfg.GraphExecutor,
+			GraphCatalog:    cfg.GraphCatalog,
+		})
 	}
 
 	tools := newOperatorTools(cfg.Runtime, cfg.PromptEngine, cfg.DefaultProvider, cfg.DefaultModel, cfg.Store, systemTools, cfg.WorkDir)
@@ -115,6 +128,7 @@ func New(cfg Config) (*Operator, error) {
 		provTools:    provTools,
 		broker:       cfg.Broker,
 		onText:       cfg.OnText,
+		onReasoning:  cfg.OnReasoning,
 		onEvent:      cfg.OnEvent,
 		onTurnDone:   cfg.OnTurnDone,
 		onPrompt:     cfg.OnPrompt,
@@ -182,9 +196,9 @@ func (o *Operator) handleEvent(ctx context.Context, ev Event) {
 			slog.Error("invalid payload for task_started event", "payload", ev.Payload)
 			return
 		}
-		content := fmt.Sprintf("⚡ %s started task: %s", payload.TeamID, payload.Title)
+		content := fmt.Sprintf("⚡ %s started task: %s", payload.GraphID, payload.Title)
 		o.postFeedEntry(ctx, db.FeedEntryTaskStarted, content, payload.JobID)
-		slog.Info("task started", "task_id", payload.TaskID, "job_id", payload.JobID, "team_id", payload.TeamID, "title", payload.Title)
+		slog.Info("task started", "task_id", payload.TaskID, "job_id", payload.JobID, "graph_id", payload.GraphID, "title", payload.Title)
 
 	case EventTaskCompleted:
 		// Conditional: mechanical if next task queued; LLM if recommendations or job may be done.
@@ -193,9 +207,9 @@ func (o *Operator) handleEvent(ctx context.Context, ev Event) {
 			slog.Error("invalid payload for task_completed event", "payload", ev.Payload)
 			return
 		}
-		content := fmt.Sprintf("✅ %s completed task: %s", payload.TeamID, payload.Summary)
+		content := fmt.Sprintf("✅ %s completed task: %s", payload.GraphID, payload.Summary)
 		o.postFeedEntry(ctx, db.FeedEntryTaskCompleted, content, payload.JobID)
-		slog.Info("task completed", "task_id", payload.TaskID, "job_id", payload.JobID, "team_id", payload.TeamID, "summary", payload.Summary)
+		slog.Info("task completed", "task_id", payload.TaskID, "job_id", payload.JobID, "graph_id", payload.GraphID, "summary", payload.Summary)
 
 		if payload.HasNextTask {
 			// Mechanical: assign the next ready task.
@@ -203,7 +217,7 @@ func (o *Operator) handleEvent(ctx context.Context, ev Event) {
 		} else if payload.Recommendations != "" {
 			// LLM: consult scheduler about recommendations.
 			msg := fmt.Sprintf("Task %q completed by team %s. Summary: %s\n\nThe team recommends: %s\n\nPlease decide how to proceed with these recommendations.",
-				payload.TaskID, payload.TeamID, payload.Summary, payload.Recommendations)
+				payload.TaskID, payload.GraphID, payload.Summary, payload.Recommendations)
 			o.sendToLLM(ctx, msg)
 		} else {
 			// No next task and no recommendations — check if job is done.
@@ -217,35 +231,12 @@ func (o *Operator) handleEvent(ctx context.Context, ev Event) {
 			slog.Error("invalid payload for task_failed event", "payload", ev.Payload)
 			return
 		}
-		content := fmt.Sprintf("❌ %s failed task: %s", payload.TeamID, payload.Error)
+		content := fmt.Sprintf("❌ %s failed task: %s", payload.GraphID, payload.Error)
 		o.postFeedEntry(ctx, db.FeedEntryTaskFailed, content, payload.JobID)
-		slog.Warn("task failed", "task_id", payload.TaskID, "job_id", payload.JobID, "team_id", payload.TeamID, "error", payload.Error)
+		slog.Warn("task failed", "task_id", payload.TaskID, "job_id", payload.JobID, "graph_id", payload.GraphID, "error", payload.Error)
 
 		msg := fmt.Sprintf("Task %q assigned to team %s has failed with error: %s\n\nPlease decide how to proceed.",
-			payload.TaskID, payload.TeamID, payload.Error)
-		o.sendToLLM(ctx, msg)
-
-	case EventBlockerReported:
-		// Surface the blocker to the user and send to LLM for triage.
-		payload, ok := ev.Payload.(BlockerReportedPayload)
-		if !ok {
-			slog.Error("invalid payload for blocker_reported event", "payload", ev.Payload)
-			return
-		}
-		content := fmt.Sprintf("🚫 %s reported blocker: %s", payload.TeamID, payload.Description)
-		o.postFeedEntry(ctx, db.FeedEntryBlockerReported, content, "")
-		slog.Warn("blocker reported", "task_id", payload.TaskID, "team_id", payload.TeamID, "worker_id", payload.WorkerID, "description", payload.Description)
-
-		// Surface directly to the user so they see it immediately.
-		if o.tools != nil && o.tools.systemTools != nil {
-			surfaceMsg := fmt.Sprintf("⚠️ **Blocker reported by %s:**\n\n%s\n\nPlease respond with guidance on how to proceed, or I will consult the blocker-handler to attempt resolution.",
-				payload.TeamID, payload.Description)
-			surfaceArgs, _ := json.Marshal(map[string]string{"text": surfaceMsg})
-			_, _ = o.tools.systemTools.Execute(ctx, "surface_to_user", surfaceArgs)
-		}
-
-		msg := fmt.Sprintf("Team %s (task %q) reported a blocker: %s\n\nPlease triage this blocker and decide how to resolve it. Consider consulting the blocker-handler agent.",
-			payload.TeamID, payload.TaskID, payload.Description)
+			payload.TaskID, payload.GraphID, payload.Error)
 		o.sendToLLM(ctx, msg)
 
 	case EventProgressUpdate:
@@ -281,12 +272,12 @@ func (o *Operator) handleEvent(ctx context.Context, ev Event) {
 			slog.Error("invalid payload for new_task_request event", "payload", ev.Payload)
 			return
 		}
-		content := fmt.Sprintf("Team %s requests new task: %s (reason: %s)", payload.TeamID, payload.Description, payload.Reason)
+		content := fmt.Sprintf("Graph %s requests new task: %s (reason: %s)", payload.GraphID, payload.Description, payload.Reason)
 		o.postFeedEntry(ctx, db.FeedEntrySystemEvent, content, payload.JobID)
-		slog.Info("new task request", "job_id", payload.JobID, "team_id", payload.TeamID, "description", payload.Description, "reason", payload.Reason)
+		slog.Info("new task request", "job_id", payload.JobID, "graph_id", payload.GraphID, "description", payload.Description, "reason", payload.Reason)
 
-		msg := fmt.Sprintf("Team %s recommends creating a new task for job %s: %s\n\nReason: %s\n\nPlease decide whether to create this task and assign it.",
-			payload.TeamID, payload.JobID, payload.Description, payload.Reason)
+		msg := fmt.Sprintf("Graph %s recommends creating a new task for job %s: %s\n\nReason: %s\n\nPlease decide whether to create this task and assign it.",
+			payload.GraphID, payload.JobID, payload.Description, payload.Reason)
 		o.sendToLLM(ctx, msg)
 
 	case EventUserResponse:
@@ -353,23 +344,23 @@ func (o *Operator) assignNextTask(ctx context.Context, jobID string) {
 	}
 
 	task := readyTasks[0]
-	if task.TeamID == "" {
-		// No pre-assigned team — need LLM to decide.
-		msg := fmt.Sprintf("Task %q (id: %s) is ready but has no team assigned. Please assign it to an appropriate team.",
+	if task.GraphID == "" {
+		// No pre-assigned graph — need LLM to decide.
+		msg := fmt.Sprintf("Task %q (id: %s) is ready but has no graph assigned. Please assign it to an appropriate graph.",
 			task.Title, task.ID)
 		o.sendToLLM(ctx, msg)
 		return
 	}
 
-	// Use SystemTools to assign the task (handles spawning, status update, event).
+	// Use SystemTools to assign the task (handles dispatch, status update, event).
 	if o.tools == nil || o.tools.systemTools == nil {
 		slog.Warn("cannot assign next task: no system tools configured")
 		return
 	}
 
 	args, err := json.Marshal(map[string]string{
-		"task_id": task.ID,
-		"team_id": task.TeamID,
+		"task_id":  task.ID,
+		"graph_id": task.GraphID,
 	})
 	if err != nil {
 		slog.Error("failed to marshal assign_task args", "error", err)
@@ -377,7 +368,7 @@ func (o *Operator) assignNextTask(ctx context.Context, jobID string) {
 	}
 
 	if _, err := o.tools.systemTools.Execute(ctx, "assign_task", args); err != nil {
-		slog.Error("failed to assign next task", "task_id", task.ID, "team_id", task.TeamID, "error", err)
+		slog.Error("failed to assign next task", "task_id", task.ID, "graph_id", task.GraphID, "error", err)
 	}
 }
 
@@ -670,6 +661,12 @@ func (o *Operator) collectResponse(ctx context.Context, eventCh <-chan provider.
 				textBuf.WriteString(ev.Text)
 				o.emitText(ev.Text)
 
+			case provider.EventReasoning:
+				// Reasoning is surfaced but not folded into the
+				// assistant message — matches the mycelium/provider
+				// contract and every upstream API's behavior.
+				o.emitReasoning(ev.Text)
+
 			case provider.EventToolCall:
 				if ev.ToolCall != nil {
 					toolCalls = append(toolCalls, *ev.ToolCall)
@@ -695,6 +692,13 @@ func (o *Operator) collectResponse(ctx context.Context, eventCh <-chan provider.
 func (o *Operator) emitText(text string) {
 	if o.onText != nil {
 		o.onText(text)
+	}
+}
+
+// emitReasoning calls the OnReasoning callback if set.
+func (o *Operator) emitReasoning(text string) {
+	if o.onReasoning != nil {
+		o.onReasoning(text)
 	}
 }
 

@@ -93,3 +93,16 @@ func (m Model) fetchModels() tea.Cmd {
 		return ModelsMsg{Models: models, Err: err}
 	}
 }
+
+// fetchGraphs returns a command that loads the graph-definition catalog. The
+// TUI uses the returned definitions to render the graph-map modal's topology
+// per task (task.GraphID → Definition → dagmap.Topology).
+func (m Model) fetchGraphs() tea.Cmd {
+	svc := m.svc
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		graphs, err := svc.Definitions().ListGraphs(ctx)
+		return GraphsMsg{Graphs: graphs, Err: err}
+	}
+}

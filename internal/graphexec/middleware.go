@@ -2,6 +2,7 @@ package graphexec
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"time"
@@ -23,8 +24,8 @@ type EventSink interface {
 	BroadcastGraphNodeCompleted(jobID, taskID, node, status string)
 	BroadcastGraphCompleted(jobID, taskID, summary string)
 	BroadcastGraphFailed(jobID, taskID, errMsg string)
-	BroadcastTaskCompleted(jobID, taskID, teamID, summary string, hasNextTask bool)
-	BroadcastTaskFailed(jobID, taskID, teamID, errMsg string)
+	BroadcastTaskCompleted(jobID, taskID, graphID, summary string, output json.RawMessage, hasNextTask bool)
+	BroadcastTaskFailed(jobID, taskID, graphID, errMsg string)
 	// BroadcastPrompt surfaces a HITL question that originated inside a
 	// graph node (via rhizome.Interrupt). Source is typically
 	// "graph:<node>" so the TUI can render an attribution hint.
@@ -33,6 +34,20 @@ type EventSink interface {
 	// SessionID convention is "graph:<TaskID>:<Node>" so the TUI's existing
 	// runtimeSlot pipeline picks it up without a special case.
 	BroadcastSessionText(sessionID, text string)
+	// BroadcastSessionReasoning carries streamed reasoning (chain-of-thought)
+	// from a graph node. Routes through a session.reasoning event; the TUI
+	// renders it alongside the node's text output with its own style.
+	BroadcastSessionReasoning(sessionID, text string)
+	// BroadcastSessionToolCall carries a tool call the model issued inside
+	// a graph node. Routes through the same session.tool_call event type
+	// that worker sessions use, so the TUI's grid cards and output panel
+	// render graph-node activity without per-source special cases.
+	BroadcastSessionToolCall(sessionID, callID, name string, args json.RawMessage)
+	// BroadcastSessionToolResult carries the dispatched tool's output.
+	// CallID may be empty for graph nodes (mycelium's agent.Event does
+	// not carry the originating call id on tool-result events); the TUI
+	// renders results inline without requiring a pairing id.
+	BroadcastSessionToolResult(sessionID, callID, name, result, errMsg string)
 }
 
 type nodeContextKey struct{}

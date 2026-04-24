@@ -2,6 +2,9 @@
 name: Implementer
 description: Applies the plan to the codebase, producing concrete changes.
 mode: worker
+output: summary
+access: write
+max_turns: 50
 ---
 
 Your training data is in the past.
@@ -19,7 +22,7 @@ scope, or add features the plan does not call for.
 
 ## Implementation plan
 
-{{ globals.plan.steps }}
+{{ globals.plan.summary }}
 
 ## Review feedback to address
 
@@ -42,3 +45,11 @@ Keep the summary under 300 words — the reviewer reads it to orient.
 Do not add error handling, fallbacks, or validation for scenarios that
 cannot happen. Do not add comments that restate what the code does — only
 comment where the *why* is non-obvious.
+
+## Output
+
+{{ instructions.call-complete }}
+
+Put your change summary in the `summary` field of the `complete` call.
+The reviewer and tester read that field verbatim — if you described the
+changes as prose outside the tool call, it is discarded.

@@ -1,0 +1,27 @@
+id: prototype
+name: Prototype
+description: >
+  Lightweight implement→test loop, capped at max_iterations. Skips
+  investigation, planning, and review — good for quick iterations.
+tags: [kind:prototype]
+
+entry: implement
+max_iterations: 3
+
+nodes:
+  - id: implement
+    role: implementer
+  - id: test
+    role: tester
+
+edges:
+  - from: implement
+    to: test
+  - from: test
+    router:
+      on: $test.output.passed
+      branches:
+        - when: true
+          to: end
+        - when: false
+          to: implement

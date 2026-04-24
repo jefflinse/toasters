@@ -35,21 +35,13 @@ type mockService struct {
 	respondToBlockerFn func(ctx context.Context, jobID, taskID string, answers []string) error
 
 	// Definitions
-	listSkillsFn        func(ctx context.Context) ([]service.Skill, error)
-	getSkillFn          func(ctx context.Context, id string) (service.Skill, error)
-	createSkillFn       func(ctx context.Context, name string) (service.Skill, error)
-	deleteSkillFn       func(ctx context.Context, id string) error
-	generateSkillFn     func(ctx context.Context, prompt string) (string, error)
-	listWorkersFn        func(ctx context.Context) ([]service.Worker, error)
-	getWorkerFn          func(ctx context.Context, id string) (service.Worker, error)
-	listTeamsFn         func(ctx context.Context) ([]service.TeamView, error)
-	getTeamFn           func(ctx context.Context, id string) (service.TeamView, error)
-	createTeamFn        func(ctx context.Context, name string) (service.TeamView, error)
-	deleteTeamFn        func(ctx context.Context, id string) error
-	setCoordinatorFn    func(ctx context.Context, teamID, agentName string) error
-	promoteTeamFn       func(ctx context.Context, teamID string) (string, error)
-	generateTeamFn      func(ctx context.Context, prompt string) (string, error)
-	detectCoordinatorFn func(ctx context.Context, teamID string) (string, error)
+	listSkillsFn    func(ctx context.Context) ([]service.Skill, error)
+	getSkillFn      func(ctx context.Context, id string) (service.Skill, error)
+	createSkillFn   func(ctx context.Context, name string) (service.Skill, error)
+	deleteSkillFn   func(ctx context.Context, id string) error
+	generateSkillFn func(ctx context.Context, prompt string) (string, error)
+	listWorkersFn   func(ctx context.Context) ([]service.Worker, error)
+	getWorkerFn     func(ctx context.Context, id string) (service.Worker, error)
 
 	// Jobs
 	listJobsFn    func(ctx context.Context, filter *service.JobListFilter) ([]service.Job, error)
@@ -172,60 +164,11 @@ func (d *mockDefinitions) GetWorker(ctx context.Context, id string) (service.Wor
 	return service.Worker{}, nil
 }
 
-func (d *mockDefinitions) ListTeams(ctx context.Context) ([]service.TeamView, error) {
-	if d.s.listTeamsFn != nil {
-		return d.s.listTeamsFn(ctx)
-	}
+func (d *mockDefinitions) ListGraphs(_ context.Context) ([]service.GraphDefinition, error) {
 	return nil, nil
 }
-
-func (d *mockDefinitions) GetTeam(ctx context.Context, id string) (service.TeamView, error) {
-	if d.s.getTeamFn != nil {
-		return d.s.getTeamFn(ctx, id)
-	}
-	return service.TeamView{}, nil
-}
-
-func (d *mockDefinitions) CreateTeam(ctx context.Context, name string) (service.TeamView, error) {
-	if d.s.createTeamFn != nil {
-		return d.s.createTeamFn(ctx, name)
-	}
-	return service.TeamView{}, nil
-}
-
-func (d *mockDefinitions) DeleteTeam(ctx context.Context, id string) error {
-	if d.s.deleteTeamFn != nil {
-		return d.s.deleteTeamFn(ctx, id)
-	}
-	return nil
-}
-
-func (d *mockDefinitions) SetCoordinator(ctx context.Context, teamID, agentName string) error {
-	if d.s.setCoordinatorFn != nil {
-		return d.s.setCoordinatorFn(ctx, teamID, agentName)
-	}
-	return nil
-}
-
-func (d *mockDefinitions) PromoteTeam(ctx context.Context, teamID string) (string, error) {
-	if d.s.promoteTeamFn != nil {
-		return d.s.promoteTeamFn(ctx, teamID)
-	}
-	return "", nil
-}
-
-func (d *mockDefinitions) GenerateTeam(ctx context.Context, prompt string) (string, error) {
-	if d.s.generateTeamFn != nil {
-		return d.s.generateTeamFn(ctx, prompt)
-	}
-	return "", nil
-}
-
-func (d *mockDefinitions) DetectCoordinator(ctx context.Context, teamID string) (string, error) {
-	if d.s.detectCoordinatorFn != nil {
-		return d.s.detectCoordinatorFn(ctx, teamID)
-	}
-	return "", nil
+func (d *mockDefinitions) GetGraph(_ context.Context, _ string) (service.GraphDefinition, error) {
+	return service.GraphDefinition{}, nil
 }
 
 // --- Jobs ---
@@ -669,8 +612,7 @@ func TestSessions_List(t *testing.T) {
 			return []service.SessionSnapshot{
 				{
 					ID:        "sess-1",
-					WorkerID:   "agent-a",
-					TeamName:  "team-alpha",
+					WorkerID:  "agent-a",
 					Status:    "active",
 					Model:     "gpt-4",
 					Provider:  "openai",
@@ -680,7 +622,7 @@ func TestSessions_List(t *testing.T) {
 				},
 				{
 					ID:        "sess-2",
-					WorkerID:   "agent-b",
+					WorkerID:  "agent-b",
 					Status:    "active",
 					StartTime: testTime.Add(time.Minute),
 					TokensIn:  200,
@@ -703,9 +645,6 @@ func TestSessions_List(t *testing.T) {
 
 	if snaps[0].ID != "sess-1" {
 		t.Errorf("snaps[0].ID = %q, want %q", snaps[0].ID, "sess-1")
-	}
-	if snaps[0].TeamName != "team-alpha" {
-		t.Errorf("snaps[0].TeamName = %q, want %q", snaps[0].TeamName, "team-alpha")
 	}
 	if snaps[0].TokensIn != 100 {
 		t.Errorf("snaps[0].TokensIn = %d, want %d", snaps[0].TokensIn, 100)
@@ -1024,7 +963,7 @@ func TestSSE_EventDelivery(t *testing.T) {
 		Payload: service.TaskCompletedPayload{
 			TaskID:  "task-1",
 			JobID:   "job-1",
-			TeamID:  "team-1",
+			GraphID: "team-1",
 			Summary: "done",
 		},
 	}

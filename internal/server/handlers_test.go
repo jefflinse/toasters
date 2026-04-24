@@ -1,7 +1,6 @@
 package server
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -114,27 +113,11 @@ func (m *mockDefinitionService) ListWorkers(_ context.Context) ([]service.Worker
 func (m *mockDefinitionService) GetWorker(_ context.Context, _ string) (service.Worker, error) {
 	return service.Worker{}, nil
 }
-func (m *mockDefinitionService) ListTeams(_ context.Context) ([]service.TeamView, error) {
+func (m *mockDefinitionService) ListGraphs(_ context.Context) ([]service.GraphDefinition, error) {
 	return nil, nil
 }
-func (m *mockDefinitionService) GetTeam(_ context.Context, _ string) (service.TeamView, error) {
-	return service.TeamView{}, nil
-}
-func (m *mockDefinitionService) CreateTeam(_ context.Context, _ string) (service.TeamView, error) {
-	return service.TeamView{}, nil
-}
-func (m *mockDefinitionService) DeleteTeam(_ context.Context, _ string) error { return nil }
-func (m *mockDefinitionService) SetCoordinator(_ context.Context, _, _ string) error {
-	return nil
-}
-func (m *mockDefinitionService) PromoteTeam(_ context.Context, _ string) (string, error) {
-	return "", nil
-}
-func (m *mockDefinitionService) GenerateTeam(_ context.Context, _ string) (string, error) {
-	return "", nil
-}
-func (m *mockDefinitionService) DetectCoordinator(_ context.Context, _ string) (string, error) {
-	return "", nil
+func (m *mockDefinitionService) GetGraph(_ context.Context, _ string) (service.GraphDefinition, error) {
+	return service.GraphDefinition{}, nil
 }
 
 func (m *mockJobService) List(_ context.Context, _ *service.JobListFilter) ([]service.Job, error) {
@@ -264,195 +247,6 @@ func TestRespondToPrompt_ResponseAtLimit(t *testing.T) {
 	}
 	if mockSvc.operator.respondToPromptCalls[0].requestID != "req-123" {
 		t.Errorf("requestID = %q, want %q", mockSvc.operator.respondToPromptCalls[0].requestID, "req-123")
-	}
-}
-
-func TestRespondToBlocker_TooManyAnswers(t *testing.T) {
-	t.Parallel()
-
-	mockSvc := newMockService()
-	srv := New(mockSvc)
-
-	// Create more answers than maxBlockerAnswers (50).
-	answers := make([]string, maxBlockerAnswers+1)
-	for i := range answers {
-		answers[i] = "answer"
-	}
-	bodyBytes, _ := json.Marshal(RespondToBlockerRequest{Answers: answers})
-
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/operator/blockers/job-1/task-1/respond", bytes.NewReader(bodyBytes))
-	req.Header.Set("Content-Type", "application/json")
-	req.SetPathValue("jobId", "job-1")
-	req.SetPathValue("taskId", "task-1")
-	rec := httptest.NewRecorder()
-
-	srv.respondToBlocker(rec, req)
-
-	if rec.Code != http.StatusBadRequest {
-		t.Errorf("status = %d, want %d", rec.Code, http.StatusBadRequest)
-	}
-
-	var errResp ErrorResponse
-	if err := json.Unmarshal(rec.Body.Bytes(), &errResp); err != nil {
-		t.Fatalf("unmarshaling response: %v", err)
-	}
-	if errResp.Error.Code != "bad_request" {
-		t.Errorf("error code = %q, want %q", errResp.Error.Code, "bad_request")
-	}
-	if !strings.Contains(errResp.Error.Message, "too many answers") {
-		t.Errorf("error message = %q, want to contain 'too many answers'", errResp.Error.Message)
-	}
-
-	// Service should not have been called.
-	if len(mockSvc.operator.respondToBlockerCalls) != 0 {
-		t.Error("service should not have been called for too many answers")
-	}
-}
-
-func TestRespondToBlocker_AnswerTooLarge(t *testing.T) {
-	t.Parallel()
-
-	mockSvc := newMockService()
-	srv := New(mockSvc)
-
-	// Create answers where one exceeds maxResponseBytes.
-	answers := []string{
-		"small answer",
-		strings.Repeat("y", maxResponseBytes+1),
-		"another answer",
-	}
-	bodyBytes, _ := json.Marshal(RespondToBlockerRequest{Answers: answers})
-
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/operator/blockers/job-1/task-1/respond", bytes.NewReader(bodyBytes))
-	req.Header.Set("Content-Type", "application/json")
-	req.SetPathValue("jobId", "job-1")
-	req.SetPathValue("taskId", "task-1")
-	rec := httptest.NewRecorder()
-
-	srv.respondToBlocker(rec, req)
-
-	if rec.Code != http.StatusBadRequest {
-		t.Errorf("status = %d, want %d", rec.Code, http.StatusBadRequest)
-	}
-
-	var errResp ErrorResponse
-	if err := json.Unmarshal(rec.Body.Bytes(), &errResp); err != nil {
-		t.Fatalf("unmarshaling response: %v", err)
-	}
-	if errResp.Error.Code != "bad_request" {
-		t.Errorf("error code = %q, want %q", errResp.Error.Code, "bad_request")
-	}
-	if !strings.Contains(errResp.Error.Message, "answer at index 1 too long") {
-		t.Errorf("error message = %q, want to contain 'answer at index 1 too long'", errResp.Error.Message)
-	}
-
-	// Service should not have been called.
-	if len(mockSvc.operator.respondToBlockerCalls) != 0 {
-		t.Error("service should not have been called for oversized answer")
-	}
-}
-
-func TestRespondToBlocker_AnswersAtLimit(t *testing.T) {
-	t.Parallel()
-
-	mockSvc := newMockService()
-	srv := New(mockSvc)
-
-	// Create exactly maxBlockerAnswers answers with reasonable sizes.
-	// Note: We can't test 50 answers at 50KB each because that would exceed
-	// the HTTP body limit (1 MiB). Instead, we test the count limit with
-	// smaller answers to verify the count validation works.
-	answers := make([]string, maxBlockerAnswers)
-	for i := range answers {
-		answers[i] = "answer"
-	}
-	bodyBytes, _ := json.Marshal(RespondToBlockerRequest{Answers: answers})
-
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/operator/blockers/job-1/task-1/respond", bytes.NewReader(bodyBytes))
-	req.Header.Set("Content-Type", "application/json")
-	req.SetPathValue("jobId", "job-1")
-	req.SetPathValue("taskId", "task-1")
-	rec := httptest.NewRecorder()
-
-	srv.respondToBlocker(rec, req)
-
-	// Should succeed (204 No Content).
-	if rec.Code != http.StatusNoContent {
-		t.Errorf("status = %d, want %d (body: %s)", rec.Code, http.StatusNoContent, rec.Body.String())
-	}
-
-	// Service should have been called.
-	if len(mockSvc.operator.respondToBlockerCalls) != 1 {
-		t.Fatal("service should have been called exactly once")
-	}
-	call := mockSvc.operator.respondToBlockerCalls[0]
-	if call.jobID != "job-1" {
-		t.Errorf("jobID = %q, want %q", call.jobID, "job-1")
-	}
-	if call.taskID != "task-1" {
-		t.Errorf("taskID = %q, want %q", call.taskID, "task-1")
-	}
-	if len(call.answers) != maxBlockerAnswers {
-		t.Errorf("answers count = %d, want %d", len(call.answers), maxBlockerAnswers)
-	}
-}
-
-func TestRespondToBlocker_EmptyAnswers(t *testing.T) {
-	t.Parallel()
-
-	mockSvc := newMockService()
-	srv := New(mockSvc)
-
-	bodyBytes, _ := json.Marshal(RespondToBlockerRequest{Answers: []string{}})
-
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/operator/blockers/job-1/task-1/respond", bytes.NewReader(bodyBytes))
-	req.Header.Set("Content-Type", "application/json")
-	req.SetPathValue("jobId", "job-1")
-	req.SetPathValue("taskId", "task-1")
-	rec := httptest.NewRecorder()
-
-	srv.respondToBlocker(rec, req)
-
-	if rec.Code != http.StatusBadRequest {
-		t.Errorf("status = %d, want %d", rec.Code, http.StatusBadRequest)
-	}
-
-	var errResp ErrorResponse
-	if err := json.Unmarshal(rec.Body.Bytes(), &errResp); err != nil {
-		t.Fatalf("unmarshaling response: %v", err)
-	}
-	if !strings.Contains(errResp.Error.Message, "answers array is required and must not be empty") {
-		t.Errorf("error message = %q, want to contain 'answers array is required'", errResp.Error.Message)
-	}
-}
-
-func TestRespondToBlocker_EmptyAnswerInArray(t *testing.T) {
-	t.Parallel()
-
-	mockSvc := newMockService()
-	srv := New(mockSvc)
-
-	answers := []string{"valid answer", "", "another answer"}
-	bodyBytes, _ := json.Marshal(RespondToBlockerRequest{Answers: answers})
-
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/operator/blockers/job-1/task-1/respond", bytes.NewReader(bodyBytes))
-	req.Header.Set("Content-Type", "application/json")
-	req.SetPathValue("jobId", "job-1")
-	req.SetPathValue("taskId", "task-1")
-	rec := httptest.NewRecorder()
-
-	srv.respondToBlocker(rec, req)
-
-	if rec.Code != http.StatusBadRequest {
-		t.Errorf("status = %d, want %d", rec.Code, http.StatusBadRequest)
-	}
-
-	var errResp ErrorResponse
-	if err := json.Unmarshal(rec.Body.Bytes(), &errResp); err != nil {
-		t.Fatalf("unmarshaling response: %v", err)
-	}
-	if !strings.Contains(errResp.Error.Message, "answer at index 1 must not be empty") {
-		t.Errorf("error message = %q, want to contain 'answer at index 1 must not be empty'", errResp.Error.Message)
 	}
 }
 

@@ -1,0 +1,20 @@
+id: qa-verify
+name: QA Verify
+description: >
+  Black-box verification of an existing, running system. The QA tester
+  exercises public interfaces (CLI, API, TUI), derives tests from
+  requirements and observed behavior, and reports pass/fail per case.
+  No implementation or review — this is a one-shot verification
+  suitable for acceptance gates.
+tags: [kind:qa, mode:blackbox]
+
+entry: verify
+exit: verify
+
+nodes:
+  - id: verify
+    role: qa-tester
+
+edges:
+  - from: verify
+    to: end

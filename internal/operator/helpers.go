@@ -38,8 +38,8 @@ func formatJobContext(ctx context.Context, store db.Store, jobID string) (string
 		fmt.Fprintf(&b, "\nTasks (%d):\n", len(tasks))
 		for _, task := range tasks {
 			fmt.Fprintf(&b, "  - [%s] %s", task.Status, task.Title)
-			if task.TeamID != "" {
-				fmt.Fprintf(&b, " (team: %s)", task.TeamID)
+			if task.GraphID != "" {
+				fmt.Fprintf(&b, " (graph: %s)", task.GraphID)
 			}
 			if task.Summary != "" {
 				fmt.Fprintf(&b, " — %s", task.Summary)

@@ -2,16 +2,14 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
-	"slices"
 	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
-
-	"context"
 
 	"github.com/jefflinse/toasters/internal/service"
 )
@@ -74,23 +72,15 @@ func (m *Model) reloadWorkersForModal() {
 		slog.Error("failed to list workers for modal", "error", err)
 		return
 	}
-	var shared, teamLocal, system []service.Worker
+	var user, system []service.Worker
 	for _, a := range workers {
-		switch {
-		case a.Source == "system":
+		if a.Source == "system" {
 			system = append(system, a)
-		case a.TeamID != "":
-			teamLocal = append(teamLocal, a)
-		default:
-			shared = append(shared, a)
+		} else {
+			user = append(user, a)
 		}
 	}
-	slices.SortFunc(teamLocal, func(a, b service.Worker) int {
-		ka := a.TeamID + "/" + a.Name
-		kb := b.TeamID + "/" + b.Name
-		return strings.Compare(ka, kb)
-	})
-	m.workersModal.workers = append(append(shared, teamLocal...), system...)
+	m.workersModal.workers = append(user, system...)
 }
 
 // renderWorkersModal renders the full-screen workers browser modal.
@@ -116,11 +106,7 @@ func (m *Model) renderWorkersModal() string {
 
 	leftInnerW := 20
 	for _, a := range workers {
-		displayName := a.Name
-		if a.TeamID != "" {
-			displayName = a.TeamID + "/" + a.Name
-		}
-		if w := len([]rune(displayName)) + 3; w > leftInnerW {
+		if w := len([]rune(a.Name)) + 3; w > leftInnerW {
 			leftInnerW = w
 		}
 	}
@@ -159,11 +145,7 @@ func (m *Model) renderWorkersModal() string {
 			if a.Mode == "lead" {
 				icon = "◆"
 			}
-			displayName := a.Name
-			if a.TeamID != "" {
-				displayName = a.TeamID + "/" + a.Name
-			}
-			name := truncateStr(displayName, leftInnerW-3)
+			name := truncateStr(a.Name, leftInnerW-3)
 			line := fmt.Sprintf(" %s %s", icon, name)
 			if a.Source == "system" {
 				line += " ⚙"
@@ -220,9 +202,6 @@ func (m *Model) renderWorkersModal() string {
 		}
 
 		rightLines = append(rightLines, DimStyle.Render("Source: "+a.Source))
-		if a.TeamID != "" {
-			rightLines = append(rightLines, DimStyle.Render("Team: "+a.TeamID))
-		}
 		if a.SourcePath != "" {
 			rightLines = append(rightLines, DimStyle.Render("Path: "+truncateStr(a.SourcePath, rightInnerW-6)))
 		}

@@ -14,6 +14,7 @@ import (
 	"os"
 
 	"github.com/jefflinse/toasters/internal/db"
+	"github.com/jefflinse/toasters/internal/graphexec"
 	"github.com/jefflinse/toasters/internal/prompt"
 	"github.com/jefflinse/toasters/internal/provider"
 	"github.com/jefflinse/toasters/internal/runtime"
@@ -138,7 +139,7 @@ func testPromptEngine(t *testing.T, roles map[string]string) *prompt.Engine {
 	}
 	for name, body := range roles {
 		path := filepath.Join(rolesDir, name+".md")
-		content := fmt.Sprintf("---\nname: %s\nmode: worker\ntools:\n  - query_teams\n  - create_job\n  - create_task\n  - assign_task\n  - query_job_context\n---\n%s", name, body)
+		content := fmt.Sprintf("---\nname: %s\nmode: worker\ntools:\n  - query_graphs\n  - create_job\n  - query_job_context\n---\n%s", name, body)
 		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 			t.Fatalf("writing role %s: %v", name, err)
 		}
@@ -168,7 +169,11 @@ func newTestOperatorTools(t *testing.T, workers []*db.Worker) *operatorTools {
 	})
 
 	eventCh := make(chan Event, 64)
-	systemTools := NewSystemTools(store, engine, "test-provider", "test-model", eventCh, t.TempDir(), nil, nil)
+	systemTools := NewSystemTools(SystemToolsConfig{
+		Store: store, PromptEngine: engine,
+		DefaultProvider: "test-provider", DefaultModel: "test-model",
+		EventCh: eventCh, WorkDir: t.TempDir(),
+	})
 
 	return newOperatorTools(nil, engine, "test-provider", "test-model", store, systemTools, t.TempDir())
 }
@@ -329,102 +334,6 @@ func TestOperatorLongLivedSession(t *testing.T) {
 	}
 }
 
-func TestOperatorConsultWorker(t *testing.T) {
-	// The operator calls consult_worker("scheduler", "..."), which spawns a
-	// fresh session via runtime.SpawnAndWait. We need the scheduler worker
-	// in the DB so the composer can look it up.
-	//
-	// Since both the operator and the scheduler use the same provider registry,
-	// we use a single mock provider that handles multiple ChatStream calls:
-	//   1. Operator's first response: tool call to consult_worker
-	//   2. Scheduler worker's response: "Here is the schedule: ..."
-	//   3. Operator's second response (after seeing tool result): final text
-	mp := &mockProvider{
-		name: "test",
-		responses: []mockResponse{
-			// 1. Operator calls consult_worker.
-			{events: []provider.StreamEvent{
-				{Type: provider.EventToolCall, ToolCall: &provider.ToolCall{
-					ID:        "call-1",
-					Name:      "consult_worker",
-					Arguments: json.RawMessage(`{"worker_name": "scheduler", "message": "Schedule the tasks"}`),
-				}},
-				{Type: provider.EventDone},
-			}},
-			// 2. Scheduler worker responds.
-			{events: []provider.StreamEvent{
-				{Type: provider.EventText, Text: "Schedule: 1) Setup 2) Build 3) Deploy"},
-				{Type: provider.EventDone},
-			}},
-			// 3. Operator responds after seeing scheduler's result.
-			{events: []provider.StreamEvent{
-				{Type: provider.EventText, Text: "The scheduler suggests: Setup, Build, Deploy"},
-				{Type: provider.EventDone},
-			}},
-		},
-	}
-
-	store := newOperatorTestStore(t)
-	ctx := context.Background()
-
-	engine := testPromptEngine(t, map[string]string{
-		"scheduler": "You are a scheduling agent. Analyze requests and schedule tasks.",
-	})
-
-	rt := runtime.New(store, newTestRegistry(mp))
-
-	var textBuf strings.Builder
-	var mu sync.Mutex
-
-	op, err := New(Config{
-		Runtime:         rt,
-		Provider:        mp,
-		Model:           "test-model",
-		WorkDir:         t.TempDir(),
-		Store:           store,
-		PromptEngine:    engine,
-		DefaultProvider: "test",
-		DefaultModel:    "test-model",
-		SystemPrompt:    "You are the operator.",
-		OnText: func(text string) {
-			mu.Lock()
-			textBuf.WriteString(text)
-			mu.Unlock()
-		},
-	})
-	if err != nil {
-		t.Fatalf("creating operator: %v", err)
-	}
-
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	op.Start(ctx)
-
-	_ = op.Send(ctx, Event{
-		Type:    EventUserMessage,
-		Payload: UserMessagePayload{Text: "Build me a web app"},
-	})
-
-	waitFor(t, func() bool {
-		mu.Lock()
-		defer mu.Unlock()
-		return strings.Contains(textBuf.String(), "scheduler suggests")
-	}, 5*time.Second)
-
-	mu.Lock()
-	got := textBuf.String()
-	mu.Unlock()
-
-	assertContains(t, got, "scheduler suggests")
-
-	// Verify the operator's message history includes the tool call round-trip.
-	// Expected: user, assistant (tool call), tool (result), assistant (final).
-	if op.MessageCount() != 4 {
-		t.Fatalf("want 4 messages in history, got %d", op.MessageCount())
-	}
-}
-
 func TestOperatorEventCallbackFires(t *testing.T) {
 	mp := &mockProvider{
 		name: "test",
@@ -523,10 +432,10 @@ func TestOperatorMechanicalEvents(t *testing.T) {
 	_ = op.Send(ctx, Event{
 		Type: EventTaskStarted,
 		Payload: TaskStartedPayload{
-			TaskID: "task-0",
-			JobID:  "job-1",
-			TeamID: "team-1",
-			Title:  "Setup",
+			TaskID:  "task-0",
+			JobID:   "job-1",
+			GraphID: "team-1",
+			Title:   "Setup",
 		},
 	})
 	_ = op.Send(ctx, Event{
@@ -594,10 +503,10 @@ func TestEventLoop_TaskStarted_CreatesFeedEntry(t *testing.T) {
 	_ = op.Send(ctx, Event{
 		Type: EventTaskStarted,
 		Payload: TaskStartedPayload{
-			TaskID: "task-1",
-			JobID:  "job-1",
-			TeamID: "backend",
-			Title:  "Build API",
+			TaskID:  "task-1",
+			JobID:   "job-1",
+			GraphID: "bug-fix",
+			Title:   "Build API",
 		},
 	})
 
@@ -614,16 +523,13 @@ func TestEventLoop_TaskStarted_CreatesFeedEntry(t *testing.T) {
 		t.Fatalf("want 1 feed entry, got %d", len(entries))
 	}
 	assertEqual(t, string(db.FeedEntryTaskStarted), string(entries[0].EntryType))
-	assertContains(t, entries[0].Content, "backend")
+	assertContains(t, entries[0].Content, "bug-fix")
 	assertContains(t, entries[0].Content, "Build API")
 }
 
 func TestEventLoop_TaskCompleted_AssignsNextTask(t *testing.T) {
 	store := newOperatorTestStore(t)
 	ctx := context.Background()
-
-	// Seed a team with a lead worker.
-	seedTeam(t, ctx, store, "backend", "Backend Team", "lead-agent")
 
 	// Create a job.
 	job := &db.Job{
@@ -636,20 +542,20 @@ func TestEventLoop_TaskCompleted_AssignsNextTask(t *testing.T) {
 
 	// Create a completed task and a pending next task with pre-assigned team.
 	task1 := &db.Task{
-		ID:     "task-1",
-		JobID:  "job-1",
-		Title:  "First task",
-		Status: db.TaskStatusCompleted,
-		TeamID: "backend",
+		ID:      "task-1",
+		JobID:   "job-1",
+		Title:   "First task",
+		Status:  db.TaskStatusCompleted,
+		GraphID: "bug-fix",
 	}
 	assertNoError(t, store.CreateTask(ctx, task1))
 
 	task2 := &db.Task{
-		ID:     "task-2",
-		JobID:  "job-1",
-		Title:  "Second task",
-		Status: db.TaskStatusPending,
-		TeamID: "backend",
+		ID:      "task-2",
+		JobID:   "job-1",
+		Title:   "Second task",
+		Status:  db.TaskStatusPending,
+		GraphID: "bug-fix",
 	}
 	assertNoError(t, store.CreateTask(ctx, task2))
 
@@ -674,7 +580,12 @@ func TestEventLoop_TaskCompleted_AssignsNextTask(t *testing.T) {
 		"lead-agent": "You are a test lead.",
 	})
 	eventCh := make(chan Event, eventChSize)
-	systemTools := NewSystemTools(store, engine, "test-provider", "test-model", eventCh, t.TempDir(), nil, gExec)
+	systemTools := NewSystemTools(SystemToolsConfig{
+		Store: store, PromptEngine: engine,
+		DefaultProvider: "test-provider", DefaultModel: "test-model",
+		EventCh: eventCh, WorkDir: t.TempDir(),
+		GraphExecutor: gExec,
+	})
 	tools := newOperatorTools(rt, engine, "test-provider", "test-model", store, systemTools, t.TempDir())
 	provTools := operatorToolsToProviderTools(tools.Definitions())
 
@@ -709,7 +620,7 @@ func TestEventLoop_TaskCompleted_AssignsNextTask(t *testing.T) {
 		Payload: TaskCompletedPayload{
 			TaskID:      "task-1",
 			JobID:       "job-1",
-			TeamID:      "backend",
+			GraphID:     "backend",
 			Summary:     "First task done",
 			HasNextTask: true,
 		},
@@ -793,7 +704,7 @@ func TestEventLoop_TaskCompleted_ChecksJobComplete(t *testing.T) {
 		Payload: TaskCompletedPayload{
 			TaskID:      "task-1",
 			JobID:       "job-1",
-			TeamID:      "backend",
+			GraphID:     "backend",
 			Summary:     "All done",
 			HasNextTask: false,
 		},
@@ -897,7 +808,7 @@ func TestEventLoop_TaskCompleted_WithRecommendations(t *testing.T) {
 		Payload: TaskCompletedPayload{
 			TaskID:          "task-1",
 			JobID:           "job-1",
-			TeamID:          "backend",
+			GraphID:         "backend",
 			Summary:         "API built",
 			Recommendations: "Add caching layer for performance",
 			HasNextTask:     false,
@@ -969,10 +880,10 @@ func TestEventLoop_TaskFailed_RoutesToLLM(t *testing.T) {
 	_ = op.Send(ctx, Event{
 		Type: EventTaskFailed,
 		Payload: TaskFailedPayload{
-			TaskID: "task-1",
-			JobID:  "job-1",
-			TeamID: "backend",
-			Error:  "compilation error in main.go",
+			TaskID:  "task-1",
+			JobID:   "job-1",
+			GraphID: "bug-fix",
+			Error:   "compilation error in main.go",
 		},
 	})
 
@@ -1004,87 +915,6 @@ func TestEventLoop_TaskFailed_RoutesToLLM(t *testing.T) {
 	}
 	if !foundFailed {
 		t.Fatal("expected task_failed feed entry")
-	}
-}
-
-func TestEventLoop_BlockerReported_RoutesToLLM(t *testing.T) {
-	store := newOperatorTestStore(t)
-
-	mp := &mockProvider{
-		name: "test",
-		responses: []mockResponse{
-			// LLM responds to the blocker notification.
-			{events: []provider.StreamEvent{
-				{Type: provider.EventText, Text: "I'll consult the blocker-handler to resolve this."},
-				{Type: provider.EventDone},
-			}},
-		},
-	}
-	rt := runtime.New(nil, newTestRegistry(mp))
-
-	var textBuf strings.Builder
-	var mu sync.Mutex
-
-	op, err := New(Config{
-		Runtime:      rt,
-		Provider:     mp,
-		Model:        "test-model",
-		WorkDir:      t.TempDir(),
-		Store:        store,
-		SystemPrompt: "You are the operator.",
-		OnText: func(text string) {
-			mu.Lock()
-			textBuf.WriteString(text)
-			mu.Unlock()
-		},
-	})
-	if err != nil {
-		t.Fatalf("creating operator: %v", err)
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	op.Start(ctx)
-
-	_ = op.Send(ctx, Event{
-		Type: EventBlockerReported,
-		Payload: BlockerReportedPayload{
-			TaskID:      "task-1",
-			TeamID:      "backend",
-			WorkerID:    "worker-1",
-			Description: "Cannot access production database",
-		},
-	})
-
-	waitFor(t, func() bool {
-		mu.Lock()
-		defer mu.Unlock()
-		return strings.Contains(textBuf.String(), "blocker-handler")
-	}, 3*time.Second)
-
-	// Verify ChatStream was called.
-	reqs := mp.getRequests()
-	if len(reqs) == 0 {
-		t.Fatal("expected ChatStream to be called for blocker")
-	}
-
-	// Verify the message contains the blocker description.
-	lastMsg := reqs[0].Messages[len(reqs[0].Messages)-1]
-	assertContains(t, lastMsg.Content, "Cannot access production database")
-
-	// Verify feed entry was created.
-	entries, err := store.ListRecentFeedEntries(context.Background(), 10)
-	assertNoError(t, err)
-	var foundBlocker bool
-	for _, e := range entries {
-		if e.EntryType == db.FeedEntryBlockerReported {
-			foundBlocker = true
-			assertContains(t, e.Content, "Cannot access production database")
-		}
-	}
-	if !foundBlocker {
-		t.Fatal("expected blocker_reported feed entry")
 	}
 }
 
@@ -1527,132 +1357,6 @@ func TestOperatorSurfaceToUser(t *testing.T) {
 	}, 2*time.Second)
 }
 
-func TestConsultWorker_ComposedWorker(t *testing.T) {
-	// Verify that consult_worker uses the prompt engine to look up and compose the
-	// worker, including the worker's system prompt and resolved provider/model.
-	store := newOperatorTestStore(t)
-
-	engine := testPromptEngine(t, map[string]string{
-		"scheduler": "You are a scheduling agent. Create detailed schedules.",
-	})
-
-	mp := &mockProvider{
-		name: "custom-provider",
-		responses: []mockResponse{
-			// 1. Operator calls consult_worker.
-			{events: []provider.StreamEvent{
-				{Type: provider.EventToolCall, ToolCall: &provider.ToolCall{
-					ID:        "call-1",
-					Name:      "consult_worker",
-					Arguments: json.RawMessage(`{"worker_name": "scheduler", "message": "Schedule a migration"}`),
-				}},
-				{Type: provider.EventDone},
-			}},
-			// 2. Scheduler worker responds (uses custom-provider).
-			{events: []provider.StreamEvent{
-				{Type: provider.EventText, Text: "Migration schedule: step 1, step 2"},
-				{Type: provider.EventDone},
-			}},
-			// 3. Operator responds after seeing tool result.
-			{events: []provider.StreamEvent{
-				{Type: provider.EventText, Text: "The scheduler created a migration schedule."},
-				{Type: provider.EventDone},
-			}},
-		},
-	}
-
-	reg := provider.NewRegistry()
-	reg.Register("custom-provider", mp)
-
-	rt := runtime.New(store, reg)
-
-	var textBuf strings.Builder
-	var mu sync.Mutex
-
-	op, err := New(Config{
-		Runtime:         rt,
-		Provider:        mp,
-		Model:           "default-model",
-		WorkDir:         t.TempDir(),
-		Store:           store,
-		PromptEngine:    engine,
-		DefaultProvider: "custom-provider",
-		DefaultModel:    "default-model",
-		SystemPrompt:    "You are the operator.",
-		OnText: func(text string) {
-			mu.Lock()
-			textBuf.WriteString(text)
-			mu.Unlock()
-		},
-	})
-	if err != nil {
-		t.Fatalf("creating operator: %v", err)
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	op.Start(ctx)
-
-	_ = op.Send(ctx, Event{
-		Type:    EventUserMessage,
-		Payload: UserMessagePayload{Text: "Schedule a migration"},
-	})
-
-	waitFor(t, func() bool {
-		mu.Lock()
-		defer mu.Unlock()
-		return strings.Contains(textBuf.String(), "migration schedule")
-	}, 5*time.Second)
-
-	mu.Lock()
-	got := textBuf.String()
-	mu.Unlock()
-
-	assertContains(t, got, "migration schedule")
-
-	// Verify the scheduler's ChatStream call used the default provider/model.
-	reqs := mp.getRequests()
-	if len(reqs) < 2 {
-		t.Fatalf("want at least 2 ChatStream calls, got %d", len(reqs))
-	}
-
-	// The second call is the scheduler worker's session.
-	schedulerReq := reqs[1]
-	assertEqual(t, "default-model", schedulerReq.Model)
-
-	// Verify the scheduler's system prompt came from the prompt engine.
-	assertContains(t, schedulerReq.System, "You are a scheduling agent")
-}
-
-func TestConsultWorker_UnknownWorker(t *testing.T) {
-	// Verify that consult_worker returns an error when the worker is not found
-	// in the prompt engine.
-	tools := newTestOperatorTools(t, nil) // no workers seeded
-
-	_, err := tools.Execute(context.Background(), "consult_worker",
-		json.RawMessage(`{"worker_name": "nonexistent", "message": "hello"}`))
-	assertError(t, err)
-	assertContains(t, err.Error(), "unknown system worker")
-	assertContains(t, err.Error(), "nonexistent")
-}
-
-func TestConsultWorkerMissingParams(t *testing.T) {
-	tools := newTestOperatorTools(t, nil)
-
-	// Missing worker_name.
-	_, err := tools.Execute(context.Background(), "consult_worker",
-		json.RawMessage(`{"message": "hello"}`))
-	assertError(t, err)
-	assertContains(t, err.Error(), "worker_name is required")
-
-	// Missing message.
-	_, err = tools.Execute(context.Background(), "consult_worker",
-		json.RawMessage(`{"worker_name": "scheduler"}`))
-	assertError(t, err)
-	assertContains(t, err.Error(), "message is required")
-}
-
 func TestSurfaceToUserMissingText(t *testing.T) {
 	tools := newTestOperatorTools(t, nil)
 
@@ -1665,7 +1369,13 @@ func TestSurfaceToUserMissingText(t *testing.T) {
 func TestSurfaceToUserCreatesFeedEntry(t *testing.T) {
 	store := newOperatorTestStore(t)
 	eventCh := make(chan Event, 64)
-	systemTools := NewSystemTools(store, nil, "test-provider", "test-model", eventCh, t.TempDir(), nil, nil)
+	systemTools := NewSystemTools(SystemToolsConfig{
+		Store:           store,
+		DefaultProvider: "test-provider",
+		DefaultModel:    "test-model",
+		EventCh:         eventCh,
+		WorkDir:         t.TempDir(),
+	})
 	tools := newOperatorTools(nil, nil, "test-provider", "test-model", store, systemTools, t.TempDir())
 
 	result, err := tools.Execute(context.Background(), "surface_to_user",
@@ -1707,8 +1417,16 @@ func TestOperatorToolDefinitions(t *testing.T) {
 	tools := newTestOperatorTools(t, nil)
 	defs := tools.Definitions()
 
-	if len(defs) != 12 {
-		t.Fatalf("want 12 tool definitions, got %d", len(defs))
+	// consult_worker and all system-worker tools (create_task, assign_task,
+	// start_job) were retired when decomposition moved into auto-dispatched
+	// graphs and the blocker-handler was replaced by direct operator triage.
+	expected := []string{
+		"surface_to_user", "list_jobs", "query_job",
+		"query_graphs", "setup_workspace", "create_job",
+		"save_work_request", "ask_user",
+	}
+	if len(defs) != len(expected) {
+		t.Fatalf("want %d tool definitions, got %d", len(expected), len(defs))
 	}
 
 	names := make(map[string]bool)
@@ -1716,9 +1434,9 @@ func TestOperatorToolDefinitions(t *testing.T) {
 		names[d.Name] = true
 	}
 
-	for _, expected := range []string{"consult_worker", "surface_to_user", "list_jobs", "query_job", "query_teams", "setup_workspace", "create_job", "create_task", "assign_task", "save_work_request", "start_job", "ask_user"} {
-		if !names[expected] {
-			t.Errorf("expected %s in definitions", expected)
+	for _, name := range expected {
+		if !names[name] {
+			t.Errorf("expected %s in definitions", name)
 		}
 	}
 }
@@ -1738,7 +1456,13 @@ func TestQueryJobDelegatesToSystemTools(t *testing.T) {
 	}
 
 	eventCh := make(chan Event, 64)
-	systemTools := NewSystemTools(store, nil, "test-provider", "test-model", eventCh, t.TempDir(), nil, nil)
+	systemTools := NewSystemTools(SystemToolsConfig{
+		Store:           store,
+		DefaultProvider: "test-provider",
+		DefaultModel:    "test-model",
+		EventCh:         eventCh,
+		WorkDir:         t.TempDir(),
+	})
 	tools := newOperatorTools(nil, nil, "test-provider", "test-model", store, systemTools, t.TempDir())
 
 	result, err := tools.Execute(ctx, "query_job",
@@ -1748,20 +1472,26 @@ func TestQueryJobDelegatesToSystemTools(t *testing.T) {
 	assertContains(t, result, "job-1")
 }
 
-func TestQueryTeamsDelegatesToSystemTools(t *testing.T) {
+func TestQueryGraphsDelegatesToSystemTools(t *testing.T) {
 	store := newOperatorTestStore(t)
 	ctx := context.Background()
 
-	// Seed a team.
-	seedTeam(t, ctx, store, "team-1", "Alpha Team", "lead-1")
-
 	eventCh := make(chan Event, 64)
-	systemTools := NewSystemTools(store, nil, "test-provider", "test-model", eventCh, t.TempDir(), nil, nil)
+	systemTools := NewSystemTools(SystemToolsConfig{
+		Store:           store,
+		DefaultProvider: "test-provider",
+		DefaultModel:    "test-model",
+		EventCh:         eventCh,
+		WorkDir:         t.TempDir(),
+		GraphCatalog: stubCatalog{graphs: []*graphexec.Definition{
+			{ID: "bug-fix", Name: "Alpha Graph"},
+		}},
+	})
 	tools := newOperatorTools(nil, nil, "test-provider", "test-model", store, systemTools, t.TempDir())
 
-	result, err := tools.Execute(ctx, "query_teams", json.RawMessage(`{}`))
+	result, err := tools.Execute(ctx, "query_graphs", json.RawMessage(`{}`))
 	assertNoError(t, err)
-	assertContains(t, result, "Alpha Team")
+	assertContains(t, result, "Alpha Graph")
 }
 
 // --- Regression tests for Bug 1: consultWorker tool filtering ---
@@ -1775,128 +1505,6 @@ func TestQueryTeamsDelegatesToSystemTools(t *testing.T) {
 //
 // Without the fix, the scheduler's ChatStream request would contain all system
 // tools instead of only the 2 declared ones.
-func TestConsultWorker_ToolFiltering(t *testing.T) {
-	store := newOperatorTestStore(t)
-
-	// Create a prompt engine role with only two tools declared.
-	dir := t.TempDir()
-	rolesDir := filepath.Join(dir, "roles")
-	if err := os.MkdirAll(rolesDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	schedulerRole := "---\nname: Scheduler\nmode: worker\ntools:\n  - create_job\n  - create_task\n---\nYou are a scheduling agent."
-	if err := os.WriteFile(filepath.Join(rolesDir, "scheduler.md"), []byte(schedulerRole), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	engine := prompt.NewEngine()
-	if err := engine.LoadDir(dir, "system"); err != nil {
-		t.Fatal(err)
-	}
-
-	mp := &mockProvider{
-		name: "test",
-		responses: []mockResponse{
-			// 1. Operator calls consult_worker.
-			{events: []provider.StreamEvent{
-				{Type: provider.EventToolCall, ToolCall: &provider.ToolCall{
-					ID:        "call-1",
-					Name:      "consult_worker",
-					Arguments: json.RawMessage(`{"worker_name": "scheduler", "message": "Schedule something"}`),
-				}},
-				{Type: provider.EventDone},
-			}},
-			// 2. Scheduler worker responds (only sees its declared tools).
-			{events: []provider.StreamEvent{
-				{Type: provider.EventText, Text: "Here is the schedule."},
-				{Type: provider.EventDone},
-			}},
-			// 3. Operator responds after seeing scheduler's result.
-			{events: []provider.StreamEvent{
-				{Type: provider.EventText, Text: "Schedule received."},
-				{Type: provider.EventDone},
-			}},
-		},
-	}
-
-	reg := provider.NewRegistry()
-	reg.Register("test", mp)
-
-	rt := runtime.New(store, reg)
-
-	var textBuf strings.Builder
-	var mu sync.Mutex
-
-	op, err := New(Config{
-		Runtime:         rt,
-		Provider:        mp,
-		Model:           "test-model",
-		WorkDir:         t.TempDir(),
-		Store:           store,
-		PromptEngine:    engine,
-		DefaultProvider: "test",
-		DefaultModel:    "test-model",
-		SystemPrompt:    "You are the operator.",
-		OnText: func(text string) {
-			mu.Lock()
-			textBuf.WriteString(text)
-			mu.Unlock()
-		},
-	})
-	if err != nil {
-		t.Fatalf("creating operator: %v", err)
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	op.Start(ctx)
-
-	_ = op.Send(ctx, Event{
-		Type:    EventUserMessage,
-		Payload: UserMessagePayload{Text: "Schedule something"},
-	})
-
-	waitFor(t, func() bool {
-		mu.Lock()
-		defer mu.Unlock()
-		return strings.Contains(textBuf.String(), "Schedule received")
-	}, 5*time.Second)
-
-	// The second ChatStream call is the scheduler worker's session.
-	// Its Tools list must contain ONLY the two declared tools, not all system tools.
-	reqs := mp.getRequests()
-	if len(reqs) < 2 {
-		t.Fatalf("want at least 2 ChatStream calls, got %d", len(reqs))
-	}
-
-	schedulerReq := reqs[1]
-
-	// Build a set of tool names from the scheduler's request.
-	schedulerToolNames := make(map[string]bool, len(schedulerReq.Tools))
-	for _, tool := range schedulerReq.Tools {
-		schedulerToolNames[tool.Name] = true
-	}
-
-	// The scheduler must see its declared tools (create_job, create_task).
-	for _, expected := range []string{"create_job", "create_task"} {
-		if !schedulerToolNames[expected] {
-			t.Errorf("scheduler session missing declared tool %q — regression: tool filtering not applied", expected)
-		}
-	}
-
-	// The scheduler must NOT see tools it did not declare.
-	undeclaredTools := []string{"assign_task", "query_teams", "query_job", "query_job_context", "surface_to_user"}
-	for _, undeclared := range undeclaredTools {
-		if schedulerToolNames[undeclared] {
-			t.Errorf("scheduler session has undeclared tool %q — regression: consultWorker not filtering tools to worker's declared set", undeclared)
-		}
-	}
-
-	if len(schedulerReq.Tools) != 2 {
-		t.Errorf("scheduler session has %d tools, want 2; got: %v",
-			len(schedulerReq.Tools), schedulerReq.Tools)
-	}
-}
 
 // --- truncateMessages tests ---
 

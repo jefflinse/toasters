@@ -99,7 +99,7 @@ func TestSessionSimpleTextResponse(t *testing.T) {
 	}
 
 	opts := SpawnOpts{
-		WorkerID:        "test-worker",
+		WorkerID:       "test-worker",
 		Model:          "test-model",
 		SystemPrompt:   "You are a test worker.",
 		InitialMessage: "Say hello",
@@ -162,7 +162,7 @@ func TestSessionToolCallLoop(t *testing.T) {
 	}
 
 	opts := SpawnOpts{
-		WorkerID:        "test-worker",
+		WorkerID:       "test-worker",
 		Model:          "test-model",
 		InitialMessage: "Read test.txt",
 		MaxTurns:       10,

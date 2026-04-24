@@ -48,6 +48,7 @@ type CoreTools struct {
 	httpClient   *http.Client   // for web_fetch; nil uses webFetchClient
 	store        db.Store       // required; for progress tools
 	promptEngine *prompt.Engine // for spawn_worker; may be nil
+	graphCatalog GraphCatalog   // for query_graphs; may be nil
 	denylist     map[string]bool
 	sessionID    string
 	workerID     string
@@ -55,6 +56,24 @@ type CoreTools struct {
 	taskID       string
 	providerName string
 	model        string
+}
+
+// GraphCatalog is a read-only view over the loaded graph Definitions,
+// used by the query_graphs tool so roles (typically the fine-decomposer)
+// can see what graphs are available for task dispatch. The actual shape
+// is defined by graphexec.Definition; kept generic here so runtime stays
+// independent of graphexec.
+type GraphCatalog interface {
+	Graphs() []GraphSummary
+}
+
+// GraphSummary is the minimal graph-catalog-entry shape query_graphs
+// surfaces to the LLM. Mirror of graphexec.Definition's identity fields.
+type GraphSummary struct {
+	ID          string
+	Name        string
+	Description string
+	Tags        []string
 }
 
 // CoreToolsOption configures a CoreTools instance.
@@ -116,6 +135,12 @@ func WithProvider(providerName, model string) CoreToolsOption {
 	}
 }
 
+// WithGraphCatalog enables the query_graphs tool by supplying the loaded
+// graph catalog. When unset, query_graphs is absent from Definitions().
+func WithGraphCatalog(cat GraphCatalog) CoreToolsOption {
+	return func(ct *CoreTools) { ct.graphCatalog = cat }
+}
+
 // NewCoreTools creates a CoreTools with the given work directory and options.
 func NewCoreTools(workDir string, opts ...CoreToolsOption) *CoreTools {
 	ct := &CoreTools{
@@ -152,6 +177,8 @@ func (ct *CoreTools) Execute(ctx context.Context, name string, args json.RawMess
 		return ct.webFetch(ctx, args)
 	case "spawn_worker":
 		return ct.spawnWorker(ctx, args)
+	case "query_graphs":
+		return ct.queryGraphs()
 	case "report_task_progress":
 		var params progress.ReportTaskProgressParams
 		if err := json.Unmarshal(args, &params); err != nil {
@@ -162,16 +189,6 @@ func (ct *CoreTools) Execute(ctx context.Context, name string, args json.RawMess
 			params.WorkerID = ct.workerID
 		}
 		return progress.ReportTaskProgress(ctx, ct.store, params)
-	case "report_blocker":
-		var params progress.ReportBlockerParams
-		if err := json.Unmarshal(args, &params); err != nil {
-			return "", fmt.Errorf("parsing report_blocker args: %w", err)
-		}
-		params.JobID, params.TaskID = ct.normalizeProgressIDs(params.JobID, params.TaskID)
-		if params.WorkerID == "" {
-			params.WorkerID = ct.workerID
-		}
-		return progress.ReportBlocker(ctx, ct.store, params)
 	case "update_task_status":
 		var params progress.UpdateTaskStatusParams
 		if err := json.Unmarshal(args, &params); err != nil {
@@ -324,6 +341,20 @@ func (ct *CoreTools) Definitions() []ToolDef {
 		},
 	}
 
+	// query_graphs is present when a graph catalog is wired in. Used by
+	// decomposition roles to see what graphs are available for task
+	// dispatch; informational only, no side effects.
+	if ct.graphCatalog != nil {
+		defs = append(defs, ToolDef{
+			Name:        "query_graphs",
+			Description: "List all available graphs with their ids, names, descriptions, and tags. Use this when deciding which graph should execute a task.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {}
+			}`),
+		})
+	}
+
 	// Only include spawn_worker if spawner, engine, and depth all allow it.
 	if ct.spawner != nil && ct.promptEngine != nil && ct.depth < ct.maxDepth {
 		defs = append(defs, ToolDef{
@@ -356,6 +387,60 @@ func (ct *CoreTools) Definitions() []ToolDef {
 	}
 
 	return defs
+}
+
+// queryGraphs renders the loaded graph catalog as markdown. Used by
+// decomposition roles to see graph ids, names, descriptions, and tags.
+//
+// Graphs tagged `system:true` are filtered out — those are meta-graphs
+// (coarse-decompose, fine-decompose) that implement the decomposition
+// flow itself, not candidate dispatch targets. Listing them would
+// invite a decomposer to assign decomposition-of-decomposition, which
+// is nonsense.
+func (ct *CoreTools) queryGraphs() (string, error) {
+	if ct.graphCatalog == nil {
+		return "No graphs are currently loaded.", nil
+	}
+	all := ct.graphCatalog.Graphs()
+	graphs := make([]GraphSummary, 0, len(all))
+	for _, g := range all {
+		if graphHasTag(g.Tags, "system:true") {
+			continue
+		}
+		graphs = append(graphs, g)
+	}
+	if len(graphs) == 0 {
+		return "No graphs are currently loaded.", nil
+	}
+	var b strings.Builder
+	b.WriteString("Available graphs:\n")
+	for _, g := range graphs {
+		name := g.Name
+		if name == "" {
+			name = g.ID
+		}
+		fmt.Fprintf(&b, "\n- %s (id: %s)\n", name, g.ID)
+		if g.Description != "" {
+			fmt.Fprintf(&b, "  Description: %s\n", strings.TrimSpace(g.Description))
+		}
+		if len(g.Tags) > 0 {
+			fmt.Fprintf(&b, "  Tags: %s\n", strings.Join(g.Tags, ", "))
+		}
+	}
+	return b.String(), nil
+}
+
+// graphHasTag reports whether a graph's tag list contains an exact
+// match for the given tag string. Tags are simple strings today
+// ("language:go", "system:true", …); matching is byte-equal, not a
+// namespace-aware lookup.
+func graphHasTag(tags []string, want string) bool {
+	for _, t := range tags {
+		if t == want {
+			return true
+		}
+	}
+	return false
 }
 
 // DefinitionsByName returns tool definitions keyed by tool name.

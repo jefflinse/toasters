@@ -28,21 +28,6 @@ func ProgressToolDefs() []ToolDef {
 			}`),
 		},
 		{
-			Name:        "report_blocker",
-			Description: "Report that you are blocked and cannot proceed without help.",
-			Parameters: json.RawMessage(`{
-				"type": "object",
-				"properties": {
-					"job_id":      {"type": "string", "description": "The job ID"},
-					"task_id":     {"type": "string", "description": "The task ID (optional)"},
-					"worker_id":    {"type": "string", "description": "The worker ID (optional)"},
-					"description": {"type": "string", "description": "What is blocking you"},
-					"severity":    {"type": "string", "enum": ["low", "medium", "high"], "description": "Severity of the blocker"}
-				},
-				"required": ["job_id", "description", "severity"]
-			}`),
-		},
-		{
 			Name:        "update_task_status",
 			Description: "Update the status of a task in the job tracker.",
 			Parameters: json.RawMessage(`{

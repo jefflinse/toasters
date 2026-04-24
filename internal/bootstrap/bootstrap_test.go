@@ -31,26 +31,17 @@ func TestRun_FirstRun(t *testing.T) {
 	assertDirExists(t, filepath.Join(configDir, "system"))
 	assertDirExists(t, filepath.Join(configDir, "system", "roles"))
 	assertDirExists(t, filepath.Join(configDir, "system", "skills"))
-	assertFileExists(t, filepath.Join(configDir, "system", "team.md"))
 	assertFileExists(t, filepath.Join(configDir, "system", "roles", "operator.md"))
-	assertFileExists(t, filepath.Join(configDir, "system", "roles", "decomposer.md"))
-	assertFileExists(t, filepath.Join(configDir, "system", "roles", "scheduler.md"))
-	assertFileExists(t, filepath.Join(configDir, "system", "roles", "blocker-handler.md"))
+	assertFileExists(t, filepath.Join(configDir, "system", "roles", "coarse-decomposer.md"))
+	assertFileExists(t, filepath.Join(configDir, "system", "roles", "fine-decomposer.md"))
 	assertFileExists(t, filepath.Join(configDir, "system", "skills", "orchestration.md"))
+	assertFileExists(t, filepath.Join(configDir, "system", "schemas", "decomposition-result.yaml"))
+	assertFileExists(t, filepath.Join(configDir, "system", "graphs", "coarse-decompose.yaml"))
+	assertFileExists(t, filepath.Join(configDir, "system", "graphs", "fine-decompose.yaml"))
 
 	// Verify user/ structure was created.
 	assertDirExists(t, filepath.Join(configDir, "user", "skills"))
-	assertDirExists(t, filepath.Join(configDir, "user", "agents"))
-	assertDirExists(t, filepath.Join(configDir, "user", "teams"))
-
-	// Verify system files have content (not empty).
-	data, err := os.ReadFile(filepath.Join(configDir, "system", "team.md"))
-	if err != nil {
-		t.Fatalf("reading team.md: %v", err)
-	}
-	if len(data) == 0 {
-		t.Error("system/team.md is empty")
-	}
+	assertDirExists(t, filepath.Join(configDir, "user", "graphs"))
 
 	// Verify config.yaml was written.
 	assertFileExists(t, filepath.Join(configDir, "config.yaml"))
@@ -96,9 +87,9 @@ func TestRun_Idempotent(t *testing.T) {
 	}
 
 	// Modify a system file to verify it's not overwritten.
-	teamMD := filepath.Join(configDir, "system", "team.md")
+	operatorMD := filepath.Join(configDir, "system", "roles", "operator.md")
 	sentinel := []byte("# customized by user\n")
-	if err := os.WriteFile(teamMD, sentinel, 0o644); err != nil {
+	if err := os.WriteFile(operatorMD, sentinel, 0o644); err != nil {
 		t.Fatalf("writing sentinel: %v", err)
 	}
 
@@ -108,330 +99,18 @@ func TestRun_Idempotent(t *testing.T) {
 	}
 
 	// Verify the customized file was NOT overwritten.
-	data, err := os.ReadFile(teamMD)
+	data, err := os.ReadFile(operatorMD)
 	if err != nil {
-		t.Fatalf("reading team.md: %v", err)
+		t.Fatalf("reading operator.md: %v", err)
 	}
 	if string(data) != string(sentinel) {
-		t.Errorf("system/team.md was overwritten: got %q, want %q", string(data), string(sentinel))
+		t.Errorf("system/roles/operator.md was overwritten: got %q, want %q", string(data), string(sentinel))
 	}
 
 	// Verify directories still exist.
 	assertDirExists(t, filepath.Join(configDir, "system"))
 	assertDirExists(t, filepath.Join(configDir, "user", "skills"))
-	assertDirExists(t, filepath.Join(configDir, "user", "agents"))
-	assertDirExists(t, filepath.Join(configDir, "user", "teams"))
-}
-
-func TestRun_UpgradeMigration(t *testing.T) {
-	configDir := t.TempDir()
-
-	// Simulate old layout: system/ exists, teams/ at root level.
-	systemDir := filepath.Join(configDir, "system")
-	if err := os.MkdirAll(systemDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	oldTeamsDir := filepath.Join(configDir, "teams")
-
-	// Create two team dirs: one with team.md, one without.
-	teamWithMD := filepath.Join(oldTeamsDir, "dev-team")
-	teamWithoutMD := filepath.Join(oldTeamsDir, "qa-team")
-	if err := os.MkdirAll(teamWithMD, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(teamWithoutMD, 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	// Write a team.md in dev-team.
-	existingTeamMD := filepath.Join(teamWithMD, "team.md")
-	existingContent := []byte("---\nname: Dev Team\n---\n")
-	if err := os.WriteFile(existingTeamMD, existingContent, 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	// Add a file inside qa-team to verify it moves.
-	if err := os.WriteFile(filepath.Join(teamWithoutMD, "notes.txt"), []byte("hello"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := Run(configDir, testFS(), testDefaultConfig()); err != nil {
-		t.Fatalf("Run() error: %v", err)
-	}
-
-	// Old teams/ should be gone.
-	if dirExists(oldTeamsDir) {
-		t.Error("old teams/ directory still exists after migration")
-	}
-
-	// Teams should now be under user/teams/.
-	newTeamsDir := filepath.Join(configDir, "user", "teams")
-	assertDirExists(t, filepath.Join(newTeamsDir, "dev-team"))
-	assertDirExists(t, filepath.Join(newTeamsDir, "qa-team"))
-
-	// dev-team's existing team.md should be preserved.
-	data, err := os.ReadFile(filepath.Join(newTeamsDir, "dev-team", "team.md"))
-	if err != nil {
-		t.Fatalf("reading dev-team/team.md: %v", err)
-	}
-	if string(data) != string(existingContent) {
-		t.Errorf("dev-team/team.md was modified: got %q, want %q", string(data), string(existingContent))
-	}
-
-	// qa-team should have a generated team.md.
-	generatedMD := filepath.Join(newTeamsDir, "qa-team", "team.md")
-	assertFileExists(t, generatedMD)
-	data, err = os.ReadFile(generatedMD)
-	if err != nil {
-		t.Fatalf("reading qa-team/team.md: %v", err)
-	}
-	if len(data) == 0 {
-		t.Error("generated team.md is empty")
-	}
-	content := string(data)
-	if !strings.Contains(content, "QA Team") {
-		t.Errorf("generated team.md doesn't contain humanized name: %s", content)
-	}
-
-	// qa-team's other files should have moved too.
-	assertFileExists(t, filepath.Join(newTeamsDir, "qa-team", "notes.txt"))
-
-	// user/skills/ and user/agents/ should exist.
-	assertDirExists(t, filepath.Join(configDir, "user", "skills"))
-	assertDirExists(t, filepath.Join(configDir, "user", "agents"))
-}
-
-func TestRun_AutoTeamDetection(t *testing.T) {
-	configDir := t.TempDir()
-
-	// Pre-create system/ so first-run doesn't trigger.
-	if err := os.MkdirAll(filepath.Join(configDir, "system"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	// Create mock external agent directories.
-	mockHome := t.TempDir()
-
-	claudeAgents := filepath.Join(mockHome, ".claude", "agents")
-	if err := os.MkdirAll(claudeAgents, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	// Add a file so we can verify the symlink works.
-	if err := os.WriteFile(filepath.Join(claudeAgents, "test-agent.md"), []byte("test"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	opencodeAgents := filepath.Join(mockHome, ".config", "opencode", "agents")
-	if err := os.MkdirAll(opencodeAgents, 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	opencodeHomeAgents := filepath.Join(mockHome, ".opencode", "agents")
-	if err := os.MkdirAll(opencodeHomeAgents, 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	// Override HOME for the test by calling the internal function directly
-	// with pre-constructed auto-team entries.
-	teamsDir := filepath.Join(configDir, "user", "teams")
-	if err := os.MkdirAll(teamsDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	// Test auto-team creation using the internal helper.
-	if err := createAutoTeam(teamsDir, "auto-claude", claudeAgents); err != nil {
-		t.Fatalf("createAutoTeam(auto-claude): %v", err)
-	}
-	if err := createAutoTeam(teamsDir, "auto-opencode", opencodeAgents); err != nil {
-		t.Fatalf("createAutoTeam(auto-opencode): %v", err)
-	}
-	if err := createAutoTeam(teamsDir, "auto-opencode-home", opencodeHomeAgents); err != nil {
-		t.Fatalf("createAutoTeam(auto-opencode-home): %v", err)
-	}
-
-	// Verify auto-claude.
-	autoClaudeDir := filepath.Join(teamsDir, "auto-claude")
-	assertDirExists(t, autoClaudeDir)
-	assertFileExists(t, filepath.Join(autoClaudeDir, ".auto-team"))
-
-	// Verify the .auto-team marker is empty.
-	data, err := os.ReadFile(filepath.Join(autoClaudeDir, ".auto-team"))
-	if err != nil {
-		t.Fatalf("reading .auto-team: %v", err)
-	}
-	if len(data) != 0 {
-		t.Errorf(".auto-team marker is not empty: %d bytes", len(data))
-	}
-
-	// Verify agents/ is a symlink.
-	linkPath := filepath.Join(autoClaudeDir, "agents")
-	linkTarget, err := os.Readlink(linkPath)
-	if err != nil {
-		t.Fatalf("reading symlink: %v", err)
-	}
-	if linkTarget != claudeAgents {
-		t.Errorf("symlink target = %q, want %q", linkTarget, claudeAgents)
-	}
-
-	// Verify the symlink actually resolves to the source files.
-	entries, err := os.ReadDir(linkPath)
-	if err != nil {
-		t.Fatalf("reading symlinked dir: %v", err)
-	}
-	if len(entries) != 1 || entries[0].Name() != "test-agent.md" {
-		t.Errorf("unexpected entries in symlinked dir: %v", entries)
-	}
-
-	// Verify auto-opencode.
-	autoOpencodeDir := filepath.Join(teamsDir, "auto-opencode")
-	assertDirExists(t, autoOpencodeDir)
-	assertFileExists(t, filepath.Join(autoOpencodeDir, ".auto-team"))
-	linkTarget, err = os.Readlink(filepath.Join(autoOpencodeDir, "agents"))
-	if err != nil {
-		t.Fatalf("reading symlink: %v", err)
-	}
-	if linkTarget != opencodeAgents {
-		t.Errorf("symlink target = %q, want %q", linkTarget, opencodeAgents)
-	}
-
-	// Verify auto-opencode-home.
-	autoOpencodeHomeDir := filepath.Join(teamsDir, "auto-opencode-home")
-	assertDirExists(t, autoOpencodeHomeDir)
-	assertFileExists(t, filepath.Join(autoOpencodeHomeDir, ".auto-team"))
-	linkTarget, err = os.Readlink(filepath.Join(autoOpencodeHomeDir, "agents"))
-	if err != nil {
-		t.Fatalf("reading symlink: %v", err)
-	}
-	if linkTarget != opencodeHomeAgents {
-		t.Errorf("symlink target = %q, want %q", linkTarget, opencodeHomeAgents)
-	}
-
-	// Verify auto-opencode and auto-opencode-home coexist as separate teams.
-	assertDirExists(t, autoOpencodeDir)
-	assertDirExists(t, autoOpencodeHomeDir)
-	autoOpencodeLink, err := os.Readlink(filepath.Join(autoOpencodeDir, "agents"))
-	if err != nil {
-		t.Fatalf("reading auto-opencode symlink: %v", err)
-	}
-	autoOpencodeHomeLink, err := os.Readlink(filepath.Join(autoOpencodeHomeDir, "agents"))
-	if err != nil {
-		t.Fatalf("reading auto-opencode-home symlink: %v", err)
-	}
-	if autoOpencodeLink == autoOpencodeHomeLink {
-		t.Errorf("auto-opencode and auto-opencode-home should point to different source dirs, both = %q", autoOpencodeLink)
-	}
-
-	// Verify idempotency: calling again should not fail.
-	if err := createAutoTeam(teamsDir, "auto-claude", claudeAgents); err != nil {
-		t.Fatalf("second createAutoTeam(auto-claude): %v", err)
-	}
-}
-
-func TestAutoTeamDetection_SkipsDismissed(t *testing.T) {
-	teamsDir := t.TempDir()
-
-	// Create a source directory for the auto-team.
-	sourceDir := filepath.Join(t.TempDir(), "agents")
-	if err := os.MkdirAll(sourceDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	// Create a dismiss marker.
-	dismissedDir := filepath.Join(teamsDir, ".dismissed")
-	if err := os.MkdirAll(dismissedDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dismissedDir, "auto-claude"), nil, 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	// Attempt to create the auto-team — should be skipped.
-	if err := createAutoTeam(teamsDir, "auto-claude", sourceDir); err != nil {
-		t.Fatalf("createAutoTeam() error: %v", err)
-	}
-
-	// Verify the auto-team directory was NOT created.
-	teamDir := filepath.Join(teamsDir, "auto-claude")
-	if dirExists(teamDir) {
-		t.Error("auto-team was created despite dismiss marker")
-	}
-}
-
-func TestAutoTeamDetection_DismissMarkerRemovalAllowsReImport(t *testing.T) {
-	teamsDir := t.TempDir()
-
-	// Create a source directory for the auto-team.
-	sourceDir := filepath.Join(t.TempDir(), "agents")
-	if err := os.MkdirAll(sourceDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	// Create a dismiss marker.
-	dismissedDir := filepath.Join(teamsDir, ".dismissed")
-	if err := os.MkdirAll(dismissedDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	markerPath := filepath.Join(dismissedDir, "auto-claude")
-	if err := os.WriteFile(markerPath, nil, 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	// Verify dismissed.
-	if !IsAutoTeamDismissed(teamsDir, "auto-claude") {
-		t.Fatal("expected auto-team to be dismissed")
-	}
-
-	// Remove the dismiss marker.
-	if err := os.Remove(markerPath); err != nil {
-		t.Fatal(err)
-	}
-
-	// Verify no longer dismissed.
-	if IsAutoTeamDismissed(teamsDir, "auto-claude") {
-		t.Fatal("expected auto-team to NOT be dismissed after marker removal")
-	}
-
-	// Now create the auto-team — should succeed.
-	if err := createAutoTeam(teamsDir, "auto-claude", sourceDir); err != nil {
-		t.Fatalf("createAutoTeam() error: %v", err)
-	}
-
-	// Verify the auto-team directory was created.
-	teamDir := filepath.Join(teamsDir, "auto-claude")
-	assertDirExists(t, teamDir)
-	assertFileExists(t, filepath.Join(teamDir, ".auto-team"))
-}
-
-func TestIsAutoTeamDismissed(t *testing.T) {
-	teamsDir := t.TempDir()
-
-	// No .dismissed directory — should return false.
-	if IsAutoTeamDismissed(teamsDir, "auto-claude") {
-		t.Error("expected false when .dismissed dir does not exist")
-	}
-
-	// Create .dismissed directory but no marker — should return false.
-	dismissedDir := filepath.Join(teamsDir, ".dismissed")
-	if err := os.MkdirAll(dismissedDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if IsAutoTeamDismissed(teamsDir, "auto-claude") {
-		t.Error("expected false when marker does not exist")
-	}
-
-	// Create marker — should return true.
-	if err := os.WriteFile(filepath.Join(dismissedDir, "auto-claude"), nil, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if !IsAutoTeamDismissed(teamsDir, "auto-claude") {
-		t.Error("expected true when marker exists")
-	}
-
-	// Different name — should return false.
-	if IsAutoTeamDismissed(teamsDir, "auto-opencode") {
-		t.Error("expected false for different auto-team name")
-	}
+	assertDirExists(t, filepath.Join(configDir, "user", "graphs"))
 }
 
 func TestRun_AlreadySetUp(t *testing.T) {
@@ -443,8 +122,8 @@ func TestRun_AlreadySetUp(t *testing.T) {
 	}
 
 	// Record modification times.
-	systemTeamMD := filepath.Join(configDir, "system", "team.md")
-	info1, err := os.Stat(systemTeamMD)
+	operatorMD := filepath.Join(configDir, "system", "roles", "operator.md")
+	info1, err := os.Stat(operatorMD)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -455,12 +134,12 @@ func TestRun_AlreadySetUp(t *testing.T) {
 	}
 
 	// Verify system file was not modified.
-	info2, err := os.Stat(systemTeamMD)
+	info2, err := os.Stat(operatorMD)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !info1.ModTime().Equal(info2.ModTime()) {
-		t.Error("system/team.md was modified on second run")
+		t.Error("system/roles/operator.md was modified on second run")
 	}
 
 	// Verify all directories still exist.
@@ -468,59 +147,7 @@ func TestRun_AlreadySetUp(t *testing.T) {
 	assertDirExists(t, filepath.Join(configDir, "system", "roles"))
 	assertDirExists(t, filepath.Join(configDir, "system", "skills"))
 	assertDirExists(t, filepath.Join(configDir, "user", "skills"))
-	assertDirExists(t, filepath.Join(configDir, "user", "agents"))
-	assertDirExists(t, filepath.Join(configDir, "user", "teams"))
-}
-
-func TestHumanizeDirName(t *testing.T) {
-	tests := []struct {
-		input string
-		want  string
-	}{
-		{"dev-team", "Dev Team"},
-		{"qa", "QA"},
-		{"qa-team", "QA Team"},
-		{"api-gateway", "API Gateway"},
-		{"my-ci-cd-pipeline", "My CI CD Pipeline"},
-		{"my-cool-team", "My Cool Team"},
-		{"single", "Single"},
-		{"", ""},
-		{"devops", "DevOps"},
-		{"sre-team", "SRE Team"},
-		{"ui-ux", "UI UX"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.input, func(t *testing.T) {
-			got := humanizeDirName(tt.input)
-			if got != tt.want {
-				t.Errorf("humanizeDirName(%q) = %q, want %q", tt.input, got, tt.want)
-			}
-		})
-	}
-}
-
-// createAutoTeam is a test helper that creates an auto-team entry.
-// It mirrors the logic in autoTeamDetection but without depending on os.UserHomeDir.
-func createAutoTeam(teamsDir, name, sourceDir string) error {
-	teamDir := filepath.Join(teamsDir, name)
-	if dirExists(teamDir) {
-		return nil
-	}
-
-	// Skip if the user previously dismissed this auto-team.
-	if IsAutoTeamDismissed(teamsDir, name) {
-		return nil
-	}
-
-	if err := os.MkdirAll(teamDir, 0o755); err != nil {
-		return err
-	}
-
-	if err := os.WriteFile(filepath.Join(teamDir, ".auto-team"), nil, 0o644); err != nil {
-		return err
-	}
-
-	return os.Symlink(sourceDir, filepath.Join(teamDir, "agents"))
+	assertDirExists(t, filepath.Join(configDir, "user", "graphs"))
 }
 
 // --- test helpers ---

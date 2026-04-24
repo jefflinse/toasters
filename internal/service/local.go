@@ -2,12 +2,10 @@
 package service
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -17,10 +15,10 @@ import (
 	"time"
 
 	"github.com/gofrs/uuid/v5"
-	"gopkg.in/yaml.v3"
 
 	"github.com/jefflinse/toasters/internal/config"
 	"github.com/jefflinse/toasters/internal/db"
+	"github.com/jefflinse/toasters/internal/graphexec"
 	"github.com/jefflinse/toasters/internal/hitl"
 	"github.com/jefflinse/toasters/internal/loader"
 	"github.com/jefflinse/toasters/internal/mcp"
@@ -102,6 +100,7 @@ type LocalConfig struct {
 	Registry         *provider.Registry         // provider registry for live operator activation
 	PromptEngine     *prompt.Engine             // optional; for role-based prompt composition
 	GraphExecutor    operator.GraphTaskExecutor // optional; rhizome graph-based task execution
+	GraphCatalog     operator.GraphCatalog      // optional; backs query_graphs on the live-activated operator
 }
 
 // LocalService is the in-process implementation of Service. It delegates to
@@ -483,10 +482,10 @@ func (s *LocalService) BroadcastOperatorEvent(ev operator.Event) {
 		s.broadcast(Event{
 			Type: EventTypeTaskStarted,
 			Payload: TaskStartedPayload{
-				TaskID: payload.TaskID,
-				JobID:  payload.JobID,
-				TeamID: payload.TeamID,
-				Title:  payload.Title,
+				TaskID:  payload.TaskID,
+				JobID:   payload.JobID,
+				GraphID: payload.GraphID,
+				Title:   payload.Title,
 			},
 		})
 
@@ -500,7 +499,7 @@ func (s *LocalService) BroadcastOperatorEvent(ev operator.Event) {
 			Payload: TaskCompletedPayload{
 				TaskID:          payload.TaskID,
 				JobID:           payload.JobID,
-				TeamID:          payload.TeamID,
+				GraphID:         payload.GraphID,
 				Summary:         payload.Summary,
 				Recommendations: payload.Recommendations,
 				HasNextTask:     payload.HasNextTask,
@@ -515,25 +514,10 @@ func (s *LocalService) BroadcastOperatorEvent(ev operator.Event) {
 		s.broadcast(Event{
 			Type: EventTypeTaskFailed,
 			Payload: TaskFailedPayload{
-				TaskID: payload.TaskID,
-				JobID:  payload.JobID,
-				TeamID: payload.TeamID,
-				Error:  payload.Error,
-			},
-		})
-
-	case operator.EventBlockerReported:
-		payload, ok := ev.Payload.(operator.BlockerReportedPayload)
-		if !ok {
-			return
-		}
-		s.broadcast(Event{
-			Type: EventTypeBlockerReported,
-			Payload: BlockerReportedPayload{
-				TaskID:      payload.TaskID,
-				TeamID:      payload.TeamID,
-				WorkerID:    payload.WorkerID,
-				Description: payload.Description,
+				TaskID:  payload.TaskID,
+				JobID:   payload.JobID,
+				GraphID: payload.GraphID,
+				Error:   payload.Error,
 			},
 		})
 
@@ -594,7 +578,8 @@ func (s *LocalService) BroadcastDefinitionsReloaded() {
 
 // BroadcastJobCreated broadcasts a job.created event. Implements
 // operator.SystemEventBroadcaster — called by SystemTools.createJob after the
-// new job is persisted.
+// new job is persisted. Also kicks off coarse-decompose automatically when
+// the job has a description and the graph executor is wired.
 func (s *LocalService) BroadcastJobCreated(jobID, title, description string) {
 	s.broadcast(Event{
 		Type: EventTypeJobCreated,
@@ -604,34 +589,66 @@ func (s *LocalService) BroadcastJobCreated(jobID, title, description string) {
 			Description: description,
 		},
 	})
+	if strings.TrimSpace(description) != "" {
+		s.dispatchCoarseDecompose(jobID, title, description)
+	}
 }
 
 // BroadcastTaskCreated broadcasts a task.created event. Implements
 // operator.SystemEventBroadcaster — called by SystemTools.createTask after the
-// new task is persisted.
-func (s *LocalService) BroadcastTaskCreated(taskID, jobID, title, teamID string) {
+// new task is persisted. When the new task has no graph_id set, the service
+// automatically dispatches fine-decompose to pick one.
+func (s *LocalService) BroadcastTaskCreated(taskID, jobID, title, graphID string) {
 	s.broadcast(Event{
 		Type: EventTypeTaskCreated,
 		Payload: TaskCreatedPayload{
-			TaskID: taskID,
-			JobID:  jobID,
-			Title:  title,
-			TeamID: teamID,
+			TaskID:  taskID,
+			JobID:   jobID,
+			Title:   title,
+			GraphID: graphID,
 		},
 	})
+	if graphID == "" {
+		s.dispatchFineDecomposeForTask(taskID)
+	}
+}
+
+// dispatchFineDecomposeForTask resolves the parent task and its job
+// before handing off to dispatchFineDecompose. Separated out so
+// BroadcastTaskCreated stays terse and only pays DB cost when the task
+// actually needs decomposition.
+func (s *LocalService) dispatchFineDecomposeForTask(taskID string) {
+	if s.cfg.Store == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(s.ctx, 5*time.Second)
+	defer cancel()
+	task, err := s.cfg.Store.GetTask(ctx, taskID)
+	if err != nil {
+		slog.Warn("fine-decompose lookup failed; task missing",
+			"task_id", taskID, "error", err)
+		return
+	}
+	job, err := s.cfg.Store.GetJob(ctx, task.JobID)
+	if err != nil {
+		slog.Warn("fine-decompose lookup failed; job missing",
+			"task_id", taskID, "error", err)
+		return
+	}
+	s.dispatchFineDecompose(task, job)
 }
 
 // BroadcastTaskAssigned broadcasts a task.assigned event. Implements
 // operator.SystemEventBroadcaster — called by SystemTools.assignTask after a
-// task has been pre-assigned or activated for a team.
-func (s *LocalService) BroadcastTaskAssigned(taskID, jobID, teamID, title string) {
+// task has been pre-assigned or dispatched to a graph.
+func (s *LocalService) BroadcastTaskAssigned(taskID, jobID, graphID, title string) {
 	s.broadcast(Event{
 		Type: EventTypeTaskAssigned,
 		Payload: TaskAssignedPayload{
-			TaskID: taskID,
-			JobID:  jobID,
-			TeamID: teamID,
-			Title:  title,
+			TaskID:  taskID,
+			JobID:   jobID,
+			GraphID: graphID,
+			Title:   title,
 		},
 	})
 }
@@ -700,6 +717,59 @@ func (s *LocalService) BroadcastSessionText(sessionID, text string) {
 	})
 }
 
+// BroadcastSessionToolCall emits a session.tool_call event for a graph
+// node, reusing the same event type the runtime emits for worker
+// sessions so the TUI renders graph activity identically.
+func (s *LocalService) BroadcastSessionToolCall(sessionID, callID, name string, args json.RawMessage) {
+	if name == "" {
+		return
+	}
+	s.broadcast(Event{
+		Type:      EventTypeSessionToolCall,
+		SessionID: sessionID,
+		Payload: SessionToolCallPayload{
+			ToolCall: ToolCall{
+				ID:        callID,
+				Name:      name,
+				Arguments: args,
+			},
+		},
+	})
+}
+
+// BroadcastSessionReasoning emits a session.reasoning event for a
+// graph node. Routes through its own event type so the TUI can style
+// reasoning differently from plain output text.
+func (s *LocalService) BroadcastSessionReasoning(sessionID, text string) {
+	if text == "" {
+		return
+	}
+	s.broadcast(Event{
+		Type:      EventTypeSessionReasoning,
+		SessionID: sessionID,
+		Payload:   SessionReasoningPayload{Text: text},
+	})
+}
+
+// BroadcastSessionToolResult emits a session.tool_result event for a
+// graph node. CallID may be empty — mycelium's tool-result events do
+// not carry the originating call id, and the TUI tolerates an empty
+// CallID (it only uses the string for optional pairing).
+func (s *LocalService) BroadcastSessionToolResult(sessionID, callID, name, result, errMsg string) {
+	s.broadcast(Event{
+		Type:      EventTypeSessionToolResult,
+		SessionID: sessionID,
+		Payload: SessionToolResultPayload{
+			Result: ToolCallResult{
+				CallID: callID,
+				Name:   name,
+				Result: result,
+				Error:  errMsg,
+			},
+		},
+	})
+}
+
 // BroadcastPrompt emits an OperatorPromptPayload with Source populated so the
 // TUI can surface a HITL question that originated from a graph node (via
 // rhizome.Interrupt). The operator's own ask_user path emits the same event
@@ -719,9 +789,13 @@ func (s *LocalService) BroadcastPrompt(requestID, question string, options []str
 
 // BroadcastTaskCompleted signals task completion to the operator's event loop
 // so it can advance to the next ready task. Called by graphexec.Executor
-// after a graph finishes successfully — mirrors what team_tools.completeTask
-// does on the team-lead path.
-func (s *LocalService) BroadcastTaskCompleted(jobID, taskID, teamID, summary string, hasNextTask bool) {
+// after a graph finishes successfully. When the completed graph is a
+// decomposition graph, the service consumes the output itself and creates
+// follow-up tasks in the database instead of forwarding to the operator.
+func (s *LocalService) BroadcastTaskCompleted(jobID, taskID, graphID, summary string, output json.RawMessage, hasNextTask bool) {
+	if s.handleDecompositionCompleted(jobID, taskID, graphID, output) {
+		return
+	}
 	op := s.currentOperator()
 	if op == nil {
 		slog.Warn("graph task completed but operator unavailable; next task will not auto-advance",
@@ -735,7 +809,7 @@ func (s *LocalService) BroadcastTaskCompleted(jobID, taskID, teamID, summary str
 		Payload: operator.TaskCompletedPayload{
 			TaskID:      taskID,
 			JobID:       jobID,
-			TeamID:      teamID,
+			GraphID:     graphID,
 			Summary:     summary,
 			HasNextTask: hasNextTask,
 		},
@@ -746,8 +820,8 @@ func (s *LocalService) BroadcastTaskCompleted(jobID, taskID, teamID, summary str
 }
 
 // BroadcastTaskFailed signals task failure to the operator's event loop so it
-// can consult the blocker-handler. Mirrors team_lead's force-fail pathway.
-func (s *LocalService) BroadcastTaskFailed(jobID, taskID, teamID, errMsg string) {
+// can consult the blocker-handler.
+func (s *LocalService) BroadcastTaskFailed(jobID, taskID, graphID, errMsg string) {
 	op := s.currentOperator()
 	if op == nil {
 		slog.Warn("graph task failed but operator unavailable",
@@ -759,10 +833,10 @@ func (s *LocalService) BroadcastTaskFailed(jobID, taskID, teamID, errMsg string)
 	if err := op.Send(ctx, operator.Event{
 		Type: operator.EventTaskFailed,
 		Payload: operator.TaskFailedPayload{
-			TaskID: taskID,
-			JobID:  jobID,
-			TeamID: teamID,
-			Error:  errMsg,
+			TaskID:  taskID,
+			JobID:   jobID,
+			GraphID: graphID,
+			Error:   errMsg,
 		},
 	}); err != nil {
 		slog.Warn("failed to forward task_failed to operator",
@@ -776,6 +850,21 @@ func (s *LocalService) currentOperator() *operator.Operator {
 	s.opMu.Lock()
 	defer s.opMu.Unlock()
 	return s.cfg.Operator
+}
+
+// handleDecompositionCompleted consumes task-completion events for the
+// two decomposition graphs. Returns true when it fully handled the event
+// (caller should not forward to the operator). Returns false when the
+// completed graph is not a decomposition graph — the caller continues
+// with its normal forwarding path.
+func (s *LocalService) handleDecompositionCompleted(jobID, taskID, graphID string, output json.RawMessage) bool {
+	if !isDecompositionGraph(graphID) {
+		return false
+	}
+	slog.Info("decomposition graph completed",
+		"graph_id", graphID, "job_id", jobID, "task_id", taskID, "output_bytes", len(output))
+	s.consumeDecompositionOutput(graphID, taskID, output)
+	return true
 }
 
 // BroadcastSessionStarted bridges a runtime session into the unified service
@@ -802,7 +891,6 @@ func (s *LocalService) BroadcastSessionStarted(sess *runtime.Session) {
 		Payload: SessionStartedPayload{
 			SessionID:      sessionID,
 			WorkerName:     snap.WorkerID,
-			TeamName:       snap.TeamName,
 			Task:           sess.Task(),
 			JobID:          snap.JobID,
 			TaskID:         snap.TaskID,
@@ -1058,39 +1146,6 @@ func (s *LocalService) History(ctx context.Context) ([]ChatEntry, error) {
 	return out, nil
 }
 
-// RespondToBlocker submits the user's answers to a blocker reported by an agent.
-func (s *LocalService) RespondToBlocker(ctx context.Context, jobID, taskID string, answers []string) error {
-	// Validate number of answers before checking operator configuration.
-	if len(answers) > maxBlockerAnswers {
-		return fmt.Errorf("too many answers: %d exceeds maximum %d", len(answers), maxBlockerAnswers)
-	}
-
-	// Validate each answer size before checking operator configuration.
-	for i, answer := range answers {
-		if len(answer) > maxResponseLen {
-			return fmt.Errorf("answer %d too large: %d bytes exceeds maximum %d", i, len(answer), maxResponseLen)
-		}
-	}
-
-	if s.cfg.Operator == nil {
-		return fmt.Errorf("operator not configured")
-	}
-
-	// Format the answers into a structured message for the operator.
-	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("Blocker response for job %s, task %s:\n", jobID, taskID))
-	for i, answer := range answers {
-		sb.WriteString(fmt.Sprintf("Answer %d: %s\n", i+1, answer))
-	}
-
-	return s.cfg.Operator.Send(ctx, operator.Event{
-		Type: operator.EventUserResponse,
-		Payload: operator.UserResponsePayload{
-			Text: sb.String(),
-		},
-	})
-}
-
 // ---------------------------------------------------------------------------
 // DefinitionService — Skills
 // ---------------------------------------------------------------------------
@@ -1340,7 +1395,7 @@ Detailed instructions for the agent using this skill. This is the system prompt 
 // DefinitionService — Workers
 // ---------------------------------------------------------------------------
 
-// ListWorkers returns all workers ordered: shared → team-local → system.
+// ListWorkers returns all workers ordered: user → system.
 func (s *LocalService) ListWorkers(ctx context.Context) ([]Worker, error) {
 	if s.cfg.Store == nil {
 		return nil, fmt.Errorf("store not configured")
@@ -1350,22 +1405,16 @@ func (s *LocalService) ListWorkers(ctx context.Context) ([]Worker, error) {
 		return nil, fmt.Errorf("listing workers: %w", err)
 	}
 
-	var shared, teamLocal, system []*db.Worker
+	var user, system []*db.Worker
 	for _, w := range dbWorkers {
-		switch {
-		case w.Source == "system":
+		if w.Source == "system" {
 			system = append(system, w)
-		case w.TeamID != "":
-			teamLocal = append(teamLocal, w)
-		default:
-			shared = append(shared, w)
+		} else {
+			user = append(user, w)
 		}
 	}
 
-	// Sort team-local by "team/worker" composite key.
-	sortWorkersByTeamKey(teamLocal)
-
-	ordered := append(append(shared, teamLocal...), system...)
+	ordered := append(user, system...)
 	workers := make([]Worker, 0, len(ordered))
 	for _, w := range ordered {
 		workers = append(workers, dbWorkerToService(w))
@@ -1388,576 +1437,84 @@ func (s *LocalService) GetWorker(ctx context.Context, id string) (Worker, error)
 	return dbWorkerToService(w), nil
 }
 
-// ---------------------------------------------------------------------------
-// DefinitionService — Teams
-// ---------------------------------------------------------------------------
-
-// ListTeams returns all non-system teams as TeamView values.
-func (s *LocalService) ListTeams(ctx context.Context) ([]TeamView, error) {
-	if s.cfg.Store == nil {
-		return nil, fmt.Errorf("store not configured")
+// ListGraphs returns all loaded graph definitions, ordered by id.
+func (s *LocalService) ListGraphs(_ context.Context) ([]GraphDefinition, error) {
+	if s.cfg.GraphCatalog == nil {
+		return nil, nil
 	}
-	return s.buildTeamViews(ctx)
+	defs := s.cfg.GraphCatalog.Graphs()
+	out := make([]GraphDefinition, 0, len(defs))
+	for _, d := range defs {
+		out = append(out, graphexecDefinitionToService(d))
+	}
+	return out, nil
 }
 
-// GetTeam returns a single team as a TeamView by team ID.
-func (s *LocalService) GetTeam(ctx context.Context, id string) (TeamView, error) {
-	if s.cfg.Store == nil {
-		return TeamView{}, fmt.Errorf("store not configured")
+// GetGraph returns a single graph definition by id.
+func (s *LocalService) GetGraph(_ context.Context, id string) (GraphDefinition, error) {
+	if s.cfg.GraphCatalog == nil {
+		return GraphDefinition{}, fmt.Errorf("getting graph %s: %w", id, ErrNotFound)
 	}
-	views, err := s.buildTeamViews(ctx)
-	if err != nil {
-		return TeamView{}, err
-	}
-	for _, tv := range views {
-		if tv.Team.ID == id {
-			return tv, nil
+	for _, d := range s.cfg.GraphCatalog.Graphs() {
+		if d.ID == id {
+			return graphexecDefinitionToService(d), nil
 		}
 	}
-	return TeamView{}, fmt.Errorf("team %s: %w", id, ErrNotFound)
+	return GraphDefinition{}, fmt.Errorf("getting graph %s: %w", id, ErrNotFound)
 }
 
-// CreateTeam creates a new team directory and triggers a reload.
-func (s *LocalService) CreateTeam(ctx context.Context, name string) (TeamView, error) {
-	name = sanitizeName(name)
-	slug := loader.Slugify(name)
-	if slug == "" {
-		return TeamView{}, fmt.Errorf("invalid team name %q: produces empty slug", name)
+// graphexecDefinitionToService converts a graphexec.Definition (the YAML-loaded
+// internal shape) to a service.GraphDefinition (the TUI-facing DTO). The edge
+// conversion expands routers into one conditional edge per branch so renderers
+// can draw each branch distinctly.
+func graphexecDefinitionToService(d *graphexec.Definition) GraphDefinition {
+	out := GraphDefinition{
+		ID:          d.ID,
+		Name:        d.Name,
+		Description: d.Description,
+		Tags:        append([]string(nil), d.Tags...),
+		Entry:       d.Entry,
+		Exit:        d.Exit,
 	}
-	if err := os.MkdirAll(s.cfg.TeamsDir, 0o755); err != nil {
-		return TeamView{}, sanitizeError(fmt.Errorf("creating teams dir: %w", err))
+	for _, n := range d.Nodes {
+		out.Nodes = append(out.Nodes, n.ID)
 	}
-	realTeamsDir, err := filepath.EvalSymlinks(s.cfg.TeamsDir)
-	if err != nil {
-		return TeamView{}, sanitizeError(fmt.Errorf("resolving teams dir: %w", err))
-	}
-	teamDir := filepath.Join(realTeamsDir, slug)
-	if !strings.HasPrefix(teamDir+string(filepath.Separator), realTeamsDir+string(filepath.Separator)) {
-		return TeamView{}, fmt.Errorf("team name %q escapes teams directory", name)
-	}
-	if err := os.MkdirAll(teamDir, 0o755); err != nil {
-		return TeamView{}, sanitizeError(fmt.Errorf("creating team directory: %w", err))
-	}
-
-	teamMDContent := fmt.Sprintf("---\nname: %s\ndescription: \nlead: \n---\n", name)
-	if err := os.WriteFile(filepath.Join(teamDir, "team.md"), []byte(teamMDContent), 0o644); err != nil {
-		return TeamView{}, sanitizeError(fmt.Errorf("writing team.md: %w", err))
-	}
-
-	if err := os.MkdirAll(filepath.Join(teamDir, "agents"), 0o755); err != nil {
-		return TeamView{}, sanitizeError(fmt.Errorf("creating agents directory: %w", err))
-	}
-
-	if s.cfg.Loader != nil {
-		if err := s.cfg.Loader.Load(ctx); err != nil {
-			slog.Warn("failed to reload definitions after team creation", "error", err)
-		}
-	}
-
-	views, err := s.buildTeamViews(ctx)
-	if err != nil {
-		return TeamView{}, sanitizeError(err)
-	}
-	for _, tv := range views {
-		if tv.Team.Name == name {
-			return tv, nil
-		}
-	}
-	return TeamView{}, fmt.Errorf("team %q not found after creation", name)
-}
-
-// DeleteTeam deletes the team directory. Writes a dismiss marker for auto-teams.
-func (s *LocalService) DeleteTeam(ctx context.Context, id string) error {
-	tv, err := s.GetTeam(ctx, id)
-	if err != nil {
-		return err
-	}
-
-	if isServiceReadOnlyTeam(tv) {
-		return fmt.Errorf("cannot delete read-only team %q", tv.Team.Name)
-	}
-	if isServiceSystemTeam(tv, s.cfg.ConfigDir) {
-		return fmt.Errorf("cannot delete system team %q", tv.Team.Name)
-	}
-
-	// Write dismiss marker for auto-teams so bootstrap doesn't re-create them.
-	if isServiceAutoTeam(tv) {
-		dismissedDir := filepath.Join(s.cfg.TeamsDir, ".dismissed")
-		if err := os.MkdirAll(dismissedDir, 0o755); err != nil {
-			slog.Warn("failed to create dismiss marker directory", "error", err)
-		} else if err := os.WriteFile(filepath.Join(dismissedDir, filepath.Base(tv.Dir())), nil, 0o644); err != nil {
-			slog.Warn("failed to write dismiss marker", "team", tv.Team.Name, "error", err)
-		}
-	}
-
-	// Validate that team dir is under the expected teams directory before deletion.
-	realTeamDir, err1 := filepath.EvalSymlinks(tv.Dir())
-	realTeamsDir, err2 := filepath.EvalSymlinks(s.cfg.TeamsDir)
-	if err1 == nil && err2 == nil && strings.HasPrefix(realTeamDir, realTeamsDir+string(filepath.Separator)) {
-		if err := os.RemoveAll(realTeamDir); err != nil {
-			return sanitizeError(fmt.Errorf("removing team directory: %w", err))
-		}
-	} else {
-		slog.Error("refusing to delete team outside teams directory", "dir", tv.Dir(), "teamsDir", s.cfg.TeamsDir)
-		return fmt.Errorf("team directory is outside the teams directory")
-	}
-
-	if s.cfg.Loader != nil {
-		if err := s.cfg.Loader.Load(ctx); err != nil {
-			slog.Warn("failed to reload definitions after team deletion", "error", err)
-		}
-	}
-	return nil
-}
-
-// SetCoordinator updates the team so that the named worker is the coordinator.
-func (s *LocalService) SetCoordinator(ctx context.Context, teamID string, workerName string) error {
-	tv, err := s.GetTeam(ctx, teamID)
-	if err != nil {
-		return err
-	}
-	if isServiceReadOnlyTeam(tv) {
-		return fmt.Errorf("cannot set coordinator on read-only team %q", tv.Team.Name)
-	}
-
-	if err := setCoordinator(tv.Dir(), workerName); err != nil {
-		return sanitizeError(err)
-	}
-
-	if s.cfg.Loader != nil {
-		if err := s.cfg.Loader.Load(ctx); err != nil {
-			slog.Warn("failed to reload definitions after setting coordinator", "error", err)
-		}
-	}
-	return nil
-}
-
-// PromoteTeam promotes an auto-detected team to a fully managed team.
-// Returns an operationID immediately; pushes operation.completed or operation.failed when done.
-func (s *LocalService) PromoteTeam(ctx context.Context, teamID string) (string, error) {
-	tv, err := s.GetTeam(ctx, teamID)
-	if err != nil {
-		return "", err
-	}
-	if !isServiceAutoTeam(tv) {
-		return "", fmt.Errorf("team %q is not an auto-team", tv.Team.Name)
-	}
-	if isServiceSystemTeam(tv, s.cfg.ConfigDir) {
-		return "", fmt.Errorf("cannot promote system team %q", tv.Team.Name)
-	}
-
-	uuidVal, err := uuid.NewV4()
-	if err != nil {
-		return "", fmt.Errorf("generating operation ID: %w", err)
-	}
-	operationID := uuidVal.String()
-
-	if !s.tryAcquireAsync() {
-		return "", fmt.Errorf("too many concurrent operations (max %d)", maxConcurrentOps)
-	}
-
-	s.safeGo(operationID, "promote_team", func() {
-		defer s.releaseAsync()
-
-		var promoteErr error
-		if isServiceReadOnlyTeam(tv) {
-			promoteErr = s.promoteReadOnlyAutoTeam(tv)
-		} else {
-			promoteErr = promoteMarkerAutoTeam(tv)
-		}
-
-		if s.ctx.Err() != nil {
-			return // service shutting down
-		}
-
-		if promoteErr != nil {
-			s.broadcast(Event{
-				Type:        EventTypeOperationFailed,
-				OperationID: operationID,
-				Payload: OperationFailedPayload{
-					Kind:  "promote_team",
-					Error: sanitizeErrorString(promoteErr),
-				},
+	for _, e := range d.Edges {
+		if e.Router == nil {
+			out.Edges = append(out.Edges, GraphEdge{
+				From: e.From,
+				To:   mapEndSentinel(e.To),
+				Kind: GraphEdgeStatic,
 			})
-			return
-		}
-
-		if s.cfg.Loader != nil {
-			if err := s.cfg.Loader.Load(s.ctx); err != nil {
-				slog.Warn("failed to reload definitions after team promotion", "error", err)
-			}
-		}
-
-		if s.ctx.Err() != nil {
-			return // service shutting down
-		}
-		s.broadcast(Event{
-			Type:        EventTypeOperationCompleted,
-			OperationID: operationID,
-			Payload: OperationCompletedPayload{
-				Kind: "promote_team",
-				Result: OperationResult{
-					OperationID: operationID,
-					Content:     tv.Team.Name,
-				},
-			},
-		})
-	})
-
-	return operationID, nil
-}
-
-// GenerateTeam asks the LLM to generate a team definition. Returns an
-// operationID immediately; pushes operation.completed or operation.failed when done.
-func (s *LocalService) GenerateTeam(ctx context.Context, prompt string) (string, error) {
-	if s.cfg.Provider == nil {
-		return "", fmt.Errorf("LLM provider not configured")
-	}
-	if len(prompt) > maxPromptLen {
-		return "", fmt.Errorf("prompt too large: %d bytes exceeds maximum %d", len(prompt), maxPromptLen)
-	}
-	if s.cfg.Store == nil {
-		return "", fmt.Errorf("store not configured")
-	}
-
-	// Capture available workers for the goroutine.
-	listCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-	dbWorkers, err := s.cfg.Store.ListWorkers(listCtx)
-	cancel()
-	if err != nil {
-		return "", fmt.Errorf("listing workers for team generation: %w", err)
-	}
-
-	uuidVal, err := uuid.NewV4()
-	if err != nil {
-		return "", fmt.Errorf("generating operation ID: %w", err)
-	}
-	operationID := uuidVal.String()
-
-	workersCopy := make([]*db.Worker, len(dbWorkers))
-	copy(workersCopy, dbWorkers)
-
-	if !s.tryAcquireAsync() {
-		return "", fmt.Errorf("too many concurrent operations (max %d)", maxConcurrentOps)
-	}
-
-	s.safeGo(operationID, "generate_team", func() {
-		defer s.releaseAsync()
-
-		genCtx, genCancel := context.WithTimeout(s.ctx, 30*time.Second)
-		defer genCancel()
-		teamMD, agentNames, genErr := s.generateTeamContent(genCtx, prompt, workersCopy)
-		if s.ctx.Err() != nil {
-			return // service shutting down
-		}
-		if genErr != nil {
-			s.broadcast(Event{
-				Type:        EventTypeOperationFailed,
-				OperationID: operationID,
-				Payload: OperationFailedPayload{
-					Kind:  "generate_team",
-					Error: sanitizeErrorString(genErr),
-				},
-			})
-			return
-		}
-
-		writeErr := s.writeGeneratedTeamFiles(teamMD, agentNames, workersCopy)
-		if s.ctx.Err() != nil {
-			return // service shutting down
-		}
-		if writeErr != nil {
-			s.broadcast(Event{
-				Type:        EventTypeOperationFailed,
-				OperationID: operationID,
-				Payload: OperationFailedPayload{
-					Kind:  "generate_team",
-					Error: sanitizeErrorString(writeErr),
-				},
-			})
-			return
-		}
-
-		if s.cfg.Loader != nil {
-			if err := s.cfg.Loader.Load(s.ctx); err != nil {
-				slog.Warn("failed to reload definitions after team generation", "error", err)
-			}
-		}
-
-		if s.ctx.Err() != nil {
-			return // service shutting down
-		}
-		s.broadcast(Event{
-			Type:        EventTypeOperationCompleted,
-			OperationID: operationID,
-			Payload: OperationCompletedPayload{
-				Kind: "generate_team",
-				Result: OperationResult{
-					OperationID: operationID,
-					Content:     teamMD,
-					AgentNames:  agentNames,
-				},
-			},
-		})
-	})
-
-	return operationID, nil
-}
-
-// generateTeamContent calls the LLM to generate a team definition.
-func (s *LocalService) generateTeamContent(ctx context.Context, prompt string, workers []*db.Worker) (teamMD string, agentNames []string, err error) {
-	var agentList strings.Builder
-	for _, a := range workers {
-		desc := a.Description
-		if desc == "" {
-			desc = "(no description)"
-		}
-		fmt.Fprintf(&agentList, "- %s: %s\n", a.Name, desc)
-	}
-
-	systemPrompt := fmt.Sprintf(`You are generating a Toasters team definition. Output ONLY a JSON object with no explanation, preamble, or code fences.
-
-A team.md file has this format:
----
-name: team-name
-description: What this team does
-coordinator: lead-agent-name
----
-
-# Team Name
-
-Team culture and working norms. How agents on this team should collaborate.
-
-Available agents that can be assigned to this team:
-%s
-Output ONLY a JSON object in this exact format:
-{"team_md": "<the full team.md content>", "agent_names": ["agent1", "agent2"]}
-
-The agent_names must be names from the available agents list above. Choose 2-5 agents that best fit the team's purpose.`, agentList.String())
-
-	userMsg := fmt.Sprintf("The user wants a team for: %s", prompt)
-
-	msgs := []provider.Message{
-		{Role: "system", Content: systemPrompt},
-		{Role: "user", Content: userMsg},
-	}
-
-	raw, err := provider.ChatCompletion(ctx, s.cfg.Provider, msgs)
-	if err != nil {
-		return "", nil, fmt.Errorf("LLM call failed: %w", err)
-	}
-
-	raw = stripCodeFences(raw)
-
-	var result struct {
-		TeamMD     string   `json:"team_md"`
-		AgentNames []string `json:"agent_names"`
-	}
-	if err := json.Unmarshal([]byte(raw), &result); err != nil {
-		return "", nil, fmt.Errorf("parsing LLM JSON response: %w", err)
-	}
-
-	if result.TeamMD == "" {
-		return "", nil, fmt.Errorf("LLM returned empty team_md")
-	}
-
-	if _, err := mdfmt.ParseBytes([]byte(result.TeamMD), mdfmt.DefTeam); err != nil {
-		return "", nil, fmt.Errorf("generated team_md is not a valid team definition: %w", err)
-	}
-
-	return result.TeamMD, result.AgentNames, nil
-}
-
-// writeGeneratedTeamFiles writes the team directory, team.md, and copies worker files.
-func (s *LocalService) writeGeneratedTeamFiles(teamMD string, agentNames []string, allWorkers []*db.Worker) error {
-	parsed, err := mdfmt.ParseBytes([]byte(teamMD), mdfmt.DefTeam)
-	if err != nil {
-		return fmt.Errorf("parsing generated team.md: %w", err)
-	}
-	teamDef, ok := parsed.(*mdfmt.TeamDef)
-	if !ok || teamDef.Name == "" {
-		return fmt.Errorf("generated team.md missing team name")
-	}
-
-	slug := loader.Slugify(teamDef.Name)
-	teamDir := filepath.Join(s.cfg.TeamsDir, slug)
-	agentsSubDir := filepath.Join(teamDir, "agents")
-
-	// Path traversal check: ensure the team directory stays within TeamsDir.
-	realTeamsDir, err := filepath.EvalSymlinks(s.cfg.TeamsDir)
-	if err != nil {
-		return fmt.Errorf("resolving teams dir: %w", err)
-	}
-	// teamDir doesn't exist yet, so EvalSymlinks on the parent.
-	realTeamDirParent, err := filepath.EvalSymlinks(filepath.Dir(teamDir))
-	if err != nil {
-		return fmt.Errorf("resolving team dir parent: %w", err)
-	}
-	candidateDir := filepath.Join(realTeamDirParent, filepath.Base(teamDir))
-	if !strings.HasPrefix(candidateDir+string(filepath.Separator), realTeamsDir+string(filepath.Separator)) {
-		return fmt.Errorf("team name escapes teams directory")
-	}
-
-	if _, err := os.Stat(teamDir); err == nil {
-		return fmt.Errorf("team directory already exists: %s", slug)
-	}
-
-	if err := os.MkdirAll(agentsSubDir, 0o755); err != nil {
-		return fmt.Errorf("creating team directory: %w", err)
-	}
-
-	if err := os.WriteFile(filepath.Join(teamDir, "team.md"), []byte(teamMD), 0o644); err != nil {
-		_ = os.RemoveAll(teamDir)
-		return fmt.Errorf("writing team.md: %w", err)
-	}
-
-	// Build name→worker map for fast lookup.
-	workerByName := make(map[string]*db.Worker, len(allWorkers))
-	for _, w := range allWorkers {
-		workerByName[w.Name] = w
-	}
-
-	for _, name := range agentNames {
-		w, found := workerByName[name]
-		if !found {
-			slog.Warn("generated team references unknown worker, skipping", "worker", name)
 			continue
 		}
-		if w.SourcePath == "" {
-			slog.Warn("generated team worker has no source path, skipping", "worker", name)
-			continue
+		for _, b := range e.Router.Branches {
+			out.Edges = append(out.Edges, GraphEdge{
+				From:  e.From,
+				To:    mapEndSentinel(b.To),
+				Kind:  GraphEdgeConditional,
+				Label: fmt.Sprintf("%v", b.When),
+			})
 		}
-		workerSlug := loader.Slugify(w.Name)
-		if workerSlug == "" {
-			workerSlug = loader.Slugify(w.ID)
-		}
-		destPath := filepath.Join(agentsSubDir, workerSlug+".md")
-		if err := copyFile(w.SourcePath, destPath); err != nil {
-			slog.Warn("failed to copy worker file for generated team", "worker", name, "error", err)
+		if e.Router.Default != "" {
+			out.Edges = append(out.Edges, GraphEdge{
+				From:  e.From,
+				To:    mapEndSentinel(e.Router.Default),
+				Kind:  GraphEdgeConditional,
+				Label: "default",
+			})
 		}
 	}
-
-	return nil
+	return out
 }
 
-// DetectCoordinator asks the LLM to pick the best coordinator for the team.
-// Returns an operationID immediately; pushes operation.completed or operation.failed when done.
-func (s *LocalService) DetectCoordinator(ctx context.Context, teamID string) (string, error) {
-	if s.cfg.Provider == nil {
-		return "", fmt.Errorf("LLM provider not configured")
+// mapEndSentinel maps the YAML "end" sentinel to the empty string so renderers
+// treat it as a terminal edge without depending on graphexec's constant.
+func mapEndSentinel(to string) string {
+	if to == graphexec.EndNode {
+		return ""
 	}
-
-	tv, err := s.GetTeam(ctx, teamID)
-	if err != nil {
-		return "", err
-	}
-	if isServiceReadOnlyTeam(tv) {
-		return "", fmt.Errorf("cannot detect coordinator for read-only team %q", tv.Team.Name)
-	}
-
-	uuidVal, err := uuid.NewV4()
-	if err != nil {
-		return "", fmt.Errorf("generating operation ID: %w", err)
-	}
-	operationID := uuidVal.String()
-
-	// Capture workers for the goroutine.
-	workers := make([]Worker, len(tv.Workers))
-	copy(workers, tv.Workers)
-	teamDir := tv.Dir()
-
-	if !s.tryAcquireAsync() {
-		return "", fmt.Errorf("too many concurrent operations (max %d)", maxConcurrentOps)
-	}
-
-	s.safeGo(operationID, "detect_coordinator", func() {
-		defer s.releaseAsync()
-
-		if len(workers) == 0 {
-			if s.ctx.Err() != nil {
-				return // service shutting down
-			}
-			s.broadcast(Event{
-				Type:        EventTypeOperationCompleted,
-				OperationID: operationID,
-				Payload: OperationCompletedPayload{
-					Kind: "detect_coordinator",
-					Result: OperationResult{
-						OperationID: operationID,
-						Content:     "",
-					},
-				},
-			})
-			return
-		}
-
-		var sb strings.Builder
-		sb.WriteString("Given these workers, which one is best suited to be the team coordinator? Respond with just the worker name, nothing else.\n\nWorkers:\n")
-		for _, a := range workers {
-			desc := a.Description
-			if desc == "" {
-				desc = "(no description)"
-			}
-			fmt.Fprintf(&sb, "- %s: %s\n", a.Name, desc)
-		}
-
-		msgs := []provider.Message{{Role: "user", Content: sb.String()}}
-		llmCtx, cancel := context.WithTimeout(s.ctx, 10*time.Second)
-		result, err := provider.ChatCompletion(llmCtx, s.cfg.Provider, msgs)
-		cancel()
-		if s.ctx.Err() != nil {
-			return // service shutting down
-		}
-		if err != nil {
-			s.broadcast(Event{
-				Type:        EventTypeOperationFailed,
-				OperationID: operationID,
-				Payload: OperationFailedPayload{
-					Kind:  "detect_coordinator",
-					Error: sanitizeErrorString(err),
-				},
-			})
-			return
-		}
-
-		// Match result to a worker name (case-insensitive, trimmed).
-		result = strings.TrimSpace(result)
-		detectedName := ""
-		for _, a := range workers {
-			if strings.EqualFold(result, a.Name) {
-				detectedName = a.Name
-				break
-			}
-		}
-
-		// If a match was found, set the coordinator.
-		if detectedName != "" {
-			if err := setCoordinator(teamDir, detectedName); err != nil {
-				slog.Warn("failed to set detected coordinator", "team", teamDir, "agent", detectedName, "error", err)
-			} else if s.cfg.Loader != nil {
-				if err := s.cfg.Loader.Load(s.ctx); err != nil {
-					slog.Warn("failed to reload definitions after coordinator detection", "error", err)
-				}
-			}
-		}
-
-		if s.ctx.Err() != nil {
-			return // service shutting down
-		}
-		s.broadcast(Event{
-			Type:        EventTypeOperationCompleted,
-			OperationID: operationID,
-			Payload: OperationCompletedPayload{
-				Kind: "detect_coordinator",
-				Result: OperationResult{
-					OperationID: operationID,
-					Content:     detectedName,
-				},
-			},
-		})
-	})
-
-	return operationID, nil
+	return to
 }
 
 // ---------------------------------------------------------------------------
@@ -2062,7 +1619,7 @@ func (s *localJobService) Cancel(ctx context.Context, id string) error {
 	}
 
 	switch dbJob.Status {
-	case db.JobStatusActive, db.JobStatusPending, db.JobStatusSettingUp, db.JobStatusDecomposing:
+	case db.JobStatusActive, db.JobStatusPending, db.JobStatusSettingUp:
 		// cancellable
 	default:
 		return fmt.Errorf("job %s cannot be cancelled (status: %s)", id, dbJob.Status)
@@ -2109,7 +1666,6 @@ func (s *localSessionService) Get(_ context.Context, id string) (SessionDetail, 
 		Output:         sess.FinalText(),
 		Activities:     nil, // deferred to Step 1.3
 		WorkerName:     snap.WorkerID,
-		TeamName:       snap.TeamName,
 		Task:           sess.Task(),
 	}, nil
 }
@@ -2367,7 +1923,11 @@ func (s *LocalService) startOperator(p provider.Provider, providerID, model stri
 	textFlush := func(text string) {
 		s.BroadcastOperatorText(text, "")
 	}
+	reasoningFlush := func(text string) {
+		s.BroadcastOperatorText("", text)
+	}
 	batcher := newTextBatcher(16*time.Millisecond, textFlush)
+	reasoningBatcher := newTextBatcher(16*time.Millisecond, reasoningFlush)
 
 	op, err := operator.New(operator.Config{
 		Runtime:                s.cfg.Runtime,
@@ -2379,6 +1939,7 @@ func (s *LocalService) startOperator(p provider.Provider, providerID, model stri
 		SessionFile:            filepath.Join(s.cfg.ConfigDir, "sessions", "operator.json"),
 		SystemEventBroadcaster: s,
 		GraphExecutor:          s.cfg.GraphExecutor,
+		GraphCatalog:           s.cfg.GraphCatalog,
 		Broker:                 s.broker,
 		PromptEngine:           s.cfg.PromptEngine,
 		DefaultProvider:        s.cfg.DefaultProvider,
@@ -2386,10 +1947,14 @@ func (s *LocalService) startOperator(p provider.Provider, providerID, model stri
 		OnText: func(text string) {
 			batcher.Add(text)
 		},
+		OnReasoning: func(text string) {
+			reasoningBatcher.Add(text)
+		},
 		OnEvent: func(event operator.Event) {
 			s.BroadcastOperatorEvent(event)
 		},
 		OnTurnDone: func(tokensIn, tokensOut, reasoningTokens int) {
+			reasoningBatcher.Flush()
 			batcher.Flush()
 			s.BroadcastOperatorDone(model, tokensIn, tokensOut, reasoningTokens)
 		},
@@ -2457,7 +2022,7 @@ func dbTaskToService(t *db.Task) Task {
 		Title:           t.Title,
 		Status:          TaskStatus(t.Status),
 		WorkerID:        t.WorkerID,
-		TeamID:          t.TeamID,
+		GraphID:         t.GraphID,
 		ParentID:        t.ParentID,
 		SortOrder:       t.SortOrder,
 		CreatedAt:       t.CreatedAt,
@@ -2529,31 +2094,8 @@ func dbWorkerToService(w *db.Worker) Worker {
 		Disabled:        w.Disabled,
 		Source:          w.Source,
 		SourcePath:      w.SourcePath,
-		TeamID:          w.TeamID,
 		CreatedAt:       w.CreatedAt,
 		UpdatedAt:       w.UpdatedAt,
-	}
-}
-
-func dbTeamToService(t *db.Team) Team {
-	var skills []string
-	if len(t.Skills) > 0 {
-		_ = json.Unmarshal(t.Skills, &skills)
-	}
-	return Team{
-		ID:          t.ID,
-		Name:        t.Name,
-		Description: t.Description,
-		LeadWorker:  t.LeadWorker,
-		Skills:      skills,
-		Provider:    t.Provider,
-		Model:       t.Model,
-		Culture:     t.Culture,
-		Source:      t.Source,
-		SourcePath:  t.SourcePath,
-		IsAuto:      t.IsAuto,
-		CreatedAt:   t.CreatedAt,
-		UpdatedAt:   t.UpdatedAt,
 	}
 }
 
@@ -2578,7 +2120,6 @@ func runtimeSnapshotToService(snap runtime.SessionSnapshot) SessionSnapshot {
 	return SessionSnapshot{
 		ID:        snap.ID,
 		WorkerID:  snap.WorkerID,
-		TeamName:  snap.TeamName,
 		JobID:     snap.JobID,
 		TaskID:    snap.TaskID,
 		Status:    snap.Status,
@@ -2634,467 +2175,17 @@ func mcpServerStatusToService(ss mcp.ServerStatus) MCPServerStatus {
 }
 
 func providerModelInfoToService(m provider.ModelInfo) ModelInfo {
+	// State is a TUI affordance indicating the loaded/preferred model. The
+	// upstream mycelium ModelInfo no longer carries it; until a replacement
+	// signal is wired through, this field is left empty. The TUI degrades
+	// to showing the first model rather than the loaded one.
 	return ModelInfo{
 		ID:                  m.ID,
 		Name:                m.Name,
 		Provider:            m.Provider,
-		State:               m.State,
 		MaxContextLength:    m.MaxContextLength,
 		LoadedContextLength: m.LoadedContextLength,
 	}
-}
-
-// buildTeamViews queries the store to build TeamView slices for all non-system teams.
-func (s *LocalService) buildTeamViews(ctx context.Context) ([]TeamView, error) {
-	dbTeams, err := s.cfg.Store.ListTeams(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("listing teams: %w", err)
-	}
-
-	var views []TeamView
-	for _, team := range dbTeams {
-		if team.Source == "system" {
-			continue
-		}
-		tv := TeamView{Team: dbTeamToService(team)}
-		tv.IsReadOnly = isServiceReadOnlyTeam(tv)
-		// Defense-in-depth: IsSystem is always false here since system teams
-		// (Source == "system") are filtered above. The computation is kept as
-		// a safety net in case ListTeams is ever called without the filter, or
-		// if a non-"system" source team is placed under the system directory.
-		tv.IsSystem = isServiceSystemTeam(tv, s.cfg.ConfigDir)
-
-		teamWorkers, err := s.cfg.Store.ListTeamWorkers(ctx, team.ID)
-		if err != nil {
-			slog.Warn("failed to list team workers", "team", team.Name, "error", err)
-			views = append(views, tv)
-			continue
-		}
-
-		for _, tw := range teamWorkers {
-			worker, err := s.cfg.Store.GetWorker(ctx, tw.WorkerID)
-			if err != nil {
-				slog.Warn("failed to get worker", "workerID", tw.WorkerID, "error", err)
-				continue
-			}
-			svcWorker := dbWorkerToService(worker)
-			if tw.Role == "lead" {
-				tv.Coordinator = &svcWorker
-			} else {
-				tv.Workers = append(tv.Workers, svcWorker)
-			}
-		}
-		views = append(views, tv)
-	}
-	return views, nil
-}
-
-// ---------------------------------------------------------------------------
-// Team classification helpers (adapted from tui/team_view.go)
-// ---------------------------------------------------------------------------
-
-var (
-	cachedHomeDir     string
-	cachedHomeDirOnce sync.Once
-)
-
-// GetHomeDir returns the current user's home directory, cached after the first call.
-// This is a client-side utility used by team classification helpers.
-func GetHomeDir() string {
-	cachedHomeDirOnce.Do(func() {
-		cachedHomeDir, _ = os.UserHomeDir()
-	})
-	return cachedHomeDir
-}
-
-// isServiceReadOnlyTeam returns true if the team's directory is one of the
-// well-known auto-detected read-only directories.
-func isServiceReadOnlyTeam(tv TeamView) bool {
-	home := GetHomeDir()
-	if home == "" {
-		return false
-	}
-	readOnlyDirs := []string{
-		filepath.Join(home, ".config", "opencode", "agents"),
-		filepath.Join(home, ".claude", "agents"),
-		filepath.Join(home, ".opencode", "agents"),
-	}
-	for _, d := range readOnlyDirs {
-		if tv.Dir() == d {
-			return true
-		}
-	}
-	return false
-}
-
-// isServiceSystemTeam returns true if the team's directory is under the system directory.
-func isServiceSystemTeam(tv TeamView, configDir string) bool {
-	systemDir := filepath.Join(configDir, "system")
-	return strings.HasPrefix(tv.Dir(), systemDir+string(filepath.Separator))
-}
-
-// isServiceAutoTeam returns true if the team is auto-detected.
-func isServiceAutoTeam(tv TeamView) bool {
-	if isServiceReadOnlyTeam(tv) {
-		return true
-	}
-	if tv.IsAuto() {
-		return true
-	}
-	_, err := os.Stat(filepath.Join(tv.Dir(), ".auto-team"))
-	return err == nil
-}
-
-// ---------------------------------------------------------------------------
-// Team promotion helpers (adapted from tui/teams_modal.go)
-// ---------------------------------------------------------------------------
-
-// promoteReadOnlyAutoTeam handles promotion of legacy read-only auto-teams.
-func (s *LocalService) promoteReadOnlyAutoTeam(tv TeamView) error {
-	userTeamsDir := filepath.Join(s.cfg.ConfigDir, "user", "teams")
-
-	slug := loader.Slugify(tv.Team.Name)
-	if slug == "" {
-		return fmt.Errorf("team name %q produces empty slug", tv.Team.Name)
-	}
-	if err := os.MkdirAll(userTeamsDir, 0o755); err != nil {
-		return fmt.Errorf("creating user teams dir: %w", err)
-	}
-	realUserTeamsDir, err := filepath.EvalSymlinks(userTeamsDir)
-	if err != nil {
-		return fmt.Errorf("resolving user teams dir: %w", err)
-	}
-	targetDir := filepath.Join(realUserTeamsDir, slug)
-	if !strings.HasPrefix(targetDir+string(filepath.Separator), realUserTeamsDir+string(filepath.Separator)) {
-		return fmt.Errorf("team name %q escapes teams directory", tv.Team.Name)
-	}
-	targetAgentsDir := filepath.Join(targetDir, "agents")
-
-	if _, err := os.Stat(targetDir); err == nil {
-		return fmt.Errorf("team directory %q already exists", targetDir)
-	}
-
-	// For read-only teams, Dir IS the agents directory.
-	agentsSourceDir := tv.Dir()
-
-	matches, err := filepath.Glob(filepath.Join(agentsSourceDir, "*.md"))
-	if err != nil {
-		return fmt.Errorf("globbing agent files in %s: %w", agentsSourceDir, err)
-	}
-	if len(matches) == 0 {
-		return fmt.Errorf("no agent files found in %s", agentsSourceDir)
-	}
-
-	if err := os.MkdirAll(targetAgentsDir, 0o755); err != nil {
-		return fmt.Errorf("creating target directory %s: %w", targetAgentsDir, err)
-	}
-
-	var agentNames []string
-	for _, path := range matches {
-		stem := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
-		safeFilename := loader.Slugify(stem)
-		if safeFilename == "" {
-			slog.Warn("skipping agent with unsluggable filename", "stem", stem)
-			continue
-		}
-		destPath := filepath.Join(targetAgentsDir, safeFilename+".md")
-		if err := copyFile(path, destPath); err != nil {
-			_ = os.RemoveAll(targetDir)
-			return fmt.Errorf("copying agent file %s: %w", path, err)
-		}
-		agentNames = append(agentNames, stem)
-	}
-	if len(agentNames) == 0 {
-		_ = os.RemoveAll(targetDir)
-		return fmt.Errorf("no agent files could be copied from %s", agentsSourceDir)
-	}
-
-	lead := ""
-	if tv.Coordinator != nil {
-		lead = tv.Coordinator.Name
-	}
-
-	source := filepath.Base(filepath.Dir(tv.Dir())) + "/" + filepath.Base(tv.Dir())
-
-	teamDef := &mdfmt.TeamDef{
-		Name:        tv.Team.Name,
-		Description: fmt.Sprintf("Promoted from %s", source),
-		Lead:        lead,
-		Agents:      agentNames,
-	}
-	teamMDPath := filepath.Join(targetDir, "team.md")
-	if err := writeTeamFile(teamMDPath, teamDef); err != nil {
-		_ = os.RemoveAll(targetDir)
-		return fmt.Errorf("writing team.md: %w", err)
-	}
-
-	slog.Info("promoted read-only auto-team to managed team", "team", tv.Team.Name, "target", targetDir, "agents", len(agentNames))
-	return nil
-}
-
-// promoteMarkerAutoTeam handles in-place promotion of bootstrap auto-teams.
-func promoteMarkerAutoTeam(tv TeamView) error {
-	agentsSymlink := filepath.Join(tv.Dir(), "agents")
-
-	matches, err := filepath.Glob(filepath.Join(agentsSymlink, "*.md"))
-	if err != nil {
-		return fmt.Errorf("globbing agent files in %s: %w", agentsSymlink, err)
-	}
-	if len(matches) == 0 {
-		return fmt.Errorf("no agent files found in %s", agentsSymlink)
-	}
-
-	// Read file contents before removing the symlink.
-	type agentContent struct {
-		filename string
-		data     []byte
-		stem     string
-	}
-	var contents []agentContent
-	for _, path := range matches {
-		stem := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
-		data, err := os.ReadFile(path)
-		if err != nil {
-			slog.Warn("skipping unreadable agent during promotion", "path", path, "error", err)
-			continue
-		}
-		contents = append(contents, agentContent{filename: filepath.Base(path), data: data, stem: stem})
-	}
-	if len(contents) == 0 {
-		return fmt.Errorf("no readable agent files found in %s", agentsSymlink)
-	}
-
-	if err := os.Remove(agentsSymlink); err != nil {
-		return fmt.Errorf("removing agents symlink %s: %w", agentsSymlink, err)
-	}
-	if err := os.MkdirAll(agentsSymlink, 0o755); err != nil {
-		return fmt.Errorf("creating agents directory %s: %w", agentsSymlink, err)
-	}
-
-	var agentNames []string
-	for _, ac := range contents {
-		safeFilename := loader.Slugify(ac.stem)
-		if safeFilename == "" {
-			slog.Warn("skipping agent with unsluggable filename", "stem", ac.stem)
-			continue
-		}
-		agentPath := filepath.Join(agentsSymlink, safeFilename+".md")
-		if err := os.WriteFile(agentPath, ac.data, 0o644); err != nil {
-			_ = os.RemoveAll(agentsSymlink)
-			return fmt.Errorf("writing agent file %s: %w", agentPath, err)
-		}
-		agentNames = append(agentNames, ac.stem)
-	}
-
-	lead := ""
-	if tv.Coordinator != nil {
-		lead = tv.Coordinator.Name
-	}
-
-	teamDef := &mdfmt.TeamDef{
-		Name:        tv.Team.Name,
-		Description: fmt.Sprintf("Promoted from %s", tv.Team.Name),
-		Lead:        lead,
-		Agents:      agentNames,
-	}
-	teamMDPath := filepath.Join(tv.Dir(), "team.md")
-	if err := writeTeamFile(teamMDPath, teamDef); err != nil {
-		return fmt.Errorf("writing team.md: %w", err)
-	}
-
-	if err := os.Remove(filepath.Join(tv.Dir(), ".auto-team")); err != nil {
-		slog.Warn("failed to remove .auto-team marker", "dir", tv.Dir(), "error", err)
-	}
-
-	slog.Info("promoted bootstrap auto-team in-place", "team", tv.Team.Name, "dir", tv.Dir(), "agents", len(agentNames))
-	return nil
-}
-
-// ---------------------------------------------------------------------------
-// SetCoordinator helper (adapted from tui/team_view.go)
-// ---------------------------------------------------------------------------
-
-// setCoordinator updates a team so that exactly one agent is the coordinator.
-func setCoordinator(teamDir, agentName string) error {
-	agentsDir := filepath.Join(teamDir, "agents")
-	matches, err := filepath.Glob(filepath.Join(agentsDir, "*.md"))
-	if err != nil {
-		return fmt.Errorf("globbing agent files in %s: %w", agentsDir, err)
-	}
-	if len(matches) == 0 {
-		return fmt.Errorf("no agent files found in %s", agentsDir)
-	}
-
-	needle := strings.ToLower(agentName)
-	type agentFile struct {
-		path string
-		name string
-	}
-	var agentFiles []agentFile
-	for _, p := range matches {
-		stem := strings.TrimSuffix(filepath.Base(p), ".md")
-		agentFiles = append(agentFiles, agentFile{path: p, name: stem})
-	}
-
-	found := false
-	for _, af := range agentFiles {
-		if strings.ToLower(af.name) == needle {
-			found = true
-			break
-		}
-	}
-	if !found {
-		return fmt.Errorf("agent %q not found in %s", agentName, agentsDir)
-	}
-
-	// Update team.md's lead: field. If team.md is missing or malformed, create a minimal one.
-	teamMDPath := filepath.Join(teamDir, "team.md")
-	teamDef, parseErr := mdfmt.ParseTeam(teamMDPath)
-	if parseErr != nil {
-		teamDef = &mdfmt.TeamDef{Name: filepath.Base(teamDir)}
-	}
-	teamDef.Lead = agentName
-	if writeErr := writeTeamFileTo(teamMDPath, teamDef); writeErr != nil {
-		return fmt.Errorf("updating team.md lead: %w", writeErr)
-	}
-
-	// Rewrite mode: in each agent file.
-	for _, af := range agentFiles {
-		targetMode := "worker"
-		if strings.ToLower(af.name) == needle {
-			targetMode = "primary"
-		}
-
-		data, err := os.ReadFile(af.path)
-		if err != nil {
-			return fmt.Errorf("reading %s: %w", af.path, err)
-		}
-
-		newContent := rewriteMode(string(data), targetMode)
-
-		tmp, err := os.CreateTemp(agentsDir, "agent-*.md.tmp")
-		if err != nil {
-			return fmt.Errorf("creating temp file in %s: %w", agentsDir, err)
-		}
-		tmpName := tmp.Name()
-
-		if _, err := tmp.WriteString(newContent); err != nil {
-			_ = tmp.Close()
-			_ = os.Remove(tmpName)
-			return fmt.Errorf("writing temp file %s: %w", tmpName, err)
-		}
-		if err := tmp.Close(); err != nil {
-			_ = os.Remove(tmpName)
-			return fmt.Errorf("closing temp file %s: %w", tmpName, err)
-		}
-		if err := os.Rename(tmpName, af.path); err != nil {
-			_ = os.Remove(tmpName)
-			return fmt.Errorf("renaming %s to %s: %w", tmpName, af.path, err)
-		}
-	}
-
-	return nil
-}
-
-// ---------------------------------------------------------------------------
-// File-writing helpers (adapted from tui/teams_modal.go and tui/agents_modal.go)
-// ---------------------------------------------------------------------------
-
-// writeTeamFile writes a TeamDef as a toasters-format .md file.
-func writeTeamFile(path string, def *mdfmt.TeamDef) error {
-	fm, err := yaml.Marshal(def)
-	if err != nil {
-		return fmt.Errorf("marshaling team frontmatter: %w", err)
-	}
-
-	var sb strings.Builder
-	sb.WriteString("---\n")
-	sb.Write(bytes.TrimRight(fm, "\n"))
-	sb.WriteString("\n---\n")
-	if def.Body != "" {
-		sb.WriteString(def.Body)
-		sb.WriteString("\n")
-	}
-
-	return os.WriteFile(path, []byte(sb.String()), 0o644)
-}
-
-// writeTeamFileTo writes a TeamDef as a toasters-format .md file (alias for writeTeamFile).
-func writeTeamFileTo(path string, def *mdfmt.TeamDef) error {
-	return writeTeamFile(path, def)
-}
-
-// rewriteMode returns content with the frontmatter mode: field set to mode.
-func rewriteMode(content, mode string) string {
-	const delim = "---"
-	modeLine := "mode: " + mode
-
-	if !strings.HasPrefix(content, delim+"\n") {
-		return delim + "\n" + modeLine + "\n" + delim + "\n" + content
-	}
-
-	rest := content[len(delim)+1:]
-	closingIdx := strings.Index(rest, "\n"+delim)
-	if closingIdx < 0 {
-		return delim + "\n" + modeLine + "\n" + delim + "\n" + content
-	}
-
-	fmBlock := rest[:closingIdx]
-	afterClose := rest[closingIdx+1+len(delim):]
-
-	lines := strings.Split(fmBlock, "\n")
-	modeFound := false
-	for i, line := range lines {
-		if strings.HasPrefix(line, "mode:") {
-			lines[i] = modeLine
-			modeFound = true
-			break
-		}
-	}
-	if !modeFound {
-		lines = append(lines, modeLine)
-	}
-
-	var sb strings.Builder
-	sb.WriteString(delim + "\n")
-	sb.WriteString(strings.Join(lines, "\n"))
-	sb.WriteString("\n" + delim)
-	sb.WriteString(afterClose)
-	return sb.String()
-}
-
-// copyFile copies the file at src to dst.
-func copyFile(src, dst string) error {
-	in, err := os.Open(src)
-	if err != nil {
-		return fmt.Errorf("opening source file: %w", err)
-	}
-
-	out, err := os.Create(dst)
-	if err != nil {
-		_ = in.Close()
-		return fmt.Errorf("creating destination file: %w", err)
-	}
-
-	n, err := io.Copy(out, io.LimitReader(in, maxCopySize+1))
-	if err != nil {
-		_ = in.Close()
-		_ = out.Close()
-		return fmt.Errorf("copying file contents: %w", err)
-	}
-	if n > maxCopySize {
-		_ = in.Close()
-		_ = out.Close()
-		_ = os.Remove(dst)
-		return fmt.Errorf("source file too large: %d bytes exceeds maximum %d", n, maxCopySize)
-	}
-
-	if err := in.Close(); err != nil {
-		_ = out.Close()
-		return fmt.Errorf("closing source file: %w", err)
-	}
-
-	return out.Close()
 }
 
 // writeGeneratedSkillFile writes LLM-generated skill content to the user skills directory.
@@ -3147,23 +2238,4 @@ func stripCodeFences(s string) string {
 	}
 	s = strings.TrimSuffix(s, "```")
 	return strings.TrimSpace(s)
-}
-
-// ---------------------------------------------------------------------------
-// Sort helpers
-// ---------------------------------------------------------------------------
-
-// sortWorkersByTeamKey sorts workers by the composite "team/worker" key.
-func sortWorkersByTeamKey(workers []*db.Worker) {
-	for i := 1; i < len(workers); i++ {
-		for j := i; j > 0; j-- {
-			ka := workers[j-1].TeamID + "/" + workers[j-1].Name
-			kb := workers[j].TeamID + "/" + workers[j].Name
-			if ka > kb {
-				workers[j-1], workers[j] = workers[j], workers[j-1]
-			} else {
-				break
-			}
-		}
-	}
 }

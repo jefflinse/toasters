@@ -8,8 +8,8 @@ import (
 func TestProgressToolDefs_Count(t *testing.T) {
 	t.Parallel()
 	defs := ProgressToolDefs()
-	if len(defs) != 6 {
-		t.Errorf("ProgressToolDefs() returned %d tools, want 6", len(defs))
+	if len(defs) != 5 {
+		t.Errorf("ProgressToolDefs() returned %d tools, want 5", len(defs))
 	}
 }
 
@@ -19,7 +19,6 @@ func TestProgressToolDefs_Names(t *testing.T) {
 
 	wantNames := []string{
 		"report_task_progress",
-		"report_blocker",
 		"update_task_status",
 		"request_review",
 		"query_job_context",
@@ -179,7 +178,6 @@ func TestProgressToolDefs_SpecificRequiredFields(t *testing.T) {
 		required []string
 	}{
 		{"report_task_progress", []string{"job_id", "status", "message"}},
-		{"report_blocker", []string{"job_id", "description", "severity"}},
 		{"update_task_status", []string{"job_id", "task_id", "status"}},
 		{"request_review", []string{"job_id", "artifact_path"}},
 		{"query_job_context", []string{"job_id"}},

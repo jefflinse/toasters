@@ -13,14 +13,13 @@ var ErrNotFound = errors.New("not found")
 type JobStatus string
 
 const (
-	JobStatusPending     JobStatus = "pending"
-	JobStatusSettingUp   JobStatus = "setting_up"
-	JobStatusDecomposing JobStatus = "decomposing"
-	JobStatusActive      JobStatus = "active"
-	JobStatusPaused      JobStatus = "paused"
-	JobStatusCompleted   JobStatus = "completed"
-	JobStatusFailed      JobStatus = "failed"
-	JobStatusCancelled   JobStatus = "cancelled"
+	JobStatusPending   JobStatus = "pending"
+	JobStatusSettingUp JobStatus = "setting_up"
+	JobStatusActive    JobStatus = "active"
+	JobStatusPaused    JobStatus = "paused"
+	JobStatusCompleted JobStatus = "completed"
+	JobStatusFailed    JobStatus = "failed"
+	JobStatusCancelled JobStatus = "cancelled"
 )
 
 // TaskStatus represents the lifecycle state of a task.
@@ -80,9 +79,10 @@ type Task struct {
 	Title           string
 	Status          TaskStatus
 	WorkerID        string // assigned worker (may be empty)
-	TeamID          string // assigned team (may be empty)
+	GraphID         string // assigned graph definition id (may be empty)
 	ParentID        string // DAG edge, empty for root tasks
 	SortOrder       int
+	DecomposeDepth  int // times this task (or its ancestors) has been split by fine-decompose
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
 	Summary         string          // completion summary or failure reason
@@ -137,33 +137,8 @@ type Worker struct {
 	Disabled        bool
 	Source          string // system, user, auto
 	SourcePath      string
-	TeamID          string // empty for shared agents
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
-}
-
-// Team represents a group of workers that work together.
-type Team struct {
-	ID          string
-	Name        string
-	Description string
-	LeadWorker  string          // worker ID reference
-	Skills      json.RawMessage // JSON array of team-wide skill names
-	Provider    string          // team default
-	Model       string          // team default
-	Culture     string          // team culture document / markdown body
-	Source      string          // system, user, auto
-	SourcePath  string
-	IsAuto      bool
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
-}
-
-// TeamWorker represents a worker's membership in a team.
-type TeamWorker struct {
-	TeamID   string
-	WorkerID string
-	Role     string // lead, worker
 }
 
 // FeedEntry represents a single entry in the activity feed.

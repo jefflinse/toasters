@@ -1129,60 +1129,6 @@ func TestDisplayJobs(t *testing.T) {
 	})
 }
 
-func TestHasBlocker(t *testing.T) {
-	t.Parallel()
-
-	t.Run("no blockers map entry", func(t *testing.T) {
-		t.Parallel()
-		m := Model{
-			blockers: make(map[string]*service.Blocker),
-		}
-		j := service.Job{ID: "job-1"}
-		if m.hasBlocker(j) {
-			t.Error("expected no blocker for job without entry")
-		}
-	})
-
-	t.Run("nil blocker entry", func(t *testing.T) {
-		t.Parallel()
-		m := Model{
-			blockers: map[string]*service.Blocker{
-				"job-1": nil,
-			},
-		}
-		j := service.Job{ID: "job-1"}
-		if m.hasBlocker(j) {
-			t.Error("expected no blocker for nil entry")
-		}
-	})
-
-	t.Run("answered blocker", func(t *testing.T) {
-		t.Parallel()
-		m := Model{
-			blockers: map[string]*service.Blocker{
-				"job-1": {Answered: true},
-			},
-		}
-		j := service.Job{ID: "job-1"}
-		if m.hasBlocker(j) {
-			t.Error("expected no blocker for answered blocker")
-		}
-	})
-
-	t.Run("unanswered blocker", func(t *testing.T) {
-		t.Parallel()
-		m := Model{
-			blockers: map[string]*service.Blocker{
-				"job-1": {Answered: false},
-			},
-		}
-		j := service.Job{ID: "job-1"}
-		if !m.hasBlocker(j) {
-			t.Error("expected blocker for unanswered blocker")
-		}
-	})
-}
-
 func TestJobByID(t *testing.T) {
 	t.Parallel()
 

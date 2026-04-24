@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -76,19 +75,11 @@ type promptModalState struct {
 
 // outputModalState holds all state for the output-viewing modal overlay.
 type outputModalState struct {
-	show      bool
-	content   string // the full output text being displayed
-	scroll    int    // scroll offset in lines
-	sessionID string // runtime session ID being viewed
-}
-
-// blockerModalState holds all state for the blocker Q&A modal.
-type blockerModalState struct {
-	show        bool
-	jobID       string
-	blocker     *service.Blocker
-	questionIdx int
-	inputText   string
+	show         bool
+	content      string // the full output text being displayed
+	scroll       int    // scroll offset in lines
+	sessionID    string // runtime session ID being viewed
+	userScrolled bool   // true when the user has scrolled away from the bottom; suppresses auto-tail on new events
 }
 
 // cmdPopupState holds all state for the slash command autocomplete popup.
@@ -152,18 +143,11 @@ type Model struct {
 	progress    progressState
 	chat        chatState
 
-	jobs         []service.Job
-	blockers     map[string]*service.Blocker // keyed by job ID
-	selectedJob  int
-	selectedTeam int
-	focused      focusedPanel
+	jobs        []service.Job
+	selectedJob int
+	focused     focusedPanel
 
-	teams        []service.TeamView // available teams
-	teamsDir     string             // path to the configured teams directory
-	systemPrompt string             // assembled at startup; prepended to every LLM call
-
-	// Teams modal state.
-	teamsModal teamsModalState
+	systemPrompt string // assembled at startup; prepended to every LLM call
 
 	// Skills modal state.
 	skillsModal skillsModalState
@@ -180,9 +164,6 @@ type Model struct {
 	// Operator modal state (provider picker).
 	operatorModal operatorModalState
 
-	// Blocker modal state.
-	blockerModal blockerModalState
-
 	// Jobs modal state.
 	jobsModal jobsModalState
 
@@ -193,6 +174,11 @@ type Model struct {
 	// GraphNodeDoneMsg. The modal reads from lastGraphTaskID.
 	graphTasks      map[string]*graphTaskState
 	lastGraphTaskID string
+
+	// Cache of loaded graph definitions, keyed by id. Populated by the
+	// fetchGraphs command at startup and on catalog-change events. Used to
+	// resolve a task's graph_id to a dagmap topology.
+	graphDefs map[string]service.GraphDefinition
 
 	// Agent pane state.
 	selectedAgentSlot int // which slot is highlighted in the agents pane
@@ -249,6 +235,7 @@ type runtimeSlot struct {
 	taskID         string
 	status         string // "active", "completed", "failed", "cancelled"
 	output         strings.Builder
+	reasoning      strings.Builder // streamed chain-of-thought; only set when the provider emits reasoning events
 	startTime      time.Time
 	endTime        time.Time      // set when session completes; zero while active
 	systemPrompt   string         // the system prompt given to the LLM
@@ -301,7 +288,6 @@ func NewModel(cfg ModelConfig) Model {
 	}
 
 	m.jobs = []service.Job{}
-	m.blockers = make(map[string]*service.Blocker)
 	m.selectedJob = 0
 	m.focused = focusChat
 
@@ -327,6 +313,7 @@ func (m *Model) Init() tea.Cmd {
 	cmds := []tea.Cmd{
 		tea.RequestWindowSize,
 		m.fetchModels(),
+		m.fetchGraphs(),
 		loadingTick(), // drive the loading screen animation
 		spinnerTick(), // drive braille spinner animations
 	}
@@ -354,11 +341,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateMCPModal(msg)
 		}
 
-		// Teams modal key handling — intercept all keys when modal is open.
-		if m.teamsModal.show {
-			return m.updateTeamsModal(msg)
-		}
-
 		// Skills modal key handling — intercept all keys when modal is open.
 		if m.skillsModal.show {
 			return m.updateSkillsModal(msg)
@@ -377,11 +359,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Graph map modal key handling — intercept all keys when modal is open.
 		if m.graphMapModal.show {
 			return m.updateGraphMapModal(msg)
-		}
-
-		// Blocker modal key handling — intercept all keys when modal is open.
-		if m.blockerModal.show {
-			return m.updateBlockerModal(msg)
 		}
 
 		// Prompt mode key handling — highest priority.
@@ -422,7 +399,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 
 		case "tab":
-			// Cycle focus: chat → jobs → agents → teams → operator → mcp → chat.
+			// Cycle focus: chat → jobs → agents → operator → mcp → chat.
 			// Skip hidden panels.
 			// (Tab inside the slash command popup is handled above and returns early.)
 			next := m.focused
@@ -433,8 +410,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				case focusJobs:
 					next = focusAgents
 				case focusAgents:
-					next = focusTeams
-				case focusTeams:
 					next = focusOperator
 				case focusOperator:
 					next = focusMCP
@@ -444,7 +419,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					next = focusChat
 				}
 				// Skip left-panel targets when left panel is hidden.
-				if m.leftPanelHidden && (next == focusJobs || next == focusAgents || next == focusTeams) {
+				if m.leftPanelHidden && (next == focusJobs || next == focusAgents) {
 					continue
 				}
 				// Skip sidebar targets when sidebar is hidden.
@@ -461,7 +436,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, focusCmd
 
 		case "shift+tab":
-			// Reverse cycle: chat → mcp → operator → teams → agents → jobs → chat.
+			// Reverse cycle: chat → mcp → operator → agents → jobs → chat.
 			next := m.focused
 			for {
 				switch next {
@@ -470,8 +445,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				case focusMCP:
 					next = focusOperator
 				case focusOperator:
-					next = focusTeams
-				case focusTeams:
 					next = focusAgents
 				case focusAgents:
 					next = focusJobs
@@ -481,7 +454,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					next = focusChat
 				}
 				// Skip left-panel targets when left panel is hidden.
-				if m.leftPanelHidden && (next == focusJobs || next == focusAgents || next == focusTeams) {
+				if m.leftPanelHidden && (next == focusJobs || next == focusAgents) {
 					continue
 				}
 				// Skip sidebar targets when sidebar is hidden.
@@ -565,13 +538,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, nil
 			}
-			// Navigate teams when teams pane is focused.
-			if m.focused == focusTeams {
-				if len(m.teams) > 0 && m.selectedTeam > 0 {
-					m.selectedTeam--
-				}
-				return m, nil
-			}
 			// Navigate agent slots when agents pane is focused.
 			if m.focused == focusAgents {
 				if m.selectedAgentSlot > 0 {
@@ -585,13 +551,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				dj := m.displayJobs()
 				if len(dj) > 0 && m.selectedJob < len(dj)-1 {
 					m.selectedJob++
-				}
-				return m, nil
-			}
-			// Navigate teams when teams pane is focused.
-			if m.focused == focusTeams {
-				if m.selectedTeam < len(m.teams)-1 {
-					m.selectedTeam++
 				}
 				return m, nil
 			}
@@ -677,7 +636,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Toggle left panel visibility.
 			m.leftPanelHidden = !m.leftPanelHidden
 			// If hiding the panel while it's focused, switch to chat.
-			if m.leftPanelHidden && (m.focused == focusJobs || m.focused == focusTeams || m.focused == focusAgents) {
+			if m.leftPanelHidden && (m.focused == focusJobs || m.focused == focusAgents) {
 				cmds = append(cmds, m.setFocus(focusChat))
 				cmds = append(cmds, m.input.Focus())
 			}
@@ -756,22 +715,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case "enter":
-			// Open blocker modal when jobs pane is focused and selected job has a blocker.
+			// Open jobs modal pre-selected on current job.
 			if m.focused == focusJobs {
 				dj := m.displayJobs()
 				if len(dj) == 0 || m.selectedJob >= len(dj) {
 					return m, nil
 				}
-				selectedJob := dj[m.selectedJob]
-				if m.hasBlocker(selectedJob) {
-					m.blockerModal.show = true
-					m.blockerModal.jobID = selectedJob.ID
-					m.blockerModal.blocker = m.blockers[selectedJob.ID]
-					m.blockerModal.questionIdx = 0
-					m.blockerModal.inputText = ""
-					return m, nil
-				}
-				// Open jobs modal pre-selected on current job.
 				m.jobsModal = jobsModalState{
 					show:   true,
 					jobIdx: m.selectedJob,
@@ -779,28 +728,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.loadJobsForModal()
 				m.loadJobDetail()
 				return m, nil
-			}
-			// Open teams modal pre-selected when teams pane is focused.
-			if m.focused == focusTeams && len(m.teams) > 0 {
-				idx := m.selectedTeam
-				if idx >= len(m.teams) {
-					idx = 0
-				}
-				m.teamsModal = teamsModalState{
-					show:              true,
-					teamIdx:           idx,
-					autoDetectPending: make(map[string]bool),
-				}
-				m.reloadTeamsForModal()
-				// Clamp teamIdx after reload in case the team list changed.
-				if m.teamsModal.teamIdx >= len(m.teamsModal.teams) && len(m.teamsModal.teams) > 0 {
-					m.teamsModal.teamIdx = len(m.teamsModal.teams) - 1
-				}
-				var teamCmd tea.Cmd
-				if len(m.teamsModal.teams) > 0 {
-					teamCmd = m.maybeAutoDetectCoordinator(m.teamsModal.teams[m.teamsModal.teamIdx])
-				}
-				return m, teamCmd
 			}
 			// Open grid view when agents pane is focused.
 			if m.focused == focusAgents {
@@ -830,16 +757,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.cmdPopup.show = false
 					m.newSession()
 					return m, nil
-				case "/teams":
-					m.input.Reset()
-					m.cmdPopup.show = false
-					m.teamsModal = teamsModalState{show: true, autoDetectPending: make(map[string]bool)}
-					m.reloadTeamsForModal()
-					var teamCmd tea.Cmd
-					if len(m.teamsModal.teams) > 0 {
-						teamCmd = m.maybeAutoDetectCoordinator(m.teamsModal.teams[0])
-					}
-					return m, teamCmd
 				case "/skills":
 					m.input.Reset()
 					m.cmdPopup.show = false
@@ -998,6 +915,20 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.updateViewportContent()
 
+	case GraphsMsg:
+		if msg.Err != nil {
+			slog.Warn("ListGraphs failed; graph-map topology unavailable", "error", msg.Err)
+			return m, nil
+		}
+		if m.graphDefs == nil {
+			m.graphDefs = make(map[string]service.GraphDefinition, len(msg.Graphs))
+		}
+		// Rebuild the cache from scratch so removals are reflected.
+		m.graphDefs = make(map[string]service.GraphDefinition, len(msg.Graphs))
+		for _, g := range msg.Graphs {
+			m.graphDefs[g.ID] = g
+		}
+
 	case CatalogMsg:
 		m.catalogModal.loading = false
 		if msg.Err != nil {
@@ -1063,18 +994,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			)
 		}
 
-	case TeamsReloadedMsg:
-		m.teams = msg.Teams
-		if m.selectedTeam >= len(m.teams) && len(m.teams) > 0 {
-			m.selectedTeam = len(m.teams) - 1
-		} else if len(m.teams) == 0 {
-			m.selectedTeam = 0
-		}
-		// The operator's system prompt is composed from operator.md at startup
-		// (server side) and does not change when teams reload. The operator
-		// discovers teams at runtime via the query_teams tool.
-		return m, tea.Batch(cmds...)
-
 	case JobsReloadedMsg:
 		m.jobs = msg.Jobs
 		dj := m.displayJobs()
@@ -1135,77 +1054,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.updateViewportContent()
 		return m, tea.Batch(cmds...)
 
-	case TeamsAutoDetectDoneMsg:
-		m.teamsModal.autoDetecting = false
-		// The service's DetectCoordinator already called SetCoordinator if a match was found.
-		// Just reload the teams list to reflect any changes.
-		if msg.err == nil {
-			m.reloadTeamsForModal()
-		}
-		return m, tea.Batch(cmds...)
-
-	case teamPromotedMsg:
-		m.teamsModal.promoting = false
-		if msg.err != nil {
-			slog.Error("failed to promote auto-team", "team", msg.teamName, "error", msg.err)
-			cmds = append(cmds, m.addToast("⚠ Promote failed: "+msg.err.Error(), toastWarning))
-		} else {
-			cmds = append(cmds, m.addToast("✓ Promoted '"+msg.teamName+"' to managed team", toastSuccess))
-			m.reloadTeamsForModal()
-			// Select the newly promoted team (it is no longer an auto-team after promotion).
-			for i, t := range m.teamsModal.teams {
-				if t.Name() == msg.teamName && !t.IsAuto() {
-					m.teamsModal.teamIdx = i
-					break
-				}
-			}
-		}
-		return m, tea.Batch(cmds...)
-
-	case teamGeneratedMsg:
-		m.teamsModal.generating = false
-		if msg.err != nil {
-			cmds = append(cmds, m.addToast("⚠ Team generation failed: "+msg.err.Error(), toastWarning))
-			return m, tea.Batch(cmds...)
-		}
-
-		// The service has already written the team directory and triggered a reload.
-		// Extract team name from the generated team.md content (YAML frontmatter name: field).
-		agentCount := len(msg.agentNames)
-		teamName := extractFrontmatterName(msg.content)
-
-		// Reload and select the newly created team.
-		m.reloadTeamsForModal()
-		for i, t := range m.teamsModal.teams {
-			if t.Name() == teamName {
-				m.teamsModal.teamIdx = i
-				break
-			}
-		}
-
-		cmds = append(cmds, m.addToast(
-			fmt.Sprintf("✓ Team '%s' generated with %d agents", teamName, agentCount),
-			toastSuccess,
-		))
-		return m, tea.Batch(cmds...)
-
-	case blockerAnswersSubmittedMsg:
-		// Mark answered, close modal.
-		if b, ok := m.blockers[msg.jobID]; ok {
-			b.Answered = true
-		}
-		m.blockerModal.show = false
-		m.blockerModal.inputText = ""
-
-		// Blocker re-spawn is handled by the operator/runtime; nothing to do here.
-		_ = m.jobByID // suppress unused warning
-		return m, nil
-
 	case SessionStartedMsg:
 		m.runtimeSessions[msg.SessionID] = &runtimeSlot{
 			sessionID:      msg.SessionID,
 			agentName:      msg.WorkerName,
-			teamName:       msg.TeamName,
 			task:           msg.Task,
 			jobID:          msg.JobID,
 			taskID:         msg.TaskID,
@@ -1223,6 +1075,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		slot.output.WriteString(msg.Text)
+		m.refreshOutputModalIfShowing(msg.SessionID, slot)
+		return m, nil
+
+	case SessionReasoningMsg:
+		slot, ok := m.runtimeSessions[msg.SessionID]
+		if !ok {
+			return m, nil
+		}
+		slot.reasoning.WriteString(msg.Text)
 		m.refreshOutputModalIfShowing(msg.SessionID, slot)
 		return m, nil
 
@@ -1304,27 +1165,19 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.MouseClickMsg:
 		// Click-to-focus: route clicks to the appropriate panel.
 		// Don't steal clicks when any overlay is active.
-		if !m.teamsModal.show && !m.skillsModal.show && !m.workersModal.show &&
+		if !m.skillsModal.show && !m.workersModal.show &&
 			!m.mcpModal.show && !m.catalogModal.show && !m.operatorModal.show &&
-			!m.blockerModal.show && !m.grid.showGrid &&
+			!m.grid.showGrid &&
 			!m.promptModal.show && !m.outputModal.show && !m.loading {
 			showLeftPanel := m.width >= minWidthForLeftPanel && !m.leftPanelHidden
 			showSidebar := m.width >= minWidthForBar && !m.sidebarHidden
 			sidebarStartX := m.width - m.sbWidth
 			if showLeftPanel && msg.X < m.lpWidth {
-				// Clicked left panel — determine which of the three panes was clicked.
-				// Pane order (top to bottom): Jobs, Agents, Teams.
-				teamsPaneH := m.leftPanelTeamsPaneHeight()
+				// Clicked left panel — determine which of the two panes was clicked.
+				// Pane order (top to bottom): Jobs, Agents.
 				agentsPaneH := m.leftPanelAgentsPaneHeight()
-				teamsPaneY := m.height - teamsPaneH
-				agentsPaneY := teamsPaneY - agentsPaneH
-				if msg.Y >= teamsPaneY {
-					// Clicked Teams pane.
-					if m.focused != focusTeams {
-						cmds = append(cmds, m.setFocus(focusTeams))
-						m.input.Blur()
-					}
-				} else if msg.Y >= agentsPaneY {
+				agentsPaneY := m.height - agentsPaneH
+				if msg.Y >= agentsPaneY {
 					// Clicked Agents pane.
 					if m.focused != focusAgents {
 						cmds = append(cmds, m.setFocus(focusAgents))
@@ -1499,7 +1352,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case DefinitionsReloadedMsg:
 		slog.Info("definitions reloaded from file watcher")
-		return m, reloadTeamsCmd(m.svc)
+		return m, nil
 
 	case ConnectionLostMsg:
 		m.stats.Connected = false
@@ -1641,26 +1494,49 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // refreshOutputModalIfShowing updates the output modal's content if it is
 // currently displaying the given session, and applies an auto-tail policy.
-// Called from session text/tool_call/tool_result message handlers.
+// Called from session text/reasoning/tool_call/tool_result message handlers.
+//
+// Auto-tail only fires when the user hasn't scrolled back (userScrolled=false).
+// Line counting uses the same markdown-rendered view the render path sees, so
+// the clamp matches what the user is actually looking at — an earlier bug
+// computed bounds on raw content lines and yanked the scroll position around
+// whenever markdown expansion changed the line count.
 func (m *Model) refreshOutputModalIfShowing(sessionID string, slot *runtimeSlot) {
 	if !m.outputModal.show || m.outputModal.sessionID != sessionID {
 		return
 	}
-	m.outputModal.content = slot.output.String()
-	allLines := strings.Split(m.outputModal.content, "\n")
-	modalH := m.height - 4
-	if modalH < 10 {
-		modalH = 10
+	m.outputModal.content = composeSlotContent(slot)
+	if m.outputModal.userScrolled {
+		return
 	}
-	// NOTE: maxScroll is computed on raw content lines; after markdown rendering
-	// the actual rendered line count may differ. This is an approximation for auto-tail.
-	maxScroll := len(allLines) - (modalH - 4)
+	allLines := m.outputModalLines(m.outputModal.content)
+	_, visibleH := m.outputModalDims()
+	maxScroll := len(allLines) - visibleH
 	if maxScroll < 0 {
 		maxScroll = 0
 	}
-	if m.outputModal.scroll >= maxScroll-2 {
-		m.outputModal.scroll = maxScroll
+	m.outputModal.scroll = maxScroll
+}
+
+// composeSlotContent returns the runtime slot's rendered body for the
+// output modal. When the underlying provider emitted reasoning, a
+// dimmed "⟳ thinking" section is prepended above the regular output;
+// otherwise the output is returned verbatim.
+func composeSlotContent(slot *runtimeSlot) string {
+	out := slot.output.String()
+	reasoning := slot.reasoning.String()
+	if reasoning == "" {
+		return out
 	}
+	var b strings.Builder
+	b.WriteString(ReasoningHeaderStyle.Render("⟳ thinking"))
+	b.WriteString("\n")
+	b.WriteString(ReasoningStyle.Render(reasoning))
+	if out != "" {
+		b.WriteString("\n\n")
+		b.WriteString(out)
+	}
+	return b.String()
 }
 
 // extractFrontmatterName extracts the name: field from a YAML frontmatter block.
@@ -1711,37 +1587,27 @@ func formatServiceEvent(ev service.Event, maxWidth int) string {
 
 	case service.EventTypeTaskAssigned:
 		if p, ok := ev.Payload.(service.TaskAssignedPayload); ok {
-			return FeedTaskStartedStyle.Render(fmt.Sprintf("➤ Task %q assigned to %s", p.Title, p.TeamID))
+			return FeedTaskStartedStyle.Render(fmt.Sprintf("➤ Task %q assigned to %s", p.Title, p.GraphID))
 		}
 		return FeedTaskStartedStyle.Render("➤ task assigned")
 
 	case service.EventTypeTaskStarted:
 		if p, ok := ev.Payload.(service.TaskStartedPayload); ok {
-			return FeedTaskStartedStyle.Render(fmt.Sprintf("⚡ %s started task: %q", p.TeamID, p.Title))
+			return FeedTaskStartedStyle.Render(fmt.Sprintf("⚡ %s started task: %q", p.GraphID, p.Title))
 		}
 		return FeedTaskStartedStyle.Render("⚡ task started")
 
 	case service.EventTypeTaskCompleted:
 		if p, ok := ev.Payload.(service.TaskCompletedPayload); ok {
-			return FeedTaskCompletedStyle.Render(fmt.Sprintf("✓ %s completed task", p.TeamID))
+			return FeedTaskCompletedStyle.Render(fmt.Sprintf("✓ %s completed task", p.GraphID))
 		}
 		return FeedTaskCompletedStyle.Render("✓ task completed")
 
 	case service.EventTypeTaskFailed:
 		if p, ok := ev.Payload.(service.TaskFailedPayload); ok {
-			return FeedTaskFailedStyle.Render(fmt.Sprintf("✗ %s failed task: %s", p.TeamID, p.Error))
+			return FeedTaskFailedStyle.Render(fmt.Sprintf("✗ %s failed task: %s", p.GraphID, p.Error))
 		}
 		return FeedTaskFailedStyle.Render("✗ task failed")
-
-	case service.EventTypeBlockerReported:
-		if p, ok := ev.Payload.(service.BlockerReportedPayload); ok {
-			text := fmt.Sprintf("🚫 %s reported blocker: %s", p.TeamID, p.Description)
-			if maxWidth > 4 {
-				text = wrapText(text, maxWidth-4) // account for indent
-			}
-			return FeedBlockerReportedStyle.Render(text)
-		}
-		return FeedBlockerReportedStyle.Render("🚫 blocker reported")
 
 	case service.EventTypeJobCompleted:
 		if p, ok := ev.Payload.(service.JobCompletedPayload); ok {
@@ -1756,19 +1622,5 @@ func formatServiceEvent(ev service.Event, maxWidth int) string {
 	default:
 		slog.Debug("unhandled service event type in feed", "type", ev.Type)
 		return ""
-	}
-}
-
-// reloadTeamsCmd returns a tea.Cmd that fetches the current team list from the
-// service and delivers it as a TeamsReloadedMsg. Used by the
-// DefinitionsReloadedMsg handler to keep m.teams in sync after file changes.
-func reloadTeamsCmd(svc service.Service) tea.Cmd {
-	return func() tea.Msg {
-		teams, err := svc.Definitions().ListTeams(context.Background())
-		if err != nil {
-			slog.Warn("failed to reload teams after definitions change", "error", err)
-			return nil
-		}
-		return TeamsReloadedMsg{Teams: teams}
 	}
 }

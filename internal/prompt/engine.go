@@ -35,6 +35,7 @@ type Engine struct {
 	roles        map[string]*Role
 	toolchains   map[string]*Toolchain
 	instructions map[string]string // name → body (plain text)
+	schemas      map[string]*Schema
 	globals      map[string]string // caller-set globals (e.g. config values)
 }
 
@@ -44,8 +45,22 @@ type Role struct {
 	Description string   `yaml:"description"`
 	Mode        string   `yaml:"mode"`
 	Tools       []string `yaml:"tools"`
-	Body        string   `yaml:"-"` // template text after frontmatter
-	Source      string   `yaml:"-"` // "system" or "user" — set by LoadDir caller
+	// Output names a Schema registered in the engine. Graph nodes use this
+	// to constrain the LLM's terminal output. Empty means the default
+	// one-field summary schema (see prompt.DefaultSchemaName).
+	Output string `yaml:"output"`
+	// Access selects the toolset a graph node built from this role gets at
+	// run time. One of "readonly" (default), "write", "test", or "all".
+	Access string `yaml:"access"`
+	// MaxTurns bounds the number of model round-trips (assistant →
+	// tool-dispatch → assistant …) in a single node execution. Zero falls
+	// back to the mycelium default (agent.DefaultMaxTurns = 20). Roles
+	// with heavy tool-call budgets — scaffolders, coders, testers —
+	// should set this higher; pure analytical roles (investigator,
+	// planner, reviewer) are fine at the default.
+	MaxTurns int    `yaml:"max_turns"`
+	Body     string `yaml:"-"` // template text after frontmatter
+	Source   string `yaml:"-"` // "system" or "user" — set by LoadDir caller
 }
 
 // Toolchain is language/framework knowledge with typed variables.
@@ -72,6 +87,7 @@ func NewEngine() *Engine {
 		roles:        make(map[string]*Role),
 		toolchains:   make(map[string]*Toolchain),
 		instructions: make(map[string]string),
+		schemas:      make(map[string]*Schema),
 		globals:      make(map[string]string),
 	}
 }
@@ -95,6 +111,9 @@ func (e *Engine) LoadDir(dir, source string) error {
 	}
 	if err := e.loadInstructions(filepath.Join(dir, "instructions")); err != nil {
 		return fmt.Errorf("loading instructions: %w", err)
+	}
+	if err := e.loadSchemas(filepath.Join(dir, "schemas")); err != nil {
+		return fmt.Errorf("loading schemas: %w", err)
 	}
 	return nil
 }

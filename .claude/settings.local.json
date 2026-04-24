@@ -26,7 +26,17 @@
       "Bash(sqlite3:*)",
       "Bash(curl -s http://127.0.0.1:1234/v1/models)",
       "Bash(go vet:*)",
-      "Bash(git:*)"
+      "Bash(git:*)",
+      "Bash(xargs -I {} dirname {})",
+      "Bash(awk 'NR>=1092 && NR<=1221' /Users/jefflinse/dev/toasters/internal/tui/grid_test.go)",
+      "Bash(awk 'NR>=1217 && NR<=1222' /Users/jefflinse/dev/toasters/internal/tui/grid_test.go)",
+      "Bash(awk -F: '{print $1}')",
+      "Bash(python3 /tmp/remove_funcs.py /Users/jefflinse/dev/toasters/internal/tui/helpers_test.go TestHasBlocker)",
+      "Bash(python3 /tmp/remove_funcs.py /Users/jefflinse/dev/toasters/internal/client/types_test.go TestParseSSEPayload_BlockerReported)",
+      "Bash(python3 /tmp/remove_funcs.py /Users/jefflinse/dev/toasters/internal/progress/handlers_test.go TestReportBlocker_Success TestReportBlocker_AllSeverities TestReportBlocker_StoreError TestReportBlocker_MissingJobID)",
+      "Bash(python3 /tmp/remove_funcs.py /Users/jefflinse/dev/toasters/internal/server/handlers_test.go TestRespondToBlocker_TooManyAnswers TestRespondToBlocker_AnswerTooLarge TestRespondToBlocker_AnswersAtLimit TestRespondToBlocker_EmptyAnswers TestRespondToBlocker_EmptyAnswerInArray)",
+      "Bash(python3 /tmp/remove_funcs.py /Users/jefflinse/dev/toasters/internal/operator/operator_test.go TestEventLoop_BlockerReported_RoutesToLLM)",
+      "Bash(python3 *)"
     ]
   }
 }

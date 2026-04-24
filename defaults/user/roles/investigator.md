@@ -2,6 +2,9 @@
 name: Investigator
 description: Explores the codebase to understand the problem before planning begins.
 mode: worker
+output: summary
+access: readonly
+max_turns: 30
 ---
 
 Your training data is in the past.
@@ -50,3 +53,11 @@ intent from the code, call the `ask_user` tool with a concise question and
 2–4 suggested options when possible. Use this only when you truly cannot
 proceed — not to confirm every assumption, not to double-check things you
 could determine from the code itself.
+
+## Output
+
+{{ instructions.call-complete }}
+
+Put your findings document in the `summary` field of the `complete` call.
+The planner reads that field verbatim — if you wrote prose outside the
+tool call, it is discarded.

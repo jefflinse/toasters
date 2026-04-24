@@ -49,10 +49,7 @@ func (m *mockSystemService) ListProviderModels(_ context.Context, _ string) ([]s
 }
 
 // mockDefinitionService implements service.DefinitionService with no-op methods.
-// Tests can override individual fields (e.g. listTeams) to inject behaviour.
-type mockDefinitionService struct {
-	listTeams func(ctx context.Context) ([]service.TeamView, error)
-}
+type mockDefinitionService struct{}
 
 func (m *mockDefinitionService) ListSkills(_ context.Context) ([]service.Skill, error) {
 	return nil, nil
@@ -73,28 +70,11 @@ func (m *mockDefinitionService) ListWorkers(_ context.Context) ([]service.Worker
 func (m *mockDefinitionService) GetWorker(_ context.Context, _ string) (service.Worker, error) {
 	return service.Worker{}, nil
 }
-func (m *mockDefinitionService) ListTeams(ctx context.Context) ([]service.TeamView, error) {
-	if m.listTeams != nil {
-		return m.listTeams(ctx)
-	}
+func (m *mockDefinitionService) ListGraphs(_ context.Context) ([]service.GraphDefinition, error) {
 	return nil, nil
 }
-func (m *mockDefinitionService) GetTeam(_ context.Context, _ string) (service.TeamView, error) {
-	return service.TeamView{}, nil
-}
-func (m *mockDefinitionService) CreateTeam(_ context.Context, _ string) (service.TeamView, error) {
-	return service.TeamView{}, nil
-}
-func (m *mockDefinitionService) DeleteTeam(_ context.Context, _ string) error { return nil }
-func (m *mockDefinitionService) SetCoordinator(_ context.Context, _, _ string) error { return nil }
-func (m *mockDefinitionService) PromoteTeam(_ context.Context, _ string) (string, error) {
-	return "", nil
-}
-func (m *mockDefinitionService) GenerateTeam(_ context.Context, _ string) (string, error) {
-	return "", nil
-}
-func (m *mockDefinitionService) DetectCoordinator(_ context.Context, _ string) (string, error) {
-	return "", nil
+func (m *mockDefinitionService) GetGraph(_ context.Context, _ string) (service.GraphDefinition, error) {
+	return service.GraphDefinition{}, nil
 }
 
 // mockService implements service.Service for testing.

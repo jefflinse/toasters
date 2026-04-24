@@ -21,12 +21,12 @@ type operatorModalState struct {
 	err         error
 
 	// Step 2: model selection.
-	pickingModel   bool
-	providerID     string // selected provider ID
-	models         []service.ModelInfo
-	modelIdx       int
-	modelsLoading  bool
-	modelsErr      error
+	pickingModel  bool
+	providerID    string // selected provider ID
+	models        []service.ModelInfo
+	modelIdx      int
+	modelsLoading bool
+	modelsErr     error
 }
 
 // OperatorConfiguredMsg is sent when the configured providers are loaded.

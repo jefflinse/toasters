@@ -137,11 +137,11 @@ func TestReportTaskProgress_Success(t *testing.T) {
 	createTestJob(t, ctx, store, "job-1")
 
 	params := ReportTaskProgressParams{
-		JobID:   "job-1",
-		TaskID:  "task-1",
+		JobID:    "job-1",
+		TaskID:   "task-1",
 		WorkerID: "agent-1",
-		Status:  "in_progress",
-		Message: "working on it",
+		Status:   "in_progress",
+		Message:  "working on it",
 	}
 
 	result, err := ReportTaskProgress(ctx, store, params)
@@ -242,134 +242,6 @@ func TestReportTaskProgress_MissingJobID(t *testing.T) {
 }
 
 // --- ReportBlocker tests ---
-
-func TestReportBlocker_Success(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	store := openTestStore(t)
-
-	createTestJob(t, ctx, store, "job-blocker")
-
-	params := ReportBlockerParams{
-		JobID:       "job-blocker",
-		TaskID:      "task-1",
-		WorkerID:     "agent-1",
-		Description: "cannot access the database",
-		Severity:    "high",
-	}
-
-	result, err := ReportBlocker(ctx, store, params)
-	if err != nil {
-		t.Fatalf("ReportBlocker: %v", err)
-	}
-	if result != "blocker reported" {
-		t.Errorf("result = %q, want %q", result, "blocker reported")
-	}
-
-	// Verify status is "blocked" and message format is "[severity] description".
-	reports, err := store.GetRecentProgress(ctx, "job-blocker", 10)
-	if err != nil {
-		t.Fatalf("GetRecentProgress: %v", err)
-	}
-	if len(reports) != 1 {
-		t.Fatalf("expected 1 report, got %d", len(reports))
-	}
-	r := reports[0]
-	if r.Status != "blocked" {
-		t.Errorf("Status = %q, want %q", r.Status, "blocked")
-	}
-	wantMsg := "[high] cannot access the database"
-	if r.Message != wantMsg {
-		t.Errorf("Message = %q, want %q", r.Message, wantMsg)
-	}
-}
-
-func TestReportBlocker_AllSeverities(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-
-	tests := []struct {
-		severity string
-	}{
-		{"low"},
-		{"medium"},
-		{"high"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.severity, func(t *testing.T) {
-			t.Parallel()
-			store := openTestStore(t)
-			createTestJob(t, ctx, store, "job-"+tt.severity)
-
-			params := ReportBlockerParams{
-				JobID:       "job-" + tt.severity,
-				Description: "some blocker",
-				Severity:    tt.severity,
-			}
-
-			result, err := ReportBlocker(ctx, store, params)
-			if err != nil {
-				t.Fatalf("ReportBlocker(%s): %v", tt.severity, err)
-			}
-			if result != "blocker reported" {
-				t.Errorf("result = %q, want %q", result, "blocker reported")
-			}
-
-			reports, err := store.GetRecentProgress(ctx, "job-"+tt.severity, 10)
-			if err != nil {
-				t.Fatalf("GetRecentProgress: %v", err)
-			}
-			if len(reports) != 1 {
-				t.Fatalf("expected 1 report, got %d", len(reports))
-			}
-			wantMsg := "[" + tt.severity + "] some blocker"
-			if reports[0].Message != wantMsg {
-				t.Errorf("Message = %q, want %q", reports[0].Message, wantMsg)
-			}
-		})
-	}
-}
-
-func TestReportBlocker_StoreError(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	storeErr := errors.New("write failed")
-	store := &mockStore{
-		reportProgressFn: func(_ context.Context, _ *db.ProgressReport) error {
-			return storeErr
-		},
-	}
-
-	_, err := ReportBlocker(ctx, store, ReportBlockerParams{
-		JobID:       "job-1",
-		Description: "blocked",
-		Severity:    "medium",
-	})
-	if err == nil {
-		t.Fatal("expected error, got nil")
-	}
-	if !errors.Is(err, storeErr) {
-		t.Errorf("expected wrapped storeErr, got: %v", err)
-	}
-}
-
-func TestReportBlocker_MissingJobID(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	store := &mockStore{}
-
-	_, err := ReportBlocker(ctx, store, ReportBlockerParams{
-		Description: "blocked",
-		Severity:    "low",
-	})
-	if err == nil {
-		t.Fatal("expected error, got nil")
-	}
-	if !strings.Contains(err.Error(), "job_id is required") {
-		t.Errorf("error should mention missing job_id, got: %v", err)
-	}
-}
 
 // --- UpdateTaskStatus tests ---
 
@@ -520,7 +392,7 @@ func TestRequestReview_Success(t *testing.T) {
 	params := RequestReviewParams{
 		JobID:        "job-rr",
 		TaskID:       "task-rr",
-		WorkerID:      "agent-rr",
+		WorkerID:     "agent-rr",
 		ArtifactPath: "/path/to/artifact.go",
 		Notes:        "please review this carefully",
 	}
@@ -815,9 +687,9 @@ func TestQueryJobContext_RecentProgressLimit(t *testing.T) {
 	// Insert 15 progress reports — QueryJobContext should only return 10.
 	for i := range 15 {
 		if err := store.ReportProgress(ctx, &db.ProgressReport{
-			JobID:   "job-limit",
-			Status:  "in_progress",
-			Message: "step",
+			JobID:    "job-limit",
+			Status:   "in_progress",
+			Message:  "step",
 			WorkerID: string(rune('a' + i)),
 		}); err != nil {
 			t.Fatalf("ReportProgress(%d): %v", i, err)

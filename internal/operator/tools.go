@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"strings"
 	"time"
 
@@ -16,7 +15,7 @@ import (
 
 // operatorTools implements runtime.ToolExecutor for the operator's tool set.
 // It provides consult_worker (spawn a system worker), surface_to_user (relay
-// information to the user), query_job, and query_teams.
+// information to the user), query_job, and query_graphs.
 type operatorTools struct {
 	rt              *runtime.Runtime
 	promptEngine    *prompt.Engine
@@ -43,28 +42,6 @@ func newOperatorTools(rt *runtime.Runtime, promptEngine *prompt.Engine, defaultP
 // Definitions returns the tool definitions available to the operator LLM.
 func (ot *operatorTools) Definitions() []runtime.ToolDef {
 	defs := []runtime.ToolDef{
-		{
-			Name:        "consult_worker",
-			Description: "Consult a specialized system worker. Spawns a fresh worker session, blocks until it completes, and returns the worker's response. Use this to delegate analysis, planning, or review tasks.",
-			Parameters: json.RawMessage(`{
-				"type": "object",
-				"properties": {
-					"worker_name": {
-						"type": "string",
-						"description": "Name of the system worker to consult (e.g. 'decomposer', 'scheduler', 'blocker-handler')"
-					},
-					"message": {
-						"type": "string",
-						"description": "The message or task to send to the worker"
-					},
-					"job_id": {
-						"type": "string",
-						"description": "Optional job ID. Required when consulting the decomposer — sets the job status to decomposing."
-					}
-				},
-				"required": ["worker_name", "message"]
-			}`),
-		},
 		{
 			Name:        "surface_to_user",
 			Description: "Surface information to the user. Use this to relay important findings, summaries, or status updates that the user should see.",
@@ -102,8 +79,8 @@ func (ot *operatorTools) Definitions() []runtime.ToolDef {
 			}`),
 		},
 		{
-			Name:        "query_teams",
-			Description: "List all available teams with their descriptions, lead agents, and member counts.",
+			Name:        "query_graphs",
+			Description: "List all available graphs with their ids, names, descriptions, and tags. Graphs are declarative, user-defined pipelines that execute a specific class of work — pick one before creating a task to target it.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {}
@@ -157,10 +134,11 @@ func (ot *operatorTools) Definitions() []runtime.ToolDef {
 		}`),
 	})
 
-	// Append create_job, create_task, assign_task, save_work_request, and
-	// start_job from SystemTools so the operator can create jobs, persist
-	// work requests, and act directly on decomposer output.
-	wantFromSystem := map[string]bool{"create_job": true, "create_task": true, "assign_task": true, "save_work_request": true, "start_job": true}
+	// Append create_job and save_work_request from SystemTools so the operator
+	// can create jobs and persist work requests. Task creation and graph
+	// assignment are no longer operator-driven — coarse-decompose and
+	// fine-decompose handle those automatically after create_job.
+	wantFromSystem := map[string]bool{"create_job": true, "save_work_request": true}
 	for _, td := range ot.systemTools.Definitions() {
 		if wantFromSystem[td.Name] {
 			defs = append(defs, td)
@@ -173,180 +151,25 @@ func (ot *operatorTools) Definitions() []runtime.ToolDef {
 // Execute dispatches a tool call by name.
 func (ot *operatorTools) Execute(ctx context.Context, name string, args json.RawMessage) (string, error) {
 	switch name {
-	case "consult_worker":
-		return ot.consultWorker(ctx, args)
 	case "surface_to_user":
 		return ot.surfaceToUser(ctx, args)
 	case "list_jobs":
 		return ot.listJobs(ctx)
 	case "query_job":
 		return ot.queryJob(ctx, args)
-	case "query_teams":
-		return ot.queryTeams(ctx)
+	case "query_graphs":
+		return ot.queryGraphs(ctx)
 	case "setup_workspace":
 		return ot.setupWorkspace(ctx, args)
 	case "create_job":
 		return ot.systemTools.Execute(ctx, "create_job", args)
-	case "create_task":
-		return ot.systemTools.Execute(ctx, "create_task", args)
-	case "assign_task":
-		return ot.systemTools.Execute(ctx, "assign_task", args)
 	case "save_work_request":
 		return ot.systemTools.Execute(ctx, "save_work_request", args)
-	case "start_job":
-		return ot.systemTools.Execute(ctx, "start_job", args)
 	case "ask_user":
 		return ot.askUser(ctx, args)
 	default:
 		return "", fmt.Errorf("%w: %s", runtime.ErrUnknownTool, name)
 	}
-}
-
-func (ot *operatorTools) consultWorker(ctx context.Context, args json.RawMessage) (string, error) {
-	var params struct {
-		WorkerName string `json:"worker_name"`
-		Message    string `json:"message"`
-		JobID      string `json:"job_id"` // optional; used to update job status for decomposer
-	}
-	if err := json.Unmarshal(args, &params); err != nil {
-		return "", fmt.Errorf("parsing consult_worker args: %w", err)
-	}
-
-	if params.WorkerName == "" {
-		return "", fmt.Errorf("worker_name is required")
-	}
-	if params.Message == "" {
-		return "", fmt.Errorf("message is required")
-	}
-
-	// Guard against oversized messages. System workers have their own tools
-	// to explore workspaces — the message should be a brief task description
-	// or work request, not embedded file contents.
-	const maxConsultMessageBytes = 32 * 1024 // 32 KB
-	if len(params.Message) > maxConsultMessageBytes {
-		return "", fmt.Errorf(
-			"consult_worker message too large (%d bytes, max %d): provide a brief task description only — the worker has tools to explore the workspace itself",
-			len(params.Message), maxConsultMessageBytes,
-		)
-	}
-
-	// When consulting the decomposer, transition the job to decomposing status.
-	if isDecomposer(params.WorkerName) && params.JobID != "" {
-		if err := ot.store.UpdateJobStatus(ctx, params.JobID, db.JobStatusDecomposing); err != nil {
-			slog.Warn("failed to set job status to decomposing",
-				"job_id", params.JobID,
-				"error", err,
-			)
-			// non-fatal: continue with the decomposer session regardless
-		}
-	}
-
-	// Verify the role exists in the prompt engine and is a system role.
-	// This prevents user-defined roles from gaining system-level tools
-	// (create_job, assign_task, etc.) via consult_worker.
-	if ot.promptEngine == nil {
-		return "", fmt.Errorf("prompt engine not configured")
-	}
-	role := ot.promptEngine.Role(params.WorkerName)
-	if role == nil {
-		return "", fmt.Errorf("unknown system worker %q: no role found in prompt engine", params.WorkerName)
-	}
-	if role.Source != "system" {
-		return "", fmt.Errorf("role %q is not a system role (source: %s)", params.WorkerName, role.Source)
-	}
-
-	systemPrompt, err := ot.promptEngine.Compose(params.WorkerName, nil)
-	if err != nil {
-		return "", fmt.Errorf("composing system worker %q: %w", params.WorkerName, err)
-	}
-	declaredTools := role.Tools
-	workerProvider := ot.defaultProvider
-	workerModel := ot.defaultModel
-
-	slog.Info("consulting system worker",
-		"worker", params.WorkerName,
-		"provider", workerProvider,
-		"model", workerModel,
-	)
-
-	// Determine tool executor and work directory. The decomposer uses CoreTools
-	// (built by the runtime, which includes spawn_worker) with query_teams as
-	// an extra-tools overlay. All other system workers get SystemTools directly.
-	var toolExecutor runtime.ToolExecutor
-	var extraTools runtime.ToolExecutor
-	workDir := ot.workDir
-
-	if isDecomposer(params.WorkerName) {
-		// Decomposer: don't set toolExecutor so the runtime builds CoreTools
-		// (including spawn_worker). Layer query_teams on top as ExtraTools.
-		extraTools = &queryTeamsExecutor{systemTools: ot.systemTools}
-
-		// Use the job's workspace directory so spawned explorers operate
-		// in the right location.
-		if params.JobID != "" {
-			job, jobErr := ot.store.GetJob(ctx, params.JobID)
-			if jobErr == nil && job.WorkspaceDir != "" {
-				workDir = job.WorkspaceDir
-			}
-		}
-	} else {
-		toolExecutor = ot.systemTools
-	}
-
-	// Build the filtered tool list from the worker's declared tools. This
-	// ensures each system worker only sees the tools it's supposed to have.
-	//
-	// For the decomposer, we use DisallowedTools instead of Tools because
-	// spawn_worker comes from CoreTools (built by the runtime), and its
-	// definition isn't available yet. We deny everything except spawn_worker
-	// so the decomposer sees only spawn_worker + query_teams (from ExtraTools).
-	var workerTools []runtime.ToolDef
-	var disallowedTools []string
-
-	if isDecomposer(params.WorkerName) {
-		// Block file and shell tools — the decomposer delegates exploration
-		// to Explorer workers via spawn_worker.
-		disallowedTools = []string{
-			"read_file", "write_file", "edit_file", "glob", "grep",
-			"shell", "web_fetch", "report_task_progress",
-		}
-	} else if len(declaredTools) > 0 {
-		allDefs := toolExecutor.Definitions()
-		defsByName := make(map[string]runtime.ToolDef, len(allDefs))
-		for _, d := range allDefs {
-			defsByName[d.Name] = d
-		}
-		for _, name := range declaredTools {
-			if d, ok := defsByName[name]; ok {
-				workerTools = append(workerTools, d)
-			} else {
-				slog.Warn("system worker declared unknown tool, skipping",
-					"worker", params.WorkerName,
-					"tool", name,
-				)
-			}
-		}
-	}
-
-	opts := runtime.SpawnOpts{
-		WorkerID:        params.WorkerName,
-		ProviderName:    workerProvider,
-		Model:           workerModel,
-		SystemPrompt:    systemPrompt,
-		Tools:           workerTools,
-		DisallowedTools: disallowedTools,
-		ToolExecutor:    toolExecutor,
-		ExtraTools:      extraTools,
-		InitialMessage:  params.Message,
-		WorkDir:         workDir,
-	}
-
-	result, err := ot.rt.SpawnAndWait(ctx, opts)
-	if err != nil {
-		return "", fmt.Errorf("consulting worker %q: %w", params.WorkerName, err)
-	}
-
-	return result, nil
 }
 
 func (ot *operatorTools) surfaceToUser(ctx context.Context, args json.RawMessage) (string, error) {
@@ -388,12 +211,12 @@ func (ot *operatorTools) queryJob(ctx context.Context, args json.RawMessage) (st
 	return ot.systemTools.Execute(ctx, "query_job", args)
 }
 
-// queryTeams delegates to SystemTools.queryTeams for DB-backed team queries.
-func (ot *operatorTools) queryTeams(ctx context.Context) (string, error) {
+// queryGraphs delegates to SystemTools.queryGraphs for catalog queries.
+func (ot *operatorTools) queryGraphs(ctx context.Context) (string, error) {
 	if ot.systemTools == nil {
-		return "", fmt.Errorf("query_teams unavailable: no system tools configured")
+		return "", fmt.Errorf("query_graphs unavailable: no system tools configured")
 	}
-	return ot.systemTools.Execute(ctx, "query_teams", json.RawMessage(`{}`))
+	return ot.systemTools.Execute(ctx, "query_graphs", json.RawMessage(`{}`))
 }
 
 func (ot *operatorTools) askUser(ctx context.Context, args json.RawMessage) (string, error) {

@@ -2,6 +2,9 @@
 name: Go Coder
 description: Implements and fixes Go code according to input requirements.
 mode: worker
+output: summary
+access: write
+max_turns: 50
 ---
 
 Your training data is in the past.
@@ -27,3 +30,10 @@ Do not write tests for your code; these will be handled separately.
 Write accurate, concise doc comments for exported types, constants, variables, and functions.
 Do not leave superfluous comments in any code. Superfluous comments are comments that add no value, exist only to visually separate code ("---"), and similar.j
 Do not leave bug, ticket, or similar identifiers in code comments when implementing phases or fixing bugs.
+
+## Output
+
+{{ instructions.call-complete }}
+
+Put your change summary (files touched, intent of each change, any
+deviations from the plan) in the `summary` field of the `complete` call.

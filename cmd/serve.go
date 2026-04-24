@@ -222,6 +222,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 		PromptEngine:     promptEngine,
 		DefaultProvider:  defaultProvider,
 		DefaultModel:     defaultModel,
+		GraphCatalog:     ldr,
 	})
 	defer svc.Shutdown()
 
@@ -242,6 +243,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 		Store:        store,
 		EventSink:    svc,
 		Broker:       svc.Broker(),
+		Graphs:       ldr,
 		DefaultModel: defaultModel,
 	})
 
@@ -261,7 +263,11 @@ func runServe(cmd *cobra.Command, args []string) error {
 		textFlush := func(text string) {
 			svc.BroadcastOperatorText(text, "")
 		}
+		reasoningFlush := func(text string) {
+			svc.BroadcastOperatorText("", text)
+		}
 		batcher := newTextBatcher(16*time.Millisecond, textFlush)
+		reasoningBatcher := newTextBatcher(16*time.Millisecond, reasoningFlush)
 
 		var opErr error
 		op, opErr = operator.New(operator.Config{
@@ -273,6 +279,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 			SystemPrompt:           operatorPrompt,
 			SystemEventBroadcaster: svc,
 			GraphExecutor:          graphExec,
+			GraphCatalog:           ldr,
 			Broker:                 svc.Broker(),
 			PromptEngine:           promptEngine,
 			DefaultProvider:        defaultProvider,
@@ -280,10 +287,14 @@ func runServe(cmd *cobra.Command, args []string) error {
 			OnText: func(text string) {
 				batcher.Add(text)
 			},
+			OnReasoning: func(text string) {
+				reasoningBatcher.Add(text)
+			},
 			OnEvent: func(event operator.Event) {
 				svc.BroadcastOperatorEvent(event)
 			},
 			OnTurnDone: func(tokensIn, tokensOut, reasoningTokens int) {
+				reasoningBatcher.Flush()
 				batcher.Flush()
 				svc.BroadcastOperatorDone(cfg.Operator.Model, tokensIn, tokensOut, reasoningTokens)
 			},
@@ -377,7 +388,10 @@ func runServe(cmd *cobra.Command, args []string) error {
 }
 
 // registerProviders reads provider configs from the loader and registers them
-// in the provider registry. Safe to call multiple times (hot-reload).
+// in the provider registry. Safe to call multiple times (hot-reload). Every
+// provider is wrapped with a per-provider Scheduler so in-flight chat calls
+// against the same backend are bounded — capacity comes from pc.Concurrency
+// (defaulting to 1, which is safe for a local LLM).
 func registerProviders(registry *provider.Registry, ldr *loader.Loader) {
 	if ldr == nil {
 		return
@@ -392,6 +406,9 @@ func registerProviders(registry *provider.Registry, ldr *loader.Loader) {
 			slog.Warn("failed to create provider", "id", pc.ID, "name", pc.Name, "error", err)
 			continue
 		}
-		registry.Register(pc.Key(), p)
+		scheduler := provider.NewScheduler(p, pc.Concurrency)
+		slog.Info("registered provider", "id", pc.ID, "name", pc.Name,
+			"concurrency", scheduler.Capacity())
+		registry.Register(pc.Key(), scheduler)
 	}
 }

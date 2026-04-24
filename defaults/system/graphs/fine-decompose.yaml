@@ -1,0 +1,19 @@
+id: fine-decompose
+name: Fine Decompose
+description: >
+  Pick a graph for a Task, or reject the task as too broad and emit
+  subtasks. The service auto-dispatches this graph for any Task created
+  without a graph_id; its structured output either assigns a graph or
+  supersedes the task with finer-grained children.
+tags: [kind:decompose, scope:fine, system:true]
+
+entry: decompose
+exit: decompose
+
+nodes:
+  - id: decompose
+    role: fine-decomposer
+
+edges:
+  - from: decompose
+    to: end

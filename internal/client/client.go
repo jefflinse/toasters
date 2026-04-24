@@ -202,19 +202,6 @@ func (s *remoteOperatorService) History(ctx context.Context) ([]service.ChatEntr
 	return entries, nil
 }
 
-func (s *remoteOperatorService) RespondToBlocker(ctx context.Context, jobID string, taskID string, answers []string) error {
-	resp, err := s.c.http.post(ctx, fmt.Sprintf("/api/v1/operator/blockers/%s/%s/respond", url.PathEscape(jobID), url.PathEscape(taskID)), struct {
-		Answers []string `json:"answers"`
-	}{Answers: answers})
-	if err != nil {
-		return fmt.Errorf("respond to blocker: %w", err)
-	}
-	if err := decodeNoContent(resp); err != nil {
-		return fmt.Errorf("respond to blocker: %w", err)
-	}
-	return nil
-}
-
 // ---------------------------------------------------------------------------
 // DefinitionService
 // ---------------------------------------------------------------------------
@@ -320,110 +307,34 @@ func (s *remoteDefinitionService) GetWorker(ctx context.Context, id string) (ser
 	return wireWorkerToService(w), nil
 }
 
-// --- Teams ---
+// --- Graphs ---
 
-func (s *remoteDefinitionService) ListTeams(ctx context.Context) ([]service.TeamView, error) {
-	resp, err := s.c.http.get(ctx, "/api/v1/teams")
+func (s *remoteDefinitionService) ListGraphs(ctx context.Context) ([]service.GraphDefinition, error) {
+	resp, err := s.c.http.get(ctx, "/api/v1/graphs")
 	if err != nil {
-		return nil, fmt.Errorf("list teams: %w", err)
+		return nil, fmt.Errorf("list graphs: %w", err)
 	}
-	pr, err := decodeResponse[paginatedResponse[wireTeamView]](resp)
+	pr, err := decodeResponse[paginatedResponse[wireGraphDefinition]](resp)
 	if err != nil {
-		return nil, fmt.Errorf("list teams: %w", err)
+		return nil, fmt.Errorf("list graphs: %w", err)
 	}
-	teams := make([]service.TeamView, 0, len(pr.Items))
-	for _, w := range pr.Items {
-		teams = append(teams, wireTeamViewToService(w))
+	out := make([]service.GraphDefinition, 0, len(pr.Items))
+	for _, g := range pr.Items {
+		out = append(out, wireGraphDefinitionToService(g))
 	}
-	return teams, nil
+	return out, nil
 }
 
-func (s *remoteDefinitionService) GetTeam(ctx context.Context, id string) (service.TeamView, error) {
-	resp, err := s.c.http.get(ctx, fmt.Sprintf("/api/v1/teams/%s", url.PathEscape(id)))
+func (s *remoteDefinitionService) GetGraph(ctx context.Context, id string) (service.GraphDefinition, error) {
+	resp, err := s.c.http.get(ctx, fmt.Sprintf("/api/v1/graphs/%s", url.PathEscape(id)))
 	if err != nil {
-		return service.TeamView{}, fmt.Errorf("get team: %w", err)
+		return service.GraphDefinition{}, fmt.Errorf("get graph: %w", err)
 	}
-	w, err := decodeResponse[wireTeamView](resp)
+	g, err := decodeResponse[wireGraphDefinition](resp)
 	if err != nil {
-		return service.TeamView{}, fmt.Errorf("get team: %w", err)
+		return service.GraphDefinition{}, fmt.Errorf("get graph: %w", err)
 	}
-	return wireTeamViewToService(w), nil
-}
-
-func (s *remoteDefinitionService) CreateTeam(ctx context.Context, name string) (service.TeamView, error) {
-	resp, err := s.c.http.post(ctx, "/api/v1/teams", struct {
-		Name string `json:"name"`
-	}{Name: name})
-	if err != nil {
-		return service.TeamView{}, fmt.Errorf("create team: %w", err)
-	}
-	w, err := decodeResponse[wireTeamView](resp)
-	if err != nil {
-		return service.TeamView{}, fmt.Errorf("create team: %w", err)
-	}
-	return wireTeamViewToService(w), nil
-}
-
-func (s *remoteDefinitionService) DeleteTeam(ctx context.Context, id string) error {
-	resp, err := s.c.http.delete(ctx, fmt.Sprintf("/api/v1/teams/%s", url.PathEscape(id)))
-	if err != nil {
-		return fmt.Errorf("delete team: %w", err)
-	}
-	if err := decodeNoContent(resp); err != nil {
-		return fmt.Errorf("delete team: %w", err)
-	}
-	return nil
-}
-
-func (s *remoteDefinitionService) SetCoordinator(ctx context.Context, teamID string, workerName string) error {
-	resp, err := s.c.http.put(ctx, fmt.Sprintf("/api/v1/teams/%s/coordinator", url.PathEscape(teamID)), struct {
-		WorkerName string `json:"worker_name"`
-	}{WorkerName: workerName})
-	if err != nil {
-		return fmt.Errorf("set coordinator: %w", err)
-	}
-	if err := decodeNoContent(resp); err != nil {
-		return fmt.Errorf("set coordinator: %w", err)
-	}
-	return nil
-}
-
-func (s *remoteDefinitionService) PromoteTeam(ctx context.Context, teamID string) (string, error) {
-	resp, err := s.c.http.post(ctx, fmt.Sprintf("/api/v1/teams/%s/promote", url.PathEscape(teamID)), nil)
-	if err != nil {
-		return "", fmt.Errorf("promote team: %w", err)
-	}
-	ar, err := decodeResponse[asyncResponse](resp)
-	if err != nil {
-		return "", fmt.Errorf("promote team: %w", err)
-	}
-	return ar.OperationID, nil
-}
-
-func (s *remoteDefinitionService) GenerateTeam(ctx context.Context, prompt string) (string, error) {
-	resp, err := s.c.http.post(ctx, "/api/v1/teams/generate", struct {
-		Prompt string `json:"prompt"`
-	}{Prompt: prompt})
-	if err != nil {
-		return "", fmt.Errorf("generate team: %w", err)
-	}
-	ar, err := decodeResponse[asyncResponse](resp)
-	if err != nil {
-		return "", fmt.Errorf("generate team: %w", err)
-	}
-	return ar.OperationID, nil
-}
-
-func (s *remoteDefinitionService) DetectCoordinator(ctx context.Context, teamID string) (string, error) {
-	resp, err := s.c.http.post(ctx, fmt.Sprintf("/api/v1/teams/%s/detect-coordinator", url.PathEscape(teamID)), nil)
-	if err != nil {
-		return "", fmt.Errorf("detect coordinator: %w", err)
-	}
-	ar, err := decodeResponse[asyncResponse](resp)
-	if err != nil {
-		return "", fmt.Errorf("detect coordinator: %w", err)
-	}
-	return ar.OperationID, nil
+	return wireGraphDefinitionToService(g), nil
 }
 
 // ---------------------------------------------------------------------------

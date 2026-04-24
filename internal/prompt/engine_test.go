@@ -351,14 +351,14 @@ func TestEngine_Compose_AllRoles(t *testing.T) {
 	// injected at Compose-time by the graph executor. Supply stub values so
 	// the test can validate the role templates resolve cleanly.
 	phaseOverrides := map[string]string{
-		"task.description":     "stub task description",
-		"job.title":            "stub job title",
-		"job.description":      "stub job description",
-		"investigate.findings": "stub investigation findings",
-		"plan.steps":           "stub plan steps",
-		"implement.summary":    "stub implementation summary",
-		"test.results":         "stub test results",
-		"review.feedback":      "",
+		"task.description":    "stub task description",
+		"job.title":           "stub job title",
+		"job.description":     "stub job description",
+		"investigate.summary": "stub investigation findings",
+		"plan.summary":        "stub plan steps",
+		"implement.summary":   "stub implementation summary",
+		"test.summary":        "stub test results",
+		"review.feedback":     "",
 	}
 
 	for _, name := range engine.Roles() {

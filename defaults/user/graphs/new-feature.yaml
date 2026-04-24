@@ -1,0 +1,42 @@
+id: new-feature
+name: New Feature
+description: >
+  Plan, implement, test, and review a new feature. Skips investigation —
+  the task description is assumed to be sufficient for planning.
+tags: [kind:feature]
+
+entry: plan
+exit: review
+max_iterations: 3
+
+nodes:
+  - id: plan
+    role: planner
+  - id: implement
+    role: implementer
+  - id: test
+    role: tester
+  - id: review
+    role: reviewer
+
+edges:
+  - from: plan
+    to: implement
+  - from: implement
+    to: test
+  - from: test
+    router:
+      on: $test.output.passed
+      branches:
+        - when: true
+          to: review
+        - when: false
+          to: implement
+  - from: review
+    router:
+      on: $review.output.approved
+      branches:
+        - when: true
+          to: end
+        - when: false
+          to: implement

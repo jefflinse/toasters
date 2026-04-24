@@ -11,7 +11,8 @@ require (
 	github.com/charmbracelet/x/ansi v0.11.6
 	github.com/fsnotify/fsnotify v1.9.0
 	github.com/gofrs/uuid/v5 v5.4.0
-	github.com/jefflinse/rhizome v0.0.0-00010101000000-000000000000
+	github.com/jefflinse/mycelium v0.1.0
+	github.com/jefflinse/rhizome v0.5.0
 	github.com/mark3labs/mcp-go v0.44.0
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/viper v1.21.0
@@ -78,3 +79,5 @@ require (
 )
 
 replace github.com/jefflinse/rhizome => ../rhizome
+
+replace github.com/jefflinse/mycelium => ../mycelium

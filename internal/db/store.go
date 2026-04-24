@@ -19,8 +19,8 @@ type Store interface {
 	UpdateTaskStatus(ctx context.Context, id string, status TaskStatus, summary string) error
 	UpdateTaskResult(ctx context.Context, id string, resultSummary, recommendations string) error
 	CompleteTask(ctx context.Context, id string, status TaskStatus, summary, recommendations string) error
-	AssignTask(ctx context.Context, id string, teamID string) error
-	PreAssignTaskTeam(ctx context.Context, id string, teamID string) error
+	AssignTaskToGraph(ctx context.Context, id string, graphID string) error
+	PreAssignTaskGraph(ctx context.Context, id string, graphID string) error
 	AddTaskDependency(ctx context.Context, taskID, dependsOn string) error
 	GetReadyTasks(ctx context.Context, jobID string) ([]*Task, error)
 
@@ -40,29 +40,19 @@ type Store interface {
 	ListWorkers(ctx context.Context) ([]*Worker, error)
 	DeleteAllWorkers(ctx context.Context) error
 
-	// Teams
-	UpsertTeam(ctx context.Context, team *Team) error
-	GetTeam(ctx context.Context, id string) (*Team, error)
-	ListTeams(ctx context.Context) ([]*Team, error)
-	DeleteAllTeams(ctx context.Context) error
-
-	// Team Workers
-	AddTeamWorker(ctx context.Context, tw *TeamWorker) error
-	ListTeamWorkers(ctx context.Context, teamID string) ([]*TeamWorker, error)
-	DeleteAllTeamWorkers(ctx context.Context) error
-
 	// Feed
 	CreateFeedEntry(ctx context.Context, entry *FeedEntry) error
 	ListFeedEntries(ctx context.Context, jobID string, limit int) ([]*FeedEntry, error)
 	ListRecentFeedEntries(ctx context.Context, limit int) ([]*FeedEntry, error)
 
 	// Rebuild — wraps delete-all + insert-all in a transaction
-	RebuildDefinitions(ctx context.Context, skills []*Skill, workers []*Worker, teams []*Team, teamWorkers []*TeamWorker) error
+	RebuildDefinitions(ctx context.Context, skills []*Skill, workers []*Worker) error
 
 	// Sessions
 	CreateSession(ctx context.Context, session *WorkerSession) error
 	UpdateSession(ctx context.Context, id string, update SessionUpdate) error
 	GetActiveSessions(ctx context.Context) ([]*WorkerSession, error)
+	ListSessionsForTask(ctx context.Context, taskID string) ([]*WorkerSession, error)
 
 	// Session transcripts
 	AppendSessionMessage(ctx context.Context, msg *SessionMessage) error

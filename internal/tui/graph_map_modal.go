@@ -45,9 +45,9 @@ func (m *Model) liveGraphState() (dagmap.Topology, dagmap.NodeStates, string, bo
 	if gts == nil {
 		return dagmap.Topology{}, nil, "", false
 	}
-	label := gts.jobType
+	label := gts.graphID
 	if label == "" {
-		label = "bug_fix"
+		label = "graph"
 	}
 	label = label + " · task " + truncateStr(gts.taskID, 8)
 	return gts.topology, gts.nodes, label, true

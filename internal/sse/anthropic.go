@@ -42,6 +42,14 @@ type AnthropicContentBlockDeltaEvent struct {
 		Type        string `json:"type"`
 		Text        string `json:"text,omitempty"`
 		PartialJSON string `json:"partial_json,omitempty"`
+		// Thinking carries incremental reasoning text when Type is
+		// "thinking_delta". Anthropic models with extended thinking
+		// enabled stream chain-of-thought this way.
+		Thinking string `json:"thinking,omitempty"`
+		// Signature carries a cryptographic signature Anthropic attaches
+		// to thinking blocks. Type is "signature_delta". Not exposed to
+		// consumers; retained here so parsing doesn't error.
+		Signature string `json:"signature,omitempty"`
 	} `json:"delta"`
 }
 

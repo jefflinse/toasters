@@ -25,8 +25,6 @@ const (
 	JobStatusPending JobStatus = "pending"
 	// JobStatusSettingUp means the job is being initialised (workspace, context).
 	JobStatusSettingUp JobStatus = "setting_up"
-	// JobStatusDecomposing means the decomposer is breaking the job into tasks.
-	JobStatusDecomposing JobStatus = "decomposing"
 	// JobStatusActive means at least one task is currently being worked on.
 	JobStatusActive JobStatus = "active"
 	// JobStatusPaused means the job is temporarily suspended.
@@ -97,14 +95,14 @@ type Task struct {
 	Title           string
 	Status          TaskStatus
 	WorkerID        string // assigned worker (may be empty)
-	TeamID          string // assigned team (may be empty)
+	GraphID         string // assigned graph definition id (may be empty)
 	ParentID        string // DAG edge; empty for root tasks
 	SortOrder       int
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
 	Summary         string          // completion summary or failure reason
 	ResultSummary   string          // structured result summary
-	Recommendations string          // structured recommendations from the team
+	Recommendations string          // structured recommendations
 	Metadata        json.RawMessage // extensible JSON blob; may be nil
 }
 
@@ -180,7 +178,6 @@ const (
 type SessionSnapshot struct {
 	ID        string
 	WorkerID  string
-	TeamName  string // team this worker belongs to; may be empty
 	JobID     string
 	TaskID    string
 	Status    string // "active", "completed", "failed", "cancelled"
@@ -201,7 +198,6 @@ type SessionDetail struct {
 	Output         string         // accumulated text output from the session
 	Activities     []ActivityItem // recent tool-call activities; newest last
 	WorkerName     string         // human-readable worker name
-	TeamName       string         // team name; may be empty
 	Task           string         // short human-readable task description
 }
 
@@ -250,7 +246,7 @@ type FeedEntry struct {
 }
 
 // ---------------------------------------------------------------------------
-// Definition types (Skills, Workers, Teams)
+// Definition types (Skills, Workers)
 // ---------------------------------------------------------------------------
 
 // Skill is the service-level representation of a reusable worker capability.
@@ -286,50 +282,50 @@ type Worker struct {
 	Disabled        bool
 	Source          string // "system", "user", "auto"
 	SourcePath      string `json:"-"` // absolute path to the .md file
-	TeamID          string // empty for shared workers
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
 }
 
-// Team is the service-level representation of a group of workers.
-type Team struct {
+// ---------------------------------------------------------------------------
+// Graph definition types
+// ---------------------------------------------------------------------------
+
+// GraphEdgeKind classifies a graph edge: a plain forward edge or a conditional
+// edge emitted from a router. Used by dagmap renderers to style branch edges
+// distinctly from linear edges.
+type GraphEdgeKind string
+
+const (
+	// GraphEdgeStatic is an unconditional forward edge (plain `to:`).
+	GraphEdgeStatic GraphEdgeKind = "static"
+
+	// GraphEdgeConditional is a router-branch edge. Label carries a short
+	// human-readable description of the match (e.g. "true", "approved",
+	// "passed"), derived from Branch.When.
+	GraphEdgeConditional GraphEdgeKind = "conditional"
+)
+
+// GraphEdge describes one edge in a graph topology.
+type GraphEdge struct {
+	From  string        // source node id, or "" for the start edge
+	To    string        // destination node id, or "" for the end edge
+	Kind  GraphEdgeKind // static or conditional
+	Label string        // optional branch label for conditional edges
+}
+
+// GraphDefinition is the service-level projection of a compiled graph. It's
+// the minimum the TUI needs to render a topology map for a task — node ids
+// plus edge shape — without taking a dependency on internal/graphexec.
+type GraphDefinition struct {
 	ID          string
 	Name        string
 	Description string
-	LeadWorker   string   // worker ID reference
-	Skills      []string // team-wide skill names
-	Provider    string   // team default provider
-	Model       string   // team default model
-	Culture     string   // team culture document (markdown body)
-	Source      string   // "system", "user", "auto"
-	SourcePath  string   `json:"-"` // absolute path to the team directory
-	IsAuto      bool
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	Tags        []string
+	Entry       string
+	Exit        string
+	Nodes       []string
+	Edges       []GraphEdge
 }
-
-// TeamView bundles a Team with its resolved coordinator and workers.
-// It replaces the tui.TeamView type and is the canonical view used everywhere
-// a team is displayed with its members.
-type TeamView struct {
-	Team        Team
-	Coordinator *Worker  // nil if no lead is set or found
-	Workers     []Worker // all non-coordinator workers
-	IsReadOnly  bool    // true if the team is read-only (e.g. Claude Code auto-discovered teams)
-	IsSystem    bool    // true if the team is a system team (lives under the system config directory)
-}
-
-// Name returns the team name.
-func (tv TeamView) Name() string { return tv.Team.Name }
-
-// Description returns the team description.
-func (tv TeamView) Description() string { return tv.Team.Description }
-
-// Dir returns the team's source path (the team directory).
-func (tv TeamView) Dir() string { return tv.Team.SourcePath }
-
-// IsAuto returns true if the team was auto-detected rather than manually created.
-func (tv TeamView) IsAuto() bool { return tv.Team.IsAuto }
 
 // ---------------------------------------------------------------------------
 // Chat / conversation types
@@ -553,8 +549,6 @@ type OperationResult struct {
 	OperationID string
 	// For generation operations, Content holds the generated definition content.
 	Content string
-	// For team generation, AgentNames holds the names of workers to assign.
-	AgentNames []string
 	// Error is non-empty for operation.failed events.
 	Error string
 }
@@ -570,33 +564,3 @@ type HealthStatus struct {
 	Uptime  time.Duration // time since the service started
 }
 
-// ---------------------------------------------------------------------------
-// Blocker types (used in the blocker modal)
-// ---------------------------------------------------------------------------
-
-// BlockerQuestion is a single question posed by a blocked worker, optionally
-// with a set of predefined answer choices. If Options is empty the user
-// provides a free-form text answer.
-type BlockerQuestion struct {
-	Text    string   // the question text
-	Options []string // suggested answers; empty means free-form
-	Answer  string   // the user's answer, populated after submission
-}
-
-// Blocker represents an active blocker reported by a worker that requires
-// user input before work can continue. It is the canonical type used by both
-// the service layer and the TUI blocker modal.
-type Blocker struct {
-	JobID          string
-	TaskID         string
-	TeamID         string
-	WorkerID       string
-	Team           string // human-readable team name for display
-	BlockerSummary string // short summary of what is blocked
-	Context        string // additional context from the worker
-	WhatWasTried   string // what the worker already attempted
-	WhatIsNeeded   string // what the worker needs to proceed
-	Questions      []BlockerQuestion
-	Answered       bool
-	RawBody        string // raw markdown body from the report_blocker tool call
-}
