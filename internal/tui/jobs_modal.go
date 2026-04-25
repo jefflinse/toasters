@@ -26,6 +26,7 @@ type jobsModalState struct {
 	confirmCancel     bool
 	agentScrollOffset int // TODO: implement scrolling in the agent detail panel (v2)
 	graphNodeIdx      int // focused node when the selected task has graph state
+	taskScrollOffset  int // line offset into the middle panel's task list
 }
 
 // loadJobsForModal populates the modal's job list from the same filtered
@@ -114,6 +115,29 @@ func (m *Model) loadJobDetail() {
 	}
 	m.jobsModal.tasks[jobID] = detail.Tasks
 	m.jobsModal.progress[jobID] = detail.Progress
+}
+
+// scrollJobsModal adjusts the middle panel's task-line scroll offset in
+// response to a mouse-wheel event. The render path re-clamps the offset
+// so the selected task stays visible, so runaway scrolling self-corrects
+// once the user hits an arrow key again.
+func (m *Model) scrollJobsModal(msg tea.MouseWheelMsg) {
+	// Only wheel events on the middle panel scroll the task list today;
+	// left/right panels already fit their content on screen or have
+	// their own navigation keys. Keep the geometry check permissive —
+	// if anything goes off, the offset just won't move.
+	const step = 3
+	switch msg.Button {
+	case tea.MouseWheelUp:
+		m.jobsModal.taskScrollOffset -= step
+		if m.jobsModal.taskScrollOffset < 0 {
+			m.jobsModal.taskScrollOffset = 0
+		}
+	case tea.MouseWheelDown:
+		m.jobsModal.taskScrollOffset += step
+		// Upper bound is clamped by the render path against the actual
+		// task-line count; overshooting here is harmless.
+	}
 }
 
 // updateJobsModal handles all key presses when the jobs modal is open.
@@ -415,21 +439,75 @@ func (m *Model) renderJobsModal() string {
 				taskIdx = 0
 			}
 
+			// Build per-task blocks (1 or 2 lines each) so the visible
+			// window can include/exclude a whole task at a time. Keeping
+			// the "task line" and its "graph-name sub-row" together in
+			// one block prevents the sub-row from orphaning at the top
+			// of the window when scrolling.
+			type taskBlock struct{ lines []string }
+			blocks := make([]taskBlock, len(selectedJobTasks))
 			for i, task := range selectedJobTasks {
+				var b taskBlock
 				indicator, style := taskStatusIndicator(task.Status)
 				taskTitle := truncateStr(task.Title, midInnerW-4)
 				if i == taskIdx {
-					midLines = append(midLines, ModalSelectedStyle.Width(midInnerW).Render(indicator+" "+taskTitle))
+					b.lines = append(b.lines, ModalSelectedStyle.Width(midInnerW).Render(indicator+" "+taskTitle))
 				} else {
-					midLines = append(midLines, style.Background(bgColor).Render(indicator+" "+taskTitle))
+					b.lines = append(b.lines, style.Background(bgColor).Render(indicator+" "+taskTitle))
 				}
-				// Graph nesting: 4-space indent, same status icon, graph name in dim gray.
 				if task.GraphID != "" {
 					graphIndicator, _ := taskStatusIndicator(task.Status)
 					graphLine := bgFill.Render("    ") + dimBg.Render(graphIndicator) + bgFill.Render(" ") + taskPendingBg.Render(truncateStr(task.GraphID, midInnerW-7))
-					midLines = append(midLines, graphLine)
+					b.lines = append(b.lines, graphLine)
 				}
+				blocks[i] = b
 			}
+
+			// Flatten, remembering each block's line range.
+			starts := make([]int, len(blocks)+1)
+			for i, b := range blocks {
+				starts[i+1] = starts[i] + len(b.lines)
+			}
+			var allTaskLines []string
+			for _, b := range blocks {
+				allTaskLines = append(allTaskLines, b.lines...)
+			}
+
+			// Budget of task lines after the header/status/separator rows.
+			avail := panelInnerH - len(midLines)
+			if avail < 1 {
+				avail = 1
+			}
+
+			// Clamp taskScrollOffset: (a) keep the selected task fully
+			// visible, (b) don't scroll past end, (c) don't scroll before
+			// the start.
+			off := m.jobsModal.taskScrollOffset
+			selStart := starts[taskIdx]
+			selEnd := starts[taskIdx+1]
+			if selStart < off {
+				off = selStart
+			}
+			if selEnd > off+avail {
+				off = selEnd - avail
+			}
+			maxOff := starts[len(blocks)] - avail
+			if maxOff < 0 {
+				maxOff = 0
+			}
+			if off > maxOff {
+				off = maxOff
+			}
+			if off < 0 {
+				off = 0
+			}
+			m.jobsModal.taskScrollOffset = off
+
+			end := off + avail
+			if end > len(allTaskLines) {
+				end = len(allTaskLines)
+			}
+			midLines = append(midLines, allTaskLines[off:end]...)
 		}
 	}
 

@@ -1236,6 +1236,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case tea.MouseWheelMsg:
+		// Jobs modal: route wheel events to the panel under the cursor so
+		// the task list and graph list stay usable with the mouse.
+		if m.jobsModal.show {
+			m.scrollJobsModal(msg)
+			return m, nil
+		}
 		// Forward mouse wheel events to viewport for scroll support.
 		var cmd tea.Cmd
 		m.chatViewport, cmd = m.chatViewport.Update(msg)
