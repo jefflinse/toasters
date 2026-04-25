@@ -391,6 +391,28 @@ type wireJobCompletedPayload struct {
 	JobID   string `json:"job_id"`
 	Title   string `json:"title"`
 	Summary string `json:"summary"`
+
+	Status    string    `json:"status,omitempty"`
+	Workspace string    `json:"workspace,omitempty"`
+	StartedAt time.Time `json:"started_at,omitempty"`
+	EndedAt   time.Time `json:"ended_at,omitempty"`
+
+	TasksTotal     int `json:"tasks_total,omitempty"`
+	TasksCompleted int `json:"tasks_completed,omitempty"`
+	TasksFailed    int `json:"tasks_failed,omitempty"`
+
+	TokensIn  int64   `json:"tokens_in,omitempty"`
+	TokensOut int64   `json:"tokens_out,omitempty"`
+	CostUSD   float64 `json:"cost_usd,omitempty"`
+
+	FilesTouched      []wireFileTouch `json:"files_touched,omitempty"`
+	FilesTouchedExtra int             `json:"files_touched_extra,omitempty"`
+}
+
+type wireFileTouch struct {
+	Path  string `json:"path"`
+	Size  int64  `json:"size,omitempty"`
+	IsNew bool   `json:"is_new,omitempty"`
 }
 
 type wireProgressUpdatePayload struct {
@@ -978,10 +1000,26 @@ func parseSSEPayload(eventType string, raw json.RawMessage) (any, error) {
 		if err := json.Unmarshal(raw, &w); err != nil {
 			return nil, fmt.Errorf("decoding job.completed payload: %w", err)
 		}
+		files := make([]service.FileTouch, 0, len(w.FilesTouched))
+		for _, f := range w.FilesTouched {
+			files = append(files, service.FileTouch{Path: f.Path, Size: f.Size, IsNew: f.IsNew})
+		}
 		return service.JobCompletedPayload{
-			JobID:   w.JobID,
-			Title:   w.Title,
-			Summary: w.Summary,
+			JobID:             w.JobID,
+			Title:             w.Title,
+			Summary:           w.Summary,
+			Status:            service.JobStatus(w.Status),
+			Workspace:         w.Workspace,
+			StartedAt:         w.StartedAt,
+			EndedAt:           w.EndedAt,
+			TasksTotal:        w.TasksTotal,
+			TasksCompleted:    w.TasksCompleted,
+			TasksFailed:       w.TasksFailed,
+			TokensIn:          w.TokensIn,
+			TokensOut:         w.TokensOut,
+			CostUSD:           w.CostUSD,
+			FilesTouched:      files,
+			FilesTouchedExtra: w.FilesTouchedExtra,
 		}, nil
 
 	case service.EventTypeProgressUpdate:

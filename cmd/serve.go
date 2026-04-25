@@ -244,14 +244,16 @@ func runServe(cmd *cobra.Command, args []string) error {
 	// MCP manager is long-lived and shared. The broker is shared with the
 	// operator so ask_user from either path lands in the same TUI modal.
 	graphExec := graphexec.NewExecutor(graphexec.ExecutorConfig{
-		Registry:     registry,
-		MCPManager:   mcpManager,
-		PromptEngine: promptEngine,
-		Store:        store,
-		EventSink:    svc,
-		Broker:       svc.Broker(),
-		Graphs:       ldr,
-		DefaultModel: defaultModel,
+		Registry:              registry,
+		MCPManager:            mcpManager,
+		PromptEngine:          promptEngine,
+		Store:                 store,
+		EventSink:             svc,
+		Broker:                svc.Broker(),
+		Graphs:                ldr,
+		DefaultModel:          defaultModel,
+		WorkerThinkingEnabled: cfg.WorkerThinkingEnabled,
+		WorkerTemperature:     cfg.WorkerTemperature,
 	})
 
 	// Share the graph executor with the service so both the startup-time

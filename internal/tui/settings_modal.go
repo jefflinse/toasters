@@ -68,6 +68,11 @@ type settingsRow struct {
 	options func() []string
 }
 
+// workerTemperatureOptions is the list of temperature presets the row
+// cycles through. Kept short so left/right is fast to scrub; values cover
+// the practical range for both deterministic (0.0) and creative (2.0) work.
+var workerTemperatureOptions = []string{"0.0", "0.1", "0.2", "0.3", "0.5", "0.7", "1.0", "1.5", "2.0"}
+
 // settingsRows is the ordered list of rows rendered in the modal. Adding a
 // new setting is just a matter of appending a row here.
 var settingsRows = []settingsRow{
@@ -85,6 +90,75 @@ var settingsRows = []settingsRow{
 		set:     func(s *service.Settings, v string) { s.FineGranularity = v },
 		options: config.GranularityLevels,
 	},
+	{
+		label: "Worker Node Thinking Enabled",
+		desc:  "Default for the per-request thinking/reasoning toggle on worker nodes. Roles may override.",
+		get: func(s *service.Settings) string {
+			if s.WorkerThinkingEnabled {
+				return "on"
+			}
+			return "off"
+		},
+		set:     func(s *service.Settings, v string) { s.WorkerThinkingEnabled = v == "on" },
+		options: func() []string { return []string{"off", "on"} },
+	},
+	{
+		label: "Worker Node Temperature",
+		desc:  "Default sampling temperature for worker nodes. Roles may override.",
+		get:   func(s *service.Settings) string { return formatTemperature(s.WorkerTemperature) },
+		set: func(s *service.Settings, v string) {
+			if f, ok := parseTemperature(v); ok {
+				s.WorkerTemperature = f
+			}
+		},
+		options: func() []string { return workerTemperatureOptions },
+	},
+	{
+		label: "Show Jobs Panel by Default",
+		desc:  "Keep the Jobs/Workers left panel visible even when there are no jobs to show. Ctrl+J still overrides per session.",
+		get: func(s *service.Settings) string {
+			if s.ShowJobsPanelByDefault {
+				return "on"
+			}
+			return "off"
+		},
+		set:     func(s *service.Settings, v string) { s.ShowJobsPanelByDefault = v == "on" },
+		options: func() []string { return []string{"off", "on"} },
+	},
+	{
+		label: "Show Operator Panel by Default",
+		desc:  "Keep the Operator sidebar visible by default. Ctrl+O still overrides per session.",
+		get: func(s *service.Settings) string {
+			if s.ShowOperatorPanelByDefault {
+				return "on"
+			}
+			return "off"
+		},
+		set:     func(s *service.Settings, v string) { s.ShowOperatorPanelByDefault = v == "on" },
+		options: func() []string { return []string{"off", "on"} },
+	},
+}
+
+// formatTemperature renders a float as one of the preset option strings so
+// the chip selector can highlight the matching value. Falls back to a
+// one-decimal print so an out-of-set value (e.g. a hand-edited config)
+// still displays sensibly.
+func formatTemperature(v float64) string {
+	for _, opt := range workerTemperatureOptions {
+		if f, ok := parseTemperature(opt); ok && f == v {
+			return opt
+		}
+	}
+	return fmt.Sprintf("%.1f", v)
+}
+
+// parseTemperature parses a preset option string into a float64.
+func parseTemperature(s string) (float64, bool) {
+	var f float64
+	if _, err := fmt.Sscanf(s, "%f", &f); err != nil {
+		return 0, false
+	}
+	return f, true
 }
 
 // updateSettingsModal handles key presses while the settings modal is open.

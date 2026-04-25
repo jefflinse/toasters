@@ -917,6 +917,33 @@ func (s *SQLiteStore) UpdateSession(ctx context.Context, id string, update Sessi
 	return checkRowsAffected(result, "session", id)
 }
 
+// ListSessionsForJob returns every worker session tied to a job id,
+// regardless of status. Used by job-completion summaries to aggregate
+// tokens/cost across the job's nodes without forcing the caller to
+// iterate tasks first.
+func (s *SQLiteStore) ListSessionsForJob(ctx context.Context, jobID string) ([]*WorkerSession, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, worker_id, job_id, task_id, status, model, provider,
+		        tokens_in, tokens_out, started_at, ended_at, cost_usd
+		 FROM worker_sessions
+		 WHERE job_id = ?
+		 ORDER BY started_at ASC`, jobID)
+	if err != nil {
+		return nil, fmt.Errorf("listing sessions for job: %w", err)
+	}
+	defer rows.Close() //nolint:errcheck
+
+	var sessions []*WorkerSession
+	for rows.Next() {
+		sess, err := scanSession(rows)
+		if err != nil {
+			return nil, err
+		}
+		sessions = append(sessions, sess)
+	}
+	return sessions, rows.Err()
+}
+
 // ListSessionsForTask returns every worker session tied to a task id,
 // regardless of status. Used by post-hoc debugging (graph-node
 // transcripts) where "active" is not the state we want.

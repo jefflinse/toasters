@@ -175,6 +175,12 @@ type Model struct {
 	// Jobs modal state.
 	jobsModal jobsModalState
 
+	// Most recent JobResult snapshot. Drives the "↑ to select for
+	// actions" hint that appears beneath the latest unread result block.
+	// Cleared when the user submits another turn or a newer result
+	// displaces it.
+	recentJobResult *service.JobResultSnapshot
+
 	// Graph map modal state (POC viewer for dagmap renderers).
 	graphMapModal graphMapModalState
 
@@ -208,10 +214,19 @@ type Model struct {
 	// scrollbar column drifts.
 	lastLeftPanelShown bool
 
-	// Collapsible panel state.
-	leftPanelHidden        bool // true when user has toggled the left panel off via ctrl+j
-	sidebarHidden          bool // true when user has toggled the sidebar off via ctrl+o
-	leftPanelWidthOverride int  // 0 = use default computed width; >0 = user-resized width
+	// Collapsible panel state. Override pointers track explicit user
+	// toggles via ctrl+j / ctrl+o: nil means "follow the configured default
+	// behavior", non-nil pins the panel to the boolean's value regardless
+	// of content or settings. This lets ctrl+j reveal an empty Jobs panel
+	// even when there's nothing to show — the prior plain-bool design
+	// silently lost that toggle because the auto-hide gate fired first.
+	leftPanelOverride *bool
+	sidebarOverride   *bool
+	// Settings-driven defaults for the panels' baseline visibility,
+	// refreshed whenever /settings is loaded or saved.
+	showJobsPanelDefault     bool
+	showOperatorPanelDefault bool
+	leftPanelWidthOverride   int // 0 = use default computed width; >0 = user-resized width
 
 	// Shared spinner animation frame counter.
 	spinnerFrame   int
@@ -316,6 +331,14 @@ func NewModel(cfg ModelConfig) Model {
 	m.chat.collapsedTools = make(map[int]bool)
 	m.runtimeSessions = make(map[string]*runtimeSlot)
 
+	// Seed panel-visibility defaults with the same baseline GetSettings
+	// returns when no AppConfig is wired. Init() will fetch the persisted
+	// settings shortly after; until that round-trip lands, this seeding
+	// keeps the operator sidebar visible (the historical default) instead
+	// of starting hidden because of the bool zero value.
+	m.showOperatorPanelDefault = true
+	m.showJobsPanelDefault = false
+
 	return m
 }
 
@@ -325,6 +348,11 @@ func (m *Model) Init() tea.Cmd {
 		tea.RequestWindowSize,
 		m.fetchModels(),
 		m.fetchGraphs(),
+		// Pull persisted settings up front so the panel-visibility
+		// defaults reflect the user's preferences before the first
+		// frame paints. The returned SettingsLoadedMsg also seeds the
+		// settingsModal cache, so opening /settings later is instant.
+		m.fetchSettings(),
 		loadingTick(), // drive the loading screen animation
 		spinnerTick(), // drive braille spinner animations
 	}
@@ -547,6 +575,18 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, nil
 			}
+			// Chat focus + at least one JobResult → walk the result-block
+			// selection backward. Blurs the input on first selection so
+			// the action keys (w/d/Enter) aren't swallowed by the textarea.
+			if m.focused == focusChat && !m.stream.streaming {
+				if m.stepJobResultSelection(-1) {
+					if m.chat.selectedMsgIdx >= 0 {
+						m.input.Blur()
+					}
+					m.updateViewportContent()
+					return m, nil
+				}
+			}
 		case "down":
 			// Navigate jobs when that panel is focused.
 			if m.focused == focusJobs {
@@ -562,6 +602,27 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.selectedAgentSlot++
 				}
 				return m, nil
+			}
+			// Mirror of the Up handler above for symmetry: walk forward
+			// through result-block selection, returning to free chat
+			// after the newest result.
+			if m.focused == focusChat && !m.stream.streaming {
+				if m.chat.selectedMsgIdx >= 0 && m.stepJobResultSelection(+1) {
+					if m.chat.selectedMsgIdx < 0 {
+						cmds = append(cmds, m.input.Focus())
+					}
+					m.updateViewportContent()
+					return m, tea.Batch(cmds...)
+				}
+			}
+		case "w":
+			// Open the workspace directory of the selected JobResult.
+			// The action keys are intentionally only live while a result
+			// is selected — typing 'w' in chat normally goes to the input.
+			if m.focused == focusChat {
+				if res := m.selectedJobResult(); res != nil {
+					return m, m.openWorkspaceDir(res.Workspace)
+				}
 			}
 		case "ctrl+x":
 			// Toggle expand/collapse on the selected completion message when chat is focused.
@@ -635,10 +696,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, cmd
 
 		case "ctrl+j":
-			// Toggle left panel (Jobs + Workers) visibility.
-			m.leftPanelHidden = !m.leftPanelHidden
-			// If hiding the panel while it's focused, switch to chat.
-			if m.leftPanelHidden && (m.focused == focusJobs || m.focused == focusAgents) {
+			// Toggle left panel (Jobs + Workers) visibility. Flip from the
+			// currently *effective* state, not the override field — when no
+			// override is set, the user's mental model is "the panel I see
+			// right now", which may be the auto-hidden empty state.
+			next := !m.shouldShowLeftPanel()
+			m.leftPanelOverride = &next
+			if !next && (m.focused == focusJobs || m.focused == focusAgents) {
 				cmds = append(cmds, m.setFocus(focusChat))
 				cmds = append(cmds, m.input.Focus())
 			}
@@ -646,8 +710,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Batch(cmds...)
 
 		case "ctrl+o":
-			// Toggle right sidebar (Operator stats) visibility.
-			m.sidebarHidden = !m.sidebarHidden
+			// Toggle right sidebar (Operator stats) visibility. Same
+			// effective-state semantics as ctrl+j above.
+			next := !m.shouldShowSidebar()
+			m.sidebarOverride = &next
 			m.resizeComponents()
 			return m, tea.Batch(cmds...)
 
@@ -681,6 +747,16 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 
 		case "esc":
+			// Drop result-block selection back to free chat. Sits ahead
+			// of the grid + stream guards because the user's mental model
+			// is "esc = back out of the most-immediate context", and a
+			// chat-selected result is more recent than a streaming turn.
+			if m.focused == focusChat && m.selectedJobResult() != nil {
+				m.chat.selectedMsgIdx = -1
+				cmds = append(cmds, m.input.Focus())
+				m.updateViewportContent()
+				return m, tea.Batch(cmds...)
+			}
 			// Exit grid screen.
 			if m.grid.showGrid {
 				m.grid.showGrid = false
@@ -710,6 +786,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case "enter":
+			// Result-block deep link: Enter on a chat-selected JobResult
+			// jumps into the Jobs modal at that job. Sits before the
+			// jobs-pane handler so chat selection wins when the user is
+			// in result-block selection mode.
+			if m.focused == focusChat && !m.stream.streaming {
+				if res := m.selectedJobResult(); res != nil {
+					return m, m.openJobsModalForJob(res.JobID)
+				}
+			}
 			// Open jobs modal pre-selected on current job.
 			if m.focused == focusJobs {
 				dj := m.displayJobs()
@@ -1021,6 +1106,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.settingsModal.settings = msg.Settings
 			m.settingsModal.dirty = msg.Settings
+			m.applyPanelVisibilityDefaults(msg.Settings)
 		}
 
 	case SettingsSavedMsg:
@@ -1030,6 +1116,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.settingsModal.settings = msg.Settings
 			m.settingsModal.dirty = msg.Settings
+			m.applyPanelVisibilityDefaults(msg.Settings)
 			return m, m.addToast("✓ Settings saved", toastSuccess)
 		}
 
@@ -1499,13 +1586,28 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// All job-scoped events (Job*, Task*) collapse into a single
 		// in-place job-update block per job ID. The block mutates as the
 		// job progresses and stays at its original chat position.
+		dirty := false
 		if m.upsertJobUpdateEntry(msg.Event) != nil {
+			dirty = true
+		}
+		// Job completion is also the moment the result block lands —
+		// distinct from the in-progress block, sitting *below* it in chat
+		// so the conversation history reflects the discrete completion
+		// event. Failed/cancelled jobs use the same hook; the renderer
+		// branches on Status.
+		if msg.Event.Type == service.EventTypeJobCompleted {
+			if cmd := m.appendJobResultEntry(msg.Event); cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+			dirty = true
+		}
+		if dirty {
 			m.updateViewportContent()
 			if !m.scroll.userScrolled {
 				m.chatViewport.GotoBottom()
 			}
 		}
-		return m, nil
+		return m, tea.Batch(cmds...)
 
 	case progressPollMsg:
 		m.progress.jobs = msg.Jobs

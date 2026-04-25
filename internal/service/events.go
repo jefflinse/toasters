@@ -280,11 +280,55 @@ type TaskFailedPayload struct {
 	Error   string
 }
 
-// JobCompletedPayload is the payload for EventTypeJobCompleted events.
+// JobCompletedPayload is the payload for EventTypeJobCompleted events. It
+// carries everything the TUI needs to render the result block in one go,
+// so the client doesn't have to round-trip back to the server for tokens,
+// sessions, or the workspace listing.
 type JobCompletedPayload struct {
 	JobID   string
 	Title   string
 	Summary string
+
+	// Status reflects the final terminal state of the job. The operator
+	// fires EventJobComplete whenever every task has reached a terminal
+	// state, so a "completed" event can still report Status = failed when
+	// one or more tasks failed.
+	Status JobStatus
+
+	// Workspace is the absolute path to the job's working directory, the
+	// dir created at job start that holds the generated artifacts. Empty
+	// when the job didn't request a workspace.
+	Workspace string
+
+	// StartedAt and EndedAt bracket the full job lifetime; EndedAt - StartedAt
+	// is the duration. EndedAt is when this event fires.
+	StartedAt time.Time
+	EndedAt   time.Time
+
+	TasksTotal     int
+	TasksCompleted int
+	TasksFailed    int
+
+	TokensIn  int64
+	TokensOut int64
+	CostUSD   float64
+
+	// FilesTouched lists files in Workspace whose mtime falls within the
+	// job's lifetime — a heuristic that approximates "files written or
+	// modified by this job" without requiring tool-call instrumentation.
+	// Capped server-side; the count of suppressed entries is tracked in
+	// FilesTouchedExtra.
+	FilesTouched      []FileTouch
+	FilesTouchedExtra int
+}
+
+// FileTouch describes a single artifact file produced or modified during a
+// job. Path is relative to the workspace, so the TUI can render it without
+// leaking the full home directory.
+type FileTouch struct {
+	Path  string
+	Size  int64
+	IsNew bool // true when the file was created during the job
 }
 
 // ProgressUpdatePayload is the payload for EventTypeProgressUpdate events.

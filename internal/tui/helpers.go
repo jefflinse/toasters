@@ -4,6 +4,9 @@ package tui
 import (
 	"fmt"
 	"log/slog"
+	"os"
+	"os/exec"
+	"runtime"
 	"slices"
 	"strings"
 	"time"
@@ -208,26 +211,36 @@ func renderScrollbar(viewportHeight int, totalLines int, scrollPercent float64) 
 }
 
 // renderToasts renders the toast notification stack as a single string block.
-// Newest toasts appear at the top.
-func (m *Model) renderToasts() string {
-	if len(m.toasts) == 0 {
+// Newest toasts appear at the top. maxOuterWidth caps the total rendered
+// width (border + padding + content); messages shorter than that produce
+// proportionally narrower toasts so the bubble grows with its content
+// instead of always padding out to a fixed 40-cell box.
+func (m *Model) renderToasts(maxOuterWidth int) string {
+	if len(m.toasts) == 0 || maxOuterWidth <= 0 {
 		return ""
 	}
-	// Inner budget = MaxWidth(40) minus horizontal padding (Padding(0,1) → 2).
-	innerBudget := 40 - ToastBaseStyle.GetHorizontalPadding()
+	// Outer = border (2) + padding (2) + inner content. Reserve the chrome
+	// before deciding how much room the message itself gets.
+	const chrome = 4
+	innerBudget := maxOuterWidth - chrome
+	if innerBudget < 1 {
+		innerBudget = 1
+	}
 	var lines []string
-	// Render newest first (reverse order).
 	for i := len(m.toasts) - 1; i >= 0; i-- {
 		t := m.toasts[i]
 		msg := truncateToWidth(t.message, innerBudget)
+		// Override MaxWidth per-render so wider terminals can show the full
+		// message; the base style's MaxWidth was a hard 40 which clipped
+		// every toast at the same point regardless of available room.
 		var rendered string
 		switch t.level {
 		case toastSuccess:
-			rendered = ToastSuccessStyle.Render(msg)
+			rendered = ToastSuccessStyle.MaxWidth(maxOuterWidth).Render(msg)
 		case toastWarning:
-			rendered = ToastWarningStyle.Render(msg)
+			rendered = ToastWarningStyle.MaxWidth(maxOuterWidth).Render(msg)
 		default:
-			rendered = ToastInfoStyle.Render(msg)
+			rendered = ToastInfoStyle.MaxWidth(maxOuterWidth).Render(msg)
 		}
 		lines = append(lines, rendered)
 	}
@@ -276,9 +289,18 @@ func truncateToWidth(s string, maxWidth int) string {
 	return b.String()
 }
 
-// overlayToasts splices the toast block into the top-right corner of the screen.
-func overlayToasts(screen string, toastBlock string, screenWidth int) string {
+// overlayToasts splices the toast block so its right edge lands at column
+// rightEdge (1-indexed cell count). The caller passes screenWidth so we can
+// pad short lines when needed; any screen content past rightEdge is preserved
+// so toasts don't paint over a sidebar.
+func overlayToasts(screen string, toastBlock string, rightEdge, screenWidth int) string {
 	if toastBlock == "" {
+		return screen
+	}
+	if rightEdge > screenWidth {
+		rightEdge = screenWidth
+	}
+	if rightEdge <= 0 {
 		return screen
 	}
 	screenLines := strings.Split(screen, "\n")
@@ -289,62 +311,111 @@ func overlayToasts(screen string, toastBlock string, screenWidth int) string {
 			break
 		}
 		toastW := lipgloss.Width(tl)
-		screenLineW := lipgloss.Width(screenLines[i])
 
-		if toastW >= screenWidth {
-			// Toast is wider than screen — just replace the line.
-			screenLines[i] = tl
+		// Toast wider than its budget — collapse to a full-line replacement
+		// across the chat area so we don't crash into a sidebar.
+		if toastW >= rightEdge {
+			leftPart := takeVisible(screenLines[i], 0)
+			_, rightPart := splitVisibleAt(screenLines[i], rightEdge)
+			screenLines[i] = leftPart + tl + rightPart
 			continue
 		}
 
-		// Pad the screen line if it's shorter than the screen width.
+		// Pad the screen line out to screenWidth so we have material to
+		// preserve to the right of the toast.
+		screenLineW := lipgloss.Width(screenLines[i])
 		if screenLineW < screenWidth {
 			screenLines[i] = screenLines[i] + strings.Repeat(" ", screenWidth-screenLineW)
 		}
 
-		// Right-align: place toast at the right edge.
-		// We need to work with the raw string, but ANSI codes make character
-		// counting tricky. Use a simpler approach: build the line as
-		// [left portion] + [toast].
-		leftWidth := screenWidth - toastW
-		if leftWidth < 0 {
-			leftWidth = 0
-		}
-
-		// Truncate the screen line to leftWidth visible characters.
-		// Walk runes and ANSI sequences to find the cut point.
-		sl := screenLines[i]
-		var result strings.Builder
-		visible := 0
-		inEsc := false
-		for _, r := range sl {
-			if r == '\x1b' {
-				inEsc = true
-				result.WriteRune(r)
-				continue
-			}
-			if inEsc {
-				result.WriteRune(r)
-				if (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') {
-					inEsc = false
-				}
-				continue
-			}
-			if visible >= leftWidth {
-				break
-			}
-			result.WriteRune(r)
-			visible++
-		}
-		// Pad if we didn't reach leftWidth.
-		for visible < leftWidth {
-			result.WriteRune(' ')
-			visible++
-		}
-		result.WriteString(tl)
-		screenLines[i] = result.String()
+		leftBudget := rightEdge - toastW
+		leftPart := takeVisible(screenLines[i], leftBudget)
+		_, rightPart := splitVisibleAt(screenLines[i], rightEdge)
+		screenLines[i] = leftPart + tl + rightPart
 	}
 	return strings.Join(screenLines, "\n")
+}
+
+// takeVisible returns the prefix of line that occupies n visible cells,
+// preserving ANSI escape sequences. If line has fewer than n visible cells
+// the result is padded with spaces.
+func takeVisible(line string, n int) string {
+	if n <= 0 {
+		return ""
+	}
+	var b strings.Builder
+	visible := 0
+	inEsc := false
+	for _, r := range line {
+		if r == '\x1b' {
+			inEsc = true
+			b.WriteRune(r)
+			continue
+		}
+		if inEsc {
+			b.WriteRune(r)
+			if (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') {
+				inEsc = false
+			}
+			continue
+		}
+		if visible >= n {
+			break
+		}
+		b.WriteRune(r)
+		visible++
+	}
+	for visible < n {
+		b.WriteRune(' ')
+		visible++
+	}
+	return b.String()
+}
+
+// splitVisibleAt splits line at the n-th visible cell. The left half holds
+// the first n visible cells (no padding); the right half holds everything
+// after, including any ANSI escape sequences in flight at the cut point so
+// the right half renders with the same styling that was active.
+func splitVisibleAt(line string, n int) (string, string) {
+	if n <= 0 {
+		return "", line
+	}
+	var left, right strings.Builder
+	visible := 0
+	inEsc := false
+	cut := false
+	for _, r := range line {
+		if r == '\x1b' {
+			inEsc = true
+			if cut {
+				right.WriteRune(r)
+			} else {
+				left.WriteRune(r)
+			}
+			continue
+		}
+		if inEsc {
+			if cut {
+				right.WriteRune(r)
+			} else {
+				left.WriteRune(r)
+			}
+			if (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') {
+				inEsc = false
+			}
+			continue
+		}
+		if visible >= n {
+			cut = true
+		}
+		if cut {
+			right.WriteRune(r)
+		} else {
+			left.WriteRune(r)
+			visible++
+		}
+	}
+	return left.String(), right.String()
 }
 
 // appendHelpMessage adds a help message to the chat as an assistant turn.
@@ -600,6 +671,509 @@ func jobStatusDecoration(snap *service.JobSnapshot) (glyph, statusWord string, s
 	default:
 		return "·", string(snap.Status), JobBlockMetaStyle, JobBlockBorderCancelled
 	}
+}
+
+// jobResultHintLine returns the dim "↑ to select for actions" affordance
+// hint shown beneath the most recent unread result block. Returns "" when
+// the hint shouldn't render (block is selected, snapshot isn't the latest,
+// or another result has displaced this one).
+func (m *Model) jobResultHintLine(snap *service.JobResultSnapshot, selected bool) string {
+	if selected || snap == nil || m.recentJobResult == nil {
+		return ""
+	}
+	if snap.JobID != m.recentJobResult.JobID {
+		return ""
+	}
+	return DimStyle.Italic(true).Render("  ↑ to select for actions")
+}
+
+// jobResultEntryIndices returns the chat-history indices of JobResult
+// entries in their natural (chronological) order. Used by chat-selection
+// navigation: pressing Up while the chat is focused walks backward through
+// these indices, surfacing "actionable" entries to the user without the
+// noise of every assistant turn becoming a selection target.
+func (m *Model) jobResultEntryIndices() []int {
+	var out []int
+	for i, e := range m.chat.entries {
+		if e.Kind == service.ChatEntryKindJobResult && e.JobResult != nil {
+			out = append(out, i)
+		}
+	}
+	return out
+}
+
+// selectedJobResult returns the snapshot for the currently selected chat
+// entry when that entry is a JobResult, or nil otherwise. Centralizing
+// the lookup means callers (key handlers, footer renderer, etc.) don't
+// have to repeat the bounds + kind checks.
+func (m *Model) selectedJobResult() *service.JobResultSnapshot {
+	idx := m.chat.selectedMsgIdx
+	if idx < 0 || idx >= len(m.chat.entries) {
+		return nil
+	}
+	e := m.chat.entries[idx]
+	if e.Kind != service.ChatEntryKindJobResult {
+		return nil
+	}
+	return e.JobResult
+}
+
+// stepJobResultSelection moves the chat selection one step (delta = -1 for
+// previous, +1 for next) through the JobResult entries. Returns true when
+// the selection changed; false (and leaves state untouched) when there's
+// nothing to select or the move would walk off the end. Selection wraps
+// off the start to "no selection" so the user can return to free typing.
+func (m *Model) stepJobResultSelection(delta int) bool {
+	indices := m.jobResultEntryIndices()
+	if len(indices) == 0 {
+		return false
+	}
+	cur := -1
+	for i, idx := range indices {
+		if idx == m.chat.selectedMsgIdx {
+			cur = i
+			break
+		}
+	}
+	switch {
+	case cur < 0 && delta < 0:
+		// Entering selection mode from "no selection" via Up — land on
+		// the most recent result, which is what the user intuits.
+		m.chat.selectedMsgIdx = indices[len(indices)-1]
+		return true
+	case cur < 0 && delta > 0:
+		// Down with no current selection is a no-op (nothing below the
+		// input area to walk into).
+		return false
+	}
+	next := cur + delta
+	if next < 0 {
+		// Stepping past the oldest result clears selection — user is
+		// back at "free chat", not stuck cycling.
+		m.chat.selectedMsgIdx = -1
+		return true
+	}
+	if next >= len(indices) {
+		// Stepping past the newest also clears selection so Down feels
+		// symmetric with Up.
+		m.chat.selectedMsgIdx = -1
+		return true
+	}
+	m.chat.selectedMsgIdx = indices[next]
+	return true
+}
+
+// openWorkspaceDir spawns the host's "open this directory in the file
+// manager" command and returns a toast describing the outcome. Picks the
+// command per platform: macOS uses `open`, Windows uses `explorer`,
+// everything else uses `xdg-open` (which is what most Linux desktops
+// honor). Errors surface as a warning toast — we never block on the
+// child process so a missing handler doesn't freeze the TUI.
+func (m *Model) openWorkspaceDir(path string) tea.Cmd {
+	if path == "" {
+		return m.addToast("⚠ No workspace path on this job", toastWarning)
+	}
+	cmd, args := workspaceOpenCommand(path)
+	if cmd == "" {
+		return m.addToast("⚠ Don't know how to open paths on this OS", toastWarning)
+	}
+	exe := exec.Command(cmd, args...)
+	if err := exe.Start(); err != nil {
+		return m.addToast("⚠ open failed: "+err.Error(), toastWarning)
+	}
+	// Detach: we don't want zombies if the user closes the TUI before
+	// the file manager finishes launching.
+	go func() { _ = exe.Wait() }()
+	return m.addToast("✓ Opened "+contractHomeDir(path), toastSuccess)
+}
+
+// workspaceOpenCommand returns the (program, args) tuple for opening dir
+// on the current OS. Returns ("", nil) on platforms we don't recognize so
+// callers can show a graceful error rather than executing junk.
+func workspaceOpenCommand(dir string) (string, []string) {
+	switch runtimeGOOS() {
+	case "darwin":
+		return "open", []string{dir}
+	case "windows":
+		return "explorer", []string{dir}
+	case "linux", "freebsd", "openbsd", "netbsd":
+		return "xdg-open", []string{dir}
+	}
+	return "", nil
+}
+
+// runtimeGOOS is split out so the test suite can override the platform
+// detection without monkey-patching runtime.GOOS.
+var runtimeGOOS = func() string { return runtime.GOOS }
+
+// appendJobResultEntry materializes a JobResultSnapshot from a
+// JobCompleted event payload and appends it as a new chat entry. Returns
+// a tea.Cmd for any side effects the caller should batch (today: a toast
+// confirming completion). Returns nil when the event payload is malformed
+// — the upsert path still updates the in-progress block, so silent fall-
+// through here is safe.
+func (m *Model) appendJobResultEntry(ev service.Event) tea.Cmd {
+	p, ok := ev.Payload.(service.JobCompletedPayload)
+	if !ok {
+		return nil
+	}
+	snap := &service.JobResultSnapshot{
+		JobID:             p.JobID,
+		Title:             p.Title,
+		Summary:           p.Summary,
+		Status:            p.Status,
+		Workspace:         p.Workspace,
+		StartedAt:         p.StartedAt,
+		EndedAt:           p.EndedAt,
+		TasksTotal:        p.TasksTotal,
+		TasksCompleted:    p.TasksCompleted,
+		TasksFailed:       p.TasksFailed,
+		TokensIn:          p.TokensIn,
+		TokensOut:         p.TokensOut,
+		CostUSD:           p.CostUSD,
+		FilesTouched:      p.FilesTouched,
+		FilesTouchedExtra: p.FilesTouchedExtra,
+	}
+	if snap.Status == "" {
+		snap.Status = service.JobStatusCompleted
+	}
+	if snap.EndedAt.IsZero() {
+		snap.EndedAt = time.Now()
+	}
+	m.appendEntry(service.ChatEntry{
+		Kind:      service.ChatEntryKindJobResult,
+		Timestamp: snap.EndedAt,
+		JobResult: snap,
+	})
+	// The most-recent completion seeds the "↑ to select for actions"
+	// hint that renders beneath the latest unread result block.
+	m.recentJobResult = snap
+	return nil
+}
+
+// renderJobResultBlock draws the terminal completion summary for a job —
+// the "result block" — in the same border/padding language as the
+// in-progress JobUpdate block, color-shifted by terminal status. Layout:
+//
+//	╭─────────────────────────────────────────────────╮
+//	│ ✓ <title>                       done · 4m12s    │
+//	│ ~/path/to/workspace                             │
+//	│ ─── 8 files: 6 added · 2 modified ───────────── │
+//	│  + first.go                                     │
+//	│  + second.go                                    │
+//	│  + 6 more                                       │
+//	│ 8.2k in · 2.1k out · ~$0.04 · finished 23:34    │
+//	│ [w] workspace  [d] details  [Enter] open in Jobs│
+//	╰─────────────────────────────────────────────────╯
+//
+// width is the total outer width including border + padding (matches
+// renderJobUpdateBlock's contract). selected swaps the border style to
+// thick so the user can see when the block has chat-selection focus and
+// the action keys are live.
+func renderJobResultBlock(res *service.JobResultSnapshot, width int, selected bool) string {
+	if res == nil {
+		return ""
+	}
+
+	frameH := JobBlockStyle.GetHorizontalFrameSize()
+	innerW := width - frameH
+	if innerW < 4 {
+		innerW = 4
+	}
+
+	glyph, statusWord, statusStyle, borderColor := jobResultDecoration(res)
+
+	// --- Line 1: glyph + title + right-aligned "<status> · <duration>" ---
+	durStr := formatJobDuration(res.StartedAt, res.EndedAt)
+	rightStr := statusStyle.Render(statusWord)
+	if durStr != "" {
+		rightStr = rightStr + DimStyle.Render(" · "+durStr)
+	}
+	rightW := lipgloss.Width(rightStr)
+	prefix := glyph + " "
+	titleBudget := innerW - lipgloss.Width(prefix) - rightW - 1
+	if titleBudget < 1 {
+		titleBudget = 1
+	}
+	title := truncateStr(res.Title, titleBudget)
+	titleRendered := JobBlockTitleStyle.Render(title)
+	gap := innerW - lipgloss.Width(prefix) - lipgloss.Width(titleRendered) - rightW
+	if gap < 1 {
+		gap = 1
+	}
+	line1 := prefix + titleRendered + strings.Repeat(" ", gap) + rightStr
+
+	// --- Line 2: workspace path (left-ellipsized to fit) ---
+	workspaceLine := DimStyle.Render(truncateLeft(contractHomeDir(res.Workspace), innerW))
+
+	lines := []string{line1, workspaceLine}
+
+	// --- Optional: failure reason for failed jobs ---
+	// Failed jobs emphasize the reason over file artifacts (which are
+	// likely incomplete or misleading anyway). When res.Summary carries a
+	// non-empty body for a failure, surface it in the prime spot.
+	if res.Status == service.JobStatusFailed && strings.TrimSpace(res.Summary) != "" {
+		lines = append(lines, sectionDivider("failure", innerW))
+		for _, l := range wrapToWidth(strings.TrimSpace(res.Summary), innerW-2, 2) {
+			lines = append(lines, "  "+l)
+		}
+	}
+
+	// --- Optional: files-touched mini-section ---
+	if len(res.FilesTouched) > 0 {
+		header := summarizeFiles(res.FilesTouched, res.FilesTouchedExtra)
+		lines = append(lines, sectionDivider(header, innerW))
+		// Show up to 3 files inline, then a "+ N more" tail. 3 is enough
+		// to convey breadth without making the block dominate chat.
+		const inlineLimit = 3
+		shown := res.FilesTouched
+		if len(shown) > inlineLimit {
+			shown = shown[:inlineLimit]
+		}
+		for _, f := range shown {
+			lines = append(lines, JobBlockMetaStyle.Render(" + "+truncateStr(f.Path, innerW-3)))
+		}
+		extra := res.FilesTouchedExtra + len(res.FilesTouched) - len(shown)
+		if extra > 0 {
+			lines = append(lines, JobBlockMetaStyle.Render(fmt.Sprintf(" + %d more", extra)))
+		}
+	}
+
+	// --- Cost / token line ---
+	if costLine := buildCostLine(res); costLine != "" {
+		lines = append(lines, JobBlockMetaStyle.Render(truncateStr(costLine, innerW)))
+	}
+
+	// --- Action hints (dim) ---
+	hints := buildJobResultHints(res, selected)
+	if hints != "" {
+		lines = append(lines, hints)
+	}
+
+	body := strings.Join(lines, "\n")
+	style := JobBlockStyle
+	if selected {
+		style = style.Border(lipgloss.ThickBorder())
+	}
+	return style.
+		BorderForeground(borderColor).
+		Width(width).
+		Render(body)
+}
+
+// jobResultDecoration mirrors jobStatusDecoration for the small set of
+// terminal statuses a JobResultSnapshot can hold. Always returns a "done"
+// or "failed" decoration — cancelled/paused/setting-up don't fire result
+// blocks today, but cancellation is included for completeness.
+func jobResultDecoration(res *service.JobResultSnapshot) (glyph, statusWord string, statusStyle lipgloss.Style, border compat.AdaptiveColor) {
+	switch res.Status {
+	case service.JobStatusFailed:
+		return "✗", "failed", JobBlockStatusFailedStyle, JobBlockBorderFailed
+	case service.JobStatusCancelled:
+		return "—", "cancelled", JobBlockMetaStyle, JobBlockBorderCancelled
+	default:
+		// Treat any non-failed, non-cancelled terminal state as a clean
+		// completion. EventJobComplete only fires once every task has
+		// reached terminal state, so this branch covers the success path.
+		return "✓", "done", JobBlockStatusDoneStyle, JobBlockBorderDone
+	}
+}
+
+// formatJobDuration returns a compact "Hh Mm Ss" / "Mm Ss" / "Ss" string
+// for the run length, dropping zero-valued leading units. Empty when
+// either timestamp is missing — the header just shows the status word in
+// that case.
+func formatJobDuration(start, end time.Time) string {
+	if start.IsZero() || end.IsZero() {
+		return ""
+	}
+	d := end.Sub(start)
+	if d < 0 {
+		d = 0
+	}
+	if d >= time.Hour {
+		h := int(d / time.Hour)
+		m := int((d % time.Hour) / time.Minute)
+		return fmt.Sprintf("%dh%02dm", h, m)
+	}
+	if d >= time.Minute {
+		m := int(d / time.Minute)
+		s := int((d % time.Minute) / time.Second)
+		return fmt.Sprintf("%dm%02ds", m, s)
+	}
+	return fmt.Sprintf("%ds", int(d/time.Second))
+}
+
+// summarizeFiles produces the section-header label, e.g.
+// "8 files: 6 added · 2 modified", from a list of FileTouch entries.
+func summarizeFiles(files []service.FileTouch, extra int) string {
+	total := len(files) + extra
+	added, modified := 0, 0
+	for _, f := range files {
+		if f.IsNew {
+			added++
+		} else {
+			modified++
+		}
+	}
+	// Add capped/extra entries to whichever bucket is appropriate. We
+	// don't know whether suppressed entries were add vs modify, so they
+	// inflate the total only.
+	noun := "file"
+	if total != 1 {
+		noun = "files"
+	}
+	if added > 0 && modified > 0 {
+		return fmt.Sprintf("%d %s: %d added · %d modified", total, noun, added, modified)
+	}
+	if added > 0 {
+		return fmt.Sprintf("%d %s added", total, noun)
+	}
+	if modified > 0 {
+		return fmt.Sprintf("%d %s modified", total, noun)
+	}
+	return fmt.Sprintf("%d %s touched", total, noun)
+}
+
+// sectionDivider draws a `─── label ───────────` line with the label
+// inset. Used to introduce sub-sections inside the result block. Falls
+// back to a plain rule when label is empty or the block is too narrow.
+func sectionDivider(label string, innerW int) string {
+	if label == "" || innerW < 6 {
+		return DimStyle.Render(strings.Repeat("─", innerW))
+	}
+	leftRule := "─── " + label + " "
+	if lipgloss.Width(leftRule) >= innerW {
+		// Label too wide; just render label dimmed without trailing rule.
+		return DimStyle.Render(truncateStr(label, innerW))
+	}
+	rightRule := strings.Repeat("─", innerW-lipgloss.Width(leftRule))
+	return DimStyle.Render(leftRule + rightRule)
+}
+
+// buildCostLine assembles the bottom meta line: token counts, optional
+// cost, and finish-time stamp. Returns empty when nothing meaningful is
+// set (older jobs without session aggregation, etc.).
+func buildCostLine(res *service.JobResultSnapshot) string {
+	var parts []string
+	if res.TokensIn > 0 || res.TokensOut > 0 {
+		parts = append(parts, fmt.Sprintf("%s in", formatTokenCount(res.TokensIn)))
+		parts = append(parts, fmt.Sprintf("%s out", formatTokenCount(res.TokensOut)))
+	}
+	if res.CostUSD > 0 {
+		parts = append(parts, fmt.Sprintf("~$%.2f", res.CostUSD))
+	}
+	if !res.EndedAt.IsZero() {
+		parts = append(parts, "finished "+res.EndedAt.Format("15:04"))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return strings.Join(parts, " · ")
+}
+
+// buildJobResultHints renders the action-hint footer line. When the block
+// is selected, hints become opaque + readable; when unselected they're
+// dim, advertising the existence of actions without committing visual
+// real estate. [Enter] leads because "see what happened" is the more
+// common follow-up than "open the directory in Finder".
+func buildJobResultHints(res *service.JobResultSnapshot, selected bool) string {
+	hints := []string{"[Enter] details"}
+	if res.Workspace != "" {
+		hints = append(hints, "[w] workspace")
+	}
+	line := strings.Join(hints, "  ")
+	if selected {
+		// Brighten selected so the user knows the keys are armed.
+		return JobBlockTitleStyle.Foreground(ColorAccent).Render(line)
+	}
+	return DimStyle.Render(line)
+}
+
+// truncateLeft trims the leading portion of s so that the result fits
+// within maxWidth display cells, prefixing "…" when content was dropped.
+// Used for paths where the meaningful tail (the last directory + files)
+// is what the user wants to see.
+func truncateLeft(s string, maxWidth int) string {
+	if maxWidth <= 0 {
+		return ""
+	}
+	if lipgloss.Width(s) <= maxWidth {
+		return s
+	}
+	const ellipsis = "…"
+	budget := maxWidth - 1
+	if budget <= 0 {
+		return ellipsis
+	}
+	runes := []rune(s)
+	// Walk from the right, accumulating until we'd exceed budget.
+	used := 0
+	cut := len(runes)
+	for i := len(runes) - 1; i >= 0; i-- {
+		w := lipgloss.Width(string(runes[i]))
+		if used+w > budget {
+			break
+		}
+		used += w
+		cut = i
+	}
+	return ellipsis + string(runes[cut:])
+}
+
+// contractHomeDir replaces a leading $HOME with "~" so paths read more
+// naturally in the UI. Falls back to the original path when home isn't
+// resolvable or doesn't prefix the input.
+func contractHomeDir(path string) string {
+	if path == "" {
+		return ""
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return path
+	}
+	if strings.HasPrefix(path, home) {
+		return "~" + strings.TrimPrefix(path, home)
+	}
+	return path
+}
+
+// wrapToWidth breaks s into lines no wider than width display cells,
+// honoring word boundaries. Caps the result at maxLines to keep the
+// failure section from overrunning the block.
+func wrapToWidth(s string, width, maxLines int) []string {
+	if width <= 0 || maxLines <= 0 {
+		return nil
+	}
+	words := strings.Fields(s)
+	var lines []string
+	var cur strings.Builder
+	flush := func() {
+		if cur.Len() > 0 {
+			lines = append(lines, cur.String())
+			cur.Reset()
+		}
+	}
+	for _, w := range words {
+		if len(lines) >= maxLines {
+			break
+		}
+		switch {
+		case cur.Len() == 0:
+			cur.WriteString(w)
+		case lipgloss.Width(cur.String())+1+lipgloss.Width(w) > width:
+			flush()
+			cur.WriteString(w)
+		default:
+			cur.WriteByte(' ')
+			cur.WriteString(w)
+		}
+	}
+	flush()
+	if len(lines) > maxLines {
+		lines = lines[:maxLines]
+	}
+	return lines
 }
 
 // jobSnapshotFromEventPayload synthesizes a minimal JobSnapshot from the
@@ -894,12 +1468,24 @@ func (m *Model) syncLeftPanelVisibility() {
 }
 
 // shouldShowLeftPanel reports whether the left panel (Jobs + Workers) should
-// be rendered. The panel is hidden when the user has toggled it off, when
-// the terminal is too narrow, or when there is nothing to show in either
-// pane.
+// be rendered. Resolution order, outermost gate first:
+//
+//  1. Width gate — terminals narrower than minWidthForLeftPanel never show
+//     the panel regardless of preferences (geometry wins).
+//  2. Explicit user override (ctrl+j) — pins the panel until cleared.
+//  3. Settings default — when ShowJobsPanelByDefault is true the panel
+//     stays visible even with no content.
+//  4. Content fallback — show only when there's a job or runtime session
+//     to surface (the original behavior, preserved as the default).
 func (m *Model) shouldShowLeftPanel() bool {
-	if m.leftPanelHidden || m.width < minWidthForLeftPanel {
+	if m.width < minWidthForLeftPanel {
 		return false
+	}
+	if m.leftPanelOverride != nil {
+		return *m.leftPanelOverride
+	}
+	if m.showJobsPanelDefault {
+		return true
 	}
 	if len(m.displayJobs()) > 0 {
 		return true
@@ -908,6 +1494,44 @@ func (m *Model) shouldShowLeftPanel() bool {
 		return true
 	}
 	return false
+}
+
+// applyPanelVisibilityDefaults caches the panel-visibility settings from a
+// freshly loaded or saved Settings snapshot, then runs resizeComponents so
+// any change in the effective visibility takes effect immediately.
+//
+// The startup load path always keeps any user-set override intact (it's nil
+// at that point anyway). On a /settings save, the user has just expressed
+// an explicit preference, so we drop the override too — otherwise a stale
+// ctrl+j toggle could mask the new default and the save would feel
+// silently broken.
+func (m *Model) applyPanelVisibilityDefaults(s service.Settings) {
+	m.showJobsPanelDefault = s.ShowJobsPanelByDefault
+	m.showOperatorPanelDefault = s.ShowOperatorPanelByDefault
+	if m.settingsModal.show {
+		// Heuristic for "this came from a save, not the initial load":
+		// the modal is open. Clear overrides so the new default wins.
+		m.leftPanelOverride = nil
+		m.sidebarOverride = nil
+	}
+	if m.width > 0 && m.height > 0 {
+		m.resizeComponents()
+	}
+}
+
+// shouldShowSidebar reports whether the right Operator/sidebar panel should
+// be rendered. Same resolution shape as shouldShowLeftPanel: width gate →
+// explicit override → settings default. The legacy default kept the
+// sidebar visible whenever the terminal was wide enough; that's preserved
+// when ShowOperatorPanelByDefault is true (the default).
+func (m *Model) shouldShowSidebar() bool {
+	if m.width < minWidthForBar {
+		return false
+	}
+	if m.sidebarOverride != nil {
+		return *m.sidebarOverride
+	}
+	return m.showOperatorPanelDefault
 }
 
 // runtimeSessionsForTask returns all runtime sessions associated with the given task ID,

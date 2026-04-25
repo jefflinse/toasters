@@ -328,7 +328,7 @@ func (m *Model) View() tea.View {
 		return v
 	}
 
-	showSidebar := m.width >= minWidthForBar && !m.sidebarHidden
+	showSidebar := m.shouldShowSidebar()
 	showLeftPanel := m.shouldShowLeftPanel()
 
 	sbWidth := sidebarWidth(m.width)
@@ -536,10 +536,16 @@ func (m *Model) View() tea.View {
 		content = mainColumn
 	}
 
-	// Overlay toast notifications in the top-right corner.
+	// Overlay toast notifications, right-aligned to the chat box's right
+	// edge so they sit inside the chat column rather than over the sidebar.
 	if len(m.toasts) > 0 {
-		toastBlock := m.renderToasts()
-		content = overlayToasts(content, toastBlock, m.width)
+		chatLeft := 0
+		if showLeftPanel {
+			chatLeft = lpWidth + columnGap
+		}
+		chatRight := chatLeft + mainWidth
+		toastBlock := m.renderToasts(mainWidth)
+		content = overlayToasts(content, toastBlock, chatRight, m.width)
 	}
 
 	v := tea.NewView(content)
@@ -937,7 +943,7 @@ func (m *Model) ensureMarkdownRenderer() {
 
 // resizeComponents recalculates sizes for viewport and textarea after a resize.
 func (m *Model) resizeComponents() {
-	showSidebar := m.width >= minWidthForBar && !m.sidebarHidden
+	showSidebar := m.shouldShowSidebar()
 	showLeftPanel := m.shouldShowLeftPanel()
 	m.lastLeftPanelShown = showLeftPanel
 
@@ -1100,6 +1106,24 @@ func (m *Model) updateViewportContent() {
 			block := renderJobUpdateBlock(entry.JobUpdate, contentWidth, false, m.spinnerFrame)
 			if block != "" {
 				sb.WriteString(block + "\n\n")
+			}
+			continue
+		}
+		if entry.Kind == service.ChatEntryKindJobResult {
+			selected := m.chat.selectedMsgIdx == i
+			block := renderJobResultBlock(entry.JobResult, contentWidth, selected)
+			if block != "" {
+				sb.WriteString(block + "\n")
+				// Affordance hint: appears inline under the most recent
+				// unread result block when it's not selected, so the user
+				// notices the [w]/[d] keys exist without having to read
+				// the in-block hint line. Dismissed on selection (the
+				// "selected" branch above hides it) or when a newer
+				// result replaces this one (recentJobResult moves on).
+				if hint := m.jobResultHintLine(entry.JobResult, selected); hint != "" {
+					sb.WriteString(hint + "\n")
+				}
+				sb.WriteString("\n")
 			}
 			continue
 		}

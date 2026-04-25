@@ -32,6 +32,9 @@ func (m *Model) sendMessage() tea.Cmd {
 	m.err = nil
 	m.scroll.userScrolled = false
 	m.scroll.hasNewMessages = false
+	// Submitting a new turn dismisses the "↑ to select for actions" hint
+	// on the most recent result block — the user has clearly moved on.
+	m.recentJobResult = nil
 
 	m.updateViewportContent()
 	m.chatViewport.GotoBottom()

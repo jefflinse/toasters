@@ -29,6 +29,30 @@ type jobsModalState struct {
 	taskScrollOffset  int // line offset into the middle panel's task list
 }
 
+// openJobsModalForJob is the entry point for "deep-link" gestures from
+// elsewhere in the TUI (the chat result block today, potentially toasts
+// later). Pops the Jobs modal open with focus pre-positioned on the
+// requested job — falls back to "first job" when the id isn't in the
+// current snapshot, on the assumption a stale link is still better than
+// no link.
+func (m *Model) openJobsModalForJob(jobID string) tea.Cmd {
+	m.jobsModal = jobsModalState{show: true}
+	m.loadJobsForModal()
+	for i, j := range m.jobsModal.jobs {
+		if j.ID == jobID {
+			m.jobsModal.jobIdx = i
+			break
+		}
+	}
+	m.loadJobDetail()
+	var tickCmd tea.Cmd
+	if !m.spinnerRunning {
+		m.spinnerRunning = true
+		tickCmd = spinnerTick()
+	}
+	return tickCmd
+}
+
 // loadJobsForModal populates the modal's job list from the same filtered
 // and sorted view used by the main-screen Jobs pane so the two surfaces
 // read identically. Live updates arrive via syncJobsModalFromProgress.

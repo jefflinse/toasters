@@ -64,9 +64,17 @@ type Role struct {
 	// with heavy tool-call budgets — scaffolders, coders, testers —
 	// should set this higher; pure analytical roles (investigator,
 	// planner, reviewer) are fine at the default.
-	MaxTurns int    `yaml:"max_turns"`
-	Body     string `yaml:"-"` // template text after frontmatter
-	Source   string `yaml:"-"` // "system" or "user" — set by LoadDir caller
+	MaxTurns int `yaml:"max_turns"`
+	// Thinking, when set, overrides the global worker_thinking_enabled
+	// default for this role. Pointer so that "absent" (use global) is
+	// distinguishable from "explicitly false".
+	Thinking *bool `yaml:"thinking,omitempty"`
+	// Temperature, when set, overrides the global worker_temperature
+	// default for this role. Pointer so that 0.0 is distinguishable from
+	// "use global default".
+	Temperature *float64 `yaml:"temperature,omitempty"`
+	Body        string   `yaml:"-"` // template text after frontmatter
+	Source      string   `yaml:"-"` // "system" or "user" — set by LoadDir caller
 }
 
 // Toolchain is language/framework knowledge with typed variables.

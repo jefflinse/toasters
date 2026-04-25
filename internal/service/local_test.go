@@ -151,6 +151,9 @@ func (m *mockStore) GetActiveSessions(_ context.Context) ([]*db.WorkerSession, e
 func (m *mockStore) ListSessionsForTask(_ context.Context, _ string) ([]*db.WorkerSession, error) {
 	return nil, fmt.Errorf("not implemented")
 }
+func (m *mockStore) ListSessionsForJob(_ context.Context, _ string) ([]*db.WorkerSession, error) {
+	return nil, fmt.Errorf("not implemented")
+}
 func (m *mockStore) LogArtifact(_ context.Context, _ *db.Artifact) error {
 	return fmt.Errorf("not implemented")
 }

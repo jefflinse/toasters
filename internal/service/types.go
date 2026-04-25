@@ -384,6 +384,13 @@ const (
 	// ChatEntryKindJobUpdate is a live, mutating block summarizing a
 	// single job's progress. Payload lives in ChatEntry.JobUpdate.
 	ChatEntryKindJobUpdate ChatEntryKind = "job_update"
+
+	// ChatEntryKindJobResult is a terminal completion summary that lands
+	// in chat the moment a job finishes — separate from the in-progress
+	// JobUpdate block so the conversation history reflects "this is the
+	// completion event" rather than retroactively rewriting prior state.
+	// Payload lives in ChatEntry.JobResult.
+	ChatEntryKindJobResult ChatEntryKind = "job_result"
 )
 
 // JobSnapshot is the payload for a ChatEntryKindJobUpdate entry. It
@@ -415,6 +422,35 @@ type ChatEntry struct {
 	// JobUpdate carries the snapshot for Kind == ChatEntryKindJobUpdate.
 	// Nil for other kinds.
 	JobUpdate *JobSnapshot
+
+	// JobResult carries the completion summary for
+	// Kind == ChatEntryKindJobResult. Nil for other kinds.
+	JobResult *JobResultSnapshot
+}
+
+// JobResultSnapshot is the payload for a ChatEntryKindJobResult entry. It
+// mirrors JobCompletedPayload one-for-one so the TUI can stash it on the
+// chat entry, render the result block from cached state, and survive a
+// progress refresh without re-fetching server state.
+type JobResultSnapshot struct {
+	JobID     string
+	Title     string
+	Summary   string
+	Status    JobStatus
+	Workspace string
+	StartedAt time.Time
+	EndedAt   time.Time
+
+	TasksTotal     int
+	TasksCompleted int
+	TasksFailed    int
+
+	TokensIn  int64
+	TokensOut int64
+	CostUSD   float64
+
+	FilesTouched      []FileTouch
+	FilesTouchedExtra int
 }
 
 // ---------------------------------------------------------------------------
@@ -517,8 +553,8 @@ type AddProviderRequest struct {
 }
 
 // Settings is the user-editable subset of runtime configuration exposed
-// through the /settings surface. All fields are flat strings or enum values
-// so the TUI can render them as simple rows.
+// through the /settings surface. All fields are flat scalars so the TUI can
+// render them as simple rows.
 type Settings struct {
 	// CoarseGranularity controls how large the tasks emitted by
 	// coarse-decompose are. One of: "xcoarse", "coarse", "medium", "fine",
@@ -529,6 +565,25 @@ type Settings struct {
 	// subtasks (and, in the future, dynamically generated graph nodes).
 	// Same enum as CoarseGranularity.
 	FineGranularity string `json:"fine_granularity"`
+
+	// WorkerThinkingEnabled is the default value of the per-request thinking
+	// toggle for worker (graph) nodes. Roles may override this in their
+	// frontmatter.
+	WorkerThinkingEnabled bool `json:"worker_thinking_enabled"`
+
+	// WorkerTemperature is the default sampling temperature for worker
+	// (graph) nodes. Roles may override this in their frontmatter.
+	WorkerTemperature float64 `json:"worker_temperature"`
+
+	// ShowJobsPanelByDefault keeps the Jobs/Workers left panel visible
+	// even when no jobs or runtime sessions exist. When false (default),
+	// the panel only appears once there's something to show.
+	ShowJobsPanelByDefault bool `json:"show_jobs_panel_by_default"`
+
+	// ShowOperatorPanelByDefault keeps the Operator/sidebar right panel
+	// visible by default. When false, the panel is hidden until the user
+	// reveals it via Ctrl+O.
+	ShowOperatorPanelByDefault bool `json:"show_operator_panel_by_default"`
 }
 
 // ---------------------------------------------------------------------------
