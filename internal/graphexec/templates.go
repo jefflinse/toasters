@@ -32,4 +32,12 @@ type TemplateConfig struct {
 	// the model never called `complete`) can read the full transcript via
 	// SQLite. Optional — when nil, graph nodes skip persistence.
 	Store db.Store
+
+	// WorkerThinkingEnabled is the default value of the per-request thinking
+	// toggle for graph nodes. Roles may override via their frontmatter.
+	WorkerThinkingEnabled bool
+
+	// WorkerTemperature is the default sampling temperature for graph
+	// nodes. Roles may override via their frontmatter.
+	WorkerTemperature float64
 }

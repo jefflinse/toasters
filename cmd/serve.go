@@ -128,6 +128,12 @@ func runServe(cmd *cobra.Command, args []string) error {
 		slog.Warn("failed to load user prompt definitions", "dir", userDir, "error", err)
 	}
 	promptEngine.SetGlobal("task.granularity", config.ValidTaskGranularity(cfg.TaskGranularity))
+	if err := prompt.ApplyGranularity(promptEngine, "coarse", config.ValidGranularity("coarse", cfg.CoarseGranularity)); err != nil {
+		slog.Warn("failed to apply coarse_granularity", "error", err)
+	}
+	if err := prompt.ApplyGranularity(promptEngine, "fine", config.ValidGranularity("fine", cfg.FineGranularity)); err != nil {
+		slog.Warn("failed to apply fine_granularity", "error", err)
+	}
 	slog.Info("loaded prompt definitions", "roles", len(promptEngine.Roles()))
 
 	// Load definitions from files into DB.
@@ -206,6 +212,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 
 	// Create the LocalService first (without graphExec — it needs svc as EventSink).
 	svc := service.NewLocal(service.LocalConfig{
+		AppConfig:        cfg,
 		Store:            store,
 		Runtime:          rt,
 		MCPManager:       mcpManager,
@@ -237,14 +244,16 @@ func runServe(cmd *cobra.Command, args []string) error {
 	// MCP manager is long-lived and shared. The broker is shared with the
 	// operator so ask_user from either path lands in the same TUI modal.
 	graphExec := graphexec.NewExecutor(graphexec.ExecutorConfig{
-		Registry:     registry,
-		MCPManager:   mcpManager,
-		PromptEngine: promptEngine,
-		Store:        store,
-		EventSink:    svc,
-		Broker:       svc.Broker(),
-		Graphs:       ldr,
-		DefaultModel: defaultModel,
+		Registry:              registry,
+		MCPManager:            mcpManager,
+		PromptEngine:          promptEngine,
+		Store:                 store,
+		EventSink:             svc,
+		Broker:                svc.Broker(),
+		Graphs:                ldr,
+		DefaultModel:          defaultModel,
+		WorkerThinkingEnabled: cfg.WorkerThinkingEnabled,
+		WorkerTemperature:     cfg.WorkerTemperature,
 	})
 
 	// Share the graph executor with the service so both the startup-time

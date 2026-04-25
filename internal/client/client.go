@@ -579,6 +579,30 @@ func (s *remoteSystemService) SetOperatorProvider(ctx context.Context, providerI
 	return nil
 }
 
+func (s *remoteSystemService) GetSettings(ctx context.Context) (service.Settings, error) {
+	resp, err := s.c.http.get(ctx, "/api/v1/settings")
+	if err != nil {
+		return service.Settings{}, fmt.Errorf("get settings: %w", err)
+	}
+	out, err := decodeResponse[service.Settings](resp)
+	if err != nil {
+		return service.Settings{}, fmt.Errorf("get settings: %w", err)
+	}
+	return out, nil
+}
+
+func (s *remoteSystemService) UpdateSettings(ctx context.Context, settings service.Settings) error {
+	resp, err := s.c.http.put(ctx, "/api/v1/settings", settings)
+	if err != nil {
+		return fmt.Errorf("update settings: %w", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 200 && resp.StatusCode != 204 {
+		return fmt.Errorf("update settings: unexpected status %d", resp.StatusCode)
+	}
+	return nil
+}
+
 func (s *remoteSystemService) ListProviderModels(ctx context.Context, providerID string) ([]service.ModelInfo, error) {
 	resp, err := s.c.http.get(ctx, "/api/v1/providers/"+providerID+"/models")
 	if err != nil {

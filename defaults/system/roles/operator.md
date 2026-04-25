@@ -56,7 +56,7 @@ Once requirements are clear:
 
 **Decomposition is automatic.** As soon as `create_job` returns, the system kicks off the `coarse-decompose` graph against the job description. It breaks the work into Tasks, and a second `fine-decompose` graph picks a graph for each Task. You do not call a decomposer worker, do not call `create_task`, and do not call `assign_task` — these have been retired. Everything downstream of `create_job` happens without further operator action.
 
-### Step 3: Write the Work Request and Get Approval
+### Step 3: Write the Work Request
 
 Call `save_work_request` with the job ID and a structured markdown document:
 
@@ -80,11 +80,9 @@ Call `save_work_request` with the job ID and a structured markdown document:
 - <What "done" looks like — concrete, verifiable>
 ```
 
-Then, **in your response text**, present the full work request content to the user. Decomposition has already been triggered against the job description — surface that too: "I've created the job and decomposition is in progress."
+Then, **in your response text**, present the work request content to the user so they can review it.
 
-### Step 4: Summarize
-
-Tell the user what was created. Be concise. Provide: job ID, title, and a brief note that tasks will appear as decomposition completes.
+**Do not narrate job state.** Job creation, title, ID, status, and task progress are already emitted as structured events by the system and surfaced to the user through those events. Restating them in prose is duplication and will go stale. Skip sentences like "I've created the job…", "Job ID: …", or "Tasks will appear as decomposition completes". Your prose is for what events can't carry: clarifying questions, qualitative summaries, rationale, caveats, guidance.
 
 ---
 
@@ -98,6 +96,7 @@ Tell the user what was created. Be concise. Provide: job ID, title, and a brief 
 
 ## Guidelines
 
+- **Job state lives in events, not prose.** Every job-scoped transition (created, task added, task completed, job done) is emitted by the system as a structured event. Never echo job IDs, titles, status, or task counts in your response text — those are carried by events. Your words are for everything events can't carry: reasoning behind a decision, clarifying questions, qualitative observations, caveats.
 - **Let decomposition happen automatically.** Your job ends at `create_job`; the framework takes it from there.
 - **Never assign graphs manually.** Graph selection happens inside `fine-decompose`. Overriding it defeats the point.
 - **Never ask the user for graph IDs**: Use `query_graphs` to discover available graphs when the user asks what's possible.

@@ -58,8 +58,9 @@ func (m Model) renderLeftPanel(panelWidth, panelHeight int) string {
 	borderOverhead := 2 * paneFrameV
 
 	// Bottom pane (Agents): content-driven height.
-	// Count active runtime sessions for the agents pane.
-	sortedRT := m.sortedRuntimeSessions()
+	// Use the filtered view (active + most-recent completed) so the pane's
+	// height math matches what we actually render.
+	sortedRT := m.displayRuntimeSessions()
 	agentCount := len(sortedRT)
 	// Each active worker with activity gets one extra "↳ <last-activity>" line
 	// below it so users can see what it's doing without opening the grid.
@@ -100,35 +101,25 @@ func (m Model) renderLeftPanel(panelWidth, panelHeight int) string {
 	// --- Top pane: Jobs ---
 	var topLines []string
 	jobsTitle := gradientText("Jobs", [3]uint8{0, 200, 200}, [3]uint8{175, 50, 200})
-	if m.focused == focusJobs && m.focusAnimFrames > 0 {
+	if m.focused == focusJobs {
 		jobsTitle = rainbowText("Jobs", m.spinnerFrame)
 	}
 	topLines = append(topLines, jobsTitle)
 	if len(displayedJobs) == 0 {
 		topLines = append(topLines, PlaceholderPaneStyle.Render("No jobs"))
 	} else {
+		// Render each job as the same bordered block used in the chat
+		// stream, keyed by status and with live task counts. Blocks stack
+		// with touching borders — a TUI has no sub-row spacing, so the
+		// choice is zero-gap (cards stacked) or a full row between them;
+		// zero-gap keeps the list dense without losing distinctness since
+		// each block still has its own status-colored border.
 		for i, j := range displayedJobs {
-			// Job name row with status prefix icon.
-			var statusPrefix string
-			switch j.Status {
-			case service.JobStatusActive:
-				statusPrefix = "▶ "
-			case service.JobStatusPaused:
-				statusPrefix = "⏸ "
-			case service.JobStatusCompleted:
-				statusPrefix = "✓ "
-			case service.JobStatusSettingUp:
-				statusPrefix = "⚙ "
-			default:
-				statusPrefix = "· "
+			snap := m.buildJobSnapshot(j.ID)
+			if snap == nil {
+				continue
 			}
-			name := truncateStr(j.Title, contentWidth-len([]rune(statusPrefix))-1)
-			selected := i == m.selectedJob
-			if selected {
-				topLines = append(topLines, JobSelectedStyle.Render(statusPrefix+name))
-			} else {
-				topLines = append(topLines, JobItemStyle.Render(statusPrefix+name))
-			}
+			topLines = append(topLines, renderJobUpdateBlock(snap, contentWidth, i == m.selectedJob, m.spinnerFrame))
 		}
 	}
 	// Hint line when jobs pane is focused.
@@ -147,7 +138,7 @@ func (m Model) renderLeftPanel(panelWidth, panelHeight int) string {
 	// --- Bottom pane: Agents ---
 	var agentLines []string
 	agentsTitle := gradientText("Workers", [3]uint8{50, 130, 255}, [3]uint8{0, 200, 200})
-	if m.focused == focusAgents && m.focusAnimFrames > 0 {
+	if m.focused == focusAgents {
 		agentsTitle = rainbowText("Workers", m.spinnerFrame)
 	}
 	agentLines = append(agentLines, agentsTitle)
@@ -157,7 +148,13 @@ func (m Model) renderLeftPanel(panelWidth, panelHeight int) string {
 	hasAnyRuntime := len(sortedRT) > 0
 	if hasAnyRuntime {
 		for _, rs := range sortedRT {
-			label := rs.agentName + " · " + rs.jobID
+			// "<short-job-id>:<role>" — e.g. graph:plan for job 67cddf28-… → "67cddf28:plan".
+			role := strings.TrimPrefix(rs.agentName, "graph:")
+			shortJobID := rs.jobID
+			if len(shortJobID) > 8 {
+				shortJobID = shortJobID[:8]
+			}
+			label := shortJobID + ":" + role
 			var statusIcon string
 			if rs.status == "active" {
 				statusIcon = string(spinnerChars[m.spinnerFrame%len(spinnerChars)]) + " "
@@ -214,7 +211,7 @@ func (m Model) renderLeftPanel(panelWidth, panelHeight int) string {
 // height math inside renderLeftPanel.
 func (m *Model) leftPanelAgentsPaneHeight() int {
 	paneFrameV := FocusedPaneStyle.GetVerticalBorderSize()
-	sortedRT := m.sortedRuntimeSessions()
+	sortedRT := m.displayRuntimeSessions()
 	agentCount := len(sortedRT)
 	activityLineCount := 0
 	for _, rs := range sortedRT {
@@ -232,94 +229,31 @@ func (m *Model) leftPanelAgentsPaneHeight() int {
 	return bottomContentH + paneFrameV
 }
 
-// renderSidebar builds the right sidebar as two independent bordered panes
-// stacked vertically: an operator/stats pane (top) and an MCP pane (bottom).
+// renderSidebar builds the right sidebar: a borderless operator/stats pane
+// that fills the full sidebar height.
 func (m Model) renderSidebar(sbWidth int) string {
-	paneFrameH := FocusedPaneStyle.GetHorizontalBorderSize() + FocusedPaneStyle.GetHorizontalPadding()
-	contentWidth := sbWidth - paneFrameH
+	// Horizontal padding matches the frame width used by left-panel panes
+	// (border 2 + padding 2 = 4 cols) so content sizing stays consistent.
+	const sidebarHPad = 2
+	contentWidth := sbWidth - 2*sidebarHPad
 	if contentWidth < 1 {
 		contentWidth = 1
 	}
 
-	// --- Bottom pane: MCP ---
-	var mcpSB strings.Builder
-	mcpTitle := gradientText("MCP", [3]uint8{50, 130, 255}, [3]uint8{175, 50, 200})
-	if m.focused == focusMCP && m.focusAnimFrames > 0 {
-		mcpTitle = rainbowText("MCP", m.spinnerFrame)
-	}
-	mcpSB.WriteString(mcpTitle)
-	mcpSB.WriteString("\n")
-
-	hasMCP := false
-	servers := m.progress.mcpServers
-	if len(servers) > 0 {
-		hasMCP = true
-		var totalTools int
-		for _, s := range servers {
-			var icon string
-			var style lipgloss.Style
-			switch s.State {
-			case service.MCPServerStateConnected:
-				icon = "✓"
-				style = ConnectedStyle
-			case service.MCPServerStateFailed:
-				icon = "✗"
-				style = ErrorStyle
-			default:
-				icon = "○"
-				style = DimStyle
-			}
-			totalTools += s.ToolCount
-
-			label := s.Name
-			toolInfo := fmt.Sprintf("(%d tools)", s.ToolCount)
-			if s.State == service.MCPServerStateFailed {
-				toolInfo = "(failed)"
-			}
-
-			line := style.Render(icon) + " " + truncateStr(label, contentWidth-len(icon)-len(toolInfo)-3) + " " + DimStyle.Render(toolInfo)
-			mcpSB.WriteString(line)
-			mcpSB.WriteString("\n")
-		}
-
-		// Summary line
-		summary := fmt.Sprintf("%d servers, %d tools", len(servers), totalTools)
-		mcpSB.WriteString(DimStyle.Render(summary))
-		mcpSB.WriteString("\n")
-	}
-	if !hasMCP {
-		mcpSB.WriteString(DimStyle.Italic(true).Render("no MCP servers"))
-		mcpSB.WriteString("\n")
-	}
-	if m.focused == focusMCP {
-		mcpSB.WriteString(DimStyle.Render("Enter → MCP details"))
-		mcpSB.WriteString("\n")
-	}
-
-	mcpPaneStyle := UnfocusedPaneStyle
-	if m.focused == focusMCP {
-		mcpPaneStyle = FocusedPaneStyle
-	}
-	// Ensure MCP pane is at least as tall as the input area so borders align.
-	minMCPH := inputHeight + InputAreaStyle.GetVerticalFrameSize()
-	mcpPane := mcpPaneStyle.Width(sbWidth).Render(mcpSB.String())
-	mcpH := lipgloss.Height(mcpPane)
-	if mcpH < minMCPH {
-		mcpPane = mcpPaneStyle.Width(sbWidth).Height(minMCPH).Render(mcpSB.String())
-		mcpH = minMCPH
-	}
-
-	// --- Top pane: Operator stats ---
+	// --- Operator stats ---
 	var sb strings.Builder
+
+	// Leading blank row matches ChatAreaStyle's top padding so the
+	// sidebar's "operator" header doesn't butt up against the very top
+	// of the terminal. The left panel's bordered panes already give it
+	// equivalent breathing room; this restores parity on the right.
+	sb.WriteString("\n")
 
 	connStatus := ConnectedStyle.Render("connected")
 	if !m.stats.Connected {
 		connStatus = ErrorStyle.Render("disconnected")
 	}
 	headerText := gradientText("operator", [3]uint8{255, 175, 0}, [3]uint8{175, 50, 200})
-	if m.focused == focusOperator && m.focusAnimFrames > 0 {
-		headerText = rainbowText("operator", m.spinnerFrame)
-	}
 	gap := contentWidth - lipgloss.Width(headerText) - lipgloss.Width(connStatus)
 	if gap < 1 {
 		gap = 1
@@ -380,19 +314,16 @@ func (m Model) renderSidebar(sbWidth int) string {
 	sb.WriteString(sidebarRow("Last resp", lastResp))
 	sb.WriteString(sidebarRow("Avg resp", avgResp))
 
-	// Calculate operator pane height so the sidebar fills the terminal exactly.
-	operatorPaneH := m.height - mcpH
+	// Operator pane fills the full sidebar height and renders borderless,
+	// matching the horizontal frame width used by bordered panes so columns
+	// line up.
+	operatorPaneH := m.height
 	if operatorPaneH < 3 {
 		operatorPaneH = 3
 	}
 
-	operatorPaneStyle := UnfocusedPaneStyle
-	if m.focused == focusOperator {
-		operatorPaneStyle = FocusedPaneStyle
-	}
-	operatorPane := operatorPaneStyle.Width(sbWidth).Height(operatorPaneH).Render(sb.String())
-
-	return lipgloss.JoinVertical(lipgloss.Left, operatorPane, mcpPane)
+	operatorPaneStyle := lipgloss.NewStyle().Padding(0, sidebarHPad)
+	return operatorPaneStyle.Width(sbWidth).Height(operatorPaneH).Render(sb.String())
 }
 
 func sidebarRow(label, value string) string {

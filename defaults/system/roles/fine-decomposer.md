@@ -47,7 +47,7 @@ decide the next step:
 
 ## Task sizing for subtasks
 
-{{ instructions.task-specificity }}
+{{ instructions.fine-granularity }}
 
 - **Too broad:** "Implement CRUD endpoints for users"
 - **Right size:** "Implement the POST /users handler with request validation"

@@ -371,6 +371,42 @@ type ChatMessage struct {
 	ToolCallID string     // populated for tool result messages
 }
 
+// ChatEntryKind distinguishes rendering modes for a ChatEntry. The default
+// empty value means a plain text message (user/assistant/system/tool);
+// additional kinds are structured entries that the TUI renders from a
+// typed payload instead of free-form content.
+type ChatEntryKind string
+
+const (
+	// ChatEntryKindMessage is the default: a conventional chat message
+	// rendered from ChatEntry.Message.
+	ChatEntryKindMessage ChatEntryKind = ""
+	// ChatEntryKindJobUpdate is a live, mutating block summarizing a
+	// single job's progress. Payload lives in ChatEntry.JobUpdate.
+	ChatEntryKindJobUpdate ChatEntryKind = "job_update"
+
+	// ChatEntryKindJobResult is a terminal completion summary that lands
+	// in chat the moment a job finishes — separate from the in-progress
+	// JobUpdate block so the conversation history reflects "this is the
+	// completion event" rather than retroactively rewriting prior state.
+	// Payload lives in ChatEntry.JobResult.
+	ChatEntryKindJobResult ChatEntryKind = "job_result"
+)
+
+// JobSnapshot is the payload for a ChatEntryKindJobUpdate entry. It
+// captures the bits of a Job needed to render the job-update block so
+// the renderer doesn't need to look up live state.
+type JobSnapshot struct {
+	JobID          string
+	Title          string
+	Status         JobStatus
+	TasksCompleted int
+	TasksTotal     int
+	TasksFailed    int
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+}
+
 // ChatEntry consolidates per-message data for the chat history display.
 // It replaces the tui.ChatEntry type, which previously held a provider.Message.
 type ChatEntry struct {
@@ -378,6 +414,43 @@ type ChatEntry struct {
 	Timestamp  time.Time
 	Reasoning  string // chain-of-thought reasoning text; empty for non-assistant messages
 	ClaudeMeta string // byline / metadata string (e.g. "operator · claude-sonnet-4-6")
+
+	// Kind selects how the entry is rendered. Defaults to ChatEntryKindMessage.
+	// Non-message kinds are currently TUI-ephemeral (not persisted or
+	// round-tripped over the wire); see internal/tui for consumers.
+	Kind ChatEntryKind
+	// JobUpdate carries the snapshot for Kind == ChatEntryKindJobUpdate.
+	// Nil for other kinds.
+	JobUpdate *JobSnapshot
+
+	// JobResult carries the completion summary for
+	// Kind == ChatEntryKindJobResult. Nil for other kinds.
+	JobResult *JobResultSnapshot
+}
+
+// JobResultSnapshot is the payload for a ChatEntryKindJobResult entry. It
+// mirrors JobCompletedPayload one-for-one so the TUI can stash it on the
+// chat entry, render the result block from cached state, and survive a
+// progress refresh without re-fetching server state.
+type JobResultSnapshot struct {
+	JobID     string
+	Title     string
+	Summary   string
+	Status    JobStatus
+	Workspace string
+	StartedAt time.Time
+	EndedAt   time.Time
+
+	TasksTotal     int
+	TasksCompleted int
+	TasksFailed    int
+
+	TokensIn  int64
+	TokensOut int64
+	CostUSD   float64
+
+	FilesTouched      []FileTouch
+	FilesTouchedExtra int
 }
 
 // ---------------------------------------------------------------------------
@@ -477,6 +550,40 @@ type AddProviderRequest struct {
 	Type     string // "openai", "local", or "anthropic"
 	Endpoint string // API endpoint URL (optional for some types)
 	APIKey   string // API key value or ${ENV_VAR} reference (optional)
+}
+
+// Settings is the user-editable subset of runtime configuration exposed
+// through the /settings surface. All fields are flat scalars so the TUI can
+// render them as simple rows.
+type Settings struct {
+	// CoarseGranularity controls how large the tasks emitted by
+	// coarse-decompose are. One of: "xcoarse", "coarse", "medium", "fine",
+	// "xfine" (coarsest → finest).
+	CoarseGranularity string `json:"coarse_granularity"`
+
+	// FineGranularity controls how finely fine-decompose slices a task into
+	// subtasks (and, in the future, dynamically generated graph nodes).
+	// Same enum as CoarseGranularity.
+	FineGranularity string `json:"fine_granularity"`
+
+	// WorkerThinkingEnabled is the default value of the per-request thinking
+	// toggle for worker (graph) nodes. Roles may override this in their
+	// frontmatter.
+	WorkerThinkingEnabled bool `json:"worker_thinking_enabled"`
+
+	// WorkerTemperature is the default sampling temperature for worker
+	// (graph) nodes. Roles may override this in their frontmatter.
+	WorkerTemperature float64 `json:"worker_temperature"`
+
+	// ShowJobsPanelByDefault keeps the Jobs/Workers left panel visible
+	// even when no jobs or runtime sessions exist. When false (default),
+	// the panel only appears once there's something to show.
+	ShowJobsPanelByDefault bool `json:"show_jobs_panel_by_default"`
+
+	// ShowOperatorPanelByDefault keeps the Operator/sidebar right panel
+	// visible by default. When false, the panel is hidden until the user
+	// reveals it via Ctrl+O.
+	ShowOperatorPanelByDefault bool `json:"show_operator_panel_by_default"`
 }
 
 // ---------------------------------------------------------------------------

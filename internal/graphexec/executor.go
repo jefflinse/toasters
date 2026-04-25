@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/gofrs/uuid/v5"
@@ -44,6 +45,12 @@ type Executor struct {
 	defaultModel  string
 	nodeTimeout   time.Duration
 	retryAttempts int
+
+	// Worker-default knobs are read on each task dispatch and may be
+	// updated live via SetWorkerDefaults when the user changes /settings.
+	defaultsMu            sync.RWMutex
+	workerThinkingEnabled bool
+	workerTemperature     float64
 }
 
 // ExecutorConfig holds configuration for creating an Executor.
@@ -94,6 +101,15 @@ type ExecutorConfig struct {
 	// Roles is the role registry used to resolve a YAML node's role: field
 	// at dispatch time. When nil, NewRoleRegistry() is used.
 	Roles *RoleRegistry
+
+	// WorkerThinkingEnabled is the initial value of the global thinking
+	// default for graph nodes. May be updated live via SetWorkerDefaults.
+	WorkerThinkingEnabled bool
+
+	// WorkerTemperature is the initial value of the global sampling
+	// temperature default for graph nodes. May be updated live via
+	// SetWorkerDefaults.
+	WorkerTemperature float64
 }
 
 // NewExecutor creates an Executor with the given configuration.
@@ -107,18 +123,38 @@ func NewExecutor(cfg ExecutorConfig) *Executor {
 		roles = NewRoleRegistry()
 	}
 	return &Executor{
-		registry:      cfg.Registry,
-		mcpManager:    cfg.MCPManager,
-		promptEngine:  cfg.PromptEngine,
-		store:         cfg.Store,
-		eventSink:     cfg.EventSink,
-		broker:        cfg.Broker,
-		graphs:        cfg.Graphs,
-		roles:         roles,
-		defaultModel:  cfg.DefaultModel,
-		nodeTimeout:   cfg.NodeTimeout,
-		retryAttempts: retries,
+		registry:              cfg.Registry,
+		mcpManager:            cfg.MCPManager,
+		promptEngine:          cfg.PromptEngine,
+		store:                 cfg.Store,
+		eventSink:             cfg.EventSink,
+		broker:                cfg.Broker,
+		graphs:                cfg.Graphs,
+		roles:                 roles,
+		defaultModel:          cfg.DefaultModel,
+		nodeTimeout:           cfg.NodeTimeout,
+		retryAttempts:         retries,
+		workerThinkingEnabled: cfg.WorkerThinkingEnabled,
+		workerTemperature:     cfg.WorkerTemperature,
 	}
+}
+
+// SetWorkerDefaults updates the global thinking/temperature defaults that
+// graph nodes inherit when their role frontmatter doesn't override. Safe to
+// call concurrently with ExecuteTask: each task reads a fresh snapshot at
+// dispatch time, so updates take effect on the next task.
+func (e *Executor) SetWorkerDefaults(thinkingEnabled bool, temperature float64) {
+	e.defaultsMu.Lock()
+	defer e.defaultsMu.Unlock()
+	e.workerThinkingEnabled = thinkingEnabled
+	e.workerTemperature = temperature
+}
+
+// workerDefaults returns the current global defaults under a read lock.
+func (e *Executor) workerDefaults() (bool, float64) {
+	e.defaultsMu.RLock()
+	defer e.defaultsMu.RUnlock()
+	return e.workerThinkingEnabled, e.workerTemperature
 }
 
 // interruptHandler is registered on every graph Run via
@@ -326,12 +362,15 @@ func (e *Executor) ExecuteTask(ctx context.Context, req TaskRequest) error {
 		model = e.defaultModel
 	}
 
+	thinking, temperature := e.workerDefaults()
 	tmplCfg := TemplateConfig{
-		Provider:     prov,
-		ToolExecutor: e.buildToolExecutor(req.WorkspaceDir),
-		Model:        model,
-		PromptEngine: e.promptEngine,
-		Store:        e.store,
+		Provider:              prov,
+		ToolExecutor:          e.buildToolExecutor(req.WorkspaceDir),
+		Model:                 model,
+		PromptEngine:          e.promptEngine,
+		Store:                 e.store,
+		WorkerThinkingEnabled: thinking,
+		WorkerTemperature:     temperature,
 	}
 
 	if e.graphs == nil {

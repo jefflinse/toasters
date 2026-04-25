@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime/debug"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -82,6 +83,11 @@ const maxHistoryEntries = 1000
 
 // LocalConfig holds the dependencies for LocalService.
 type LocalConfig struct {
+	// AppConfig is the loaded application config, used for serving and
+	// mutating user-editable settings (see GetSettings/UpdateSettings).
+	// Optional — if nil, the settings endpoints return defaults and
+	// UpdateSettings is a no-op that returns an error.
+	AppConfig        *config.Config
 	Store            db.Store
 	Runtime          *runtime.Runtime
 	Operator         *operator.Operator
@@ -527,14 +533,173 @@ func (s *LocalService) BroadcastOperatorEvent(ev operator.Event) {
 			return
 		}
 		s.broadcast(Event{
-			Type: EventTypeJobCompleted,
-			Payload: JobCompletedPayload{
-				JobID:   payload.JobID,
-				Title:   payload.Title,
-				Summary: payload.Summary,
-			},
+			Type:    EventTypeJobCompleted,
+			Payload: s.buildJobCompletedPayload(payload),
 		})
 	}
+}
+
+// buildJobCompletedPayload assembles the rich completion payload by pulling
+// together the job row, its tasks, all worker sessions for the job, and a
+// listing of files in the workspace whose mtime falls inside the job's
+// lifetime. Errors at each stage degrade the payload but never block
+// emission — a thin payload still beats no payload for the UI.
+func (s *LocalService) buildJobCompletedPayload(payload operator.JobCompletePayload) JobCompletedPayload {
+	out := JobCompletedPayload{
+		JobID:   payload.JobID,
+		Title:   payload.Title,
+		Summary: payload.Summary,
+		Status:  JobStatusCompleted,
+		EndedAt: time.Now(),
+	}
+
+	if s.cfg.Store == nil {
+		return out
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if job, err := s.cfg.Store.GetJob(ctx, payload.JobID); err == nil && job != nil {
+		out.Workspace = job.WorkspaceDir
+		out.StartedAt = job.CreatedAt
+		// out.Title comes from the operator payload, which is authoritative
+		// for the operator-perceived label; only fall back to the DB when
+		// the payload's title is empty.
+		if out.Title == "" {
+			out.Title = job.Title
+		}
+	} else if err != nil {
+		slog.Warn("job-completed payload: GetJob failed", "job_id", payload.JobID, "error", err)
+	}
+
+	if tasks, err := s.cfg.Store.ListTasksForJob(ctx, payload.JobID); err == nil {
+		out.TasksTotal = len(tasks)
+		for _, t := range tasks {
+			switch t.Status {
+			case db.TaskStatusCompleted:
+				out.TasksCompleted++
+			case db.TaskStatusFailed:
+				out.TasksFailed++
+			}
+		}
+		// Promote the job's effective status: if any task failed the run
+		// wasn't a clean win, even though EventJobComplete fires for any
+		// terminal state.
+		if out.TasksFailed > 0 {
+			out.Status = JobStatusFailed
+		}
+	} else {
+		slog.Warn("job-completed payload: ListTasksForJob failed", "job_id", payload.JobID, "error", err)
+	}
+
+	if sessions, err := s.cfg.Store.ListSessionsForJob(ctx, payload.JobID); err == nil {
+		for _, sess := range sessions {
+			out.TokensIn += sess.TokensIn
+			out.TokensOut += sess.TokensOut
+			if sess.CostUSD != nil {
+				out.CostUSD += *sess.CostUSD
+			}
+		}
+		// Diagnostic: many local-inference servers (LM Studio in
+		// particular older builds) ship without `stream_options.include_usage`
+		// support, so worker_sessions can land at tokens=0 even when the
+		// job clearly produced text. Log the count + aggregate so the
+		// user can correlate against `sqlite3 toasters.db "SELECT
+		// id,tokens_in,tokens_out FROM worker_sessions WHERE job_id=?"`.
+		slog.Debug("job-completed payload: aggregated session tokens",
+			"job_id", payload.JobID,
+			"sessions", len(sessions),
+			"tokens_in", out.TokensIn,
+			"tokens_out", out.TokensOut)
+	} else {
+		slog.Warn("job-completed payload: ListSessionsForJob failed", "job_id", payload.JobID, "error", err)
+	}
+
+	if out.Workspace != "" && !out.StartedAt.IsZero() {
+		files, extra := walkFilesTouched(out.Workspace, out.StartedAt, out.EndedAt)
+		out.FilesTouched = files
+		out.FilesTouchedExtra = extra
+	}
+
+	return out
+}
+
+// walkFilesTouched returns the files inside dir whose mtime falls within
+// [startedAt, endedAt+grace]. A small forward grace window covers the
+// race between the last file write and the completion event firing. The
+// listing is bounded so an over-eager scan in a huge workspace can't
+// stall the broadcast loop or blow the SSE event size.
+func walkFilesTouched(dir string, startedAt, endedAt time.Time) ([]FileTouch, int) {
+	const (
+		maxFiles  = 200
+		graceWin  = 2 * time.Second
+		hardLimit = 5000 // walk-time guard: stop entirely after this many entries
+	)
+	if dir == "" {
+		return nil, 0
+	}
+	endWindow := endedAt.Add(graceWin)
+	var (
+		out   []FileTouch
+		extra int
+		seen  int
+	)
+	walkErr := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			// Ignore individual file errors (permission denied, broken
+			// symlinks); they shouldn't poison the whole listing.
+			return nil
+		}
+		if d.IsDir() {
+			// Skip the workspace-internal cache dirs that almost always
+			// pollute file-touch lists with uninteresting churn.
+			name := d.Name()
+			if path != dir && (name == ".git" || name == "node_modules" || name == ".toasters") {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		seen++
+		if seen > hardLimit {
+			return filepath.SkipAll
+		}
+		info, err := d.Info()
+		if err != nil {
+			return nil
+		}
+		mtime := info.ModTime()
+		if mtime.Before(startedAt) || mtime.After(endWindow) {
+			return nil
+		}
+		rel, err := filepath.Rel(dir, path)
+		if err != nil {
+			rel = path
+		}
+		if len(out) >= maxFiles {
+			extra++
+			return nil
+		}
+		out = append(out, FileTouch{
+			Path:  rel,
+			Size:  info.Size(),
+			IsNew: !mtime.Before(startedAt) && info.ModTime().Equal(infoBirthFallback(info)),
+		})
+		return nil
+	})
+	if walkErr != nil {
+		slog.Debug("walkFilesTouched: WalkDir returned error", "dir", dir, "error", walkErr)
+	}
+	// Stable ordering: alphabetical by relative path so the displayed
+	// list doesn't reshuffle every render.
+	sort.Slice(out, func(i, j int) bool { return out[i].Path < out[j].Path })
+	return out, extra
+}
+
+// infoBirthFallback returns the file's modification time as a stand-in for
+// a creation timestamp on platforms that don't expose btime. The TUI uses
+// IsNew only as a hint, so the heuristic doesn't need to be precise.
+func infoBirthFallback(info os.FileInfo) time.Time {
+	return info.ModTime()
 }
 
 // BroadcastOperatorDone broadcasts an operator.done event. Called from the
@@ -1893,6 +2058,118 @@ func (s *LocalService) ListProviderModels(ctx context.Context, providerID string
 		models = append(models, providerModelInfoToService(m))
 	}
 	return models, nil
+}
+
+// GetSettings returns the current user-editable runtime settings. Values are
+// sourced from the in-memory config; if no config is wired (tests), sensible
+// defaults are returned.
+func (s *LocalService) GetSettings(_ context.Context) (Settings, error) {
+	if s.cfg.AppConfig == nil {
+		return Settings{
+			CoarseGranularity:          config.ValidGranularity("coarse", ""),
+			FineGranularity:            config.ValidGranularity("fine", ""),
+			WorkerThinkingEnabled:      false,
+			WorkerTemperature:          0.1,
+			ShowJobsPanelByDefault:     false,
+			ShowOperatorPanelByDefault: true,
+		}, nil
+	}
+	return Settings{
+		CoarseGranularity:          config.ValidGranularity("coarse", s.cfg.AppConfig.CoarseGranularity),
+		FineGranularity:            config.ValidGranularity("fine", s.cfg.AppConfig.FineGranularity),
+		WorkerThinkingEnabled:      s.cfg.AppConfig.WorkerThinkingEnabled,
+		WorkerTemperature:          s.cfg.AppConfig.WorkerTemperature,
+		ShowJobsPanelByDefault:     s.cfg.AppConfig.ShowJobsPanelByDefault,
+		ShowOperatorPanelByDefault: s.cfg.AppConfig.ShowOperatorPanelByDefault,
+	}, nil
+}
+
+// UpdateSettings validates, persists, and applies the given settings.
+// Persistence writes to config.yaml in place; applying refreshes the prompt
+// engine so new worker runs pick up the change immediately. Every granularity
+// lever is validated before any write, so a bad value on one field leaves
+// the rest untouched.
+func (s *LocalService) UpdateSettings(_ context.Context, next Settings) error {
+	if s.cfg.AppConfig == nil {
+		return fmt.Errorf("settings unavailable: no app config loaded")
+	}
+	type lever struct {
+		kind     string // "coarse" or "fine"
+		yamlKey  string
+		incoming string
+		set      func(string)
+	}
+	levers := []lever{
+		{
+			kind:     "coarse",
+			yamlKey:  "coarse_granularity",
+			incoming: next.CoarseGranularity,
+			set:      func(v string) { s.cfg.AppConfig.CoarseGranularity = v },
+		},
+		{
+			kind:     "fine",
+			yamlKey:  "fine_granularity",
+			incoming: next.FineGranularity,
+			set:      func(v string) { s.cfg.AppConfig.FineGranularity = v },
+		},
+	}
+
+	// Validate first, write second — so an invalid field doesn't leave
+	// config.yaml half-updated.
+	for _, l := range levers {
+		if normalized := config.ValidGranularity(l.kind, l.incoming); normalized != l.incoming {
+			return fmt.Errorf("invalid %s %q", l.yamlKey, l.incoming)
+		}
+	}
+
+	for _, l := range levers {
+		if err := config.SetTopLevelScalar(s.cfg.ConfigDir, l.yamlKey, l.incoming); err != nil {
+			return fmt.Errorf("persisting %s: %w", l.yamlKey, err)
+		}
+		l.set(l.incoming)
+		if s.cfg.PromptEngine != nil {
+			if err := prompt.ApplyGranularity(s.cfg.PromptEngine, l.kind, l.incoming); err != nil {
+				slog.Warn("failed to refresh granularity instruction", "kind", l.kind, "error", err)
+			}
+		}
+	}
+
+	// Worker defaults: validate and persist as their native YAML types so
+	// viper round-trips them as bool/float on next load.
+	if next.WorkerTemperature < 0 || next.WorkerTemperature > 2 {
+		return fmt.Errorf("invalid worker_temperature %v (must be in [0, 2])", next.WorkerTemperature)
+	}
+	if err := config.SetTopLevelValue(s.cfg.ConfigDir, "worker_thinking_enabled", next.WorkerThinkingEnabled); err != nil {
+		return fmt.Errorf("persisting worker_thinking_enabled: %w", err)
+	}
+	if err := config.SetTopLevelValue(s.cfg.ConfigDir, "worker_temperature", next.WorkerTemperature); err != nil {
+		return fmt.Errorf("persisting worker_temperature: %w", err)
+	}
+	s.cfg.AppConfig.WorkerThinkingEnabled = next.WorkerThinkingEnabled
+	s.cfg.AppConfig.WorkerTemperature = next.WorkerTemperature
+	if applier, ok := s.cfg.GraphExecutor.(workerDefaultsApplier); ok {
+		applier.SetWorkerDefaults(next.WorkerThinkingEnabled, next.WorkerTemperature)
+	}
+
+	// Panel visibility defaults: pure UI prefs, no live engine to refresh.
+	if err := config.SetTopLevelValue(s.cfg.ConfigDir, "show_jobs_panel_by_default", next.ShowJobsPanelByDefault); err != nil {
+		return fmt.Errorf("persisting show_jobs_panel_by_default: %w", err)
+	}
+	if err := config.SetTopLevelValue(s.cfg.ConfigDir, "show_operator_panel_by_default", next.ShowOperatorPanelByDefault); err != nil {
+		return fmt.Errorf("persisting show_operator_panel_by_default: %w", err)
+	}
+	s.cfg.AppConfig.ShowJobsPanelByDefault = next.ShowJobsPanelByDefault
+	s.cfg.AppConfig.ShowOperatorPanelByDefault = next.ShowOperatorPanelByDefault
+
+	return nil
+}
+
+// workerDefaultsApplier is the optional surface a graph executor exposes to
+// receive runtime updates of the global worker temperature/thinking
+// defaults. *graphexec.Executor satisfies it; tests that pass a mock
+// executor without this method silently skip the live update.
+type workerDefaultsApplier interface {
+	SetWorkerDefaults(thinkingEnabled bool, temperature float64)
 }
 
 // startOperator creates and starts a new operator, replacing any existing one.

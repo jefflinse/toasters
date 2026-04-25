@@ -56,8 +56,11 @@ func RoleNode(cfg TemplateConfig, role *prompt.Role, nodeID string) rhizome.Node
 			}
 		}
 
+		thinkingEnabled, temperature := effectiveWorkerDefaults(cfg, role)
+		tunedProv := newTunedProvider(cfg.Provider, thinkingEnabled, temperature)
+
 		res, runErr := agent.Run(ctx, agent.Config[json.RawMessage]{
-			Provider:     cfg.Provider,
+			Provider:     tunedProv,
 			Model:        cfg.Model,
 			System:       sysPrompt,
 			Messages:     []provider.Message{{Role: "user", Content: buildInitialMessage(state)}},

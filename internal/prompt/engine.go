@@ -25,13 +25,19 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"gopkg.in/yaml.v3"
 )
 
 // Engine loads and composes worker prompts from roles, toolchains, and instructions.
+//
+// Most state is populated at startup via LoadDir and read-only from then on,
+// but globals and instructions can be updated at runtime (e.g. from the
+// settings surface), so the maps touched by those paths are guarded by mu.
 type Engine struct {
+	mu           sync.RWMutex
 	roles        map[string]*Role
 	toolchains   map[string]*Toolchain
 	instructions map[string]string // name → body (plain text)
@@ -58,9 +64,17 @@ type Role struct {
 	// with heavy tool-call budgets — scaffolders, coders, testers —
 	// should set this higher; pure analytical roles (investigator,
 	// planner, reviewer) are fine at the default.
-	MaxTurns int    `yaml:"max_turns"`
-	Body     string `yaml:"-"` // template text after frontmatter
-	Source   string `yaml:"-"` // "system" or "user" — set by LoadDir caller
+	MaxTurns int `yaml:"max_turns"`
+	// Thinking, when set, overrides the global worker_thinking_enabled
+	// default for this role. Pointer so that "absent" (use global) is
+	// distinguishable from "explicitly false".
+	Thinking *bool `yaml:"thinking,omitempty"`
+	// Temperature, when set, overrides the global worker_temperature
+	// default for this role. Pointer so that 0.0 is distinguishable from
+	// "use global default".
+	Temperature *float64 `yaml:"temperature,omitempty"`
+	Body        string   `yaml:"-"` // template text after frontmatter
+	Source      string   `yaml:"-"` // "system" or "user" — set by LoadDir caller
 }
 
 // Toolchain is language/framework knowledge with typed variables.
@@ -93,10 +107,32 @@ func NewEngine() *Engine {
 }
 
 // SetGlobal registers a global template variable that will be available as
-// {{ globals.<key> }} in role templates. Call this during startup before any
-// goroutines call Compose.
+// {{ globals.<key> }} in role templates. Safe to call concurrently with
+// Compose.
 func (e *Engine) SetGlobal(key, value string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	e.globals[key] = value
+}
+
+// SetInstruction registers a synthetic instruction body under name so that
+// role templates referencing {{ instructions.<name> }} resolve to body.
+// Intended for runtime-injected instructions whose content comes from
+// configuration (e.g. the selected worker-granularity level). Safe to call
+// concurrently with Compose.
+func (e *Engine) SetInstruction(name, body string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.instructions[name] = strings.TrimSpace(body)
+}
+
+// Instruction returns the body of the instruction registered under name, if
+// any. The second return is false when no such instruction was loaded.
+func (e *Engine) Instruction(name string) (string, bool) {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	body, ok := e.instructions[name]
+	return body, ok
 }
 
 // LoadDir loads all definitions from a directory containing roles/, toolchains/,
@@ -122,18 +158,26 @@ func (e *Engine) LoadDir(dir, source string) error {
 // system prompt. Overrides are passed to toolchain var resolution (e.g.
 // {"go.version": "1.25"} overrides the Go toolchain's version var).
 func (e *Engine) Compose(roleName string, overrides map[string]string) (string, error) {
+	e.mu.RLock()
 	role, ok := e.roles[roleName]
 	if !ok {
+		e.mu.RUnlock()
 		return "", fmt.Errorf("role %q not found", roleName)
 	}
 
-	// Build the globals map: caller-set globals first, then time-based globals
-	// (time values win on collision).
+	// Snapshot the runtime-mutable maps under the lock; compose against the
+	// snapshot so the lock isn't held during regex work.
 	now := time.Now()
 	globals := make(map[string]string, len(e.globals)+3)
 	for k, v := range e.globals {
 		globals[k] = v
 	}
+	instructions := make(map[string]string, len(e.instructions))
+	for k, v := range e.instructions {
+		instructions[k] = v
+	}
+	e.mu.RUnlock()
+
 	globals["now.month"] = now.Format("January")
 	globals["now.year"] = fmt.Sprintf("%d", now.Year())
 	globals["now.date"] = now.Format("2006-01-02")
@@ -168,7 +212,7 @@ func (e *Engine) Compose(roleName string, overrides map[string]string) (string, 
 			slog.Warn("unresolved toolchain reference", "role", roleName, "ref", name)
 			return match
 		case "instructions":
-			if body, ok := e.instructions[name]; ok {
+			if body, ok := instructions[name]; ok {
 				return strings.TrimSpace(body)
 			}
 			slog.Warn("unresolved instruction reference", "role", roleName, "ref", name)

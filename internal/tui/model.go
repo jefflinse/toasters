@@ -116,6 +116,11 @@ type chatState struct {
 	selectedMsgIdx    int                 // currently selected message index (-1 = none)
 	expandedReasoning map[int]bool        // which entry indices have reasoning expanded
 	collapsedTools    map[int]bool        // true = expanded; absent/false = collapsed (default)
+
+	// queuedMessages holds user messages entered while the operator is
+	// mid-turn. When OperatorDoneMsg arrives, the next queued message is
+	// sent automatically.
+	queuedMessages []string
 }
 
 // Model is the root Bubble Tea model for the toasters TUI.
@@ -155,6 +160,9 @@ type Model struct {
 	// Workers modal state.
 	workersModal workersModalState
 
+	// Settings modal state (/settings).
+	settingsModal settingsModalState
+
 	// MCP modal state.
 	mcpModal mcpModalState
 
@@ -166,6 +174,12 @@ type Model struct {
 
 	// Jobs modal state.
 	jobsModal jobsModalState
+
+	// Most recent JobResult snapshot. Drives the "↑ to select for
+	// actions" hint that appears beneath the latest unread result block.
+	// Cleared when the user submits another turn or a newer result
+	// displaces it.
+	recentJobResult *service.JobResultSnapshot
 
 	// Graph map modal state (POC viewer for dagmap renderers).
 	graphMapModal graphMapModalState
@@ -192,19 +206,31 @@ type Model struct {
 	lpWidth int // cached left panel width for mouse hit-testing
 	sbWidth int // cached sidebar width for mouse hit-testing
 
-	// Collapsible panel state.
-	leftPanelHidden        bool // true when user has toggled the left panel off via ctrl+l
-	sidebarHidden          bool // true when user has toggled the sidebar off via ctrl+b
-	leftPanelWidthOverride int  // 0 = use default computed width; >0 = user-resized width
+	// lastLeftPanelShown tracks the visibility outcome from the last
+	// resizeComponents call so we can re-run the size math when the left
+	// panel flips between shown/hidden due to state changes (a job or
+	// worker appearing/disappearing) rather than an explicit toggle.
+	// Without this the chat viewport keeps a stale width and the
+	// scrollbar column drifts.
+	lastLeftPanelShown bool
+
+	// Collapsible panel state. Override pointers track explicit user
+	// toggles via ctrl+j / ctrl+o: nil means "follow the configured default
+	// behavior", non-nil pins the panel to the boolean's value regardless
+	// of content or settings. This lets ctrl+j reveal an empty Jobs panel
+	// even when there's nothing to show — the prior plain-bool design
+	// silently lost that toggle because the auto-hide gate fired first.
+	leftPanelOverride *bool
+	sidebarOverride   *bool
+	// Settings-driven defaults for the panels' baseline visibility,
+	// refreshed whenever /settings is loaded or saved.
+	showJobsPanelDefault     bool
+	showOperatorPanelDefault bool
+	leftPanelWidthOverride   int // 0 = use default computed width; >0 = user-resized width
 
 	// Shared spinner animation frame counter.
 	spinnerFrame   int
 	spinnerRunning bool // true while the spinnerTick loop is live; prevents double-arming
-
-	// Focus burst animation: plays rainbowText on the newly-focused sidebar tile
-	// for focusAnimFramesTotal ticks, then stops.
-	focusAnimPanel  focusedPanel // which panel is currently animating
-	focusAnimFrames int          // frames remaining (counts down from 13 to 0)
 
 	// Toast notification state.
 	toasts      []toast
@@ -305,6 +331,14 @@ func NewModel(cfg ModelConfig) Model {
 	m.chat.collapsedTools = make(map[int]bool)
 	m.runtimeSessions = make(map[string]*runtimeSlot)
 
+	// Seed panel-visibility defaults with the same baseline GetSettings
+	// returns when no AppConfig is wired. Init() will fetch the persisted
+	// settings shortly after; until that round-trip lands, this seeding
+	// keeps the operator sidebar visible (the historical default) instead
+	// of starting hidden because of the bool zero value.
+	m.showOperatorPanelDefault = true
+	m.showJobsPanelDefault = false
+
 	return m
 }
 
@@ -314,6 +348,11 @@ func (m *Model) Init() tea.Cmd {
 		tea.RequestWindowSize,
 		m.fetchModels(),
 		m.fetchGraphs(),
+		// Pull persisted settings up front so the panel-visibility
+		// defaults reflect the user's preferences before the first
+		// frame paints. The returned SettingsLoadedMsg also seeds the
+		// settingsModal cache, so opening /settings later is instant.
+		m.fetchSettings(),
 		loadingTick(), // drive the loading screen animation
 		spinnerTick(), // drive braille spinner animations
 	}
@@ -322,6 +361,8 @@ func (m *Model) Init() tea.Cmd {
 }
 
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	defer m.syncLeftPanelVisibility()
+
 	var cmds []tea.Cmd
 
 	switch msg := msg.(type) {
@@ -354,6 +395,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Jobs modal key handling — intercept all keys when modal is open.
 		if m.jobsModal.show {
 			return m.updateJobsModal(msg)
+		}
+
+		// Settings modal key handling — intercept all keys when modal is open.
+		if m.settingsModal.show {
+			return m.updateSettingsModal(msg)
 		}
 
 		// Graph map modal key handling — intercept all keys when modal is open.
@@ -399,7 +445,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 
 		case "tab":
-			// Cycle focus: chat → jobs → agents → operator → mcp → chat.
+			// Cycle focus: chat → jobs → agents → chat.
 			// Skip hidden panels.
 			// (Tab inside the slash command popup is handled above and returns early.)
 			next := m.focused
@@ -410,20 +456,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				case focusJobs:
 					next = focusAgents
 				case focusAgents:
-					next = focusOperator
-				case focusOperator:
-					next = focusMCP
-				case focusMCP:
 					next = focusChat
 				default:
 					next = focusChat
 				}
-				// Skip left-panel targets when left panel is hidden.
-				if m.leftPanelHidden && (next == focusJobs || next == focusAgents) {
-					continue
-				}
-				// Skip sidebar targets when sidebar is hidden.
-				if m.sidebarHidden && (next == focusOperator || next == focusMCP) {
+				// Skip left-panel targets when left panel is hidden or empty.
+				if !m.shouldShowLeftPanel() && (next == focusJobs || next == focusAgents) {
 					continue
 				}
 				break
@@ -436,15 +474,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, focusCmd
 
 		case "shift+tab":
-			// Reverse cycle: chat → mcp → operator → agents → jobs → chat.
+			// Reverse cycle: chat → agents → jobs → chat.
 			next := m.focused
 			for {
 				switch next {
 				case focusChat:
-					next = focusMCP
-				case focusMCP:
-					next = focusOperator
-				case focusOperator:
 					next = focusAgents
 				case focusAgents:
 					next = focusJobs
@@ -453,12 +487,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				default:
 					next = focusChat
 				}
-				// Skip left-panel targets when left panel is hidden.
-				if m.leftPanelHidden && (next == focusJobs || next == focusAgents) {
-					continue
-				}
-				// Skip sidebar targets when sidebar is hidden.
-				if m.sidebarHidden && (next == focusOperator || next == focusMCP) {
+				// Skip left-panel targets when left panel is hidden or empty.
+				if !m.shouldShowLeftPanel() && (next == focusJobs || next == focusAgents) {
 					continue
 				}
 				break
@@ -545,6 +575,18 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, nil
 			}
+			// Chat focus + at least one JobResult → walk the result-block
+			// selection backward. Blurs the input on first selection so
+			// the action keys (w/d/Enter) aren't swallowed by the textarea.
+			if m.focused == focusChat && !m.stream.streaming {
+				if m.stepJobResultSelection(-1) {
+					if m.chat.selectedMsgIdx >= 0 {
+						m.input.Blur()
+					}
+					m.updateViewportContent()
+					return m, nil
+				}
+			}
 		case "down":
 			// Navigate jobs when that panel is focused.
 			if m.focused == focusJobs {
@@ -560,6 +602,27 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.selectedAgentSlot++
 				}
 				return m, nil
+			}
+			// Mirror of the Up handler above for symmetry: walk forward
+			// through result-block selection, returning to free chat
+			// after the newest result.
+			if m.focused == focusChat && !m.stream.streaming {
+				if m.chat.selectedMsgIdx >= 0 && m.stepJobResultSelection(+1) {
+					if m.chat.selectedMsgIdx < 0 {
+						cmds = append(cmds, m.input.Focus())
+					}
+					m.updateViewportContent()
+					return m, tea.Batch(cmds...)
+				}
+			}
+		case "w":
+			// Open the workspace directory of the selected JobResult.
+			// The action keys are intentionally only live while a result
+			// is selected — typing 'w' in chat normally goes to the input.
+			if m.focused == focusChat {
+				if res := m.selectedJobResult(); res != nil {
+					return m, m.openWorkspaceDir(res.Workspace)
+				}
 			}
 		case "ctrl+x":
 			// Toggle expand/collapse on the selected completion message when chat is focused.
@@ -632,32 +695,31 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmd := m.openLogView()
 			return m, cmd
 
-		case "ctrl+l":
-			// Toggle left panel visibility.
-			m.leftPanelHidden = !m.leftPanelHidden
-			// If hiding the panel while it's focused, switch to chat.
-			if m.leftPanelHidden && (m.focused == focusJobs || m.focused == focusAgents) {
+		case "ctrl+j":
+			// Toggle left panel (Jobs + Workers) visibility. Flip from the
+			// currently *effective* state, not the override field — when no
+			// override is set, the user's mental model is "the panel I see
+			// right now", which may be the auto-hidden empty state.
+			next := !m.shouldShowLeftPanel()
+			m.leftPanelOverride = &next
+			if !next && (m.focused == focusJobs || m.focused == focusAgents) {
 				cmds = append(cmds, m.setFocus(focusChat))
 				cmds = append(cmds, m.input.Focus())
 			}
 			m.resizeComponents()
 			return m, tea.Batch(cmds...)
 
-		case "ctrl+b":
-			// Toggle sidebar visibility.
-			m.sidebarHidden = !m.sidebarHidden
-			// If hiding the sidebar while it's focused, switch to chat.
-			if m.sidebarHidden && (m.focused == focusOperator || m.focused == focusMCP) {
-				cmds = append(cmds, m.setFocus(focusChat))
-				cmds = append(cmds, m.input.Focus())
-			}
+		case "ctrl+o":
+			// Toggle right sidebar (Operator stats) visibility. Same
+			// effective-state semantics as ctrl+j above.
+			next := !m.shouldShowSidebar()
+			m.sidebarOverride = &next
 			m.resizeComponents()
 			return m, tea.Batch(cmds...)
 
 		case "alt+[":
 			// Decrease left panel width.
-			showLeftPanel := m.width >= minWidthForLeftPanel && !m.leftPanelHidden
-			if showLeftPanel {
+			if m.shouldShowLeftPanel() {
 				if m.leftPanelWidthOverride == 0 {
 					m.leftPanelWidthOverride = leftPanelWidth(m.width)
 				}
@@ -671,8 +733,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case "alt+]":
 			// Increase left panel width.
-			showLeftPanel := m.width >= minWidthForLeftPanel && !m.leftPanelHidden
-			if showLeftPanel {
+			if m.shouldShowLeftPanel() {
 				if m.leftPanelWidthOverride == 0 {
 					m.leftPanelWidthOverride = leftPanelWidth(m.width)
 				}
@@ -686,6 +747,16 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 
 		case "esc":
+			// Drop result-block selection back to free chat. Sits ahead
+			// of the grid + stream guards because the user's mental model
+			// is "esc = back out of the most-immediate context", and a
+			// chat-selected result is more recent than a streaming turn.
+			if m.focused == focusChat && m.selectedJobResult() != nil {
+				m.chat.selectedMsgIdx = -1
+				cmds = append(cmds, m.input.Focus())
+				m.updateViewportContent()
+				return m, tea.Batch(cmds...)
+			}
 			// Exit grid screen.
 			if m.grid.showGrid {
 				m.grid.showGrid = false
@@ -715,6 +786,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case "enter":
+			// Result-block deep link: Enter on a chat-selected JobResult
+			// jumps into the Jobs modal at that job. Sits before the
+			// jobs-pane handler so chat selection wins when the user is
+			// in result-block selection mode.
+			if m.focused == focusChat && !m.stream.streaming {
+				if res := m.selectedJobResult(); res != nil {
+					return m, m.openJobsModalForJob(res.JobID)
+				}
+			}
 			// Open jobs modal pre-selected on current job.
 			if m.focused == focusJobs {
 				dj := m.displayJobs()
@@ -727,22 +807,23 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				m.loadJobsForModal()
 				m.loadJobDetail()
-				return m, nil
+				var tickCmd tea.Cmd
+				if !m.spinnerRunning {
+					m.spinnerRunning = true
+					tickCmd = spinnerTick()
+				}
+				return m, tickCmd
 			}
 			// Open grid view when agents pane is focused.
 			if m.focused == focusAgents {
 				m.grid.showGrid = true
 				return m, nil
 			}
-			// Open MCP modal when MCP pane is focused.
-			if m.focused == focusMCP {
-				m.mcpModal = mcpModalState{show: true}
-				return m, nil
-			}
-			// focusJobs, focusOperator, focusChat: handled above or fall through to send.
-			// Send message on Enter when not streaming and input has content.
-			// Shift+enter inserts a newline (handled by textarea).
-			if !m.stream.streaming && strings.TrimSpace(m.input.Value()) != "" {
+			// focusOperator, focusChat: handled above or fall through to send.
+			// Shift+enter inserts a newline (handled by textarea). Local
+			// slash commands execute immediately even during an operator
+			// turn; anything else goes to the queue while streaming.
+			if strings.TrimSpace(m.input.Value()) != "" {
 				text := strings.TrimSpace(m.input.Value())
 				switch text {
 				case "/exit", "/quit":
@@ -779,7 +860,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if len(m.jobsModal.jobs) > 0 {
 						m.loadJobDetail()
 					}
-					return m, nil
+					var tickCmd tea.Cmd
+					if !m.spinnerRunning {
+						m.spinnerRunning = true
+						tickCmd = spinnerTick()
+					}
+					return m, tickCmd
 				case "/graphmap":
 					m.input.Reset()
 					m.cmdPopup.show = false
@@ -801,7 +887,22 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.cmdPopup.show = false
 					m.operatorModal = operatorModalState{show: true, loading: true}
 					return m, m.fetchConfiguredProviders()
+				case "/settings":
+					m.input.Reset()
+					m.cmdPopup.show = false
+					m.settingsModal = settingsModalState{show: true, loading: true}
+					return m, m.fetchSettings()
 				}
+
+				// Remaining cases send a message to the operator. If a turn
+				// is already in progress, queue it for auto-send on done.
+				if m.stream.streaming {
+					m.chat.queuedMessages = append(m.chat.queuedMessages, text)
+					m.input.Reset()
+					m.cmdPopup.show = false
+					return m, nil
+				}
+
 				// /job <prompt> — create a new job via the operator LLM.
 				if strings.HasPrefix(text, "/job ") {
 					prompt := strings.TrimSpace(strings.TrimPrefix(text, "/job "))
@@ -824,8 +925,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
-		// Delegate to textarea when not a special key we handle.
-		if !m.stream.streaming {
+		// Delegate to textarea only when the chat pane is focused. Typing
+		// is allowed even while the operator is streaming (the message
+		// will be queued on Enter), but when the user has tabbed over to
+		// a side pane like Jobs, keystrokes should not leak into the
+		// input box.
+		if m.focused == focusChat {
 			var cmd tea.Cmd
 			m.input, cmd = m.input.Update(msg)
 			cmds = append(cmds, cmd)
@@ -992,6 +1097,27 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.refreshOperatorStatus(),
 				m.fetchModels(),
 			)
+		}
+
+	case SettingsLoadedMsg:
+		m.settingsModal.loading = false
+		if msg.Err != nil {
+			m.settingsModal.err = msg.Err
+		} else {
+			m.settingsModal.settings = msg.Settings
+			m.settingsModal.dirty = msg.Settings
+			m.applyPanelVisibilityDefaults(msg.Settings)
+		}
+
+	case SettingsSavedMsg:
+		m.settingsModal.saving = false
+		if msg.Err != nil {
+			m.settingsModal.err = msg.Err
+		} else {
+			m.settingsModal.settings = msg.Settings
+			m.settingsModal.dirty = msg.Settings
+			m.applyPanelVisibilityDefaults(msg.Settings)
+			return m, m.addToast("✓ Settings saved", toastSuccess)
 		}
 
 	case JobsReloadedMsg:
@@ -1169,10 +1295,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			!m.mcpModal.show && !m.catalogModal.show && !m.operatorModal.show &&
 			!m.grid.showGrid &&
 			!m.promptModal.show && !m.outputModal.show && !m.loading {
-			showLeftPanel := m.width >= minWidthForLeftPanel && !m.leftPanelHidden
-			showSidebar := m.width >= minWidthForBar && !m.sidebarHidden
-			sidebarStartX := m.width - m.sbWidth
-			if showLeftPanel && msg.X < m.lpWidth {
+			if m.shouldShowLeftPanel() && msg.X < m.lpWidth {
 				// Clicked left panel — determine which of the two panes was clicked.
 				// Pane order (top to bottom): Jobs, Agents.
 				agentsPaneH := m.leftPanelAgentsPaneHeight()
@@ -1190,24 +1313,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.input.Blur()
 					}
 				}
-			} else if showSidebar && msg.X >= sidebarStartX {
-				// Clicked sidebar — determine if Operator (top) or MCP (bottom) pane.
-				// MCP pane sits at the bottom; compute its start Y.
-				minMCPH := inputHeight + InputAreaStyle.GetVerticalFrameSize()
-				mcpPaneY := m.height - minMCPH
-				if msg.Y >= mcpPaneY {
-					// Clicked MCP pane.
-					if m.focused != focusMCP {
-						cmds = append(cmds, m.setFocus(focusMCP))
-						m.input.Blur()
-					}
-				} else {
-					// Clicked Operator pane.
-					if m.focused != focusOperator {
-						cmds = append(cmds, m.setFocus(focusOperator))
-						m.input.Blur()
-					}
-				}
 			} else {
 				// Clicked chat area — focus chat.
 				if m.focused != focusChat {
@@ -1218,6 +1323,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case tea.MouseWheelMsg:
+		// Jobs modal: route wheel events to the panel under the cursor so
+		// the task list and graph list stay usable with the mouse.
+		if m.jobsModal.show {
+			m.scrollJobsModal(msg)
+			return m, nil
+		}
 		// Forward mouse wheel events to viewport for scroll support.
 		var cmd tea.Cmd
 		m.chatViewport, cmd = m.chatViewport.Update(msg)
@@ -1246,10 +1357,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case spinnerTickMsg:
 		m.spinnerFrame++
-		if m.focusAnimFrames > 0 {
-			m.focusAnimFrames--
-		}
-		// Re-arm only if something is animating: operator streaming or any agent running.
+		// Re-arm as long as something is animating: operator streaming, any
+		// worker running, any displayed job still active/pending, or a
+		// sidebar panel whose title rainbow-cycles while focused. Animating
+		// indicators should keep moving even when the pane isn't focused.
 		needTick := m.stream.streaming
 		if !needTick {
 			for _, rs := range m.runtimeSessions {
@@ -1259,7 +1370,19 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		}
-		if !needTick && m.focusAnimFrames > 0 {
+		if !needTick {
+			for _, j := range m.displayJobs() {
+				if j.Status == service.JobStatusActive || j.Status == service.JobStatusPending {
+					needTick = true
+					break
+				}
+			}
+		}
+		if !needTick && (m.focused == focusJobs || m.focused == focusAgents) {
+			needTick = true
+		}
+		// Jobs modal's focused panel also rainbow-cycles its title.
+		if !needTick && m.jobsModal.show {
 			needTick = true
 		}
 		if needTick {
@@ -1424,6 +1547,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.scroll.hasNewMessages = true
 		}
 		cmds = append(cmds, m.input.Focus())
+		// If the user queued messages while the operator was busy, send
+		// the next one automatically.
+		if len(m.chat.queuedMessages) > 0 {
+			next := m.chat.queuedMessages[0]
+			m.chat.queuedMessages = m.chat.queuedMessages[1:]
+			m.input.SetValue(next)
+			cmds = append(cmds, m.sendMessage())
+		}
 		return m, tea.Batch(cmds...)
 
 	case OperatorPromptMsg:
@@ -1452,22 +1583,31 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case OperatorEventMsg:
 		slog.Debug("operator event", "type", msg.Event.Type)
-		// Render visible operator events as styled system entries in the chat.
-		if line := formatServiceEvent(msg.Event, m.chatViewport.Width()); line != "" {
-			m.appendEntry(service.ChatEntry{
-				Message: service.ChatMessage{
-					Role:    service.MessageRoleAssistant,
-					Content: line,
-				},
-				Timestamp:  time.Now(),
-				ClaudeMeta: "feed-event",
-			})
+		// All job-scoped events (Job*, Task*) collapse into a single
+		// in-place job-update block per job ID. The block mutates as the
+		// job progresses and stays at its original chat position.
+		dirty := false
+		if m.upsertJobUpdateEntry(msg.Event) != nil {
+			dirty = true
+		}
+		// Job completion is also the moment the result block lands —
+		// distinct from the in-progress block, sitting *below* it in chat
+		// so the conversation history reflects the discrete completion
+		// event. Failed/cancelled jobs use the same hook; the renderer
+		// branches on Status.
+		if msg.Event.Type == service.EventTypeJobCompleted {
+			if cmd := m.appendJobResultEntry(msg.Event); cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+			dirty = true
+		}
+		if dirty {
 			m.updateViewportContent()
 			if !m.scroll.userScrolled {
 				m.chatViewport.GotoBottom()
 			}
 		}
-		return m, nil
+		return m, tea.Batch(cmds...)
 
 	case progressPollMsg:
 		m.progress.jobs = msg.Jobs
@@ -1479,6 +1619,24 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Keep m.jobs in sync so the Jobs panel (which reads m.jobs via
 		// displayJobs) reflects the latest polled state.
 		m.jobs = msg.Jobs
+		// Re-render any job-update blocks with the fresh state — the
+		// discrete JobCompleted / TaskCompleted events race this update,
+		// so the blocks have to catch up here to avoid stale status.
+		if m.refreshJobUpdateEntries() {
+			m.updateViewportContent()
+		}
+		m.syncJobsModalFromProgress()
+		// Kick the spinner ticker if we see animated state but the tick
+		// isn't running — handles TUI reconnect mid-job and any other
+		// path where active state arrives without sendMessage arming it.
+		if !m.spinnerRunning {
+			for _, j := range m.displayJobs() {
+				if j.Status == service.JobStatusActive || j.Status == service.JobStatusPending {
+					m.spinnerRunning = true
+					return m, spinnerTick()
+				}
+			}
+		}
 		return m, nil
 
 	case logTailTickMsg:
@@ -1567,60 +1725,3 @@ func extractFrontmatterName(content string) string {
 	return ""
 }
 
-// formatServiceEvent returns a styled string for a service.Event,
-// or empty string if the event type should not be displayed in the feed.
-// maxWidth is used to word-wrap long content (e.g. blocker descriptions).
-// This is the service-layer equivalent of formatOperatorEvent (defined in helpers.go).
-func formatServiceEvent(ev service.Event, maxWidth int) string {
-	switch ev.Type {
-	case service.EventTypeJobCreated:
-		if p, ok := ev.Payload.(service.JobCreatedPayload); ok {
-			return FeedTaskStartedStyle.Render(fmt.Sprintf("📋 Job created: %q", p.Title))
-		}
-		return FeedTaskStartedStyle.Render("📋 job created")
-
-	case service.EventTypeTaskCreated:
-		if p, ok := ev.Payload.(service.TaskCreatedPayload); ok {
-			return FeedTaskStartedStyle.Render(fmt.Sprintf("◇ Task created: %q", p.Title))
-		}
-		return FeedTaskStartedStyle.Render("◇ task created")
-
-	case service.EventTypeTaskAssigned:
-		if p, ok := ev.Payload.(service.TaskAssignedPayload); ok {
-			return FeedTaskStartedStyle.Render(fmt.Sprintf("➤ Task %q assigned to %s", p.Title, p.GraphID))
-		}
-		return FeedTaskStartedStyle.Render("➤ task assigned")
-
-	case service.EventTypeTaskStarted:
-		if p, ok := ev.Payload.(service.TaskStartedPayload); ok {
-			return FeedTaskStartedStyle.Render(fmt.Sprintf("⚡ %s started task: %q", p.GraphID, p.Title))
-		}
-		return FeedTaskStartedStyle.Render("⚡ task started")
-
-	case service.EventTypeTaskCompleted:
-		if p, ok := ev.Payload.(service.TaskCompletedPayload); ok {
-			return FeedTaskCompletedStyle.Render(fmt.Sprintf("✓ %s completed task", p.GraphID))
-		}
-		return FeedTaskCompletedStyle.Render("✓ task completed")
-
-	case service.EventTypeTaskFailed:
-		if p, ok := ev.Payload.(service.TaskFailedPayload); ok {
-			return FeedTaskFailedStyle.Render(fmt.Sprintf("✗ %s failed task: %s", p.GraphID, p.Error))
-		}
-		return FeedTaskFailedStyle.Render("✗ task failed")
-
-	case service.EventTypeJobCompleted:
-		if p, ok := ev.Payload.(service.JobCompletedPayload); ok {
-			return FeedJobCompleteStyle.Render(fmt.Sprintf("✅ Job %q complete", p.Title))
-		}
-		return FeedJobCompleteStyle.Render("✅ job complete")
-
-	case service.EventTypeProgressUpdate:
-		// Progress updates are too noisy for the main feed — skip.
-		return ""
-
-	default:
-		slog.Debug("unhandled service event type in feed", "type", ev.Type)
-		return ""
-	}
-}

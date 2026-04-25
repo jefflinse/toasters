@@ -784,6 +784,28 @@ type wireJobCompletedPayload struct {
 	JobID   string `json:"job_id"`
 	Title   string `json:"title"`
 	Summary string `json:"summary"`
+
+	Status    string    `json:"status,omitempty"`
+	Workspace string    `json:"workspace,omitempty"`
+	StartedAt time.Time `json:"started_at,omitempty"`
+	EndedAt   time.Time `json:"ended_at,omitempty"`
+
+	TasksTotal     int `json:"tasks_total,omitempty"`
+	TasksCompleted int `json:"tasks_completed,omitempty"`
+	TasksFailed    int `json:"tasks_failed,omitempty"`
+
+	TokensIn  int64   `json:"tokens_in,omitempty"`
+	TokensOut int64   `json:"tokens_out,omitempty"`
+	CostUSD   float64 `json:"cost_usd,omitempty"`
+
+	FilesTouched      []wireFileTouch `json:"files_touched,omitempty"`
+	FilesTouchedExtra int             `json:"files_touched_extra,omitempty"`
+}
+
+type wireFileTouch struct {
+	Path  string `json:"path"`
+	Size  int64  `json:"size,omitempty"`
+	IsNew bool   `json:"is_new,omitempty"`
 }
 
 type wireProgressUpdatePayload struct {
@@ -923,7 +945,25 @@ func eventPayloadToWire(ev service.Event) any {
 	case service.TaskFailedPayload:
 		return wireTaskFailedPayload{TaskID: p.TaskID, JobID: p.JobID, GraphID: p.GraphID, Error: p.Error}
 	case service.JobCompletedPayload:
-		return wireJobCompletedPayload{JobID: p.JobID, Title: p.Title, Summary: p.Summary}
+		files := make([]wireFileTouch, 0, len(p.FilesTouched))
+		for _, f := range p.FilesTouched {
+			files = append(files, wireFileTouch{Path: f.Path, Size: f.Size, IsNew: f.IsNew})
+		}
+		return wireJobCompletedPayload{
+			JobID: p.JobID, Title: p.Title, Summary: p.Summary,
+			Status:            string(p.Status),
+			Workspace:         p.Workspace,
+			StartedAt:         p.StartedAt,
+			EndedAt:           p.EndedAt,
+			TasksTotal:        p.TasksTotal,
+			TasksCompleted:    p.TasksCompleted,
+			TasksFailed:       p.TasksFailed,
+			TokensIn:          p.TokensIn,
+			TokensOut:         p.TokensOut,
+			CostUSD:           p.CostUSD,
+			FilesTouched:      files,
+			FilesTouchedExtra: p.FilesTouchedExtra,
+		}
 	case service.ProgressUpdatePayload:
 		return wireProgressUpdatePayload{State: progressStateToWire(p.State)}
 	case service.SessionStartedPayload:

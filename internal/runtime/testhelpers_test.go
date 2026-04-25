@@ -128,6 +128,9 @@ func (s *noopStore) GetActiveSessions(_ context.Context) ([]*db.WorkerSession, e
 func (s *noopStore) ListSessionsForTask(_ context.Context, _ string) ([]*db.WorkerSession, error) {
 	return nil, nil
 }
+func (s *noopStore) ListSessionsForJob(_ context.Context, _ string) ([]*db.WorkerSession, error) {
+	return nil, nil
+}
 func (s *noopStore) LogArtifact(_ context.Context, _ *db.Artifact) error { return nil }
 func (s *noopStore) ListArtifactsForJob(_ context.Context, _ string) ([]*db.Artifact, error) {
 	return nil, nil

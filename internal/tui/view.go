@@ -14,6 +14,8 @@ import (
 	"github.com/charmbracelet/glamour/ansi"
 	glamourstyles "github.com/charmbracelet/glamour/styles"
 	xansi "github.com/charmbracelet/x/ansi"
+
+	"github.com/jefflinse/toasters/internal/service"
 )
 
 // loadingBarWidth is the number of cells in the bouncing bar track.
@@ -52,15 +54,30 @@ func fadeColor(r, g, b uint8, factor float64) color.Color {
 // color `from` to color `to`, returning a styled string. Each visible
 // character gets its own foreground color and bold styling.
 func gradientText(text string, from, to [3]uint8) string {
+	return gradientTextOn(text, from, to, nil)
+}
+
+// gradientTextOn is like gradientText but paints each character's background
+// with `bg` so the text reads cleanly on a tinted surface (the per-rune
+// styles each end in an ANSI reset, so a single outer Background wrap
+// doesn't survive the resets — the bg has to be set per span). Pass `nil`
+// for no background.
+func gradientTextOn(text string, from, to [3]uint8, bg color.Color) string {
 	runes := []rune(text)
 	if len(runes) == 0 {
 		return ""
 	}
-	if len(runes) == 1 {
-		return lipgloss.NewStyle().
+	mkStyle := func(r, g, b uint8) lipgloss.Style {
+		s := lipgloss.NewStyle().
 			Bold(true).
-			Foreground(lipgloss.Color(fmt.Sprintf("#%02x%02x%02x", from[0], from[1], from[2]))).
-			Render(string(runes[0]))
+			Foreground(lipgloss.Color(fmt.Sprintf("#%02x%02x%02x", r, g, b)))
+		if bg != nil {
+			s = s.Background(bg)
+		}
+		return s
+	}
+	if len(runes) == 1 {
+		return mkStyle(from[0], from[1], from[2]).Render(string(runes[0]))
 	}
 	var sb strings.Builder
 	n := len(runes) - 1
@@ -69,10 +86,7 @@ func gradientText(text string, from, to [3]uint8) string {
 		cr := uint8(float64(from[0])*(1-t) + float64(to[0])*t)
 		cg := uint8(float64(from[1])*(1-t) + float64(to[1])*t)
 		cb := uint8(float64(from[2])*(1-t) + float64(to[2])*t)
-		sb.WriteString(lipgloss.NewStyle().
-			Bold(true).
-			Foreground(lipgloss.Color(fmt.Sprintf("#%02x%02x%02x", cr, cg, cb))).
-			Render(string(r)))
+		sb.WriteString(mkStyle(cr, cg, cb).Render(string(r)))
 	}
 	return sb.String()
 }
@@ -81,19 +95,35 @@ func gradientText(text string, from, to [3]uint8) string {
 // The phase parameter shifts the hue offset, creating an animation when
 // incremented each frame (e.g. driven by spinnerFrame).
 func rainbowText(text string, phase int) string {
+	return rainbowTextOn(text, phase, nil)
+}
+
+// rainbowTextOn is like rainbowText but paints each character's background
+// with `bg` so the animation reads cleanly on a tinted surface. Pass `nil`
+// for no background.
+func rainbowTextOn(text string, phase int, bg color.Color) string {
 	runes := []rune(text)
 	if len(runes) == 0 {
 		return ""
 	}
 	var sb strings.Builder
 	for i, r := range runes {
-		// Spread one full hue cycle across ~20 characters; shift by phase (1 full cycle per ~30 frames).
-		hue := math.Mod(float64(i)/20.0+float64(phase)/30.0, 1.0)
+		// Spread one full hue cycle across ~20 characters; shift by phase (1
+		// full cycle per ~30 frames). Subtracting the phase makes the wave
+		// travel left → right across the text. math.Mod preserves sign, so
+		// renormalize negative results into [0, 1).
+		hue := math.Mod(float64(i)/20.0-float64(phase)/30.0, 1.0)
+		if hue < 0 {
+			hue += 1.0
+		}
 		cr, cg, cb := hslToRGB(hue, 1.0, 0.6)
-		sb.WriteString(lipgloss.NewStyle().
+		s := lipgloss.NewStyle().
 			Bold(true).
-			Foreground(lipgloss.Color(fmt.Sprintf("#%02x%02x%02x", cr, cg, cb))).
-			Render(string(r)))
+			Foreground(lipgloss.Color(fmt.Sprintf("#%02x%02x%02x", cr, cg, cb)))
+		if bg != nil {
+			s = s.Background(bg)
+		}
+		sb.WriteString(s.Render(string(r)))
 	}
 	return sb.String()
 }
@@ -237,6 +267,15 @@ func (m *Model) View() tea.View {
 		return v
 	}
 
+	// Settings modal takes over the full terminal as a centered overlay.
+	if m.settingsModal.show {
+		settingsView := m.renderSettingsModal()
+		v := tea.NewView(settingsView)
+		v.AltScreen = true
+		v.MouseMode = tea.MouseModeCellMotion
+		return v
+	}
+
 	// Catalog modal takes over the full terminal as a centered overlay.
 	if m.catalogModal.show {
 		catalogView := m.renderCatalogModal()
@@ -289,8 +328,8 @@ func (m *Model) View() tea.View {
 		return v
 	}
 
-	showSidebar := m.width >= minWidthForBar && !m.sidebarHidden
-	showLeftPanel := m.width >= minWidthForLeftPanel && !m.leftPanelHidden
+	showSidebar := m.shouldShowSidebar()
+	showLeftPanel := m.shouldShowLeftPanel()
 
 	sbWidth := sidebarWidth(m.width)
 	lpWidth := m.effectiveLeftPanelWidth()
@@ -377,6 +416,13 @@ func (m *Model) View() tea.View {
 			inputArea = m.renderPromptWidget(mainWidth, inputStyle)
 		} else {
 			inputArea = inputStyle.Width(mainWidth).Render(m.input.View())
+			if n := len(m.chat.queuedMessages); n > 0 {
+				label := fmt.Sprintf("  %d queued · sends when operator finishes", n)
+				if n == 1 {
+					label = "  1 queued · sends when operator finishes"
+				}
+				inputArea = lipgloss.JoinVertical(lipgloss.Left, inputArea, DimStyle.Render(label))
+			}
 		}
 		if flashLine != "" {
 			inputOrStatus = lipgloss.JoinVertical(lipgloss.Left, flashLine, inputArea)
@@ -490,10 +536,16 @@ func (m *Model) View() tea.View {
 		content = mainColumn
 	}
 
-	// Overlay toast notifications in the top-right corner.
+	// Overlay toast notifications, right-aligned to the chat box's right
+	// edge so they sit inside the chat column rather than over the sidebar.
 	if len(m.toasts) > 0 {
-		toastBlock := m.renderToasts()
-		content = overlayToasts(content, toastBlock, m.width)
+		chatLeft := 0
+		if showLeftPanel {
+			chatLeft = lpWidth + columnGap
+		}
+		chatRight := chatLeft + mainWidth
+		toastBlock := m.renderToasts(mainWidth)
+		content = overlayToasts(content, toastBlock, chatRight, m.width)
 	}
 
 	v := tea.NewView(content)
@@ -891,8 +943,9 @@ func (m *Model) ensureMarkdownRenderer() {
 
 // resizeComponents recalculates sizes for viewport and textarea after a resize.
 func (m *Model) resizeComponents() {
-	showSidebar := m.width >= minWidthForBar && !m.sidebarHidden
-	showLeftPanel := m.width >= minWidthForLeftPanel && !m.leftPanelHidden
+	showSidebar := m.shouldShowSidebar()
+	showLeftPanel := m.shouldShowLeftPanel()
+	m.lastLeftPanelShown = showLeftPanel
 
 	sbWidth := sidebarWidth(m.width)
 	lpWidth := m.effectiveLeftPanelWidth()
@@ -1047,6 +1100,34 @@ func (m *Model) updateViewportContent() {
 	}
 
 	for i, entry := range m.chat.entries {
+		// Structured entries render from a typed payload, bypassing the
+		// role-based message dispatch.
+		if entry.Kind == service.ChatEntryKindJobUpdate {
+			block := renderJobUpdateBlock(entry.JobUpdate, contentWidth, false, m.spinnerFrame)
+			if block != "" {
+				sb.WriteString(block + "\n\n")
+			}
+			continue
+		}
+		if entry.Kind == service.ChatEntryKindJobResult {
+			selected := m.chat.selectedMsgIdx == i
+			block := renderJobResultBlock(entry.JobResult, contentWidth, selected)
+			if block != "" {
+				sb.WriteString(block + "\n")
+				// Affordance hint: appears inline under the most recent
+				// unread result block when it's not selected, so the user
+				// notices the [w]/[d] keys exist without having to read
+				// the in-block hint line. Dismissed on selection (the
+				// "selected" branch above hides it) or when a newer
+				// result replaces this one (recentJobResult moves on).
+				if hint := m.jobResultHintLine(entry.JobResult, selected); hint != "" {
+					sb.WriteString(hint + "\n")
+				}
+				sb.WriteString("\n")
+			}
+			continue
+		}
+
 		msg := entry.Message
 		// Timestamp helper.
 		var ts string

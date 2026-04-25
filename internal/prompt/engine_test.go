@@ -346,6 +346,16 @@ func TestEngine_Compose_AllRoles(t *testing.T) {
 		t.Fatalf("LoadDir(user): %v", err)
 	}
 	engine.SetGlobal("task.granularity", "moderate")
+	// The decomposer roles reference the synthetic
+	// {{ instructions.coarse-granularity }} / {{ instructions.fine-granularity }}
+	// instructions registered at startup by ApplyGranularity. Do the same
+	// here so those roles render cleanly.
+	if err := ApplyGranularity(engine, "coarse", "medium"); err != nil {
+		t.Fatalf("ApplyGranularity(coarse): %v", err)
+	}
+	if err := ApplyGranularity(engine, "fine", "medium"); err != nil {
+		t.Fatalf("ApplyGranularity(fine): %v", err)
+	}
 
 	// Phase roles (used by graphexec) reference per-task globals that are
 	// injected at Compose-time by the graph executor. Supply stub values so

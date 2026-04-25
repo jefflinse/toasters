@@ -45,6 +45,87 @@ func AddProvider(configDir string, entry ProviderEntry) error {
 	return nil
 }
 
+// SetTopLevelValue updates (or creates) a top-level scalar key in config.yaml,
+// preserving unrelated content. Unlike SetTopLevelScalar, the value may be
+// any YAML-encodable scalar (bool, int, float, string), and the type tag is
+// inferred so that round-tripping through viper preserves the field's Go
+// type (a bool stays a bool, a float stays a float).
+func SetTopLevelValue(configDir, key string, value any) error {
+	configPath := filepath.Join(configDir, "config.yaml")
+
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return fmt.Errorf("reading config: %w", err)
+	}
+
+	var root yaml.Node
+	if err := yaml.Unmarshal(data, &root); err != nil {
+		return fmt.Errorf("parsing config: %w", err)
+	}
+
+	if root.Kind != yaml.DocumentNode || len(root.Content) == 0 {
+		return fmt.Errorf("config.yaml has unexpected structure")
+	}
+	rootMap := root.Content[0]
+	if rootMap.Kind != yaml.MappingNode {
+		return fmt.Errorf("config.yaml root is not a mapping")
+	}
+
+	if err := setMappingValueAny(rootMap, key, value); err != nil {
+		return fmt.Errorf("encoding %s: %w", key, err)
+	}
+
+	out, err := yaml.Marshal(&root)
+	if err != nil {
+		return fmt.Errorf("marshaling config: %w", err)
+	}
+
+	if err := os.WriteFile(configPath, out, 0o600); err != nil {
+		return fmt.Errorf("writing config: %w", err)
+	}
+
+	return nil
+}
+
+// SetTopLevelScalar updates (or creates) a top-level scalar key in config.yaml,
+// preserving unrelated content. Intended for simple runtime-editable settings
+// like coarse_granularity and fine_granularity. The value is not validated
+// here — callers should normalize first.
+func SetTopLevelScalar(configDir, key, value string) error {
+	configPath := filepath.Join(configDir, "config.yaml")
+
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return fmt.Errorf("reading config: %w", err)
+	}
+
+	var root yaml.Node
+	if err := yaml.Unmarshal(data, &root); err != nil {
+		return fmt.Errorf("parsing config: %w", err)
+	}
+
+	if root.Kind != yaml.DocumentNode || len(root.Content) == 0 {
+		return fmt.Errorf("config.yaml has unexpected structure")
+	}
+	rootMap := root.Content[0]
+	if rootMap.Kind != yaml.MappingNode {
+		return fmt.Errorf("config.yaml root is not a mapping")
+	}
+
+	setMappingValue(rootMap, key, value)
+
+	out, err := yaml.Marshal(&root)
+	if err != nil {
+		return fmt.Errorf("marshaling config: %w", err)
+	}
+
+	if err := os.WriteFile(configPath, out, 0o600); err != nil {
+		return fmt.Errorf("writing config: %w", err)
+	}
+
+	return nil
+}
+
 // SetOperatorProvider updates the operator.provider field in config.yaml.
 func SetOperatorProvider(configDir, providerID, model string) error {
 	configPath := filepath.Join(configDir, "config.yaml")
@@ -103,6 +184,27 @@ func mappingValue(node *yaml.Node, key string) *yaml.Node {
 			return node.Content[i+1]
 		}
 	}
+	return nil
+}
+
+// setMappingValueAny sets or adds a key-value pair in a mapping node, encoding
+// value as the appropriate YAML scalar (bool, int, float, string). Returns an
+// error if value can't be encoded.
+func setMappingValueAny(node *yaml.Node, key string, value any) error {
+	var encoded yaml.Node
+	if err := encoded.Encode(value); err != nil {
+		return err
+	}
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		if node.Content[i].Value == key {
+			node.Content[i+1] = &encoded
+			return nil
+		}
+	}
+	node.Content = append(node.Content,
+		&yaml.Node{Kind: yaml.ScalarNode, Value: key},
+		&encoded,
+	)
 	return nil
 }
 
