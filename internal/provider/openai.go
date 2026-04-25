@@ -249,14 +249,17 @@ func (p *OpenAIProvider) streamResponse(ctx context.Context, req *http.Request, 
 					}
 				}
 
-				if choice.FinishReason == "tool_calls" {
-					p.emitToolCalls(accumulated, ch)
-					if lastUsage != nil {
-						ch <- StreamEvent{Type: EventUsage, Usage: lastUsage}
-					}
-					ch <- StreamEvent{Type: EventDone}
-					return
-				}
+				// finish_reason="tool_calls" is NOT a stream-terminator — when
+				// the server is streaming with stream_options.include_usage
+				// (OpenAI, LM Studio, vLLM, Ollama, …) the usage chunk arrives
+				// AFTER the finish_reason chunk and BEFORE [DONE]. Returning
+				// early here would drop that usage chunk, which is exactly
+				// the bug that left worker_sessions.tokens_in/out at zero
+				// for every tool-using turn (i.e. essentially every turn,
+				// since the agent loop's terminal tool calls always finish
+				// this way). Keep draining until [DONE] (or the stream
+				// naturally closes); the [DONE] branch above already emits
+				// the accumulated tool calls + usage + done together.
 			}
 
 			if choice.Delta.Reasoning != "" {
