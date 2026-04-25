@@ -243,6 +243,12 @@ func (m Model) renderSidebar(sbWidth int) string {
 	// --- Operator stats ---
 	var sb strings.Builder
 
+	// Leading blank row matches ChatAreaStyle's top padding so the
+	// sidebar's "operator" header doesn't butt up against the very top
+	// of the terminal. The left panel's bordered panes already give it
+	// equivalent breathing room; this restores parity on the right.
+	sb.WriteString("\n")
+
 	connStatus := ConnectedStyle.Render("connected")
 	if !m.stats.Connected {
 		connStatus = ErrorStyle.Render("disconnected")
