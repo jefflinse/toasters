@@ -1227,7 +1227,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		slot.appendText(msg.Text)
+		m.appendWorkerStreamText(slot, msg.Text)
 		m.refreshOutputModalIfShowing(msg.SessionID, slot)
+		m.updateViewportContent()
+		if !m.scroll.userScrolled {
+			m.chatViewport.GotoBottom()
+		}
 		return m, nil
 
 	case SessionReasoningMsg:
@@ -1251,8 +1256,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if len(slot.activities) > 6 {
 				slot.activities = slot.activities[len(slot.activities)-6:]
 			}
+			m.appendWorkerStreamToolCall(slot, msg.ToolID, msg.ToolName, json.RawMessage(msg.ToolInput))
 		}
 		m.refreshOutputModalIfShowing(msg.SessionID, slot)
+		m.updateViewportContent()
+		if !m.scroll.userScrolled {
+			m.chatViewport.GotoBottom()
+		}
 		return m, nil
 
 	case SessionToolResultMsg:
@@ -1265,7 +1275,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			result = result[:200] + "..."
 		}
 		slot.completeTool(msg.CallID, msg.ToolName, result, msg.IsError)
+		m.appendWorkerStreamToolResult(slot, msg.CallID, msg.ToolName, result, msg.IsError)
 		m.refreshOutputModalIfShowing(msg.SessionID, slot)
+		m.updateViewportContent()
+		if !m.scroll.userScrolled {
+			m.chatViewport.GotoBottom()
+		}
 		return m, nil
 
 	case SessionDoneMsg:
@@ -1275,6 +1290,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		slot.status = msg.Status
 		slot.endTime = time.Now()
+		m.markWorkerStreamDone(msg.SessionID)
+		m.updateViewportContent()
 		cmds = append(cmds, m.addToast("🍞 "+msg.WorkerName+" is done.", toastSuccess))
 		// Note: agent completion is no longer reported back to the operator from
 		// the TUI. The server is responsible for routing task completion into the
