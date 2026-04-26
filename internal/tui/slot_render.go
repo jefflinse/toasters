@@ -87,14 +87,13 @@ func (m *Model) renderSlotOutputContent(slot *runtimeSlot, width int) string {
 		it := &slot.items[i]
 		switch it.kind {
 		case outputItemText:
-			text := it.text.String()
-			if text == "" {
+			if it.text == "" {
 				continue
 			}
 			if sb.Len() > 0 {
 				sb.WriteString("\n")
 			}
-			sb.WriteString(m.renderJobsPaneMarkdown(text))
+			sb.WriteString(m.renderJobsPaneMarkdown(it.text))
 		case outputItemTool:
 			if sb.Len() > 0 {
 				sb.WriteString("\n")

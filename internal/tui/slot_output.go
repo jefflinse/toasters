@@ -22,10 +22,16 @@ const (
 // pane can render text and tool calls as distinct, stylized blocks
 // while legacy callers (output modal, grid mini view) get a plain-text
 // rendering via outputText().
+//
+// text is a plain string rather than a strings.Builder because items
+// are stored in a slice and slice growth copies elements; copying a
+// non-zero strings.Builder panics on next use. Streamed text gets
+// concatenated into the last text item, which is O(n²) over the run
+// length but acceptable for chat-scale text bursts.
 type outputItem struct {
 	kind outputItemKind
 
-	text strings.Builder
+	text string
 
 	toolID     string
 	toolName   string
@@ -46,12 +52,10 @@ func (rs *runtimeSlot) appendText(s string) {
 	}
 	rs.contentVersion++
 	if n := len(rs.items); n > 0 && rs.items[n-1].kind == outputItemText {
-		rs.items[n-1].text.WriteString(s)
+		rs.items[n-1].text += s
 		return
 	}
-	it := outputItem{kind: outputItemText}
-	it.text.WriteString(s)
-	rs.items = append(rs.items, it)
+	rs.items = append(rs.items, outputItem{kind: outputItemText, text: s})
 }
 
 // startTool records a new in-flight tool call. Returns false when the
@@ -116,7 +120,7 @@ func (rs *runtimeSlot) outputText() string {
 		it := &rs.items[i]
 		switch it.kind {
 		case outputItemText:
-			b.WriteString(it.text.String())
+			b.WriteString(it.text)
 		case outputItemTool:
 			fmt.Fprintf(&b, "\n⚙ %s\n", it.toolName)
 			if !it.endedAt.IsZero() && it.toolResult != "" {
