@@ -136,6 +136,13 @@ type Model struct {
 	err            error
 	mdRender       *glamour.TermRenderer
 	outputMdRender *glamour.TermRenderer // separate renderer sized for the fullscreen output modal
+	// jobsPaneMdRender renders worker output in the Jobs modal's graph
+	// pane. The pane has its own width (different from the chat and the
+	// fullscreen modal) and resizes with the layout, so it gets its own
+	// renderer that's reissued when the configured width drifts. See
+	// ensureJobsPaneMarkdownRenderer.
+	jobsPaneMdRender      *glamour.TermRenderer
+	jobsPaneMdRenderWidth int
 
 	// Sub-models grouping related state.
 	stream      streamingState
@@ -253,14 +260,33 @@ type activityItem struct {
 
 // runtimeSlot tracks a runtime agent session for TUI display.
 type runtimeSlot struct {
-	sessionID      string
-	agentName      string
-	teamName       string // team this agent belongs to (may be empty)
-	task           string // short human-readable description of what this agent is doing
-	jobID          string
-	taskID         string
-	status         string // "active", "completed", "failed", "cancelled"
-	output         strings.Builder
+	sessionID string
+	agentName string
+	teamName  string // team this agent belongs to (may be empty)
+	task      string // short human-readable description of what this agent is doing
+	jobID     string
+	taskID    string
+	status    string // "active", "completed", "failed", "cancelled"
+
+	// items holds typed output blocks (text + tool calls) so the graph
+	// pane can render styled, scrollable output. Replaces the previous
+	// strings.Builder accumulator. toolItemIdx maps tool call IDs to
+	// their position in items so a tool result can patch the matching
+	// call without scanning. See slot_output.go.
+	items       []outputItem
+	toolItemIdx map[string]int
+
+	// contentVersion bumps on every items mutation so the graph pane's
+	// glamour render cache (slot_render.go) can detect changes without
+	// hashing the whole content. cachedRender holds the most recent
+	// styled output for a given width and content version.
+	contentVersion       int
+	cachedRender         string
+	cachedRenderVersion  int
+	cachedRenderWidth    int
+	cachedRenderAt       time.Time
+	cachedRenderTerminal bool // true when the cache was produced after the slot finished — never re-render in that case
+
 	reasoning      strings.Builder // streamed chain-of-thought; only set when the provider emits reasoning events
 	startTime      time.Time
 	endTime        time.Time      // set when session completes; zero while active
@@ -1200,7 +1226,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !ok {
 			return m, nil
 		}
-		slot.output.WriteString(msg.Text)
+		slot.appendText(msg.Text)
 		m.refreshOutputModalIfShowing(msg.SessionID, slot)
 		return m, nil
 
@@ -1219,7 +1245,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if msg.ToolName != "" {
-			fmt.Fprintf(&slot.output, "\n⚙ %s\n", msg.ToolName)
+			slot.startTool(msg.ToolID, msg.ToolName, json.RawMessage(msg.ToolInput))
 			label := activityLabel(msg.ToolName, json.RawMessage(msg.ToolInput))
 			slot.activities = append(slot.activities, activityItem{label: label, toolName: msg.ToolName})
 			if len(slot.activities) > 6 {
@@ -1234,13 +1260,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !ok {
 			return m, nil
 		}
-		if msg.ToolOutput != "" {
-			result := xansi.Strip(msg.ToolOutput)
-			if len(result) > 200 {
-				result = result[:200] + "..."
-			}
-			fmt.Fprintf(&slot.output, "→ %s\n", result)
+		result := xansi.Strip(msg.ToolOutput)
+		if len(result) > 200 {
+			result = result[:200] + "..."
 		}
+		slot.completeTool(msg.CallID, msg.ToolName, result, msg.IsError)
 		m.refreshOutputModalIfShowing(msg.SessionID, slot)
 		return m, nil
 
@@ -1681,7 +1705,7 @@ func (m *Model) refreshOutputModalIfShowing(sessionID string, slot *runtimeSlot)
 // dimmed "⟳ thinking" section is prepended above the regular output;
 // otherwise the output is returned verbatim.
 func composeSlotContent(slot *runtimeSlot) string {
-	out := slot.output.String()
+	out := slot.outputText()
 	reasoning := slot.reasoning.String()
 	if reasoning == "" {
 		return out

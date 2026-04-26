@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
@@ -27,6 +28,15 @@ type jobsModalState struct {
 	agentScrollOffset int // TODO: implement scrolling in the agent detail panel (v2)
 	graphNodeIdx      int // focused node when the selected task has graph state
 	taskScrollOffset  int // line offset into the middle panel's task list
+
+	// outputViewport scrolls the worker's streamed output in the graph
+	// pane. It is shared across all displayed slots — when the focused
+	// node changes (or the displayed slot changes for any other reason)
+	// outputCurrentSlotID flips and the viewport jumps back to the bottom.
+	outputViewport      viewport.Model
+	outputCurrentSlotID string
+	outputUserScrolled  bool
+	outputViewportInit  bool
 }
 
 // openJobsModalForJob is the entry point for "deep-link" gestures from
@@ -264,6 +274,29 @@ func (m *Model) updateJobsModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		// focus==0: no additional action beyond confirmCancel handling above.
 		// focus==2: no-op.
+
+	// Output viewport scrolling — only meaningful when the third panel
+	// is focused and the viewport has been initialized by a prior
+	// render. Up/Down stay bound to graph-node navigation; PgUp/PgDn,
+	// Home/End, and shift+up/down move the streamed-output viewport.
+	case "pgup":
+		m.scrollGraphPaneOutput(-1, true)
+	case "pgdown":
+		m.scrollGraphPaneOutput(1, true)
+	case "shift+up":
+		m.scrollGraphPaneOutput(-1, false)
+	case "shift+down":
+		m.scrollGraphPaneOutput(1, false)
+	case "home":
+		if m.jobsModal.focus == 2 && m.jobsModal.outputViewportInit {
+			m.jobsModal.outputViewport.GotoTop()
+			m.jobsModal.outputUserScrolled = true
+		}
+	case "end":
+		if m.jobsModal.focus == 2 && m.jobsModal.outputViewportInit {
+			m.jobsModal.outputViewport.GotoBottom()
+			m.jobsModal.outputUserScrolled = false
+		}
 	}
 
 	return m, tea.Batch(modalCmds...)

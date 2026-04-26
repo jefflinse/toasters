@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 
+	"charm.land/bubbles/v2/viewport"
 	"charm.land/lipgloss/v2"
 
 	"github.com/jefflinse/toasters/internal/tui/dagmap"
@@ -92,7 +93,7 @@ func (m *Model) renderGraphTaskPane(gts *graphTaskState, innerW, innerH int) []s
 	if displayName != "" {
 		outputHeader = "Output · " + displayName
 	}
-	outputLines := []string{
+	headerLines := []string{
 		lipgloss.NewStyle().Bold(true).Foreground(ColorAccent).Render(outputHeader),
 	}
 	if focusedName != "" {
@@ -106,19 +107,20 @@ func (m *Model) renderGraphTaskPane(gts *graphTaskState, innerW, innerH int) []s
 		if ns.LastStatus != "" {
 			meta = append(meta, "status: "+ns.LastStatus)
 		}
-		outputLines = append(outputLines, DimStyle.Render(strings.Join(meta, "  ·  ")))
+		headerLines = append(headerLines, DimStyle.Render(strings.Join(meta, "  ·  ")))
 	} else if displaySlot != nil {
-		outputLines = append(outputLines, DimStyle.Render("status: "+displaySlot.status))
+		headerLines = append(headerLines, DimStyle.Render("status: "+displaySlot.status))
 	}
-	outputLines = append(outputLines, "")
+	headerLines = append(headerLines, "")
 
-	outputBodyH := outputH - len(outputLines)
-	if outputBodyH < 1 {
-		outputBodyH = 1
+	bodyH := outputH - len(headerLines)
+	if bodyH < 1 {
+		bodyH = 1
 	}
-	outputLines = append(outputLines, renderSlotOutput(displaySlot, innerW, outputBodyH)...)
 
-	// Pad output to outputH.
+	bodyLines := m.renderGraphPaneOutputViewport(displaySlot, innerW, bodyH)
+
+	outputLines := append(headerLines, bodyLines...)
 	for len(outputLines) < outputH {
 		outputLines = append(outputLines, "")
 	}
@@ -130,6 +132,91 @@ func (m *Model) renderGraphTaskPane(gts *graphTaskState, innerW, innerH int) []s
 	lines = append(lines, listLines...)
 	lines = append(lines, divider)
 	lines = append(lines, outputLines...)
+	return lines
+}
+
+// renderGraphPaneOutputViewport configures the shared output viewport
+// for the given slot and returns its rendered lines, padded to height.
+// Auto-tails to the bottom unless the user has scrolled away. When the
+// displayed slot changes (focused node moves, slot finishes), scroll
+// state resets so the new content is shown from the bottom.
+func (m *Model) renderGraphPaneOutputViewport(slot *runtimeSlot, width, height int) []string {
+	if width <= 0 || height <= 0 {
+		return []string{}
+	}
+	jm := &m.jobsModal
+
+	if !jm.outputViewportInit {
+		jm.outputViewport = viewport.New()
+		jm.outputViewport.MouseWheelEnabled = true
+		jm.outputViewport.KeyMap = viewport.KeyMap{}
+		jm.outputViewportInit = true
+	}
+
+	jm.outputViewport.SetWidth(width)
+	jm.outputViewport.SetHeight(height)
+
+	if slot == nil {
+		jm.outputViewport.SetContent(DimStyle.Italic(true).Render("(waiting for output…)"))
+		return padViewportLines(jm.outputViewport.View(), height)
+	}
+
+	// Slot switch — reset scroll state so we don't carry the previous
+	// worker's offset into the new one.
+	if jm.outputCurrentSlotID != slot.sessionID {
+		jm.outputCurrentSlotID = slot.sessionID
+		jm.outputUserScrolled = false
+	}
+
+	content := m.renderSlotOutputContent(slot, width)
+	if content == "" {
+		content = DimStyle.Italic(true).Render("(waiting for output…)")
+	}
+	jm.outputViewport.SetContent(content)
+	if !jm.outputUserScrolled {
+		jm.outputViewport.GotoBottom()
+	}
+
+	return padViewportLines(jm.outputViewport.View(), height)
+}
+
+// scrollGraphPaneOutput scrolls the graph pane's shared output viewport
+// by either a half-page (page=true) or a single line (page=false). dir
+// is -1 for up, +1 for down. No-op unless the third panel is focused
+// and the viewport has been initialized. Updates the
+// userScrolled flag so subsequent streamed text doesn't yank the
+// position back to the bottom while the user is reading.
+func (m *Model) scrollGraphPaneOutput(dir int, page bool) {
+	if m.jobsModal.focus != 2 || !m.jobsModal.outputViewportInit {
+		return
+	}
+	vp := &m.jobsModal.outputViewport
+	if page {
+		if dir < 0 {
+			vp.HalfPageUp()
+		} else {
+			vp.HalfPageDown()
+		}
+	} else {
+		if dir < 0 {
+			vp.ScrollUp(1)
+		} else {
+			vp.ScrollDown(1)
+		}
+	}
+	m.jobsModal.outputUserScrolled = !vp.AtBottom()
+}
+
+// padViewportLines splits a viewport's rendered View() into lines and
+// pads with empty lines so callers can rely on an exact line count.
+func padViewportLines(view string, height int) []string {
+	lines := strings.Split(view, "\n")
+	if len(lines) > height {
+		lines = lines[:height]
+	}
+	for len(lines) < height {
+		lines = append(lines, "")
+	}
 	return lines
 }
 
@@ -176,25 +263,6 @@ func graphNodeFromSessionID(sessionID string) string {
 		return ""
 	}
 	return rest[idx+1:]
-}
-
-// renderSlotOutput wraps and tail-truncates a runtime slot's accumulated
-// output to fit the given pane geometry. Operates directly on a slot
-// pointer so the caller is free to choose between focus-specified and
-// fallback resolutions.
-func renderSlotOutput(slot *runtimeSlot, width, height int) []string {
-	if slot == nil || height <= 0 {
-		return []string{DimStyle.Italic(true).Render("(waiting for output…)")}
-	}
-	if slot.output.Len() == 0 {
-		return []string{DimStyle.Italic(true).Render("(waiting for output…)")}
-	}
-	wrapped := lipgloss.NewStyle().Width(width).Render(slot.output.String())
-	lines := strings.Split(wrapped, "\n")
-	if len(lines) > height {
-		lines = lines[len(lines)-height:]
-	}
-	return lines
 }
 
 func phaseWord(p dagmap.Phase) string {
