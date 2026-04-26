@@ -22,6 +22,13 @@ import (
 // rendering (header shows "(idle)" instead of "● streaming").
 const workerStreamIdleWindow = 60 * time.Second
 
+// workerStreamChatMaxItems caps how many items a chat-side worker
+// stream block keeps. Older items roll off so the block reads as a
+// rolling tail of recent output; the Jobs modal still has the full
+// transcript via the runtimeSlot, which is what the Enter-to-deep-link
+// flow targets.
+const workerStreamChatMaxItems = 5
+
 // openWorkerStream returns the current open worker stream block for
 // (workerName, jobID) — i.e. the last entry in the chat, if it is a
 // worker_stream matching the same worker+job, hasn't been closed by
@@ -90,6 +97,7 @@ func (m *Model) appendWorkerStreamText(slot *runtimeSlot, text string) {
 		Kind: service.WorkerStreamItemText,
 		Text: text,
 	})
+	trimWorkerStreamItems(snap)
 }
 
 // appendWorkerStreamToolCall records a new in-flight tool call into
@@ -112,6 +120,7 @@ func (m *Model) appendWorkerStreamToolCall(slot *runtimeSlot, callID, toolName s
 		ToolArgs:  args,
 		StartedAt: time.Now(),
 	})
+	trimWorkerStreamItems(snap)
 }
 
 // appendWorkerStreamToolResult patches the matching tool call item
@@ -149,6 +158,21 @@ func (m *Model) appendWorkerStreamToolResult(slot *runtimeSlot, callID, toolName
 		StartedAt:  now,
 		EndedAt:    now,
 	})
+	trimWorkerStreamItems(snap)
+}
+
+// trimWorkerStreamItems caps snap.Items at workerStreamChatMaxItems by
+// dropping the oldest entries. The result-patching path looks up tool
+// items by ID newest-first, so dropped in-flight tools get fallen back
+// to a synthesized completed item — duration is lost but the result is
+// still surfaced. The Jobs pane has the full transcript for any deeper
+// look.
+func trimWorkerStreamItems(snap *service.WorkerStreamSnapshot) {
+	if snap == nil || len(snap.Items) <= workerStreamChatMaxItems {
+		return
+	}
+	drop := len(snap.Items) - workerStreamChatMaxItems
+	snap.Items = append(snap.Items[:0], snap.Items[drop:]...)
 }
 
 // markWorkerStreamDone flips the Done flag on whichever open worker
