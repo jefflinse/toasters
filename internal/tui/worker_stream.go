@@ -22,12 +22,14 @@ import (
 // rendering (header shows "(idle)" instead of "● streaming").
 const workerStreamIdleWindow = 60 * time.Second
 
-// workerStreamChatMaxItems caps how many items a chat-side worker
-// stream block keeps. Older items roll off so the block reads as a
-// rolling tail of recent output; the Jobs modal still has the full
-// transcript via the runtimeSlot, which is what the Enter-to-deep-link
-// flow targets.
-const workerStreamChatMaxItems = 5
+// workerStreamChatMaxLines caps how many rendered lines a chat-side
+// worker stream block displays. Older lines roll off so the block
+// reads as a rolling tail of recent output — items themselves aren't
+// trimmed (long prose should remain a single coherent run, just
+// tail-truncated visually). The Jobs modal still has the full
+// transcript via the runtimeSlot, which is what Enter-to-deep-link
+// surfaces.
+const workerStreamChatMaxLines = 16
 
 // openWorkerStream returns the current open worker stream block for
 // (workerName, jobID) — i.e. the last entry in the chat, if it is a
@@ -97,7 +99,6 @@ func (m *Model) appendWorkerStreamText(slot *runtimeSlot, text string) {
 		Kind: service.WorkerStreamItemText,
 		Text: text,
 	})
-	trimWorkerStreamItems(snap)
 }
 
 // appendWorkerStreamToolCall records a new in-flight tool call into
@@ -120,7 +121,6 @@ func (m *Model) appendWorkerStreamToolCall(slot *runtimeSlot, callID, toolName s
 		ToolArgs:  args,
 		StartedAt: time.Now(),
 	})
-	trimWorkerStreamItems(snap)
 }
 
 // appendWorkerStreamToolResult patches the matching tool call item
@@ -158,21 +158,6 @@ func (m *Model) appendWorkerStreamToolResult(slot *runtimeSlot, callID, toolName
 		StartedAt:  now,
 		EndedAt:    now,
 	})
-	trimWorkerStreamItems(snap)
-}
-
-// trimWorkerStreamItems caps snap.Items at workerStreamChatMaxItems by
-// dropping the oldest entries. The result-patching path looks up tool
-// items by ID newest-first, so dropped in-flight tools get fallen back
-// to a synthesized completed item — duration is lost but the result is
-// still surfaced. The Jobs pane has the full transcript for any deeper
-// look.
-func trimWorkerStreamItems(snap *service.WorkerStreamSnapshot) {
-	if snap == nil || len(snap.Items) <= workerStreamChatMaxItems {
-		return
-	}
-	drop := len(snap.Items) - workerStreamChatMaxItems
-	snap.Items = append(snap.Items[:0], snap.Items[drop:]...)
 }
 
 // markWorkerStreamDone flips the Done flag on whichever open worker
@@ -259,7 +244,10 @@ func (m *Model) renderWorkerStreamBlock(snap *service.WorkerStreamSnapshot, widt
 
 // renderWorkerStreamItems iterates items in order, rendering text
 // runs through the chat's glamour renderer (m.mdRender) and tool calls
-// through the shared renderToolBlock helper from slot_render.go.
+// through the shared renderToolBlock helper from slot_render.go. The
+// final output is tail-truncated to workerStreamChatMaxLines so the
+// in-chat block stays compact regardless of how chatty the worker
+// gets — long prose simply scrolls off the top of its own block.
 func (m *Model) renderWorkerStreamItems(items []service.WorkerStreamItem, width int) string {
 	if len(items) == 0 {
 		return DimStyle.Italic(true).Render("(waiting for output…)")
@@ -280,7 +268,12 @@ func (m *Model) renderWorkerStreamItems(items []service.WorkerStreamItem, width 
 			b.WriteString(renderToolBlock(workerStreamItemAsOutputItem(it), width))
 		}
 	}
-	return strings.TrimRight(b.String(), "\n")
+	full := strings.TrimRight(b.String(), "\n")
+	lines := strings.Split(full, "\n")
+	if len(lines) <= workerStreamChatMaxLines {
+		return full
+	}
+	return strings.Join(lines[len(lines)-workerStreamChatMaxLines:], "\n")
 }
 
 // workerStreamItemAsOutputItem adapts a service.WorkerStreamItem to
