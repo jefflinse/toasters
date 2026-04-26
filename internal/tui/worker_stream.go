@@ -173,8 +173,10 @@ func (m *Model) markWorkerStreamDone(sessionID string) {
 // bordered block for the chat viewport. Header line shows the worker
 // name, short job id, and a status indicator; body interleaves
 // glamour-rendered text and Lipgloss-styled tool blocks (the same
-// helpers the Jobs pane uses, for visual consistency).
-func (m *Model) renderWorkerStreamBlock(snap *service.WorkerStreamSnapshot, width int) string {
+// helpers the Jobs pane uses, for visual consistency). selected
+// brightens the left border so the user can see which block their
+// Up-arrow selection has landed on, mirroring the JobResult block.
+func (m *Model) renderWorkerStreamBlock(snap *service.WorkerStreamSnapshot, width int, selected bool) string {
 	if snap == nil || width < 8 {
 		return ""
 	}
@@ -208,6 +210,9 @@ func (m *Model) renderWorkerStreamBlock(snap *service.WorkerStreamSnapshot, widt
 	headerLeft := lipgloss.NewStyle().Bold(true).Foreground(ColorAccent).Render("🍞 "+worker) +
 		DimStyle.Render(" · "+shortJob)
 	header := headerLeft + "  " + status
+	if selected {
+		header += "  " + DimStyle.Render("[enter to view]")
+	}
 
 	body := m.renderWorkerStreamItems(snap.Items, innerW)
 
@@ -216,9 +221,13 @@ func (m *Model) renderWorkerStreamBlock(snap *service.WorkerStreamSnapshot, widt
 		content += "\n" + body
 	}
 
+	borderColor := ColorAccent
+	if selected {
+		borderColor = ColorPrimary
+	}
 	frame := lipgloss.NewStyle().
 		Border(lipgloss.Border{Left: "▌"}, false, false, false, true).
-		BorderForeground(ColorAccent).
+		BorderForeground(borderColor).
 		PaddingLeft(1).
 		Width(width - 2)
 	return frame.Render(content)

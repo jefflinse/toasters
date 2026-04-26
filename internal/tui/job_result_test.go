@@ -138,8 +138,8 @@ func TestStepJobResultSelection(t *testing.T) {
 			{Message: service.ChatMessage{Role: "user", Content: "hi"}},
 		}
 		m.chat.selectedMsgIdx = -1
-		if changed := m.stepJobResultSelection(-1); changed {
-			t.Error("expected stepJobResultSelection to be a noop without results")
+		if changed := m.stepBlockSelection(-1); changed {
+			t.Error("expected stepBlockSelection to be a noop without results")
 		}
 	})
 
@@ -148,7 +148,7 @@ func TestStepJobResultSelection(t *testing.T) {
 		m := newMinimalModel(t)
 		m.chat.entries = []service.ChatEntry{mk("job-A"), mk("job-B")}
 		m.chat.selectedMsgIdx = -1
-		if !m.stepJobResultSelection(-1) {
+		if !m.stepBlockSelection(-1) {
 			t.Fatal("expected selection change")
 		}
 		if m.chat.selectedMsgIdx != 1 {
@@ -161,14 +161,14 @@ func TestStepJobResultSelection(t *testing.T) {
 		m := newMinimalModel(t)
 		m.chat.entries = []service.ChatEntry{mk("job-A"), mk("job-B")}
 		m.chat.selectedMsgIdx = 1 // most recent selected
-		if !m.stepJobResultSelection(-1) {
+		if !m.stepBlockSelection(-1) {
 			t.Fatal("expected step")
 		}
 		if m.chat.selectedMsgIdx != 0 {
 			t.Errorf("got %d, want 0", m.chat.selectedMsgIdx)
 		}
 		// Step further back clears.
-		if !m.stepJobResultSelection(-1) {
+		if !m.stepBlockSelection(-1) {
 			t.Fatal("expected step")
 		}
 		if m.chat.selectedMsgIdx != -1 {
@@ -181,13 +181,13 @@ func TestStepJobResultSelection(t *testing.T) {
 		m := newMinimalModel(t)
 		m.chat.entries = []service.ChatEntry{mk("job-A"), mk("job-B")}
 		m.chat.selectedMsgIdx = 0
-		if !m.stepJobResultSelection(+1) {
+		if !m.stepBlockSelection(+1) {
 			t.Fatal("expected step")
 		}
 		if m.chat.selectedMsgIdx != 1 {
 			t.Errorf("got %d, want 1", m.chat.selectedMsgIdx)
 		}
-		if !m.stepJobResultSelection(+1) {
+		if !m.stepBlockSelection(+1) {
 			t.Fatal("expected step")
 		}
 		if m.chat.selectedMsgIdx != -1 {

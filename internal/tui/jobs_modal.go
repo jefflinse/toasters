@@ -63,6 +63,43 @@ func (m *Model) openJobsModalForJob(jobID string) tea.Cmd {
 	return tickCmd
 }
 
+// openJobsModalForWorkerStream is the deep-link entry point for chat
+// worker_stream blocks. Opens the Jobs modal pre-positioned to the
+// snapshot's job + task + graph node so the user lands on the live
+// output for that worker. The third panel takes focus directly so the
+// next Tab/scroll lines up with what they came to see.
+func (m *Model) openJobsModalForWorkerStream(snap *service.WorkerStreamSnapshot) tea.Cmd {
+	if snap == nil {
+		return nil
+	}
+	cmd := m.openJobsModalForJob(snap.JobID)
+	if snap.TaskID != "" {
+		for i, t := range m.jobsModal.tasks[snap.JobID] {
+			if t.ID == snap.TaskID {
+				m.jobsModal.taskIdx = i
+				break
+			}
+		}
+	}
+	// Position the focused graph node when this worker is graph-driven.
+	// Graph session IDs encode the node ("graph:<task>:<node>"); fall
+	// back to the worker's logical name for non-graph sessions.
+	if gts := m.graphTasks[snap.TaskID]; gts != nil && len(gts.topology.Nodes) > 0 {
+		nodeName := graphNodeFromSessionID(snap.SessionID)
+		if nodeName == "" {
+			nodeName = snap.WorkerName
+		}
+		for i, n := range gts.topology.Nodes {
+			if n == nodeName {
+				m.jobsModal.graphNodeIdx = i
+				break
+			}
+		}
+	}
+	m.jobsModal.focus = 2
+	return cmd
+}
+
 // loadJobsForModal populates the modal's job list from the same filtered
 // and sorted view used by the main-screen Jobs pane so the two surfaces
 // read identically. Live updates arrive via syncJobsModalFromProgress.

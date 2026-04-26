@@ -605,7 +605,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// selection backward. Blurs the input on first selection so
 			// the action keys (w/d/Enter) aren't swallowed by the textarea.
 			if m.focused == focusChat && !m.stream.streaming {
-				if m.stepJobResultSelection(-1) {
+				if m.stepBlockSelection(-1) {
 					if m.chat.selectedMsgIdx >= 0 {
 						m.input.Blur()
 					}
@@ -633,7 +633,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// through result-block selection, returning to free chat
 			// after the newest result.
 			if m.focused == focusChat && !m.stream.streaming {
-				if m.chat.selectedMsgIdx >= 0 && m.stepJobResultSelection(+1) {
+				if m.chat.selectedMsgIdx >= 0 && m.stepBlockSelection(+1) {
 					if m.chat.selectedMsgIdx < 0 {
 						cmds = append(cmds, m.input.Focus())
 					}
@@ -773,11 +773,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 
 		case "esc":
-			// Drop result-block selection back to free chat. Sits ahead
-			// of the grid + stream guards because the user's mental model
-			// is "esc = back out of the most-immediate context", and a
-			// chat-selected result is more recent than a streaming turn.
-			if m.focused == focusChat && m.selectedJobResult() != nil {
+			// Drop block selection back to free chat. Sits ahead of the
+			// grid + stream guards because the user's mental model is
+			// "esc = back out of the most-immediate context", and a
+			// chat-selected block is more recent than a streaming turn.
+			if m.focused == focusChat && (m.selectedJobResult() != nil || m.selectedWorkerStream() != nil) {
 				m.chat.selectedMsgIdx = -1
 				cmds = append(cmds, m.input.Focus())
 				m.updateViewportContent()
@@ -812,13 +812,16 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case "enter":
-			// Result-block deep link: Enter on a chat-selected JobResult
-			// jumps into the Jobs modal at that job. Sits before the
-			// jobs-pane handler so chat selection wins when the user is
-			// in result-block selection mode.
+			// Block deep link: Enter on a chat-selected JobResult or
+			// WorkerStream jumps into the Jobs modal at that job. Sits
+			// before the jobs-pane handler so chat selection wins when
+			// the user is in block-selection mode.
 			if m.focused == focusChat && !m.stream.streaming {
 				if res := m.selectedJobResult(); res != nil {
 					return m, m.openJobsModalForJob(res.JobID)
+				}
+				if ws := m.selectedWorkerStream(); ws != nil {
+					return m, m.openJobsModalForWorkerStream(ws)
 				}
 			}
 			// Open jobs modal pre-selected on current job.

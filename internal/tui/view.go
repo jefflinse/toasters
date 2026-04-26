@@ -1128,7 +1128,8 @@ func (m *Model) updateViewportContent() {
 			continue
 		}
 		if entry.Kind == service.ChatEntryKindWorkerStream {
-			block := m.renderWorkerStreamBlock(entry.WorkerStream, contentWidth)
+			selected := m.chat.selectedMsgIdx == i
+			block := m.renderWorkerStreamBlock(entry.WorkerStream, contentWidth, selected)
 			if block != "" {
 				sb.WriteString(block + "\n\n")
 			}
