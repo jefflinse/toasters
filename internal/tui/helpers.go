@@ -702,6 +702,27 @@ func (m *Model) jobResultEntryIndices() []int {
 	return out
 }
 
+// selectableEntryIndices returns the indices of chat entries that
+// participate in Up/Down selection — currently job results and worker
+// stream blocks. Both are deep-link targets into the Jobs modal, so
+// they share one selection cursor and the same Enter behavior.
+func (m *Model) selectableEntryIndices() []int {
+	var out []int
+	for i, e := range m.chat.entries {
+		switch e.Kind {
+		case service.ChatEntryKindJobResult:
+			if e.JobResult != nil {
+				out = append(out, i)
+			}
+		case service.ChatEntryKindWorkerStream:
+			if e.WorkerStream != nil {
+				out = append(out, i)
+			}
+		}
+	}
+	return out
+}
+
 // selectedJobResult returns the snapshot for the currently selected chat
 // entry when that entry is a JobResult, or nil otherwise. Centralizing
 // the lookup means callers (key handlers, footer renderer, etc.) don't
@@ -718,13 +739,29 @@ func (m *Model) selectedJobResult() *service.JobResultSnapshot {
 	return e.JobResult
 }
 
-// stepJobResultSelection moves the chat selection one step (delta = -1 for
-// previous, +1 for next) through the JobResult entries. Returns true when
-// the selection changed; false (and leaves state untouched) when there's
-// nothing to select or the move would walk off the end. Selection wraps
-// off the start to "no selection" so the user can return to free typing.
-func (m *Model) stepJobResultSelection(delta int) bool {
-	indices := m.jobResultEntryIndices()
+// selectedWorkerStream returns the snapshot for the currently selected
+// chat entry when that entry is a WorkerStream, or nil otherwise. The
+// counterpart to selectedJobResult — same shape, different kind.
+func (m *Model) selectedWorkerStream() *service.WorkerStreamSnapshot {
+	idx := m.chat.selectedMsgIdx
+	if idx < 0 || idx >= len(m.chat.entries) {
+		return nil
+	}
+	e := m.chat.entries[idx]
+	if e.Kind != service.ChatEntryKindWorkerStream {
+		return nil
+	}
+	return e.WorkerStream
+}
+
+// stepBlockSelection moves the chat selection one step (delta = -1 for
+// previous, +1 for next) through the selectable entries (job results
+// and worker stream blocks). Returns true when the selection changed;
+// false (and leaves state untouched) when there's nothing to select or
+// the move would walk off the end. Selection wraps off the start to
+// "no selection" so the user can return to free typing.
+func (m *Model) stepBlockSelection(delta int) bool {
+	indices := m.selectableEntryIndices()
 	if len(indices) == 0 {
 		return false
 	}

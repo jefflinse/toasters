@@ -136,6 +136,13 @@ type Model struct {
 	err            error
 	mdRender       *glamour.TermRenderer
 	outputMdRender *glamour.TermRenderer // separate renderer sized for the fullscreen output modal
+	// jobsPaneMdRender renders worker output in the Jobs modal's graph
+	// pane. The pane has its own width (different from the chat and the
+	// fullscreen modal) and resizes with the layout, so it gets its own
+	// renderer that's reissued when the configured width drifts. See
+	// ensureJobsPaneMarkdownRenderer.
+	jobsPaneMdRender      *glamour.TermRenderer
+	jobsPaneMdRenderWidth int
 
 	// Sub-models grouping related state.
 	stream      streamingState
@@ -253,14 +260,33 @@ type activityItem struct {
 
 // runtimeSlot tracks a runtime agent session for TUI display.
 type runtimeSlot struct {
-	sessionID      string
-	agentName      string
-	teamName       string // team this agent belongs to (may be empty)
-	task           string // short human-readable description of what this agent is doing
-	jobID          string
-	taskID         string
-	status         string // "active", "completed", "failed", "cancelled"
-	output         strings.Builder
+	sessionID string
+	agentName string
+	teamName  string // team this agent belongs to (may be empty)
+	task      string // short human-readable description of what this agent is doing
+	jobID     string
+	taskID    string
+	status    string // "active", "completed", "failed", "cancelled"
+
+	// items holds typed output blocks (text + tool calls) so the graph
+	// pane can render styled, scrollable output. Replaces the previous
+	// strings.Builder accumulator. toolItemIdx maps tool call IDs to
+	// their position in items so a tool result can patch the matching
+	// call without scanning. See slot_output.go.
+	items       []outputItem
+	toolItemIdx map[string]int
+
+	// contentVersion bumps on every items mutation so the graph pane's
+	// glamour render cache (slot_render.go) can detect changes without
+	// hashing the whole content. cachedRender holds the most recent
+	// styled output for a given width and content version.
+	contentVersion       int
+	cachedRender         string
+	cachedRenderVersion  int
+	cachedRenderWidth    int
+	cachedRenderAt       time.Time
+	cachedRenderTerminal bool // true when the cache was produced after the slot finished — never re-render in that case
+
 	reasoning      strings.Builder // streamed chain-of-thought; only set when the provider emits reasoning events
 	startTime      time.Time
 	endTime        time.Time      // set when session completes; zero while active
@@ -579,7 +605,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// selection backward. Blurs the input on first selection so
 			// the action keys (w/d/Enter) aren't swallowed by the textarea.
 			if m.focused == focusChat && !m.stream.streaming {
-				if m.stepJobResultSelection(-1) {
+				if m.stepBlockSelection(-1) {
 					if m.chat.selectedMsgIdx >= 0 {
 						m.input.Blur()
 					}
@@ -607,7 +633,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// through result-block selection, returning to free chat
 			// after the newest result.
 			if m.focused == focusChat && !m.stream.streaming {
-				if m.chat.selectedMsgIdx >= 0 && m.stepJobResultSelection(+1) {
+				if m.chat.selectedMsgIdx >= 0 && m.stepBlockSelection(+1) {
 					if m.chat.selectedMsgIdx < 0 {
 						cmds = append(cmds, m.input.Focus())
 					}
@@ -747,11 +773,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 
 		case "esc":
-			// Drop result-block selection back to free chat. Sits ahead
-			// of the grid + stream guards because the user's mental model
-			// is "esc = back out of the most-immediate context", and a
-			// chat-selected result is more recent than a streaming turn.
-			if m.focused == focusChat && m.selectedJobResult() != nil {
+			// Drop block selection back to free chat. Sits ahead of the
+			// grid + stream guards because the user's mental model is
+			// "esc = back out of the most-immediate context", and a
+			// chat-selected block is more recent than a streaming turn.
+			if m.focused == focusChat && (m.selectedJobResult() != nil || m.selectedWorkerStream() != nil) {
 				m.chat.selectedMsgIdx = -1
 				cmds = append(cmds, m.input.Focus())
 				m.updateViewportContent()
@@ -786,13 +812,16 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case "enter":
-			// Result-block deep link: Enter on a chat-selected JobResult
-			// jumps into the Jobs modal at that job. Sits before the
-			// jobs-pane handler so chat selection wins when the user is
-			// in result-block selection mode.
+			// Block deep link: Enter on a chat-selected JobResult or
+			// WorkerStream jumps into the Jobs modal at that job. Sits
+			// before the jobs-pane handler so chat selection wins when
+			// the user is in block-selection mode.
 			if m.focused == focusChat && !m.stream.streaming {
 				if res := m.selectedJobResult(); res != nil {
 					return m, m.openJobsModalForJob(res.JobID)
+				}
+				if ws := m.selectedWorkerStream(); ws != nil {
+					return m, m.openJobsModalForWorkerStream(ws)
 				}
 			}
 			// Open jobs modal pre-selected on current job.
@@ -1200,8 +1229,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !ok {
 			return m, nil
 		}
-		slot.output.WriteString(msg.Text)
+		slot.appendText(msg.Text)
+		m.appendWorkerStreamText(slot, msg.Text)
 		m.refreshOutputModalIfShowing(msg.SessionID, slot)
+		m.updateViewportContent()
+		if !m.scroll.userScrolled {
+			m.chatViewport.GotoBottom()
+		}
 		return m, nil
 
 	case SessionReasoningMsg:
@@ -1219,14 +1253,19 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if msg.ToolName != "" {
-			fmt.Fprintf(&slot.output, "\n⚙ %s\n", msg.ToolName)
+			slot.startTool(msg.ToolID, msg.ToolName, json.RawMessage(msg.ToolInput))
 			label := activityLabel(msg.ToolName, json.RawMessage(msg.ToolInput))
 			slot.activities = append(slot.activities, activityItem{label: label, toolName: msg.ToolName})
 			if len(slot.activities) > 6 {
 				slot.activities = slot.activities[len(slot.activities)-6:]
 			}
+			m.appendWorkerStreamToolCall(slot, msg.ToolID, msg.ToolName, json.RawMessage(msg.ToolInput))
 		}
 		m.refreshOutputModalIfShowing(msg.SessionID, slot)
+		m.updateViewportContent()
+		if !m.scroll.userScrolled {
+			m.chatViewport.GotoBottom()
+		}
 		return m, nil
 
 	case SessionToolResultMsg:
@@ -1234,14 +1273,17 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !ok {
 			return m, nil
 		}
-		if msg.ToolOutput != "" {
-			result := xansi.Strip(msg.ToolOutput)
-			if len(result) > 200 {
-				result = result[:200] + "..."
-			}
-			fmt.Fprintf(&slot.output, "→ %s\n", result)
+		result := xansi.Strip(msg.ToolOutput)
+		if len(result) > 200 {
+			result = result[:200] + "..."
 		}
+		slot.completeTool(msg.CallID, msg.ToolName, result, msg.IsError)
+		m.appendWorkerStreamToolResult(slot, msg.CallID, msg.ToolName, result, msg.IsError)
 		m.refreshOutputModalIfShowing(msg.SessionID, slot)
+		m.updateViewportContent()
+		if !m.scroll.userScrolled {
+			m.chatViewport.GotoBottom()
+		}
 		return m, nil
 
 	case SessionDoneMsg:
@@ -1251,6 +1293,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		slot.status = msg.Status
 		slot.endTime = time.Now()
+		m.markWorkerStreamDone(msg.SessionID)
+		m.updateViewportContent()
 		cmds = append(cmds, m.addToast("🍞 "+msg.WorkerName+" is done.", toastSuccess))
 		// Note: agent completion is no longer reported back to the operator from
 		// the TUI. The server is responsible for routing task completion into the
@@ -1681,7 +1725,7 @@ func (m *Model) refreshOutputModalIfShowing(sessionID string, slot *runtimeSlot)
 // dimmed "⟳ thinking" section is prepended above the regular output;
 // otherwise the output is returned verbatim.
 func composeSlotContent(slot *runtimeSlot) string {
-	out := slot.output.String()
+	out := slot.outputText()
 	reasoning := slot.reasoning.String()
 	if reasoning == "" {
 		return out

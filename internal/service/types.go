@@ -391,6 +391,14 @@ const (
 	// completion event" rather than retroactively rewriting prior state.
 	// Payload lives in ChatEntry.JobResult.
 	ChatEntryKindJobResult ChatEntryKind = "job_result"
+
+	// ChatEntryKindWorkerStream is a live block accumulating one worker's
+	// streamed output (text + tool calls) interleaved into the chat. New
+	// streamed events for the same worker+job append to the existing
+	// block until the block closes (60s idle, worker done, or any other
+	// chat entry supersedes it from below). Payload lives in
+	// ChatEntry.WorkerStream.
+	ChatEntryKindWorkerStream ChatEntryKind = "worker_stream"
 )
 
 // JobSnapshot is the payload for a ChatEntryKindJobUpdate entry. It
@@ -426,6 +434,57 @@ type ChatEntry struct {
 	// JobResult carries the completion summary for
 	// Kind == ChatEntryKindJobResult. Nil for other kinds.
 	JobResult *JobResultSnapshot
+
+	// WorkerStream carries the streamed-output snapshot for
+	// Kind == ChatEntryKindWorkerStream. Nil for other kinds.
+	WorkerStream *WorkerStreamSnapshot
+}
+
+// WorkerStreamItemKind discriminates the elements stored in a
+// WorkerStreamSnapshot.Items slice.
+type WorkerStreamItemKind int
+
+const (
+	// WorkerStreamItemText is a coalesced run of streamed text tokens.
+	WorkerStreamItemText WorkerStreamItemKind = iota
+	// WorkerStreamItemTool wraps a tool call's lifecycle: start (with
+	// args) and result (with status, duration, and a truncated preview).
+	WorkerStreamItemTool
+)
+
+// WorkerStreamItem is one renderable element inside a worker stream
+// chat block — either a coalesced text run or a single tool
+// call/result pair.
+type WorkerStreamItem struct {
+	Kind WorkerStreamItemKind
+
+	// Text run.
+	Text string
+
+	// Tool call lifecycle.
+	ToolID     string
+	ToolName   string
+	ToolArgs   json.RawMessage
+	ToolResult string
+	ToolError  bool
+	StartedAt  time.Time
+	EndedAt    time.Time // zero while in flight
+}
+
+// WorkerStreamSnapshot is the payload for a ChatEntryKindWorkerStream
+// entry. The block accumulates items as long as it stays "open" — same
+// (WorkerName, JobID), most-recent chat entry, less than 60s since
+// LastActivity, and Done==false. Once any of those flips, the next
+// streamed event from the same worker starts a fresh snapshot.
+type WorkerStreamSnapshot struct {
+	WorkerName   string
+	JobID        string
+	TaskID       string
+	SessionID    string // most recent contributing session
+	Items        []WorkerStreamItem
+	StartedAt    time.Time
+	LastActivity time.Time
+	Done         bool // session terminated normally; render shows ✓ instead of streaming/idle
 }
 
 // JobResultSnapshot is the payload for a ChatEntryKindJobResult entry. It

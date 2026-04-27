@@ -1127,6 +1127,14 @@ func (m *Model) updateViewportContent() {
 			}
 			continue
 		}
+		if entry.Kind == service.ChatEntryKindWorkerStream {
+			selected := m.chat.selectedMsgIdx == i
+			block := m.renderWorkerStreamBlock(entry.WorkerStream, contentWidth, selected)
+			if block != "" {
+				sb.WriteString(block + "\n\n")
+			}
+			continue
+		}
 
 		msg := entry.Message
 		// Timestamp helper.

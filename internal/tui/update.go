@@ -91,7 +91,7 @@ func (m *Model) updateGrid(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "enter":
 		// Check for runtime session in this cell.
 		if rs := m.runtimeSessionForGridCell(m.grid.gridFocusCell); rs != nil {
-			output := rs.output.String()
+			output := rs.outputText()
 			if output != "" {
 				m.outputModal.show = true
 				m.outputModal.content = output
