@@ -139,17 +139,28 @@ func (m *Model) ensureGraphTaskState(jobID, taskID string) *graphTaskState {
 		m.graphTasks[taskID] = gts
 		return gts
 	}
-	// If we created the state before the graph id or definition was
-	// known, fill them in now that we might have the data.
+	m.refreshGraphTaskState(gts)
+	return gts
+}
+
+// refreshGraphTaskState fills in the graph id and topology on an existing
+// state when they couldn't be resolved at creation time. The first
+// graph.node_started event commonly arrives before the progress.update that
+// carries the task's graph_id, so the TUI may cache a state with empty
+// fields; render-time callers run this to recover once the missing data
+// shows up.
+func (m *Model) refreshGraphTaskState(gts *graphTaskState) {
+	if gts == nil {
+		return
+	}
 	if gts.graphID == "" {
-		gts.graphID = m.taskGraphID(jobID, taskID)
+		gts.graphID = m.taskGraphID(gts.jobID, gts.taskID)
 	}
 	if len(gts.topology.Nodes) == 0 && gts.graphID != "" {
 		if topology, ok := m.topologyForGraphID(gts.graphID); ok {
 			gts.topology = topology
 		}
 	}
-	return gts
 }
 
 // activeGraphTaskState returns the most recently touched graph task state,
@@ -158,5 +169,7 @@ func (m *Model) activeGraphTaskState() *graphTaskState {
 	if m.lastGraphTaskID == "" {
 		return nil
 	}
-	return m.graphTasks[m.lastGraphTaskID]
+	gts := m.graphTasks[m.lastGraphTaskID]
+	m.refreshGraphTaskState(gts)
+	return gts
 }

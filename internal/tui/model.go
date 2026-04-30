@@ -182,6 +182,9 @@ type Model struct {
 	// Jobs modal state.
 	jobsModal jobsModalState
 
+	// Presets modal state (/presets).
+	presetsModal presetsModalState
+
 	// Most recent JobResult snapshot. Drives the "↑ to select for
 	// actions" hint that appears beneath the latest unread result block.
 	// Cleared when the user submits another turn or a newer result
@@ -426,6 +429,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Settings modal key handling — intercept all keys when modal is open.
 		if m.settingsModal.show {
 			return m.updateSettingsModal(msg)
+		}
+
+		// Presets modal key handling — intercept all keys when modal is open.
+		if m.presetsModal.show {
+			return m.updatePresetsModal(msg)
 		}
 
 		// Graph map modal key handling — intercept all keys when modal is open.
@@ -921,6 +929,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.cmdPopup.show = false
 					m.settingsModal = settingsModalState{show: true, loading: true}
 					return m, m.fetchSettings()
+				case "/presets":
+					m.input.Reset()
+					m.cmdPopup.show = false
+					m.presetsModal = presetsModalState{show: true}
+					return m, nil
 				}
 
 				// Remaining cases send a message to the operator. If a turn
