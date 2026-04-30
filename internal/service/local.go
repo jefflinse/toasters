@@ -2186,7 +2186,7 @@ func (s *LocalService) startOperator(p provider.Provider, providerID, model stri
 	// Compose the operator system prompt via the prompt engine.
 	var systemPrompt string
 	if s.cfg.PromptEngine != nil {
-		composed, err := s.cfg.PromptEngine.Compose("operator", nil)
+		composed, err := s.cfg.PromptEngine.Compose("operator", nil, nil)
 		if err != nil {
 			slog.Warn("failed to compose operator for live activation", "error", err)
 		} else {

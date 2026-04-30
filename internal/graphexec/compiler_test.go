@@ -30,9 +30,9 @@ func bugFixDef() *Definition {
 		Nodes: []Node{
 			{ID: "investigate", Role: "investigator"},
 			{ID: "plan", Role: "planner"},
-			{ID: "implement", Role: "implementer"},
-			{ID: "test", Role: "tester"},
-			{ID: "review", Role: "reviewer"},
+			{ID: "implement", Role: "coder", Slots: map[string]string{"toolchain": "go"}},
+			{ID: "test", Role: "tester", Slots: map[string]string{"toolchain": "go"}},
+			{ID: "review", Role: "code-reviewer", Slots: map[string]string{"toolchain": "go"}},
 		},
 		Edges: []Edge{
 			{From: "investigate", To: "plan"},
@@ -117,8 +117,8 @@ func TestCompile_MaxIterationsCap(t *testing.T) {
 		ID:    "proto",
 		Entry: "implement",
 		Nodes: []Node{
-			{ID: "implement", Role: "implementer"},
-			{ID: "test", Role: "tester"},
+			{ID: "implement", Role: "coder", Slots: map[string]string{"toolchain": "go"}},
+			{ID: "test", Role: "tester", Slots: map[string]string{"toolchain": "go"}},
 		},
 		Edges: []Edge{
 			{From: "implement", To: "test"},
@@ -273,8 +273,8 @@ func TestCompile_RouterRejectsUnknownField(t *testing.T) {
 		ID:    "bad-router",
 		Entry: "implement",
 		Nodes: []Node{
-			{ID: "implement", Role: "implementer"},
-			{ID: "test", Role: "tester"},
+			{ID: "implement", Role: "coder", Slots: map[string]string{"toolchain": "go"}},
+			{ID: "test", Role: "tester", Slots: map[string]string{"toolchain": "go"}},
 		},
 		Edges: []Edge{
 			{From: "implement", To: "test"},
@@ -294,5 +294,73 @@ func TestCompile_RouterRejectsUnknownField(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "bogus") {
 		t.Errorf("err = %v, want to mention unknown field", err)
+	}
+}
+
+// slotDef is a minimal one-node graph used to exercise compile-time slot
+// validation. Each subtest swaps in a different Slots map.
+func slotDef(slots map[string]string) *Definition {
+	return &Definition{
+		ID:    "slot-test",
+		Entry: "implement",
+		Exit:  "implement",
+		Nodes: []Node{
+			{ID: "implement", Role: "coder", Slots: slots},
+		},
+	}
+}
+
+func TestCompile_SlotValidation_DeclaredSlotMissingBinding(t *testing.T) {
+	cfg := compilerTemplate(t, nil)
+	_, err := Compile(slotDef(nil), cfg, nil)
+	if err == nil {
+		t.Fatal("expected error for unbound declared slot")
+	}
+	if !strings.Contains(err.Error(), "toolchain") || !strings.Contains(err.Error(), "binds no value") {
+		t.Errorf("err = %v, want to mention the unbound slot", err)
+	}
+}
+
+func TestCompile_SlotValidation_BindingForUndeclaredSlot(t *testing.T) {
+	cfg := compilerTemplate(t, nil)
+	_, err := Compile(slotDef(map[string]string{
+		"toolchain":  "go",
+		"toolchians": "go", // typo
+	}), cfg, nil)
+	if err == nil {
+		t.Fatal("expected error for binding to undeclared slot")
+	}
+	if !strings.Contains(err.Error(), "toolchians") || !strings.Contains(err.Error(), "no such slot") {
+		t.Errorf("err = %v, want to flag the typo'd slot name", err)
+	}
+}
+
+func TestCompile_SlotValidation_BindingToUnknownToolchain(t *testing.T) {
+	cfg := compilerTemplate(t, nil)
+	_, err := Compile(slotDef(map[string]string{"toolchain": "rust"}), cfg, nil)
+	if err == nil {
+		t.Fatal("expected error for binding to unknown toolchain")
+	}
+	if !strings.Contains(err.Error(), "rust") || !strings.Contains(err.Error(), "unknown toolchain") {
+		t.Errorf("err = %v, want to flag the unknown toolchain id", err)
+	}
+}
+
+func TestCompile_SlotValidation_TemplateRefDeferredToRuntime(t *testing.T) {
+	// Template-reference values can't be checked against the toolchain
+	// catalog at compile time — the artifact doesn't exist yet. Compile
+	// must succeed; runtime resolves and validates.
+	cfg := compilerTemplate(t, nil)
+	_, err := Compile(slotDef(map[string]string{"toolchain": "{{ globals.task.toolchain }}"}), cfg, nil)
+	if err != nil {
+		t.Fatalf("expected compile to defer template-ref binding to runtime, got: %v", err)
+	}
+}
+
+func TestCompile_SlotValidation_LiteralToolchainResolves(t *testing.T) {
+	cfg := compilerTemplate(t, nil)
+	_, err := Compile(slotDef(map[string]string{"toolchain": "go"}), cfg, nil)
+	if err != nil {
+		t.Fatalf("expected literal toolchain id to compile cleanly, got: %v", err)
 	}
 }

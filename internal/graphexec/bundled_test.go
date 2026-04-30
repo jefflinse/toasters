@@ -45,6 +45,7 @@ func runBundled(t *testing.T, name string, responses [][]provider.StreamEvent) (
 
 	state := NewTaskState("j", "t", "/w", "mock", "test-model")
 	state.SetArtifact("task.description", "do the thing")
+	state.SetArtifact("task.toolchain", "go")
 
 	result, err := compiled.Run(context.Background(), state)
 	if err != nil {
@@ -135,6 +136,7 @@ func TestBundled_Prototype_HitsCycleCap(t *testing.T) {
 		t.Fatalf("Compile: %v", err)
 	}
 	state := NewTaskState("j", "t", "/w", "mock", "test-model")
+	state.SetArtifact("task.toolchain", "go")
 	if _, err := compiled.Run(context.Background(), state); !errors.Is(err, rhizome.ErrCycleLimit) {
 		t.Errorf("err = %v, want ErrCycleLimit", err)
 	}

@@ -30,7 +30,7 @@ The core insight: LLMs are good at reasoning and writing code, but bad at mainta
 ## What It Is
 
 - A TUI-first orchestration platform for agentic coding work
-- A multi-agent coordinator: operator dispatches to teams of specialized agents
+- A multi-worker orchestrator: operator dispatches to graphs of specialized workers
 - An MCP client: consumes tools from external MCP servers (GitHub, Jira, Linear, etc.)
 - An MCP server: exposes a progress-reporting API that agents use to report status back to the orchestrator
 - A persistent state manager: SQLite for operational data, markdown for human-readable artifacts
@@ -229,7 +229,7 @@ What exists today is a functional agentic orchestration TUI with operator chat, 
 
 **`internal/agents` — Agent system**
 - Agent discovery from `.md` files with YAML frontmatter
-- Team definitions with coordinator + worker roles
+- Team definitions with team-lead + worker roles
 - Hot-reload via fsnotify
 
 **`internal/claude` — Shared Claude CLI stream types**

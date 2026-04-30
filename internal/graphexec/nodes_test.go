@@ -164,7 +164,7 @@ func TestRoleNode_TesterPassedRoutesViaOutput(t *testing.T) {
 	if role == nil {
 		t.Fatal("tester role not loaded")
 	}
-	node := RoleNode(cfg, role, "test")
+	node := RoleNode(cfg, role, "test", map[string]string{"toolchain": "go"})
 	state := NewTaskState("job-1", "task-1", "/workspace", "mock", "test-model")
 
 	result, err := node(context.Background(), state)
@@ -188,8 +188,8 @@ func TestRoleNode_ReviewerRejectedCarriesFeedback(t *testing.T) {
 		reviewResp(false, "missing error handling"),
 	})
 
-	role := cfg.PromptEngine.Role("reviewer")
-	node := RoleNode(cfg, role, "review")
+	role := cfg.PromptEngine.Role("code-reviewer")
+	node := RoleNode(cfg, role, "review", map[string]string{"toolchain": "go"})
 	state := NewTaskState("job-1", "task-1", "/workspace", "mock", "test-model")
 
 	result, err := node(context.Background(), state)
@@ -225,8 +225,8 @@ func TestRoleNode_ImplementerToolCallThenComplete(t *testing.T) {
 		},
 	}
 
-	role := cfg.PromptEngine.Role("implementer")
-	node := RoleNode(cfg, role, "implement")
+	role := cfg.PromptEngine.Role("coder")
+	node := RoleNode(cfg, role, "implement", map[string]string{"toolchain": "go"})
 	state := NewTaskState("job-1", "task-1", "/workspace", "mock", "test-model")
 
 	result, err := node(context.Background(), state)
@@ -576,7 +576,7 @@ JOB_MARKER: {{ globals.job.title }}
 	state.SetArtifact("task.description", "Find the bug")
 	state.SetArtifact("job.title", "Parser reliability")
 
-	got, err := composePrompt(cfg, role, state)
+	got, err := composePrompt(cfg, role, state, nil)
 	if err != nil {
 		t.Fatalf("composePrompt: %v", err)
 	}
@@ -586,6 +586,50 @@ JOB_MARKER: {{ globals.job.title }}
 	if !strings.Contains(got, "JOB_MARKER: Parser reliability") {
 		t.Errorf("prompt missing job override: %q", got)
 	}
+}
+
+func TestResolveSlotValues(t *testing.T) {
+	artifacts := map[string]string{
+		"task.toolchain":   "go",
+		"task.description": "do thing",
+	}
+
+	t.Run("literal passes through", func(t *testing.T) {
+		out, err := resolveSlotValues(map[string]string{"toolchain": "python"}, artifacts)
+		if err != nil {
+			t.Fatalf("resolveSlotValues: %v", err)
+		}
+		if out["toolchain"] != "python" {
+			t.Errorf("literal mutated: %q", out["toolchain"])
+		}
+	})
+
+	t.Run("globals reference resolves", func(t *testing.T) {
+		out, err := resolveSlotValues(map[string]string{"toolchain": "{{ globals.task.toolchain }}"}, artifacts)
+		if err != nil {
+			t.Fatalf("resolveSlotValues: %v", err)
+		}
+		if out["toolchain"] != "go" {
+			t.Errorf("got %q, want %q", out["toolchain"], "go")
+		}
+	})
+
+	t.Run("missing artifact errors", func(t *testing.T) {
+		_, err := resolveSlotValues(map[string]string{"toolchain": "{{ globals.task.toolchain }}"}, map[string]string{})
+		if err == nil {
+			t.Fatal("expected error for missing artifact")
+		}
+		if !strings.Contains(err.Error(), "task.toolchain") {
+			t.Errorf("error should name the missing artifact, got: %v", err)
+		}
+	})
+
+	t.Run("non-globals category errors", func(t *testing.T) {
+		_, err := resolveSlotValues(map[string]string{"toolchain": "{{ slots.other }}"}, artifacts)
+		if err == nil {
+			t.Fatal("expected error for non-globals reference")
+		}
+	})
 }
 
 func TestBundledRolesCompose(t *testing.T) {
@@ -600,14 +644,22 @@ func TestBundledRolesCompose(t *testing.T) {
 	state.SetArtifact("test.summary", "stub tests")
 	state.SetArtifact("review.feedback", "")
 
+	state.SetArtifact("task.toolchain", "go")
 	cfg := TemplateConfig{PromptEngine: engine}
-	for _, name := range []string{"investigator", "planner", "implementer", "tester", "reviewer"} {
+	for _, name := range []string{"investigator", "planner", "coder", "tester", "code-reviewer"} {
 		role := engine.Role(name)
 		if role == nil {
 			t.Errorf("role %q not loaded", name)
 			continue
 		}
-		got, err := composePrompt(cfg, role, state)
+		var slots map[string]string
+		if len(role.Slots) > 0 {
+			slots = make(map[string]string, len(role.Slots))
+			for _, s := range role.Slots {
+				slots[s] = "go"
+			}
+		}
+		got, err := composePrompt(cfg, role, state, slots)
 		if err != nil {
 			t.Errorf("compose %q: %v", name, err)
 			continue
@@ -748,7 +800,7 @@ func TestRoleNode_PersistsSessionTranscript(t *testing.T) {
 	if role == nil {
 		t.Fatal("investigator not loaded")
 	}
-	node := RoleNode(cfg, role, "investigate")
+	node := RoleNode(cfg, role, "investigate", nil)
 	state := NewTaskState("job-1", "task-1", "/workspace", "mock", "test-model")
 
 	if _, err := node(context.Background(), state); err != nil {
@@ -801,7 +853,7 @@ func TestRoleNode_PersistsSessionOnMissingTerminal(t *testing.T) {
 	cfg.Store = store
 
 	role := cfg.PromptEngine.Role("planner")
-	node := RoleNode(cfg, role, "plan")
+	node := RoleNode(cfg, role, "plan", nil)
 	state := NewTaskState("job-1", "task-1", "/workspace", "mock", "test-model")
 
 	_, err := node(context.Background(), state)

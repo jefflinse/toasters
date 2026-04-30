@@ -19,7 +19,7 @@ Continuing feature development on the `dev` branch. This session completed the p
 - Safety-net watcher now force-**fails** tasks (not force-completes) when a team lead session ends without calling any terminal tool
 - `CompletedCalled` → `TerminalActionTaken`, tracking both `complete_task` and `report_blocker`
 - `ForceComplete` → `ForceFail`, emits `TaskFailed` event so operator can decide next steps
-- Coordinator role prompt updated to use `report_blocker` for out-of-scope work
+- Team-lead role prompt updated to use `report_blocker` for out-of-scope work
 
 ### 3. Legacy agent system removal (complete)
 - Deleted `internal/compose/` — the entire legacy Composer
@@ -33,7 +33,7 @@ Continuing feature development on the `dev` branch. This session completed the p
 
 ## What's next
 
-1. **Task granularity tuning** — Local models (Gemma 4 26B) loop on open-ended tasks. Coordinator subtask descriptions need to be more specific. May need max-turn limits on workers.
+1. **Task granularity tuning** — Local models (Gemma 4 26B) loop on open-ended tasks. Operator subtask descriptions need to be more specific. May need max-turn limits on workers.
 
 2. **Clean up remaining agent DB infrastructure** — `db.Agent` table and methods still exist for team membership tracking via synthetic agents. Could be simplified to just role references on teams.
 
@@ -52,7 +52,7 @@ Continuing feature development on the `dev` branch. This session completed the p
 | consultAgent | `internal/operator/tools.go` (prompt-engine-only, source guard) |
 | assignTask | `internal/operator/system_tools.go` (prompt-engine-only) |
 | Team lead safety net | `internal/runtime/team_lead.go`, `internal/operator/team_tools.go` |
-| Coordinator prompt | `defaults/user/roles/coordinator.md` (report_blocker for pushback) |
+| Team-lead prompt | (file later removed during graph-executor migration; report_blocker for pushback) |
 | Deleted: Composer | `internal/compose/` (entire package) |
 | Deleted: old agents | `defaults/system/agents/` (5 files) |
 | Stripped: agentfmt | `internal/agentfmt/` (agent-specific code removed) |

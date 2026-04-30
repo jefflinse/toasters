@@ -41,6 +41,12 @@ fields:
     description: >
       When fine-decompose selected a graph for the task, the id of the
       chosen graph. Omit for coarse-decompose or for rejections.
+  toolchain:
+    type: string
+    description: >
+      Toolchain id (e.g. "go", "python", "typescript") that the selected
+      graph should execute against. Used to bind toolchain slots on roles
+      inside the graph. Required when graph_id is set; omit otherwise.
   rejected:
     type: boolean
     description: >

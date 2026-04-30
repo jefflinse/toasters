@@ -333,6 +333,15 @@ type TaskRequest struct {
 	// executor's GraphSource. Required.
 	GraphID string
 
+	// Toolchain names the toolchain id (e.g. "go", "python", "typescript")
+	// the task should execute against. Surfaced to graphs via the
+	// `task.toolchain` artifact so slot bindings like
+	// `slots: { toolchain: "{{ globals.task.toolchain }}" }` resolve.
+	// Required for graphs whose roles bind toolchain slots; optional
+	// otherwise. Set by fine-decompose; callers without a real source
+	// should leave empty rather than defaulting.
+	Toolchain string
+
 	WorkspaceDir string
 	ProviderName string
 	Model        string
@@ -387,6 +396,9 @@ func (e *Executor) ExecuteTask(ctx context.Context, req TaskRequest) error {
 
 	state := NewTaskState(req.JobID, req.TaskID, req.WorkspaceDir, req.ProviderName, model)
 	state.SetArtifact("task.description", req.TaskTitle)
+	if req.Toolchain != "" {
+		state.SetArtifact("task.toolchain", req.Toolchain)
+	}
 	state.SetArtifact("job.title", req.JobTitle)
 	state.SetArtifact("job.description", req.JobDescription)
 	state.ExitNode = def.Exit

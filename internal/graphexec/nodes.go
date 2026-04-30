@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -19,20 +20,21 @@ import (
 // RoleNode returns a generic rhizome NodeFunc bound to a single role. The
 // system prompt is composed from the role's markdown body; the terminal
 // output shape comes from the role's declared schema; the tool allowlist
-// is picked from the role's Access field.
+// is picked from the role's Access field. Slots binds the role's declared
+// slots to concrete values (today: toolchain ids).
 //
 // Every role runs through the same path — there are no per-role builders.
-// Language-specific roles (go-coder, py-tester, …) only differ from the
-// generic investigator/planner/etc. via their markdown bodies and their
-// declared schemas.
-func RoleNode(cfg TemplateConfig, role *prompt.Role, nodeID string) rhizome.NodeFunc[*TaskState] {
+// Slot-bearing roles (coder, code-reviewer, …) parameterize their bodies
+// at compose time via the slots map; otherwise they go through the same
+// path as plain roles.
+func RoleNode(cfg TemplateConfig, role *prompt.Role, nodeID string, slots map[string]string) rhizome.NodeFunc[*TaskState] {
 	return func(ctx context.Context, state *TaskState) (*TaskState, error) {
 		schemaRaw, _, err := ResolveSchema(cfg.PromptEngine, role)
 		if err != nil {
 			return state, fmt.Errorf("role %q: %w", role.Name, err)
 		}
 
-		sysPrompt, err := composePrompt(cfg, role, state)
+		sysPrompt, err := composePrompt(cfg, role, state, slots)
 		if err != nil {
 			return state, fmt.Errorf("composing prompt for role %q: %w", role.Name, err)
 		}
@@ -129,8 +131,11 @@ func effectiveNodeID(ctx context.Context, fallback string) string {
 // composePrompt resolves a role's system prompt via the prompt engine,
 // passing TaskState artifacts as overrides. Every artifact string value is
 // exposed as a global so role templates can reference `{{ globals.<node-id>.<field> }}`
-// for any upstream node.
-func composePrompt(cfg TemplateConfig, role *prompt.Role, state *TaskState) (string, error) {
+// for any upstream node. Slots binds parameterized fillers declared on the
+// role (e.g. {"toolchain": "go"}); slot values may themselves be template
+// references like `{{ globals.task.toolchain }}` that resolve against
+// state artifacts at compose time, letting graphs stay toolchain-generic.
+func composePrompt(cfg TemplateConfig, role *prompt.Role, state *TaskState, slots map[string]string) (string, error) {
 	if cfg.PromptEngine == nil {
 		return fmt.Sprintf("You are %s. Task: %s", roleLabel(role), state.GetArtifactString("task.description")), nil
 	}
@@ -140,7 +145,43 @@ func composePrompt(cfg TemplateConfig, role *prompt.Role, state *TaskState) (str
 			overrides[key] = s
 		}
 	}
-	return cfg.PromptEngine.Compose(roleLookupKey(role), overrides)
+	resolved, err := resolveSlotValues(slots, overrides)
+	if err != nil {
+		return "", err
+	}
+	return cfg.PromptEngine.Compose(roleLookupKey(role), overrides, resolved)
+}
+
+// slotRef matches a single template reference that occupies the entire
+// slot value, e.g. `{{ globals.task.toolchain }}`. Slot values are not
+// arbitrary templates — they're either a literal id or one ref.
+var slotRef = regexp.MustCompile(`^\s*\{\{\s*([\w-]+)\.([\w.-]+)\s*\}\}\s*$`)
+
+// resolveSlotValues replaces `{{ globals.X }}` references in slot values
+// with the matching state artifact. Plain literal values pass through.
+// Returns an error when a referenced artifact is missing or empty.
+func resolveSlotValues(slots, artifacts map[string]string) (map[string]string, error) {
+	if len(slots) == 0 {
+		return slots, nil
+	}
+	out := make(map[string]string, len(slots))
+	for name, value := range slots {
+		m := slotRef.FindStringSubmatch(value)
+		if m == nil {
+			out[name] = value
+			continue
+		}
+		category, key := m[1], m[2]
+		if category != "globals" {
+			return nil, fmt.Errorf("slot %q: only globals.* references are supported in slot values, got %q", name, value)
+		}
+		resolved, ok := artifacts[key]
+		if !ok || resolved == "" {
+			return nil, fmt.Errorf("slot %q: reference %q has no value in task artifacts", name, value)
+		}
+		out[name] = resolved
+	}
+	return out, nil
 }
 
 // roleLookupKey picks the key the prompt engine registered the role under.

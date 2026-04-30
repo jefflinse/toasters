@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -128,6 +129,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 		slog.Warn("failed to load user prompt definitions", "dir", userDir, "error", err)
 	}
 	promptEngine.SetGlobal("task.granularity", config.ValidTaskGranularity(cfg.TaskGranularity))
+	promptEngine.SetGlobal("toolchains.available", strings.Join(promptEngine.Toolchains(), ", "))
 	if err := prompt.ApplyGranularity(promptEngine, "coarse", config.ValidGranularity("coarse", cfg.CoarseGranularity)); err != nil {
 		slog.Warn("failed to apply coarse_granularity", "error", err)
 	}
@@ -201,7 +203,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 
 	// Compose the operator agent's system prompt via the prompt engine.
 	var operatorPrompt string
-	if composed, err := promptEngine.Compose("operator", nil); err != nil {
+	if composed, err := promptEngine.Compose("operator", nil, nil); err != nil {
 		slog.Warn("failed to compose operator prompt", "error", err)
 	} else {
 		operatorPrompt = composed

@@ -6,7 +6,7 @@ This document captures the evolving ambitions for Toasters, from its origins as 
 
 ## The Realization
 
-Toasters started as a fun TUI project to play with a local LLM. But the core loop — system prompt + tools + execute-tool-calls-until-done — is exactly what Claude Code, OpenCode, and every other agentic coding tool does. The difference is that Toasters orchestrates *multiple* of those loops concurrently with a coordinator dispatching to workers.
+Toasters started as a fun TUI project to play with a local LLM. But the core loop — system prompt + tools + execute-tool-calls-until-done — is exactly what Claude Code, OpenCode, and every other agentic coding tool does. The difference is that Toasters orchestrates *multiple* of those loops concurrently with an operator dispatching to workers.
 
 The "magic" is just: system prompt + tool permissions + a loop that executes tool calls and feeds results back to the LLM until it says it's done. Everything else is scaffolding around that core loop.
 
@@ -68,7 +68,7 @@ Extract the orchestration engine into a long-running server process. The TUI bec
 - Remote operation: run server on a beefy machine, connect from laptop
 
 ### Team Templates and Workflows
-Predefined team compositions: "coding team" = coordinator + builder + reviewer. Workflows become first-class: a workflow defines phases, agent assignments, gates, and completion criteria. The operator selects a workflow, not just a team.
+Predefined team compositions: "coding team" = team-lead + builder + reviewer. Workflows become first-class: a workflow defines phases, worker assignments, gates, and completion criteria. The operator selects a workflow, not just a team.
 
 ### Ecosystems
 **Ephemeral**: A job clones multiple repos into a workspace, sets up cross-repo context, and agents work across all of them. Torn down or archived when done.

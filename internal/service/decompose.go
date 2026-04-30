@@ -40,10 +40,11 @@ type decomposeMetadata struct {
 // decompositionResult is the parsed form of the decomposition-result
 // schema shared by coarse-decompose and fine-decompose.
 type decompositionResult struct {
-	Tasks    []decomposedTask `json:"tasks,omitempty"`
-	GraphID  string           `json:"graph_id,omitempty"`
-	Rejected bool             `json:"rejected,omitempty"`
-	Reason   string           `json:"reason,omitempty"`
+	Tasks     []decomposedTask `json:"tasks,omitempty"`
+	GraphID   string           `json:"graph_id,omitempty"`
+	Toolchain string           `json:"toolchain,omitempty"`
+	Rejected  bool             `json:"rejected,omitempty"`
+	Reason    string           `json:"reason,omitempty"`
 }
 
 // decomposedTask is one entry produced by a decomposition graph.
@@ -242,7 +243,7 @@ func (s *LocalService) applyFineResult(ctx context.Context, parentID string, res
 
 	switch {
 	case result.GraphID != "":
-		s.assignGraphToParent(ctx, parent, result.GraphID, result.Reason)
+		s.assignGraphToParent(ctx, parent, result.GraphID, result.Toolchain, result.Reason)
 	case result.Rejected && len(result.Tasks) > 0:
 		s.replaceParentWithSubtasks(ctx, parent, result)
 	default:
@@ -252,8 +253,10 @@ func (s *LocalService) applyFineResult(ctx context.Context, parentID string, res
 }
 
 // assignGraphToParent wires the selected graph to the parent task and
-// kicks off normal execution via the executor.
-func (s *LocalService) assignGraphToParent(ctx context.Context, parent *db.Task, graphID, reason string) {
+// kicks off normal execution via the executor. toolchain is the toolchain
+// id chosen by fine-decompose to bind slot-bearing roles inside the graph;
+// it may be empty when the graph has no slot-bearing roles.
+func (s *LocalService) assignGraphToParent(ctx context.Context, parent *db.Task, graphID, toolchain, reason string) {
 	job, err := s.cfg.Store.GetJob(ctx, parent.JobID)
 	if err != nil {
 		slog.Error("failed to fetch job for graph assignment",
@@ -294,6 +297,7 @@ func (s *LocalService) assignGraphToParent(ctx context.Context, parent *db.Task,
 		TaskID:         parent.ID,
 		TaskTitle:      parent.Title,
 		GraphID:        graphID,
+		Toolchain:      toolchain,
 		WorkspaceDir:   job.WorkspaceDir,
 		ProviderName:   s.cfg.DefaultProvider,
 		Model:          s.cfg.DefaultModel,
