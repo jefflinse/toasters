@@ -30,6 +30,11 @@ type EventSink interface {
 	// graph node (via rhizome.Interrupt). Source is typically
 	// "graph:<node>" so the TUI can render an attribution hint.
 	BroadcastPrompt(requestID, question string, options []string, source string)
+	// BroadcastSessionPrompt fires once per node session, after the system
+	// prompt has been composed and before the LLM starts. The TUI uses it
+	// to populate the prompt-viewer modal for the existing slot created
+	// by graph.node_started.
+	BroadcastSessionPrompt(sessionID, systemPrompt, initialMessage string)
 	// BroadcastSessionText carries streamed LLM text from a graph node. The
 	// SessionID convention is "graph:<TaskID>:<Node>" so the TUI's existing
 	// runtimeSlot pipeline picks it up without a special case.

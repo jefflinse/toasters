@@ -340,6 +340,9 @@ func (m *mockEventSink) BroadcastTaskFailed(_, _, graphID, errMsg string) {
 func (m *mockEventSink) BroadcastPrompt(requestID, question string, _ []string, source string) {
 	m.record(fmt.Sprintf("prompt:%s:%s:%s", source, requestID, question))
 }
+func (m *mockEventSink) BroadcastSessionPrompt(sessionID, _, _ string) {
+	m.record(fmt.Sprintf("session_prompt:%s", sessionID))
+}
 func (m *mockEventSink) BroadcastSessionText(sessionID, text string) {
 	m.record(fmt.Sprintf("session_text:%s:%s", sessionID, text))
 }
@@ -630,6 +633,46 @@ func TestResolveSlotValues(t *testing.T) {
 			t.Fatal("expected error for non-globals reference")
 		}
 	})
+}
+
+func TestBuildInitialMessage_FiltersJobAndTaskScopedArtifacts(t *testing.T) {
+	state := NewTaskState("job-1", "task-1", "/workspace", "mock", "test-model")
+	state.SetArtifact("task.description", "Implement the Go backend")
+	state.SetArtifact("task.toolchain", "go")
+	state.SetArtifact("job.title", "Build a To-Do app")
+	state.SetArtifact("job.description", "Backend in Go, frontend in TS, deploy via Docker")
+	state.SetArtifact("plan.summary", "Step 1: routes; Step 2: handlers")
+	state.SetArtifact("investigate.summary", "Found existing skeleton")
+
+	got := buildInitialMessage(state)
+
+	// Task description must be present (added explicitly).
+	if !strings.Contains(got, "Task: Implement the Go backend") {
+		t.Errorf("missing task description: %q", got)
+	}
+	// Workspace must be present.
+	if !strings.Contains(got, "Workspace: /workspace") {
+		t.Errorf("missing workspace dir: %q", got)
+	}
+	// Predecessor node outputs must flow through.
+	if !strings.Contains(got, "plan.summary") || !strings.Contains(got, "Step 1: routes") {
+		t.Errorf("missing plan.summary: %q", got)
+	}
+	if !strings.Contains(got, "investigate.summary") || !strings.Contains(got, "Found existing skeleton") {
+		t.Errorf("missing investigate.summary: %q", got)
+	}
+	// Job-level context must NOT leak into the initial message — roles
+	// pull it via templates when needed.
+	if strings.Contains(got, "Build a To-Do app") {
+		t.Errorf("job.title leaked into initial message: %q", got)
+	}
+	if strings.Contains(got, "Backend in Go, frontend in TS") {
+		t.Errorf("job.description leaked into initial message: %q", got)
+	}
+	// task.toolchain is exposed via slot bindings, not the dump.
+	if strings.Contains(got, "task.toolchain") {
+		t.Errorf("task.toolchain leaked into initial message: %q", got)
+	}
 }
 
 func TestBundledRolesCompose(t *testing.T) {

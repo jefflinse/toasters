@@ -205,7 +205,10 @@ func (s *LocalService) applyCoarseResult(ctx context.Context, jobID string, resu
 		slog.Warn("coarse-decompose produced no tasks", "job_id", jobID, "reason", result.Reason)
 		return
 	}
-	// Create tasks in order; sort_order mirrors the array index.
+	// Create tasks in order; sort_order mirrors the array index. Defer
+	// broadcasts until after dependencies are wired so fine-decompose
+	// dispatch only fires for tasks with no unmet predecessors.
+	ids := make([]string, len(result.Tasks))
 	for i, t := range result.Tasks {
 		task := &db.Task{
 			ID:        newTaskID(),
@@ -220,7 +223,29 @@ func (s *LocalService) applyCoarseResult(ctx context.Context, jobID string, resu
 				"job_id", jobID, "index", i, "error", err)
 			continue
 		}
-		s.BroadcastTaskCreated(task.ID, jobID, task.Title, "")
+		ids[i] = task.ID
+	}
+	for i, t := range result.Tasks {
+		if ids[i] == "" {
+			continue
+		}
+		for _, depIdx := range t.DependsOn {
+			if depIdx < 0 || depIdx >= len(ids) || ids[depIdx] == "" {
+				slog.Warn("ignoring invalid dependency index from coarse-decompose",
+					"task_id", ids[i], "index", depIdx, "job_id", jobID)
+				continue
+			}
+			if err := s.cfg.Store.AddTaskDependency(ctx, ids[i], ids[depIdx]); err != nil {
+				slog.Error("failed to persist task dependency",
+					"task_id", ids[i], "depends_on", ids[depIdx], "error", err)
+			}
+		}
+	}
+	for i, t := range result.Tasks {
+		if ids[i] == "" {
+			continue
+		}
+		s.BroadcastTaskCreated(ids[i], jobID, t.Title, "")
 	}
 	slog.Info("coarse-decompose applied",
 		"job_id", jobID, "task_count", len(result.Tasks), "reason", result.Reason)
@@ -323,6 +348,7 @@ func (s *LocalService) replaceParentWithSubtasks(ctx context.Context, parent *db
 		return
 	}
 	childDepth := parent.DecomposeDepth + 1
+	ids := make([]string, len(result.Tasks))
 	for i, t := range result.Tasks {
 		task := &db.Task{
 			ID:             newTaskID(),
@@ -339,7 +365,29 @@ func (s *LocalService) replaceParentWithSubtasks(ctx context.Context, parent *db
 				"parent_id", parent.ID, "index", i, "error", err)
 			continue
 		}
-		s.BroadcastTaskCreated(task.ID, parent.JobID, task.Title, "")
+		ids[i] = task.ID
+	}
+	for i, t := range result.Tasks {
+		if ids[i] == "" {
+			continue
+		}
+		for _, depIdx := range t.DependsOn {
+			if depIdx < 0 || depIdx >= len(ids) || ids[depIdx] == "" {
+				slog.Warn("ignoring invalid dependency index from fine-decompose rejection",
+					"task_id", ids[i], "index", depIdx, "parent_id", parent.ID)
+				continue
+			}
+			if err := s.cfg.Store.AddTaskDependency(ctx, ids[i], ids[depIdx]); err != nil {
+				slog.Error("failed to persist subtask dependency",
+					"task_id", ids[i], "depends_on", ids[depIdx], "error", err)
+			}
+		}
+	}
+	for i, t := range result.Tasks {
+		if ids[i] == "" {
+			continue
+		}
+		s.BroadcastTaskCreated(ids[i], parent.JobID, t.Title, "")
 	}
 	slog.Info("fine-decompose rejected parent; replaced with subtasks",
 		"parent_id", parent.ID, "children", len(result.Tasks), "depth", childDepth, "reason", result.Reason)

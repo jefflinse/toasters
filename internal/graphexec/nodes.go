@@ -40,8 +40,13 @@ func RoleNode(cfg TemplateConfig, role *prompt.Role, nodeID string, slots map[st
 		}
 
 		tools := toolsForRole(cfg.ToolExecutor, role)
+		initialMessage := buildInitialMessage(state)
 
 		sess := openGraphSession(ctx, cfg.Store, state, effectiveNodeID(ctx, nodeID), sysPrompt, toolNamesOf(tools), cfg)
+
+		if nc := NodeContextFromContext(ctx); nc != nil && nc.Sink != nil {
+			nc.Sink.BroadcastSessionPrompt(nc.SessionID, sysPrompt, initialMessage)
+		}
 
 		// onEvent fans out: forward to the TUI sink AND accumulate reasoning
 		// locally so it can be persisted as its own session_messages row.
@@ -65,7 +70,7 @@ func RoleNode(cfg TemplateConfig, role *prompt.Role, nodeID string, slots map[st
 			Provider:     tunedProv,
 			Model:        cfg.Model,
 			System:       sysPrompt,
-			Messages:     []provider.Message{{Role: "user", Content: buildInitialMessage(state)}},
+			Messages:     []provider.Message{{Role: "user", Content: initialMessage}},
 			Tools:        tools,
 			OutputSchema: schemaRaw,
 			MaxTurns:     role.MaxTurns,
@@ -223,6 +228,15 @@ func slugify(s string) string {
 }
 
 // buildInitialMessage constructs a user message from TaskState artifacts.
+//
+// Scope: only the task description (added explicitly), workspace dir, and
+// upstream node outputs from this graph (artifact keys of the form
+// `<nodeID>.<field>`). Job-level context (`job.title`, `job.description`)
+// and `task.*` artifacts beyond the description are deliberately excluded
+// — roles that need them already pull them in via `{{ globals.* }}`
+// references in their templates. Including everything by default makes
+// narrow-scope roles (coder, tester, reviewer) treat the whole job as
+// their scope and overreach.
 func buildInitialMessage(state *TaskState) string {
 	var parts []string
 
@@ -233,7 +247,7 @@ func buildInitialMessage(state *TaskState) string {
 		parts = append(parts, fmt.Sprintf("Workspace: %s", state.WorkspaceDir))
 	}
 	for key, val := range state.Artifacts {
-		if key == "task.description" {
+		if strings.HasPrefix(key, "task.") || strings.HasPrefix(key, "job.") {
 			continue
 		}
 		if s, ok := val.(string); ok && s != "" {

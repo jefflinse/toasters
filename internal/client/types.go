@@ -453,6 +453,12 @@ type wireSessionDonePayload struct {
 	FinalText  string `json:"final_text,omitempty"`
 }
 
+type wireSessionPromptPayload struct {
+	SessionID      string `json:"session_id"`
+	SystemPrompt   string `json:"system_prompt,omitempty"`
+	InitialMessage string `json:"initial_message,omitempty"`
+}
+
 type wireOperationCompletedPayload struct {
 	Kind   string              `json:"kind"`
 	Result wireOperationResult `json:"result"`
@@ -1093,6 +1099,17 @@ func parseSSEPayload(eventType string, raw json.RawMessage) (any, error) {
 			TaskID:     w.TaskID,
 			Status:     w.Status,
 			FinalText:  w.FinalText,
+		}, nil
+
+	case service.EventTypeSessionPrompt:
+		var w wireSessionPromptPayload
+		if err := json.Unmarshal(raw, &w); err != nil {
+			return nil, fmt.Errorf("decoding session.prompt payload: %w", err)
+		}
+		return service.SessionPromptPayload{
+			SessionID:      w.SessionID,
+			SystemPrompt:   w.SystemPrompt,
+			InitialMessage: w.InitialMessage,
 		}, nil
 
 	case service.EventTypeOperationCompleted:

@@ -1224,6 +1224,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, m.addToast("🤖 "+msg.WorkerName+" started", toastInfo))
 		return m, tea.Batch(cmds...)
 
+	case SessionPromptMsg:
+		// Slot may not exist yet if event ordering races (rare). When it
+		// arrives later, the slot will already have prompt fields set.
+		if slot, ok := m.runtimeSessions[msg.SessionID]; ok {
+			slot.systemPrompt = msg.SystemPrompt
+			slot.initialMessage = msg.InitialMessage
+		}
+		return m, nil
+
 	case SessionTextMsg:
 		slot, ok := m.runtimeSessions[msg.SessionID]
 		if !ok {

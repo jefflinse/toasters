@@ -782,6 +782,12 @@ func (s *LocalService) BroadcastTaskCreated(taskID, jobID, title, graphID string
 // before handing off to dispatchFineDecompose. Separated out so
 // BroadcastTaskCreated stays terse and only pays DB cost when the task
 // actually needs decomposition.
+//
+// Defers fine-decompose for tasks with unmet predecessors. Fine-decompose
+// inputs include the task title plus job context — running it before
+// predecessors complete means the decomposer can't incorporate their
+// summaries when picking a graph. The retro-trigger in BroadcastTaskCompleted
+// re-runs this for every task as it becomes ready.
 func (s *LocalService) dispatchFineDecomposeForTask(taskID string) {
 	if s.cfg.Store == nil {
 		return
@@ -794,6 +800,11 @@ func (s *LocalService) dispatchFineDecomposeForTask(taskID string) {
 			"task_id", taskID, "error", err)
 		return
 	}
+	if !s.taskIsReady(ctx, task) {
+		slog.Info("fine-decompose deferred; predecessors incomplete",
+			"task_id", taskID, "job_id", task.JobID)
+		return
+	}
 	job, err := s.cfg.Store.GetJob(ctx, task.JobID)
 	if err != nil {
 		slog.Warn("fine-decompose lookup failed; job missing",
@@ -801,6 +812,48 @@ func (s *LocalService) dispatchFineDecomposeForTask(taskID string) {
 		return
 	}
 	s.dispatchFineDecompose(task, job)
+}
+
+// dispatchFineDecomposeForReadyTasks scans the job's ready tasks and
+// kicks off fine-decompose for any that don't yet have a graph_id. Called
+// after a real task completes so newly-unblocked tasks pick a graph at
+// the moment their dependencies' summaries are available.
+func (s *LocalService) dispatchFineDecomposeForReadyTasks(jobID string) {
+	if s.cfg.Store == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(s.ctx, 5*time.Second)
+	defer cancel()
+	ready, err := s.cfg.Store.GetReadyTasks(ctx, jobID)
+	if err != nil {
+		slog.Warn("failed to list ready tasks after completion",
+			"job_id", jobID, "error", err)
+		return
+	}
+	for _, t := range ready {
+		if t.GraphID != "" {
+			continue
+		}
+		s.dispatchFineDecomposeForTask(t.ID)
+	}
+}
+
+// taskIsReady reports whether a task's predecessors are all complete.
+// Wraps GetReadyTasks(jobID) and scans the result rather than adding a
+// per-task store query.
+func (s *LocalService) taskIsReady(ctx context.Context, task *db.Task) bool {
+	ready, err := s.cfg.Store.GetReadyTasks(ctx, task.JobID)
+	if err != nil {
+		slog.Warn("readiness check failed; assuming task is ready",
+			"task_id", task.ID, "error", err)
+		return true
+	}
+	for _, r := range ready {
+		if r.ID == task.ID {
+			return true
+		}
+	}
+	return false
 }
 
 // BroadcastTaskAssigned broadcasts a task.assigned event. Implements
@@ -863,6 +916,25 @@ func (s *LocalService) BroadcastGraphFailed(jobID, taskID, errMsg string) {
 			JobID:  jobID,
 			TaskID: taskID,
 			Error:  errMsg,
+		},
+	})
+}
+
+// BroadcastSessionPrompt emits a session.prompt event so the TUI can
+// populate the system prompt and initial message on an existing session
+// slot. Graph nodes call this once their prompt has been composed and
+// before the LLM starts streaming.
+func (s *LocalService) BroadcastSessionPrompt(sessionID, systemPrompt, initialMessage string) {
+	if sessionID == "" {
+		return
+	}
+	s.broadcast(Event{
+		Type:      EventTypeSessionPrompt,
+		SessionID: sessionID,
+		Payload: SessionPromptPayload{
+			SessionID:      sessionID,
+			SystemPrompt:   systemPrompt,
+			InitialMessage: initialMessage,
 		},
 	})
 }
@@ -961,6 +1033,10 @@ func (s *LocalService) BroadcastTaskCompleted(jobID, taskID, graphID, summary st
 	if s.handleDecompositionCompleted(jobID, taskID, graphID, output) {
 		return
 	}
+	// Fan out fine-decompose to tasks that became ready due to this
+	// completion. Tasks already pre-assigned to a graph (i.e. fine-decompose
+	// already ran) are advanced by the operator's assignNextTask path.
+	s.dispatchFineDecomposeForReadyTasks(jobID)
 	op := s.currentOperator()
 	if op == nil {
 		slog.Warn("graph task completed but operator unavailable; next task will not auto-advance",

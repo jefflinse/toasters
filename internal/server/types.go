@@ -853,6 +853,12 @@ type wireSessionDonePayload struct {
 	FinalText  string `json:"final_text,omitempty"`
 }
 
+type wireSessionPromptPayload struct {
+	SessionID      string `json:"session_id"`
+	SystemPrompt   string `json:"system_prompt,omitempty"`
+	InitialMessage string `json:"initial_message,omitempty"`
+}
+
 type wireOperationCompletedPayload struct {
 	Kind   string              `json:"kind"`
 	Result wireOperationResult `json:"result"`
@@ -993,6 +999,10 @@ func eventPayloadToWire(ev service.Event) any {
 		return wireSessionDonePayload{
 			WorkerName: p.WorkerName, JobID: p.JobID, TaskID: p.TaskID,
 			Status: p.Status, FinalText: p.FinalText,
+		}
+	case service.SessionPromptPayload:
+		return wireSessionPromptPayload{
+			SessionID: p.SessionID, SystemPrompt: p.SystemPrompt, InitialMessage: p.InitialMessage,
 		}
 	case service.OperationCompletedPayload:
 		return wireOperationCompletedPayload{
