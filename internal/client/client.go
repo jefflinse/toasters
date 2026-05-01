@@ -61,7 +61,7 @@ func WithToken(token string) Option {
 
 // New creates a new RemoteClient connected to the given base URL.
 // The base URL must include the scheme (http or https) and host
-// (e.g. "http://localhost:8080", "https://example.com").
+// (e.g. "http://localhost:8421", "https://example.com").
 // Call Close when the client is no longer needed.
 func New(baseURL string, opts ...Option) (*RemoteClient, error) {
 	// Validate the baseURL has a scheme and host.

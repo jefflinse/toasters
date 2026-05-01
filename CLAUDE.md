@@ -15,7 +15,7 @@ No Makefile or task runner — pure Go module (Go 1.25, see `go.mod`).
 ```bash
 go build -o toasters ./                     # build the binary
 go run . serve                              # HTTP/SSE server mode (start this first)
-go run .                                    # connect TUI to localhost:8080 (default)
+go run .                                    # connect TUI to localhost:8421 (default)
 go run . --server <addr>                    # connect TUI to a different server
 
 go test ./...                               # all tests
@@ -33,7 +33,7 @@ in separate processes. The TUI cannot run "embedded" alongside the backend
 anymore; the embedded mode was removed during the client/server cleanup.
 
 1. **Server** — `cmd/serve.go`. Owns all state: runtime, operator, composer,
-   loader, MCP, SQLite. Exposes REST + SSE on `:8080` by default. Bearer-token
+   loader, MCP, SQLite. Exposes REST + SSE on `:8421` by default. Bearer-token
    auth from `~/.config/toasters/server.token` (mode 0600), constant-time
    comparison; `--no-auth` is dev-only.
 2. **TUI client** — `cmd/root.go`. Always a remote client. TCP-probes the

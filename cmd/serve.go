@@ -47,7 +47,7 @@ can connect to. By default, authentication is enabled using a bearer token
 stored in ~/.config/toasters/server.token.
 
 Examples:
-  toasters serve                    # Start server on :8080
+  toasters serve                    # Start server on :8421
   toasters serve --addr :3000       # Start server on port 3000
   toasters serve --no-auth          # Start server without authentication`,
 	RunE: runServe,
@@ -55,7 +55,7 @@ Examples:
 
 func init() {
 	rootCmd.AddCommand(serveCmd)
-	serveCmd.Flags().StringVar(&serveAddr, "addr", ":8080", "address to listen on")
+	serveCmd.Flags().StringVar(&serveAddr, "addr", ":8421", "address to listen on")
 	serveCmd.Flags().BoolVar(&serveNoAuth, "no-auth", false, "disable authentication")
 }
 

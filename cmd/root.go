@@ -23,7 +23,7 @@ import (
 )
 
 // defaultServerAddr is used when --server is not specified.
-const defaultServerAddr = "localhost:8080"
+const defaultServerAddr = "localhost:8421"
 
 var serverAddr string
 
