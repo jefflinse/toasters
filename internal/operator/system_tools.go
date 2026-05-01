@@ -166,24 +166,6 @@ func (st *SystemTools) Definitions() []runtime.ToolDef {
 				"required": ["text"]
 			}`),
 		},
-		{
-			Name:        "save_work_request",
-			Description: "Save a formalized work request document to the job's workspace. Call this after gathering requirements from the user and before consulting the decomposer.",
-			Parameters: json.RawMessage(`{
-				"type": "object",
-				"properties": {
-					"job_id": {
-						"type": "string",
-						"description": "ID of the job this work request belongs to"
-					},
-					"content": {
-						"type": "string",
-						"description": "The work request content in markdown format"
-					}
-				},
-				"required": ["job_id", "content"]
-			}`),
-		},
 	}
 }
 
@@ -206,8 +188,6 @@ func (st *SystemTools) Execute(ctx context.Context, name string, args json.RawMe
 		return st.queryJobContext(ctx, args)
 	case "surface_to_user":
 		return st.surfaceToUser(ctx, args)
-	case "save_work_request":
-		return st.saveWorkRequest(ctx, args)
 	default:
 		return "", fmt.Errorf("%w: %s", runtime.ErrUnknownTool, name)
 	}
@@ -576,42 +556,5 @@ func (st *SystemTools) surfaceToUser(ctx context.Context, args json.RawMessage) 
 	}
 
 	return fmt.Sprintf("Surfaced to user: %s", params.Text), nil
-}
-
-func (st *SystemTools) saveWorkRequest(ctx context.Context, args json.RawMessage) (string, error) {
-	var params struct {
-		JobID   string `json:"job_id"`
-		Content string `json:"content"`
-	}
-	if err := json.Unmarshal(args, &params); err != nil {
-		return "", fmt.Errorf("parsing save_work_request args: %w", err)
-	}
-
-	if params.JobID == "" {
-		return "", fmt.Errorf("job_id is required")
-	}
-	if params.Content == "" {
-		return "", fmt.Errorf("content is required")
-	}
-
-	job, err := st.store.GetJob(ctx, params.JobID)
-	if err != nil {
-		return "", fmt.Errorf("getting job: %w", err)
-	}
-	if job.WorkspaceDir == "" {
-		return "", fmt.Errorf("job %q has no workspace directory", params.JobID)
-	}
-
-	toastersDir := filepath.Join(job.WorkspaceDir, ".toasters")
-	if err := os.MkdirAll(toastersDir, 0o755); err != nil {
-		return "", fmt.Errorf("creating .toasters directory: %w", err)
-	}
-
-	wrPath := filepath.Join(toastersDir, "work-request.md")
-	if err := os.WriteFile(wrPath, []byte(params.Content), 0o644); err != nil {
-		return "", fmt.Errorf("writing work request: %w", err)
-	}
-
-	return fmt.Sprintf("Work request saved to %s", contractHome(wrPath)), nil
 }
 

@@ -3,3 +3,4 @@ Do not make assumptions.
 Do not skip any requirements.
 Do not invent new requirements.
 Stay strictly within the scope of this task. The wider job may include other tasks (other components, other languages, deployment, infrastructure) — those are handled by separate runs against those tasks. Do not work on anything outside the requirements of this task, even if the workspace contains files belonging to sibling tasks.
+The task description is the authoritative scope. Workspace files describing the wider job exist for shared context — read them only to resolve terminology your task description references. Do not expand your plan or implementation to cover items in those files that aren't in your task description.
