@@ -31,6 +31,15 @@ Do not leave bug, ticket, or similar identifiers in code comments.
 
 {{ instructions.do-exact }}
 
+## Other tasks in this job
+
+The following tasks are part of the wider job but are NOT your
+responsibility — they are handled by separate runs. Do not implement
+or modify code for them, even if the workspace contains files that
+belong to them.
+
+{{ globals.task.siblings }}
+
 {{ instructions.stop-and-request-if-unclear }}
 
 {{ instructions.call-complete }}

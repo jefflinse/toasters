@@ -243,20 +243,20 @@ func (e *Engine) Compose(roleName string, overrides map[string]string, slots map
 			if body, ok := resolvedToolchains[name]; ok {
 				return strings.TrimSpace(body)
 			}
-			slog.Warn("unresolved toolchain reference", "role", roleName, "ref", name)
-			return match
+			slog.Warn("unresolved toolchain reference; substituting empty", "role", roleName, "ref", name)
+			return ""
 		case "instructions":
 			if body, ok := instructions[name]; ok {
 				return strings.TrimSpace(body)
 			}
-			slog.Warn("unresolved instruction reference", "role", roleName, "ref", name)
-			return match
+			slog.Warn("unresolved instruction reference; substituting empty", "role", roleName, "ref", name)
+			return ""
 		case "globals":
 			if val, ok := globals[name]; ok {
 				return val
 			}
-			slog.Warn("unresolved global reference", "role", roleName, "ref", name)
-			return match
+			slog.Warn("unresolved global reference; substituting empty", "role", roleName, "ref", name)
+			return ""
 		case "slots":
 			if _, ok := declared[name]; !ok {
 				resolveErr = fmt.Errorf("role %q references slot %q not declared in frontmatter", roleName, name)

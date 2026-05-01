@@ -273,6 +273,34 @@ func TestEngine_Compose_MissingRole(t *testing.T) {
 	}
 }
 
+func TestEngine_Compose_UnresolvedRefsBecomeEmpty(t *testing.T) {
+	dir := t.TempDir()
+	mkdirAll(t, filepath.Join(dir, "roles"))
+	writeFile(t, filepath.Join(dir, "roles", "r.md"), `---
+name: R
+---
+BEFORE
+{{ globals.task.description }}
+{{ instructions.does-not-exist }}
+{{ toolchains.does-not-exist }}
+AFTER
+`)
+	engine := NewEngine()
+	if err := engine.LoadDir(dir, "test"); err != nil {
+		t.Fatalf("LoadDir: %v", err)
+	}
+	got, err := engine.Compose("r", nil, nil)
+	if err != nil {
+		t.Fatalf("Compose: %v", err)
+	}
+	if strings.Contains(got, "{{") {
+		t.Errorf("unresolved template ref left in output: %q", got)
+	}
+	if !strings.Contains(got, "BEFORE") || !strings.Contains(got, "AFTER") {
+		t.Errorf("surrounding text dropped: %q", got)
+	}
+}
+
 // slotEngine returns an engine with one slot-using role and one toolchain
 // loaded. Subtests parameterize the role frontmatter and body via the
 // roleFrontmatter/roleBody args so each failure mode gets its own tiny role.

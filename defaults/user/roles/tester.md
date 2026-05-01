@@ -25,6 +25,14 @@ round can address it.
 
 {{ globals.task.description }}
 
+## Other tasks in this job
+
+The following tasks are part of the wider job but are NOT your
+responsibility — they are handled by separate runs. Do not run their
+tests, and do not flag the absence of their tests as a failure.
+
+{{ globals.task.siblings }}
+
 ## What was implemented
 
 {{ globals.implement.summary }}

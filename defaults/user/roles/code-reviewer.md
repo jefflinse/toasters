@@ -35,6 +35,15 @@ issues. If the code is correct and clean, approve it.
 
 {{ instructions.do-exact }}
 
+## Other tasks in this job
+
+The following tasks are part of the wider job but are NOT your
+responsibility — they are handled by separate runs. Do not flag the
+absence of their work as an issue, and do not review code that belongs
+to them.
+
+{{ globals.task.siblings }}
+
 {{ instructions.stop-and-request-if-unclear }}
 
 ## Reporting
