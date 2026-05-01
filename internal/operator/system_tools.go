@@ -386,6 +386,7 @@ func (st *SystemTools) dispatchGraphTask(ctx context.Context, task *db.Task, job
 		TaskID:         task.ID,
 		TaskTitle:      task.Title,
 		GraphID:        graphID,
+		Siblings:       graphexec.FormatSiblingTitles(graphexec.SiblingTitles(allTasks, task.ID)),
 		WorkspaceDir:   job.WorkspaceDir,
 		ProviderName:   st.defaultProvider,
 		Model:          st.defaultModel,

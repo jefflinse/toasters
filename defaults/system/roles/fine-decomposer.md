@@ -25,7 +25,9 @@ decide the next step:
 
 **Job:** {{ globals.job.title }}
 
-{{ globals.job.description }}
+Other tasks in this job (handled by separate runs):
+
+{{ globals.task.siblings }}
 
 ## How to decide
 

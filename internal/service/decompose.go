@@ -13,13 +13,13 @@ import (
 	"github.com/jefflinse/toasters/internal/graphexec"
 )
 
-// Decomposition graph IDs — these must match the system graph YAML files
-// at defaults/system/graphs/. The service dispatches them automatically:
-// coarse-decompose on new jobs, fine-decompose on tasks without a
-// graph_id.
+// Decomposition graph IDs — re-exposed from graphexec so this file can
+// keep using its short local names. The service dispatches them
+// automatically: coarse-decompose on new jobs, fine-decompose on tasks
+// without a graph_id.
 const (
-	graphCoarseDecompose = "coarse-decompose"
-	graphFineDecompose   = "fine-decompose"
+	graphCoarseDecompose = graphexec.GraphCoarseDecompose
+	graphFineDecompose   = graphexec.GraphFineDecompose
 )
 
 // maxDecomposeDepth bounds fine-decompose recursion. A task whose
@@ -85,7 +85,7 @@ func (s *LocalService) dispatchCoarseDecompose(jobID, jobTitle, jobDescription s
 		return
 	}
 
-	s.dispatchBootstrap(bootstrap, job, jobDescription)
+	s.dispatchBootstrap(bootstrap, job, jobDescription, "")
 }
 
 // dispatchFineDecompose creates a bootstrap task to run fine-decompose
@@ -118,14 +118,24 @@ func (s *LocalService) dispatchFineDecompose(parent *db.Task, job *db.Job) {
 		return
 	}
 
-	s.dispatchBootstrap(bootstrap, job, parent.Title)
+	s.dispatchBootstrap(bootstrap, job, parent.Title, parent.ID)
 }
 
 // dispatchBootstrap kicks off the graph executor for a decomposition
 // bootstrap task. Runs in a goroutine — ExecuteTask itself is async
 // inside dispatchGraphTask, but we're already inside a broadcaster
 // callback that must not block.
-func (s *LocalService) dispatchBootstrap(bootstrap *db.Task, job *db.Job, description string) {
+//
+// subjectTaskID is the real task whose siblings should be exposed to
+// the bootstrap graph (parent.ID for fine-decompose). Pass empty for
+// coarse-decompose, which operates on the job and has no siblings.
+func (s *LocalService) dispatchBootstrap(bootstrap *db.Task, job *db.Job, description, subjectTaskID string) {
+	siblings := ""
+	if subjectTaskID != "" {
+		if jobTasks, err := s.cfg.Store.ListTasksForJob(s.ctx, bootstrap.JobID); err == nil {
+			siblings = graphexec.FormatSiblingTitles(graphexec.SiblingTitles(jobTasks, subjectTaskID))
+		}
+	}
 	req := graphexec.TaskRequest{
 		JobID:          bootstrap.JobID,
 		JobTitle:       job.Title,
@@ -133,6 +143,7 @@ func (s *LocalService) dispatchBootstrap(bootstrap *db.Task, job *db.Job, descri
 		TaskID:         bootstrap.ID,
 		TaskTitle:      description,
 		GraphID:        bootstrap.GraphID,
+		Siblings:       siblings,
 		WorkspaceDir:   job.WorkspaceDir,
 		ProviderName:   s.cfg.DefaultProvider,
 		Model:          s.cfg.DefaultModel,
@@ -292,12 +303,12 @@ func (s *LocalService) assignGraphToParent(ctx context.Context, parent *db.Task,
 	// If a sibling is already in progress, defer execution via
 	// PreAssignTaskGraph — same serial-execution semantics the operator
 	// uses for manually-assigned tasks.
-	siblings, err := s.cfg.Store.ListTasksForJob(ctx, parent.JobID)
+	jobTasks, err := s.cfg.Store.ListTasksForJob(ctx, parent.JobID)
 	if err != nil {
 		slog.Error("failed to list sibling tasks", "task_id", parent.ID, "error", err)
 		return
 	}
-	for _, t := range siblings {
+	for _, t := range jobTasks {
 		if t.ID != parent.ID && t.Status == db.TaskStatusInProgress && !isDecompositionGraph(t.GraphID) {
 			if err := s.cfg.Store.PreAssignTaskGraph(ctx, parent.ID, graphID); err != nil {
 				slog.Error("pre-assign failed", "task_id", parent.ID, "error", err)
@@ -323,6 +334,7 @@ func (s *LocalService) assignGraphToParent(ctx context.Context, parent *db.Task,
 		TaskTitle:      parent.Title,
 		GraphID:        graphID,
 		Toolchain:      toolchain,
+		Siblings:       graphexec.FormatSiblingTitles(graphexec.SiblingTitles(jobTasks, parent.ID)),
 		WorkspaceDir:   job.WorkspaceDir,
 		ProviderName:   s.cfg.DefaultProvider,
 		Model:          s.cfg.DefaultModel,
@@ -393,11 +405,9 @@ func (s *LocalService) replaceParentWithSubtasks(ctx context.Context, parent *db
 		"parent_id", parent.ID, "children", len(result.Tasks), "depth", childDepth, "reason", result.Reason)
 }
 
-// isDecompositionGraph reports whether a graph id is one of the internal
-// decomposition graphs, so scheduling logic can ignore decomposition
-// bootstrap tasks when checking for "real" in-progress siblings.
+// isDecompositionGraph is a short local alias for the shared predicate.
 func isDecompositionGraph(id string) bool {
-	return id == graphCoarseDecompose || id == graphFineDecompose
+	return graphexec.IsDecompositionGraph(id)
 }
 
 // newTaskID returns a fresh task UUID string. Mirrors the format used by

@@ -342,6 +342,13 @@ type TaskRequest struct {
 	// should leave empty rather than defaulting.
 	Toolchain string
 
+	// Siblings is a pre-formatted bullet list of other task titles in
+	// the same job, excluding this task and any decomposition bootstrap
+	// tasks. Empty string is treated as "no siblings"; the executor
+	// substitutes a placeholder so role templates that reference
+	// `{{ globals.task.siblings }}` always render meaningful text.
+	Siblings string
+
 	WorkspaceDir string
 	ProviderName string
 	Model        string
@@ -399,6 +406,7 @@ func (e *Executor) ExecuteTask(ctx context.Context, req TaskRequest) error {
 	if req.Toolchain != "" {
 		state.SetArtifact("task.toolchain", req.Toolchain)
 	}
+	state.SetArtifact("task.siblings", siblingsArtifact(req.Siblings))
 	state.SetArtifact("job.title", req.JobTitle)
 	state.SetArtifact("job.description", req.JobDescription)
 	state.ExitNode = def.Exit
