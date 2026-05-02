@@ -353,6 +353,16 @@ func (s *LocalService) progressPollLoop() {
 		case <-s.ctx.Done():
 			return
 		case <-ticker.C:
+			// Skip the work entirely if no one is listening. buildProgressState
+			// touches the DB and runtime on every tick; with no subscribers it's
+			// pure waste.
+			s.mu.Lock()
+			n := len(s.subscribers)
+			s.mu.Unlock()
+			if n == 0 {
+				continue
+			}
+
 			state := s.buildProgressState()
 			s.broadcast(Event{
 				Type:    EventTypeProgressUpdate,
