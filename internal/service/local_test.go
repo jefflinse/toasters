@@ -30,14 +30,6 @@ type mockStore struct {
 	// GetSkill
 	getSkillResult *db.Skill
 	getSkillErr    error
-
-	// ListWorkers
-	listWorkersResult []*db.Worker
-	listWorkersErr    error
-
-	// GetWorker
-	getWorkerResult *db.Worker
-	getWorkerErr    error
 }
 
 // Compile-time assertion that mockStore satisfies db.Store.
@@ -49,14 +41,6 @@ func (m *mockStore) ListSkills(_ context.Context) ([]*db.Skill, error) {
 
 func (m *mockStore) GetSkill(_ context.Context, _ string) (*db.Skill, error) {
 	return m.getSkillResult, m.getSkillErr
-}
-
-func (m *mockStore) ListWorkers(_ context.Context) ([]*db.Worker, error) {
-	return m.listWorkersResult, m.listWorkersErr
-}
-
-func (m *mockStore) GetWorker(_ context.Context, _ string) (*db.Worker, error) {
-	return m.getWorkerResult, m.getWorkerErr
 }
 
 // --- Unimplemented methods ---
@@ -121,12 +105,6 @@ func (m *mockStore) UpsertSkill(_ context.Context, _ *db.Skill) error {
 func (m *mockStore) DeleteAllSkills(_ context.Context) error {
 	return fmt.Errorf("not implemented")
 }
-func (m *mockStore) UpsertWorker(_ context.Context, _ *db.Worker) error {
-	return fmt.Errorf("not implemented")
-}
-func (m *mockStore) DeleteAllWorkers(_ context.Context) error {
-	return fmt.Errorf("not implemented")
-}
 func (m *mockStore) CreateFeedEntry(_ context.Context, _ *db.FeedEntry) error {
 	return fmt.Errorf("not implemented")
 }
@@ -136,7 +114,7 @@ func (m *mockStore) ListFeedEntries(_ context.Context, _ string, _ int) ([]*db.F
 func (m *mockStore) ListRecentFeedEntries(_ context.Context, _ int) ([]*db.FeedEntry, error) {
 	return nil, fmt.Errorf("not implemented")
 }
-func (m *mockStore) RebuildDefinitions(_ context.Context, _ []*db.Skill, _ []*db.Worker) error {
+func (m *mockStore) RebuildDefinitions(_ context.Context, _ []*db.Skill) error {
 	return fmt.Errorf("not implemented")
 }
 func (m *mockStore) CreateSession(_ context.Context, _ *db.WorkerSession) error {

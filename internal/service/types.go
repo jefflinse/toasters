@@ -262,30 +262,6 @@ type Skill struct {
 	UpdatedAt   time.Time
 }
 
-// Worker is the service-level representation of a configured LLM worker.
-type Worker struct {
-	ID              string
-	Name            string
-	Description     string
-	Mode            string // "lead", "worker", "primary"
-	Model           string
-	Provider        string
-	Temperature     *float64
-	SystemPrompt    string
-	Tools           []string // tool names
-	DisallowedTools []string // tool names blocked for this worker
-	Skills          []string // skill name references
-	PermissionMode  string
-	MaxTurns        *int
-	Color           string
-	Hidden          bool
-	Disabled        bool
-	Source          string // "system", "user", "auto"
-	SourcePath      string `json:"-"` // absolute path to the .md file
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
-}
-
 // ---------------------------------------------------------------------------
 // Graph definition types
 // ---------------------------------------------------------------------------

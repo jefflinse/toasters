@@ -70,12 +70,6 @@ func (m *mockDefinitionService) DeleteSkill(_ context.Context, _ string) error {
 func (m *mockDefinitionService) GenerateSkill(_ context.Context, _ string) (string, error) {
 	return "", nil
 }
-func (m *mockDefinitionService) ListWorkers(_ context.Context) ([]service.Worker, error) {
-	return nil, nil
-}
-func (m *mockDefinitionService) GetWorker(_ context.Context, _ string) (service.Worker, error) {
-	return service.Worker{}, nil
-}
 func (m *mockDefinitionService) ListGraphs(_ context.Context) ([]service.GraphDefinition, error) {
 	return nil, nil
 }

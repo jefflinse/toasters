@@ -104,18 +104,14 @@ func (s *noopStore) UpsertSkill(_ context.Context, _ *db.Skill) error          {
 func (s *noopStore) GetSkill(_ context.Context, _ string) (*db.Skill, error)   { return nil, nil }
 func (s *noopStore) ListSkills(_ context.Context) ([]*db.Skill, error)         { return nil, nil }
 func (s *noopStore) DeleteAllSkills(_ context.Context) error                   { return nil }
-func (s *noopStore) UpsertWorker(_ context.Context, _ *db.Worker) error        { return nil }
-func (s *noopStore) GetWorker(_ context.Context, _ string) (*db.Worker, error) { return nil, nil }
-func (s *noopStore) ListWorkers(_ context.Context) ([]*db.Worker, error)       { return nil, nil }
-func (s *noopStore) DeleteAllWorkers(_ context.Context) error                  { return nil }
-func (s *noopStore) CreateFeedEntry(_ context.Context, _ *db.FeedEntry) error  { return nil }
+func (s *noopStore) CreateFeedEntry(_ context.Context, _ *db.FeedEntry) error { return nil }
 func (s *noopStore) ListFeedEntries(_ context.Context, _ string, _ int) ([]*db.FeedEntry, error) {
 	return nil, nil
 }
 func (s *noopStore) ListRecentFeedEntries(_ context.Context, _ int) ([]*db.FeedEntry, error) {
 	return nil, nil
 }
-func (s *noopStore) RebuildDefinitions(_ context.Context, _ []*db.Skill, _ []*db.Worker) error {
+func (s *noopStore) RebuildDefinitions(_ context.Context, _ []*db.Skill) error {
 	return nil
 }
 func (s *noopStore) CreateSession(_ context.Context, _ *db.WorkerSession) error { return nil }

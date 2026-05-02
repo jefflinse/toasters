@@ -299,12 +299,6 @@ func (m *shutdownTestDefinitions) DeleteSkill(ctx context.Context, id string) er
 func (m *shutdownTestDefinitions) GenerateSkill(ctx context.Context, prompt string) (string, error) {
 	return "", nil
 }
-func (m *shutdownTestDefinitions) ListWorkers(ctx context.Context) ([]service.Worker, error) {
-	return nil, nil
-}
-func (m *shutdownTestDefinitions) GetWorker(ctx context.Context, id string) (service.Worker, error) {
-	return service.Worker{}, nil
-}
 func (m *shutdownTestDefinitions) ListGraphs(ctx context.Context) ([]service.GraphDefinition, error) {
 	return nil, nil
 }

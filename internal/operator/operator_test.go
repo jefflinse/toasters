@@ -152,16 +152,9 @@ func testPromptEngine(t *testing.T, roles map[string]string) *prompt.Engine {
 }
 
 // newTestOperatorTools creates an operatorTools with a real store and prompt engine.
-func newTestOperatorTools(t *testing.T, workers []*db.Worker) *operatorTools {
+func newTestOperatorTools(t *testing.T) *operatorTools {
 	t.Helper()
 	store := newOperatorTestStore(t)
-	ctx := context.Background()
-
-	for _, w := range workers {
-		if err := store.UpsertWorker(ctx, w); err != nil {
-			t.Fatalf("upserting worker: %v", err)
-		}
-	}
 
 	engine := testPromptEngine(t, map[string]string{
 		"scheduler":  "You are a scheduling agent.",
@@ -1358,7 +1351,7 @@ func TestOperatorSurfaceToUser(t *testing.T) {
 }
 
 func TestSurfaceToUserMissingText(t *testing.T) {
-	tools := newTestOperatorTools(t, nil)
+	tools := newTestOperatorTools(t)
 
 	_, err := tools.Execute(context.Background(), "surface_to_user",
 		json.RawMessage(`{}`))
@@ -1404,7 +1397,7 @@ func TestSurfaceToUserWithoutSystemTools(t *testing.T) {
 }
 
 func TestOperatorToolsUnknownTool(t *testing.T) {
-	tools := newTestOperatorTools(t, nil)
+	tools := newTestOperatorTools(t)
 
 	_, err := tools.Execute(context.Background(), "nonexistent", json.RawMessage(`{}`))
 	assertError(t, err)
@@ -1414,7 +1407,7 @@ func TestOperatorToolsUnknownTool(t *testing.T) {
 }
 
 func TestOperatorToolDefinitions(t *testing.T) {
-	tools := newTestOperatorTools(t, nil)
+	tools := newTestOperatorTools(t)
 	defs := tools.Definitions()
 
 	// consult_worker and all system-worker tools (create_task, assign_task,

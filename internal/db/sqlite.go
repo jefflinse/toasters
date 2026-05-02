@@ -520,120 +520,6 @@ func (s *SQLiteStore) DeleteAllSkills(ctx context.Context) error {
 	return nil
 }
 
-// --- Workers ---
-
-func (s *SQLiteStore) UpsertWorker(ctx context.Context, worker *Worker) error {
-	now := time.Now().UTC()
-	if worker.CreatedAt.IsZero() {
-		worker.CreatedAt = now
-	}
-	if worker.UpdatedAt.IsZero() {
-		worker.UpdatedAt = now
-	}
-
-	var hidden, disabled int
-	if worker.Hidden {
-		hidden = 1
-	}
-	if worker.Disabled {
-		disabled = 1
-	}
-
-	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO workers (id, name, description, mode, model, provider, temperature,
-		                      system_prompt, tools, disallowed_tools, skills,
-		                      permission_mode, permissions, mcp_servers, max_turns,
-		                      color, hidden, disabled, source, source_path,
-		                      created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		 ON CONFLICT(id) DO UPDATE SET
-		     name = excluded.name,
-		     description = excluded.description,
-		     mode = excluded.mode,
-		     model = excluded.model,
-		     provider = excluded.provider,
-		     temperature = excluded.temperature,
-		     system_prompt = excluded.system_prompt,
-		     tools = excluded.tools,
-		     disallowed_tools = excluded.disallowed_tools,
-		     skills = excluded.skills,
-		     permission_mode = excluded.permission_mode,
-		     permissions = excluded.permissions,
-		     mcp_servers = excluded.mcp_servers,
-		     max_turns = excluded.max_turns,
-		     color = excluded.color,
-		     hidden = excluded.hidden,
-		     disabled = excluded.disabled,
-		     source = excluded.source,
-		     source_path = excluded.source_path,
-		     updated_at = excluded.updated_at`,
-		worker.ID, worker.Name, worker.Description, worker.Mode,
-		worker.Model, worker.Provider, worker.Temperature,
-		worker.SystemPrompt, nullableJSON(worker.Tools),
-		nullableJSON(worker.DisallowedTools), nullableJSON(worker.Skills),
-		worker.PermissionMode, nullableJSON(worker.Permissions),
-		nullableJSON(worker.MCPServers), worker.MaxTurns,
-		worker.Color, hidden, disabled,
-		worker.Source, worker.SourcePath,
-		worker.CreatedAt.Format(time.RFC3339), worker.UpdatedAt.Format(time.RFC3339),
-	)
-	if err != nil {
-		return fmt.Errorf("upserting worker: %w", err)
-	}
-	return nil
-}
-
-func (s *SQLiteStore) GetWorker(ctx context.Context, id string) (*Worker, error) {
-	row := s.db.QueryRowContext(ctx,
-		`SELECT id, name, description, mode, model, provider, temperature,
-		        system_prompt, tools, disallowed_tools, skills,
-		        permission_mode, permissions, mcp_servers, max_turns,
-		        color, hidden, disabled, source, source_path,
-		        created_at, updated_at
-		 FROM workers WHERE id = ?`, id)
-
-	w, err := scanWorker(row)
-	if err != nil {
-		if errors.Is(err, ErrNotFound) {
-			return nil, fmt.Errorf("worker %q: %w", id, ErrNotFound)
-		}
-		return nil, err
-	}
-	return w, nil
-}
-
-func (s *SQLiteStore) ListWorkers(ctx context.Context) ([]*Worker, error) {
-	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, name, description, mode, model, provider, temperature,
-		        system_prompt, tools, disallowed_tools, skills,
-		        permission_mode, permissions, mcp_servers, max_turns,
-		        color, hidden, disabled, source, source_path,
-		        created_at, updated_at
-		 FROM workers ORDER BY name`)
-	if err != nil {
-		return nil, fmt.Errorf("listing workers: %w", err)
-	}
-	defer rows.Close() //nolint:errcheck
-
-	var workers []*Worker
-	for rows.Next() {
-		w, err := scanWorker(rows)
-		if err != nil {
-			return nil, err
-		}
-		workers = append(workers, w)
-	}
-	return workers, rows.Err()
-}
-
-func (s *SQLiteStore) DeleteAllWorkers(ctx context.Context) error {
-	_, err := s.db.ExecContext(ctx, "DELETE FROM workers")
-	if err != nil {
-		return fmt.Errorf("deleting all workers: %w", err)
-	}
-	return nil
-}
-
 // --- Feed ---
 
 func (s *SQLiteStore) CreateFeedEntry(ctx context.Context, entry *FeedEntry) error {
@@ -770,20 +656,17 @@ func (s *SQLiteStore) ListRecentChatEntries(ctx context.Context, limit int) ([]*
 
 // --- Rebuild ---
 
-func (s *SQLiteStore) RebuildDefinitions(ctx context.Context, skills []*Skill, workers []*Worker) error {
+func (s *SQLiteStore) RebuildDefinitions(ctx context.Context, skills []*Skill) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("beginning rebuild transaction: %w", err)
 	}
 	defer tx.Rollback() //nolint:errcheck
 
-	for _, table := range []string{"workers", "skills"} {
-		if _, err := tx.ExecContext(ctx, "DELETE FROM "+table); err != nil {
-			return fmt.Errorf("clearing %s: %w", table, err)
-		}
+	if _, err := tx.ExecContext(ctx, "DELETE FROM skills"); err != nil {
+		return fmt.Errorf("clearing skills: %w", err)
 	}
 
-	// Insert skills.
 	for _, sk := range skills {
 		now := time.Now().UTC()
 		if sk.CreatedAt.IsZero() {
@@ -801,43 +684,6 @@ func (s *SQLiteStore) RebuildDefinitions(ctx context.Context, skills []*Skill, w
 			sk.CreatedAt.Format(time.RFC3339), sk.UpdatedAt.Format(time.RFC3339),
 		); err != nil {
 			return fmt.Errorf("inserting skill %q: %w", sk.ID, err)
-		}
-	}
-
-	// Insert workers.
-	for _, w := range workers {
-		now := time.Now().UTC()
-		if w.CreatedAt.IsZero() {
-			w.CreatedAt = now
-		}
-		if w.UpdatedAt.IsZero() {
-			w.UpdatedAt = now
-		}
-		var hidden, disabled int
-		if w.Hidden {
-			hidden = 1
-		}
-		if w.Disabled {
-			disabled = 1
-		}
-		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO workers (id, name, description, mode, model, provider, temperature,
-			                      system_prompt, tools, disallowed_tools, skills,
-			                      permission_mode, permissions, mcp_servers, max_turns,
-			                      color, hidden, disabled, source, source_path,
-			                      created_at, updated_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			w.ID, w.Name, w.Description, w.Mode,
-			w.Model, w.Provider, w.Temperature,
-			w.SystemPrompt, nullableJSON(w.Tools),
-			nullableJSON(w.DisallowedTools), nullableJSON(w.Skills),
-			w.PermissionMode, nullableJSON(w.Permissions),
-			nullableJSON(w.MCPServers), w.MaxTurns,
-			w.Color, hidden, disabled,
-			w.Source, w.SourcePath,
-			w.CreatedAt.Format(time.RFC3339), w.UpdatedAt.Format(time.RFC3339),
-		); err != nil {
-			return fmt.Errorf("inserting worker %q: %w", w.ID, err)
 		}
 	}
 
@@ -1138,55 +984,6 @@ func scanSkill(s scanner) (*Skill, error) {
 	sk.CreatedAt = parseTime(createdAt)
 	sk.UpdatedAt = parseTime(updatedAt)
 	return sk, nil
-}
-
-func scanWorker(s scanner) (*Worker, error) {
-	w := &Worker{}
-	var createdAt, updatedAt string
-	var temperature sql.NullFloat64
-	var maxTurns sql.NullInt64
-	var tools, disallowedTools, skills, permissions, mcpServers sql.NullString
-	var hidden, disabled int
-
-	if err := s.Scan(&w.ID, &w.Name, &w.Description, &w.Mode,
-		&w.Model, &w.Provider, &temperature,
-		&w.SystemPrompt, &tools, &disallowedTools, &skills,
-		&w.PermissionMode, &permissions, &mcpServers, &maxTurns,
-		&w.Color, &hidden, &disabled, &w.Source, &w.SourcePath,
-		&createdAt, &updatedAt); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, ErrNotFound
-		}
-		return nil, fmt.Errorf("scanning worker: %w", err)
-	}
-
-	if temperature.Valid {
-		w.Temperature = &temperature.Float64
-	}
-	if maxTurns.Valid {
-		v := int(maxTurns.Int64)
-		w.MaxTurns = &v
-	}
-	if tools.Valid {
-		w.Tools = json.RawMessage(tools.String)
-	}
-	if disallowedTools.Valid {
-		w.DisallowedTools = json.RawMessage(disallowedTools.String)
-	}
-	if skills.Valid {
-		w.Skills = json.RawMessage(skills.String)
-	}
-	if permissions.Valid {
-		w.Permissions = json.RawMessage(permissions.String)
-	}
-	if mcpServers.Valid {
-		w.MCPServers = json.RawMessage(mcpServers.String)
-	}
-	w.Hidden = hidden != 0
-	w.Disabled = disabled != 0
-	w.CreatedAt = parseTime(createdAt)
-	w.UpdatedAt = parseTime(updatedAt)
-	return w, nil
 }
 
 func scanFeedEntries(rows *sql.Rows) ([]*FeedEntry, error) {

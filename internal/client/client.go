@@ -277,35 +277,6 @@ func (s *remoteDefinitionService) GenerateSkill(ctx context.Context, prompt stri
 	return ar.OperationID, nil
 }
 
-// --- Workers ---
-
-func (s *remoteDefinitionService) ListWorkers(ctx context.Context) ([]service.Worker, error) {
-	resp, err := s.c.http.get(ctx, "/api/v1/workers")
-	if err != nil {
-		return nil, fmt.Errorf("list workers: %w", err)
-	}
-	pr, err := decodeResponse[paginatedResponse[wireWorker]](resp)
-	if err != nil {
-		return nil, fmt.Errorf("list workers: %w", err)
-	}
-	workers := make([]service.Worker, 0, len(pr.Items))
-	for _, w := range pr.Items {
-		workers = append(workers, wireWorkerToService(w))
-	}
-	return workers, nil
-}
-
-func (s *remoteDefinitionService) GetWorker(ctx context.Context, id string) (service.Worker, error) {
-	resp, err := s.c.http.get(ctx, fmt.Sprintf("/api/v1/workers/%s", url.PathEscape(id)))
-	if err != nil {
-		return service.Worker{}, fmt.Errorf("get worker: %w", err)
-	}
-	w, err := decodeResponse[wireWorker](resp)
-	if err != nil {
-		return service.Worker{}, fmt.Errorf("get worker: %w", err)
-	}
-	return wireWorkerToService(w), nil
-}
 
 // --- Graphs ---
 

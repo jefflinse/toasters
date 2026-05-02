@@ -115,32 +115,6 @@ type Skill struct {
 	UpdatedAt   time.Time
 }
 
-// Worker represents a configured LLM worker.
-type Worker struct {
-	ID              string
-	Name            string
-	Description     string
-	Mode            string // lead, worker
-	Model           string
-	Provider        string
-	Temperature     *float64
-	SystemPrompt    string
-	Tools           json.RawMessage // JSON array of tool names
-	DisallowedTools json.RawMessage // JSON array of disallowed tool names
-	Skills          json.RawMessage // JSON array of skill name references
-	PermissionMode  string
-	Permissions     json.RawMessage // JSON blob
-	MCPServers      json.RawMessage // JSON blob
-	MaxTurns        *int
-	Color           string
-	Hidden          bool
-	Disabled        bool
-	Source          string // system, user, auto
-	SourcePath      string
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
-}
-
 // FeedEntry represents a single entry in the activity feed.
 type FeedEntry struct {
 	ID        int64

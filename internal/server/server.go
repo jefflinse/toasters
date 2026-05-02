@@ -166,10 +166,6 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /api/v1/skills/{id}", s.deleteSkill)
 	mux.HandleFunc("POST /api/v1/skills/generate", s.generateSkill)
 
-	// Workers
-	mux.HandleFunc("GET /api/v1/workers", s.listWorkers)
-	mux.HandleFunc("GET /api/v1/workers/{id}", s.getWorker)
-
 	// Graphs
 	mux.HandleFunc("GET /api/v1/graphs", s.listGraphs)
 	mux.HandleFunc("GET /api/v1/graphs/{id}", s.getGraph)

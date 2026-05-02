@@ -252,12 +252,6 @@ func (m *mockDefinitionService) DeleteSkill(ctx context.Context, id string) erro
 func (m *mockDefinitionService) GenerateSkill(ctx context.Context, prompt string) (string, error) {
 	return "op-123", nil
 }
-func (m *mockDefinitionService) ListWorkers(ctx context.Context) ([]service.Worker, error) {
-	return nil, nil
-}
-func (m *mockDefinitionService) GetWorker(ctx context.Context, id string) (service.Worker, error) {
-	return service.Worker{}, service.ErrNotFound
-}
 func (m *mockDefinitionService) ListGraphs(ctx context.Context) ([]service.GraphDefinition, error) {
 	return nil, nil
 }

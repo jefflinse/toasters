@@ -164,9 +164,6 @@ type Model struct {
 	// Skills modal state.
 	skillsModal skillsModalState
 
-	// Workers modal state.
-	workersModal workersModalState
-
 	// Settings modal state (/settings).
 	settingsModal settingsModalState
 
@@ -414,11 +411,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Skills modal key handling — intercept all keys when modal is open.
 		if m.skillsModal.show {
 			return m.updateSkillsModal(msg)
-		}
-
-		// Workers modal key handling — intercept all keys when modal is open.
-		if m.workersModal.show {
-			return m.updateWorkersModal(msg)
 		}
 
 		// Jobs modal key handling — intercept all keys when modal is open.
@@ -880,12 +872,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.cmdPopup.show = false
 					m.skillsModal = skillsModalState{show: true}
 					m.reloadSkillsForModal()
-					return m, nil
-				case "/workers":
-					m.input.Reset()
-					m.cmdPopup.show = false
-					m.workersModal = workersModalState{show: true}
-					m.reloadWorkersForModal()
 					return m, nil
 				case "/jobs":
 					m.input.Reset()
@@ -1357,7 +1343,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.MouseClickMsg:
 		// Click-to-focus: route clicks to the appropriate panel.
 		// Don't steal clicks when any overlay is active.
-		if !m.skillsModal.show && !m.workersModal.show &&
+		if !m.skillsModal.show &&
 			!m.mcpModal.show && !m.catalogModal.show && !m.operatorModal.show &&
 			!m.grid.showGrid &&
 			!m.promptModal.show && !m.outputModal.show && !m.loading {
@@ -1512,9 +1498,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.skillsModal.show {
 			m.reloadSkillsForModal()
-		}
-		if m.workersModal.show {
-			m.reloadWorkersForModal()
 		}
 		return m, nil
 

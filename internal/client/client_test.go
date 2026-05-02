@@ -40,8 +40,6 @@ type mockService struct {
 	createSkillFn   func(ctx context.Context, name string) (service.Skill, error)
 	deleteSkillFn   func(ctx context.Context, id string) error
 	generateSkillFn func(ctx context.Context, prompt string) (string, error)
-	listWorkersFn   func(ctx context.Context) ([]service.Worker, error)
-	getWorkerFn     func(ctx context.Context, id string) (service.Worker, error)
 
 	// Jobs
 	listJobsFn    func(ctx context.Context, filter *service.JobListFilter) ([]service.Job, error)
@@ -148,20 +146,6 @@ func (d *mockDefinitions) GenerateSkill(ctx context.Context, prompt string) (str
 		return d.s.generateSkillFn(ctx, prompt)
 	}
 	return "", nil
-}
-
-func (d *mockDefinitions) ListWorkers(ctx context.Context) ([]service.Worker, error) {
-	if d.s.listWorkersFn != nil {
-		return d.s.listWorkersFn(ctx)
-	}
-	return nil, nil
-}
-
-func (d *mockDefinitions) GetWorker(ctx context.Context, id string) (service.Worker, error) {
-	if d.s.getWorkerFn != nil {
-		return d.s.getWorkerFn(ctx, id)
-	}
-	return service.Worker{}, nil
 }
 
 func (d *mockDefinitions) ListGraphs(_ context.Context) ([]service.GraphDefinition, error) {

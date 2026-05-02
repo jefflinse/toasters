@@ -267,65 +267,6 @@ func skillToWire(s service.Skill) wireSkill {
 	}
 }
 
-// wireWorker is the JSON wire representation of a service.Worker.
-type wireWorker struct {
-	ID              string    `json:"id"`
-	Name            string    `json:"name"`
-	Description     string    `json:"description,omitempty"`
-	Mode            string    `json:"mode,omitempty"`
-	Model           string    `json:"model,omitempty"`
-	Provider        string    `json:"provider,omitempty"`
-	Temperature     *float64  `json:"temperature,omitempty"`
-	SystemPrompt    string    `json:"system_prompt,omitempty"`
-	Tools           []string  `json:"tools"`
-	DisallowedTools []string  `json:"disallowed_tools"`
-	Skills          []string  `json:"skills"`
-	PermissionMode  string    `json:"permission_mode,omitempty"`
-	MaxTurns        *int      `json:"max_turns,omitempty"`
-	Color           string    `json:"color,omitempty"`
-	Hidden          bool      `json:"hidden"`
-	Disabled        bool      `json:"disabled"`
-	Source          string    `json:"source"`
-	CreatedAt       time.Time `json:"created_at"`
-	UpdatedAt       time.Time `json:"updated_at"`
-}
-
-func workerToWire(a service.Worker) wireWorker {
-	tools := a.Tools
-	if tools == nil {
-		tools = []string{}
-	}
-	disallowed := a.DisallowedTools
-	if disallowed == nil {
-		disallowed = []string{}
-	}
-	skills := a.Skills
-	if skills == nil {
-		skills = []string{}
-	}
-	return wireWorker{
-		ID:              a.ID,
-		Name:            a.Name,
-		Description:     a.Description,
-		Mode:            a.Mode,
-		Model:           a.Model,
-		Provider:        a.Provider,
-		Temperature:     a.Temperature,
-		SystemPrompt:    a.SystemPrompt,
-		Tools:           tools,
-		DisallowedTools: disallowed,
-		Skills:          skills,
-		PermissionMode:  a.PermissionMode,
-		MaxTurns:        a.MaxTurns,
-		Color:           a.Color,
-		Hidden:          a.Hidden,
-		Disabled:        a.Disabled,
-		Source:          a.Source,
-		CreatedAt:       a.CreatedAt,
-		UpdatedAt:       a.UpdatedAt,
-	}
-}
-
 // wireGraphEdge is the JSON wire representation of a service.GraphEdge.
 type wireGraphEdge struct {
 	From  string `json:"from"`

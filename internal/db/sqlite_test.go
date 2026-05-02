@@ -40,7 +40,6 @@ func TestOpen(t *testing.T) {
 		"tasks",
 		"task_dependencies",
 		"progress_reports",
-		"workers",
 		"skills",
 		"feed_entries",
 		"worker_sessions",
@@ -622,107 +621,6 @@ func TestProgressReports(t *testing.T) {
 }
 
 // --- Workers CRUD ---
-
-func TestWorkers_CRUD(t *testing.T) {
-	store := openTestStore(t)
-	ctx := context.Background()
-
-	temp := 0.7
-	tools := json.RawMessage(`["read","write"]`)
-	worker := &Worker{
-		ID:           "worker-1",
-		Name:         "Code Writer",
-		Description:  "Writes code",
-		Mode:         "worker",
-		Model:        "claude-opus-4-20250514",
-		Provider:     "anthropic",
-		Temperature:  &temp,
-		SystemPrompt: "You are a code writer.",
-		Tools:        tools,
-		Source:       "file",
-	}
-
-	// Upsert (insert)
-	if err := store.UpsertWorker(ctx, worker); err != nil {
-		t.Fatalf("UpsertWorker (insert): %v", err)
-	}
-
-	// Get
-	got, err := store.GetWorker(ctx, "worker-1")
-	if err != nil {
-		t.Fatalf("GetWorker: %v", err)
-	}
-	if got.Name != "Code Writer" {
-		t.Errorf("Name = %q, want %q", got.Name, "Code Writer")
-	}
-	if got.Temperature == nil || *got.Temperature != 0.7 {
-		t.Errorf("Temperature = %v, want 0.7", got.Temperature)
-	}
-	if string(got.Tools) != `["read","write"]` {
-		t.Errorf("Tools = %q, want %q", string(got.Tools), `["read","write"]`)
-	}
-	if got.Source != "file" {
-		t.Errorf("Source = %q, want %q", got.Source, "file")
-	}
-
-	// Upsert (update)
-	worker.Name = "Code Writer v2"
-	worker.UpdatedAt = time.Time{} // reset so it gets set by UpsertWorker
-	if err := store.UpsertWorker(ctx, worker); err != nil {
-		t.Fatalf("UpsertWorker (update): %v", err)
-	}
-	got, err = store.GetWorker(ctx, "worker-1")
-	if err != nil {
-		t.Fatalf("GetWorker after upsert: %v", err)
-	}
-	if got.Name != "Code Writer v2" {
-		t.Errorf("Name after upsert = %q, want %q", got.Name, "Code Writer v2")
-	}
-
-	// List
-	worker2 := &Worker{ID: "worker-2", Name: "Reviewer", Mode: "coordinator", Source: "database"}
-	if err := store.UpsertWorker(ctx, worker2); err != nil {
-		t.Fatalf("UpsertWorker (2): %v", err)
-	}
-	workers, err := store.ListWorkers(ctx)
-	if err != nil {
-		t.Fatalf("ListWorkers: %v", err)
-	}
-	if len(workers) != 2 {
-		t.Fatalf("ListWorkers returned %d workers, want 2", len(workers))
-	}
-}
-
-func TestGetWorker_NotFound(t *testing.T) {
-	store := openTestStore(t)
-	ctx := context.Background()
-
-	_, err := store.GetWorker(ctx, "nonexistent")
-	if err == nil {
-		t.Fatal("expected error for nonexistent worker, got nil")
-	}
-	if !errors.Is(err, ErrNotFound) {
-		t.Errorf("expected ErrNotFound, got: %v", err)
-	}
-}
-
-func TestWorkers_NilTemperature(t *testing.T) {
-	store := openTestStore(t)
-	ctx := context.Background()
-
-	worker := &Worker{ID: "worker-nil-temp", Name: "No Temp", Source: "test"}
-	if err := store.UpsertWorker(ctx, worker); err != nil {
-		t.Fatalf("UpsertWorker: %v", err)
-	}
-
-	got, err := store.GetWorker(ctx, "worker-nil-temp")
-	if err != nil {
-		t.Fatalf("GetWorker: %v", err)
-	}
-	if got.Temperature != nil {
-		t.Errorf("Temperature = %v, want nil", got.Temperature)
-	}
-}
 
 // --- Sessions CRUD ---
 
@@ -1449,118 +1347,6 @@ func TestGetSkill_NotFound(t *testing.T) {
 	}
 }
 
-// --- Worker new fields ---
-
-func TestWorkers_NewFields(t *testing.T) {
-	store := openTestStore(t)
-	ctx := context.Background()
-
-	temp := 0.7
-	maxTurns := 10
-	tools := json.RawMessage(`["read","write"]`)
-	disallowed := json.RawMessage(`["bash"]`)
-	skills := json.RawMessage(`["go","testing"]`)
-	permissions := json.RawMessage(`{"allow":["read"]}`)
-	mcpServers := json.RawMessage(`{"github":{"enabled":true}}`)
-
-	worker := &Worker{
-		ID:              "worker-full",
-		Name:            "Full Worker",
-		Description:     "Worker with all fields",
-		Mode:            "lead",
-		Model:           "claude-opus-4-20250514",
-		Provider:        "anthropic",
-		Temperature:     &temp,
-		SystemPrompt:    "You are a lead worker.",
-		Tools:           tools,
-		DisallowedTools: disallowed,
-		Skills:          skills,
-		PermissionMode:  "plan",
-		Permissions:     permissions,
-		MCPServers:      mcpServers,
-		MaxTurns:        &maxTurns,
-		Color:           "#ff0000",
-		Hidden:          true,
-		Disabled:        false,
-		Source:          "user",
-		SourcePath:      "/workers/full.md",
-	}
-
-	if err := store.UpsertWorker(ctx, worker); err != nil {
-		t.Fatalf("UpsertWorker: %v", err)
-	}
-
-	got, err := store.GetWorker(ctx, "worker-full")
-	if err != nil {
-		t.Fatalf("GetWorker: %v", err)
-	}
-
-	if got.Mode != "lead" {
-		t.Errorf("Mode = %q, want %q", got.Mode, "lead")
-	}
-	if string(got.DisallowedTools) != `["bash"]` {
-		t.Errorf("DisallowedTools = %q, want %q", string(got.DisallowedTools), `["bash"]`)
-	}
-	if string(got.Skills) != `["go","testing"]` {
-		t.Errorf("Skills = %q, want %q", string(got.Skills), `["go","testing"]`)
-	}
-	if got.PermissionMode != "plan" {
-		t.Errorf("PermissionMode = %q, want %q", got.PermissionMode, "plan")
-	}
-	if string(got.Permissions) != `{"allow":["read"]}` {
-		t.Errorf("Permissions = %q, want %q", string(got.Permissions), `{"allow":["read"]}`)
-	}
-	if string(got.MCPServers) != `{"github":{"enabled":true}}` {
-		t.Errorf("MCPServers = %q, want %q", string(got.MCPServers), `{"github":{"enabled":true}}`)
-	}
-	if got.MaxTurns == nil || *got.MaxTurns != 10 {
-		t.Errorf("MaxTurns = %v, want 10", got.MaxTurns)
-	}
-	if got.Color != "#ff0000" {
-		t.Errorf("Color = %q, want %q", got.Color, "#ff0000")
-	}
-	if !got.Hidden {
-		t.Error("Hidden = false, want true")
-	}
-	if got.Disabled {
-		t.Error("Disabled = true, want false")
-	}
-	if got.SourcePath != "/workers/full.md" {
-		t.Errorf("SourcePath = %q, want %q", got.SourcePath, "/workers/full.md")
-	}
-}
-
-func TestWorkers_DeleteAll(t *testing.T) {
-	store := openTestStore(t)
-	ctx := context.Background()
-
-	for _, id := range []string{"w1", "w2", "w3"} {
-		if err := store.UpsertWorker(ctx, &Worker{ID: id, Name: id, Source: "test"}); err != nil {
-			t.Fatalf("UpsertWorker(%s): %v", id, err)
-		}
-	}
-
-	workers, err := store.ListWorkers(ctx)
-	if err != nil {
-		t.Fatalf("ListWorkers: %v", err)
-	}
-	if len(workers) != 3 {
-		t.Fatalf("ListWorkers returned %d, want 3", len(workers))
-	}
-
-	if err := store.DeleteAllWorkers(ctx); err != nil {
-		t.Fatalf("DeleteAllWorkers: %v", err)
-	}
-
-	workers, err = store.ListWorkers(ctx)
-	if err != nil {
-		t.Fatalf("ListWorkers after delete: %v", err)
-	}
-	if len(workers) != 0 {
-		t.Errorf("ListWorkers after delete returned %d, want 0", len(workers))
-	}
-}
-
 // --- Feed Entries ---
 
 func TestFeedEntries_CRUD(t *testing.T) {
@@ -1694,22 +1480,15 @@ func TestRebuildDefinitions(t *testing.T) {
 	store := openTestStore(t)
 	ctx := context.Background()
 
-	// Initial data.
 	skills1 := []*Skill{
 		{ID: "sk-1", Name: "Go", Source: "builtin", Prompt: "Go expert"},
 		{ID: "sk-2", Name: "TypeScript", Source: "builtin", Prompt: "TS expert"},
 	}
-	workers1 := []*Worker{
-		{ID: "wk-1", Name: "Builder", Mode: "worker", Source: "user"},
-		{ID: "wk-2", Name: "Reviewer", Mode: "lead", Source: "user"},
-	}
 
-	// First rebuild.
-	if err := store.RebuildDefinitions(ctx, skills1, workers1); err != nil {
+	if err := store.RebuildDefinitions(ctx, skills1); err != nil {
 		t.Fatalf("RebuildDefinitions (first): %v", err)
 	}
 
-	// Verify initial data.
 	skillList, err := store.ListSkills(ctx)
 	if err != nil {
 		t.Fatalf("ListSkills: %v", err)
@@ -1718,27 +1497,15 @@ func TestRebuildDefinitions(t *testing.T) {
 		t.Errorf("ListSkills returned %d, want 2", len(skillList))
 	}
 
-	workerList, err := store.ListWorkers(ctx)
-	if err != nil {
-		t.Fatalf("ListWorkers: %v", err)
-	}
-	if len(workerList) != 2 {
-		t.Errorf("ListWorkers returned %d, want 2", len(workerList))
-	}
-
 	// Second rebuild with different data — old data should be gone.
 	skills2 := []*Skill{
 		{ID: "sk-3", Name: "Python", Source: "user", Prompt: "Python expert"},
 	}
-	workers2 := []*Worker{
-		{ID: "wk-3", Name: "Tester", Mode: "worker", Source: "system"},
-	}
 
-	if err := store.RebuildDefinitions(ctx, skills2, workers2); err != nil {
+	if err := store.RebuildDefinitions(ctx, skills2); err != nil {
 		t.Fatalf("RebuildDefinitions (second): %v", err)
 	}
 
-	// Verify old data is gone.
 	skillList, err = store.ListSkills(ctx)
 	if err != nil {
 		t.Fatalf("ListSkills after rebuild: %v", err)
@@ -1749,34 +1516,19 @@ func TestRebuildDefinitions(t *testing.T) {
 	if skillList[0].ID != "sk-3" {
 		t.Errorf("skill ID = %q, want %q", skillList[0].ID, "sk-3")
 	}
-
-	workerList, err = store.ListWorkers(ctx)
-	if err != nil {
-		t.Fatalf("ListWorkers after rebuild: %v", err)
-	}
-	if len(workerList) != 1 {
-		t.Fatalf("ListWorkers after rebuild returned %d, want 1", len(workerList))
-	}
-	if workerList[0].ID != "wk-3" {
-		t.Errorf("worker ID = %q, want %q", workerList[0].ID, "wk-3")
-	}
 }
 
 func TestRebuildDefinitions_Empty(t *testing.T) {
 	store := openTestStore(t)
 	ctx := context.Background()
 
-	// Rebuild with empty slices should succeed.
-	if err := store.RebuildDefinitions(ctx, nil, nil); err != nil {
+	if err := store.RebuildDefinitions(ctx, nil); err != nil {
 		t.Fatalf("RebuildDefinitions (empty): %v", err)
 	}
 
-	// All definition tables should be empty.
 	skills, _ := store.ListSkills(ctx)
-	workers, _ := store.ListWorkers(ctx)
-	if len(skills) != 0 || len(workers) != 0 {
-		t.Errorf("expected all empty after empty rebuild: skills=%d workers=%d",
-			len(skills), len(workers))
+	if len(skills) != 0 {
+		t.Errorf("expected skills empty after empty rebuild, got %d", len(skills))
 	}
 }
 
@@ -1795,8 +1547,7 @@ func TestRebuildDefinitions_PreservesOperationalData(t *testing.T) {
 		t.Fatalf("CreateTask: %v", err)
 	}
 
-	// Rebuild definitions.
-	if err := store.RebuildDefinitions(ctx, nil, nil); err != nil {
+	if err := store.RebuildDefinitions(ctx, nil); err != nil {
 		t.Fatalf("RebuildDefinitions: %v", err)
 	}
 

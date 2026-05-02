@@ -34,19 +34,13 @@ type Store interface {
 	ListSkills(ctx context.Context) ([]*Skill, error)
 	DeleteAllSkills(ctx context.Context) error
 
-	// Workers
-	UpsertWorker(ctx context.Context, worker *Worker) error
-	GetWorker(ctx context.Context, id string) (*Worker, error)
-	ListWorkers(ctx context.Context) ([]*Worker, error)
-	DeleteAllWorkers(ctx context.Context) error
-
 	// Feed
 	CreateFeedEntry(ctx context.Context, entry *FeedEntry) error
 	ListFeedEntries(ctx context.Context, jobID string, limit int) ([]*FeedEntry, error)
 	ListRecentFeedEntries(ctx context.Context, limit int) ([]*FeedEntry, error)
 
 	// Rebuild — wraps delete-all + insert-all in a transaction
-	RebuildDefinitions(ctx context.Context, skills []*Skill, workers []*Worker) error
+	RebuildDefinitions(ctx context.Context, skills []*Skill) error
 
 	// Sessions
 	CreateSession(ctx context.Context, session *WorkerSession) error

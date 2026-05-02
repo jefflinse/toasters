@@ -74,28 +74,6 @@ type wireSkill struct {
 	UpdatedAt   time.Time `json:"updated_at"`
 }
 
-type wireWorker struct {
-	ID              string    `json:"id"`
-	Name            string    `json:"name"`
-	Description     string    `json:"description,omitempty"`
-	Mode            string    `json:"mode,omitempty"`
-	Model           string    `json:"model,omitempty"`
-	Provider        string    `json:"provider,omitempty"`
-	Temperature     *float64  `json:"temperature,omitempty"`
-	SystemPrompt    string    `json:"system_prompt,omitempty"`
-	Tools           []string  `json:"tools"`
-	DisallowedTools []string  `json:"disallowed_tools"`
-	Skills          []string  `json:"skills"`
-	PermissionMode  string    `json:"permission_mode,omitempty"`
-	MaxTurns        *int      `json:"max_turns,omitempty"`
-	Color           string    `json:"color,omitempty"`
-	Hidden          bool      `json:"hidden"`
-	Disabled        bool      `json:"disabled"`
-	Source          string    `json:"source"`
-	CreatedAt       time.Time `json:"created_at"`
-	UpdatedAt       time.Time `json:"updated_at"`
-}
-
 type wireGraphEdge struct {
 	From  string `json:"from"`
 	To    string `json:"to"`
@@ -584,30 +562,6 @@ func wireSkillToService(w wireSkill) service.Skill {
 		Source:      w.Source,
 		CreatedAt:   w.CreatedAt,
 		UpdatedAt:   w.UpdatedAt,
-	}
-}
-
-func wireWorkerToService(w wireWorker) service.Worker {
-	return service.Worker{
-		ID:              w.ID,
-		Name:            w.Name,
-		Description:     w.Description,
-		Mode:            w.Mode,
-		Model:           w.Model,
-		Provider:        w.Provider,
-		Temperature:     w.Temperature,
-		SystemPrompt:    w.SystemPrompt,
-		Tools:           w.Tools,
-		DisallowedTools: w.DisallowedTools,
-		Skills:          w.Skills,
-		PermissionMode:  w.PermissionMode,
-		MaxTurns:        w.MaxTurns,
-		Color:           w.Color,
-		Hidden:          w.Hidden,
-		Disabled:        w.Disabled,
-		Source:          w.Source,
-		CreatedAt:       w.CreatedAt,
-		UpdatedAt:       w.UpdatedAt,
 	}
 }
 

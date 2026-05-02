@@ -219,44 +219,6 @@ func (s *Server) generateSkill(w http.ResponseWriter, r *http.Request) {
 }
 
 // ---------------------------------------------------------------------------
-// Workers handlers
-// ---------------------------------------------------------------------------
-
-// listWorkers handles GET /api/v1/workers.
-func (s *Server) listWorkers(w http.ResponseWriter, r *http.Request) {
-	pg, err := parsePagination(r)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "bad_request", err.Error())
-		return
-	}
-
-	workers, err := s.svc.Definitions().ListWorkers(r.Context())
-	if err != nil {
-		handleServiceError(w, r, err)
-		return
-	}
-
-	wireWorkers := make([]wireWorker, 0, len(workers))
-	for _, a := range workers {
-		wireWorkers = append(wireWorkers, workerToWire(a))
-	}
-
-	page, total := paginate(wireWorkers, pg)
-	writeJSON(w, http.StatusOK, PaginatedResponse[wireWorker]{Items: page, Total: total})
-}
-
-// getWorker handles GET /api/v1/workers/{id}.
-func (s *Server) getWorker(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	a, err := s.svc.Definitions().GetWorker(r.Context(), id)
-	if err != nil {
-		handleServiceError(w, r, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, workerToWire(a))
-}
-
-// ---------------------------------------------------------------------------
 // Graphs handlers
 // ---------------------------------------------------------------------------
 

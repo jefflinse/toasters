@@ -117,16 +117,6 @@ type DefinitionService interface {
 	// On failure, an operation.failed event is pushed with the error message.
 	GenerateSkill(ctx context.Context, prompt string) (operationID string, err error)
 
-	// --- Workers (read-only) ---
-
-	// ListWorkers returns all workers known to the service. The ordering is:
-	// user workers alphabetically, then system workers alphabetically.
-	ListWorkers(ctx context.Context) ([]Worker, error)
-
-	// GetWorker returns a single worker by ID. Returns an error wrapping
-	// ErrNotFound if the worker does not exist.
-	GetWorker(ctx context.Context, id string) (Worker, error)
-
 	// --- Graphs (read-only) ---
 
 	// ListGraphs returns all loaded graph definitions, ordered by id.

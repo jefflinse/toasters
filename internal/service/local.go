@@ -1636,48 +1636,6 @@ Detailed instructions for the agent using this skill. This is the system prompt 
 // DefinitionService — Workers
 // ---------------------------------------------------------------------------
 
-// ListWorkers returns all workers ordered: user → system.
-func (s *LocalService) ListWorkers(ctx context.Context) ([]Worker, error) {
-	if s.cfg.Store == nil {
-		return nil, fmt.Errorf("store not configured")
-	}
-	dbWorkers, err := s.cfg.Store.ListWorkers(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("listing workers: %w", err)
-	}
-
-	var user, system []*db.Worker
-	for _, w := range dbWorkers {
-		if w.Source == "system" {
-			system = append(system, w)
-		} else {
-			user = append(user, w)
-		}
-	}
-
-	ordered := append(user, system...)
-	workers := make([]Worker, 0, len(ordered))
-	for _, w := range ordered {
-		workers = append(workers, dbWorkerToService(w))
-	}
-	return workers, nil
-}
-
-// GetWorker returns a single worker by ID.
-func (s *LocalService) GetWorker(ctx context.Context, id string) (Worker, error) {
-	if s.cfg.Store == nil {
-		return Worker{}, fmt.Errorf("store not configured")
-	}
-	w, err := s.cfg.Store.GetWorker(ctx, id)
-	if err != nil {
-		if errors.Is(err, db.ErrNotFound) {
-			return Worker{}, fmt.Errorf("getting worker %s: %w", id, ErrNotFound)
-		}
-		return Worker{}, fmt.Errorf("getting worker %s: %w", id, err)
-	}
-	return dbWorkerToService(w), nil
-}
-
 // ListGraphs returns all loaded graph definitions, ordered by id.
 func (s *LocalService) ListGraphs(_ context.Context) ([]GraphDefinition, error) {
 	if s.cfg.GraphCatalog == nil {
@@ -2414,41 +2372,6 @@ func dbSkillToService(sk *db.Skill) Skill {
 		SourcePath:  sk.SourcePath,
 		CreatedAt:   sk.CreatedAt,
 		UpdatedAt:   sk.UpdatedAt,
-	}
-}
-
-func dbWorkerToService(w *db.Worker) Worker {
-	var tools, disallowedTools, skills []string
-	if len(w.Tools) > 0 {
-		_ = json.Unmarshal(w.Tools, &tools)
-	}
-	if len(w.DisallowedTools) > 0 {
-		_ = json.Unmarshal(w.DisallowedTools, &disallowedTools)
-	}
-	if len(w.Skills) > 0 {
-		_ = json.Unmarshal(w.Skills, &skills)
-	}
-	return Worker{
-		ID:              w.ID,
-		Name:            w.Name,
-		Description:     w.Description,
-		Mode:            w.Mode,
-		Model:           w.Model,
-		Provider:        w.Provider,
-		Temperature:     w.Temperature,
-		SystemPrompt:    w.SystemPrompt,
-		Tools:           tools,
-		DisallowedTools: disallowedTools,
-		Skills:          skills,
-		PermissionMode:  w.PermissionMode,
-		MaxTurns:        w.MaxTurns,
-		Color:           w.Color,
-		Hidden:          w.Hidden,
-		Disabled:        w.Disabled,
-		Source:          w.Source,
-		SourcePath:      w.SourcePath,
-		CreatedAt:       w.CreatedAt,
-		UpdatedAt:       w.UpdatedAt,
 	}
 }
 
