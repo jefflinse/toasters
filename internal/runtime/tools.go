@@ -909,7 +909,7 @@ func (ct *CoreTools) webFetch(ctx context.Context, args json.RawMessage) (string
 	if err != nil {
 		return "", fmt.Errorf("creating request: %w", err)
 	}
-	req.Header.Set("User-Agent", "toasters-agent/1.0")
+	req.Header.Set("User-Agent", "toasters/1.0")
 
 	client := ct.httpClient
 	if client == nil {

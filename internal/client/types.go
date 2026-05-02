@@ -459,8 +459,6 @@ type wireConnectionLostPayload struct {
 	Error string `json:"error"`
 }
 
-type wireConnectionRestoredPayload struct{}
-
 type wireGraphNodeStartedPayload struct {
 	JobID  string `json:"job_id"`
 	TaskID string `json:"task_id"`
@@ -578,27 +576,6 @@ func wireGraphDefinitionToService(w wireGraphDefinition) service.GraphDefinition
 			From:  e.From,
 			To:    e.To,
 			Kind:  service.GraphEdgeKind(e.Kind),
-			Label: e.Label,
-		})
-	}
-	return out
-}
-
-func serviceGraphDefinitionToWire(d service.GraphDefinition) wireGraphDefinition {
-	out := wireGraphDefinition{
-		ID:          d.ID,
-		Name:        d.Name,
-		Description: d.Description,
-		Tags:        d.Tags,
-		Entry:       d.Entry,
-		Exit:        d.Exit,
-		Nodes:       d.Nodes,
-	}
-	for _, e := range d.Edges {
-		out.Edges = append(out.Edges, wireGraphEdge{
-			From:  e.From,
-			To:    e.To,
-			Kind:  string(e.Kind),
 			Label: e.Label,
 		})
 	}

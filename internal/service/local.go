@@ -67,11 +67,9 @@ type CatalogSourceModel struct {
 
 // Size limits for input validation.
 const (
-	maxMessageLen     = 102400           // 100KB — maximum user message size
-	maxPromptLen      = 51200            // 50KB — maximum generation prompt size
-	maxResponseLen    = 51200            // 50KB — maximum prompt/blocker response size
-	maxBlockerAnswers = 50               // maximum number of blocker answers
-	maxCopySize       = 50 * 1024 * 1024 // 50MB — maximum file copy size
+	maxMessageLen  = 102400 // 100KB — maximum user message size
+	maxPromptLen   = 51200  // 50KB — maximum generation prompt size
+	maxResponseLen = 51200  // 50KB — maximum prompt/blocker response size
 )
 
 // maxConcurrentOps bounds the number of concurrent async operations (generate,
@@ -1933,11 +1931,6 @@ func (s *LocalService) ConfigDir() string {
 	return s.cfg.ConfigDir
 }
 
-// Slugify converts a human-readable name into a filesystem-safe slug.
-// This is a client-side utility, not exposed over HTTP.
-func Slugify(name string) string {
-	return loader.Slugify(name)
-}
 
 // GetProgressState returns the current full progress state snapshot.
 func (s *LocalService) GetProgressState(_ context.Context) (ProgressState, error) {

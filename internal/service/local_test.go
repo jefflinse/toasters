@@ -298,34 +298,6 @@ func TestConfigDir_ReturnsConfigured(t *testing.T) {
 	}
 }
 
-func TestSlugify(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name  string
-		input string
-		want  string
-	}{
-		{"simple words", "My Agent", "my-agent"},
-		{"empty string", "", ""},
-		{"already slug", "my-agent", "my-agent"},
-		{"special chars", "Go & Dev!", "go-dev"},
-		{"multiple spaces", "a  b  c", "a-b-c"},
-		{"leading trailing spaces", "  hello  ", "hello"},
-		{"numbers", "Agent 42", "agent-42"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			got := Slugify(tt.input)
-			if got != tt.want {
-				t.Errorf("Slugify(%q) = %q, want %q", tt.input, got, tt.want)
-			}
-		})
-	}
-}
-
 func TestStripCodeFences(t *testing.T) {
 	t.Parallel()
 
