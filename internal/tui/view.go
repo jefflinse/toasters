@@ -276,6 +276,15 @@ func (m *Model) View() tea.View {
 		return v
 	}
 
+	// Presets modal takes over the full terminal as a centered overlay.
+	if m.presetsModal.show {
+		presetsView := m.renderPresetsModal()
+		v := tea.NewView(presetsView)
+		v.AltScreen = true
+		v.MouseMode = tea.MouseModeCellMotion
+		return v
+	}
+
 	// Catalog modal takes over the full terminal as a centered overlay.
 	if m.catalogModal.show {
 		catalogView := m.renderCatalogModal()

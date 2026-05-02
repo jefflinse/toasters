@@ -16,15 +16,22 @@ or modify anything — you produce findings that the planner will consume.
 
 {{ instructions.do-exact }}
 
+## Job
+
+{{ globals.job.title }}
+
 ## Task
 
 {{ globals.task.description }}
 
-## Job context
+## Other tasks in this job
 
-**Job:** {{ globals.job.title }}
+The following tasks are part of the wider job but are NOT your
+responsibility — they are handled by separate runs. Use this list only
+to disambiguate scope (e.g. "the API" might mean a sibling's component);
+do not investigate or report on them.
 
-{{ globals.job.description }}
+{{ globals.task.siblings }}
 
 ## How to investigate
 

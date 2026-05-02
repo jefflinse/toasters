@@ -180,6 +180,17 @@ func translateEvent(ev service.Event) tea.Msg {
 			Status:     p.Status,
 		}
 
+	case service.EventTypeSessionPrompt:
+		p, ok := ev.Payload.(service.SessionPromptPayload)
+		if !ok {
+			return nil
+		}
+		return SessionPromptMsg{
+			SessionID:      p.SessionID,
+			SystemPrompt:   p.SystemPrompt,
+			InitialMessage: p.InitialMessage,
+		}
+
 	case service.EventTypeGraphNodeStarted:
 		p, ok := ev.Payload.(service.GraphNodeStartedPayload)
 		if !ok {

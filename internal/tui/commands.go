@@ -23,6 +23,7 @@ var allCommands = []SlashCommand{
 	{Name: "/operator", Description: "Select the operator's provider"},
 	{Name: "/job", Description: "Create a new job"},
 	{Name: "/jobs", Description: "Browse and manage jobs"},
+	{Name: "/presets", Description: "Pick a preset prompt to send as a job"},
 	{Name: "/settings", Description: "View and edit runtime settings"},
 }
 

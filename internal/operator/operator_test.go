@@ -1423,7 +1423,7 @@ func TestOperatorToolDefinitions(t *testing.T) {
 	expected := []string{
 		"surface_to_user", "list_jobs", "query_job",
 		"query_graphs", "setup_workspace", "create_job",
-		"save_work_request", "ask_user",
+		"ask_user",
 	}
 	if len(defs) != len(expected) {
 		t.Fatalf("want %d tool definitions, got %d", len(expected), len(defs))

@@ -13,13 +13,13 @@ import (
 	"github.com/jefflinse/toasters/internal/graphexec"
 )
 
-// Decomposition graph IDs — these must match the system graph YAML files
-// at defaults/system/graphs/. The service dispatches them automatically:
-// coarse-decompose on new jobs, fine-decompose on tasks without a
-// graph_id.
+// Decomposition graph IDs — re-exposed from graphexec so this file can
+// keep using its short local names. The service dispatches them
+// automatically: coarse-decompose on new jobs, fine-decompose on tasks
+// without a graph_id.
 const (
-	graphCoarseDecompose = "coarse-decompose"
-	graphFineDecompose   = "fine-decompose"
+	graphCoarseDecompose = graphexec.GraphCoarseDecompose
+	graphFineDecompose   = graphexec.GraphFineDecompose
 )
 
 // maxDecomposeDepth bounds fine-decompose recursion. A task whose
@@ -40,10 +40,11 @@ type decomposeMetadata struct {
 // decompositionResult is the parsed form of the decomposition-result
 // schema shared by coarse-decompose and fine-decompose.
 type decompositionResult struct {
-	Tasks    []decomposedTask `json:"tasks,omitempty"`
-	GraphID  string           `json:"graph_id,omitempty"`
-	Rejected bool             `json:"rejected,omitempty"`
-	Reason   string           `json:"reason,omitempty"`
+	Tasks     []decomposedTask `json:"tasks,omitempty"`
+	GraphID   string           `json:"graph_id,omitempty"`
+	Toolchain string           `json:"toolchain,omitempty"`
+	Rejected  bool             `json:"rejected,omitempty"`
+	Reason    string           `json:"reason,omitempty"`
 }
 
 // decomposedTask is one entry produced by a decomposition graph.
@@ -84,7 +85,7 @@ func (s *LocalService) dispatchCoarseDecompose(jobID, jobTitle, jobDescription s
 		return
 	}
 
-	s.dispatchBootstrap(bootstrap, job, jobDescription)
+	s.dispatchBootstrap(bootstrap, job, jobDescription, "")
 }
 
 // dispatchFineDecompose creates a bootstrap task to run fine-decompose
@@ -117,14 +118,24 @@ func (s *LocalService) dispatchFineDecompose(parent *db.Task, job *db.Job) {
 		return
 	}
 
-	s.dispatchBootstrap(bootstrap, job, parent.Title)
+	s.dispatchBootstrap(bootstrap, job, parent.Title, parent.ID)
 }
 
 // dispatchBootstrap kicks off the graph executor for a decomposition
 // bootstrap task. Runs in a goroutine — ExecuteTask itself is async
 // inside dispatchGraphTask, but we're already inside a broadcaster
 // callback that must not block.
-func (s *LocalService) dispatchBootstrap(bootstrap *db.Task, job *db.Job, description string) {
+//
+// subjectTaskID is the real task whose siblings should be exposed to
+// the bootstrap graph (parent.ID for fine-decompose). Pass empty for
+// coarse-decompose, which operates on the job and has no siblings.
+func (s *LocalService) dispatchBootstrap(bootstrap *db.Task, job *db.Job, description, subjectTaskID string) {
+	siblings := ""
+	if subjectTaskID != "" {
+		if jobTasks, err := s.cfg.Store.ListTasksForJob(s.ctx, bootstrap.JobID); err == nil {
+			siblings = graphexec.FormatSiblingTitles(graphexec.SiblingTitles(jobTasks, subjectTaskID))
+		}
+	}
 	req := graphexec.TaskRequest{
 		JobID:          bootstrap.JobID,
 		JobTitle:       job.Title,
@@ -132,6 +143,7 @@ func (s *LocalService) dispatchBootstrap(bootstrap *db.Task, job *db.Job, descri
 		TaskID:         bootstrap.ID,
 		TaskTitle:      description,
 		GraphID:        bootstrap.GraphID,
+		Siblings:       siblings,
 		WorkspaceDir:   job.WorkspaceDir,
 		ProviderName:   s.cfg.DefaultProvider,
 		Model:          s.cfg.DefaultModel,
@@ -204,7 +216,10 @@ func (s *LocalService) applyCoarseResult(ctx context.Context, jobID string, resu
 		slog.Warn("coarse-decompose produced no tasks", "job_id", jobID, "reason", result.Reason)
 		return
 	}
-	// Create tasks in order; sort_order mirrors the array index.
+	// Create tasks in order; sort_order mirrors the array index. Defer
+	// broadcasts until after dependencies are wired so fine-decompose
+	// dispatch only fires for tasks with no unmet predecessors.
+	ids := make([]string, len(result.Tasks))
 	for i, t := range result.Tasks {
 		task := &db.Task{
 			ID:        newTaskID(),
@@ -219,7 +234,29 @@ func (s *LocalService) applyCoarseResult(ctx context.Context, jobID string, resu
 				"job_id", jobID, "index", i, "error", err)
 			continue
 		}
-		s.BroadcastTaskCreated(task.ID, jobID, task.Title, "")
+		ids[i] = task.ID
+	}
+	for i, t := range result.Tasks {
+		if ids[i] == "" {
+			continue
+		}
+		for _, depIdx := range t.DependsOn {
+			if depIdx < 0 || depIdx >= len(ids) || ids[depIdx] == "" {
+				slog.Warn("ignoring invalid dependency index from coarse-decompose",
+					"task_id", ids[i], "index", depIdx, "job_id", jobID)
+				continue
+			}
+			if err := s.cfg.Store.AddTaskDependency(ctx, ids[i], ids[depIdx]); err != nil {
+				slog.Error("failed to persist task dependency",
+					"task_id", ids[i], "depends_on", ids[depIdx], "error", err)
+			}
+		}
+	}
+	for i, t := range result.Tasks {
+		if ids[i] == "" {
+			continue
+		}
+		s.BroadcastTaskCreated(ids[i], jobID, t.Title, "")
 	}
 	slog.Info("coarse-decompose applied",
 		"job_id", jobID, "task_count", len(result.Tasks), "reason", result.Reason)
@@ -242,7 +279,7 @@ func (s *LocalService) applyFineResult(ctx context.Context, parentID string, res
 
 	switch {
 	case result.GraphID != "":
-		s.assignGraphToParent(ctx, parent, result.GraphID, result.Reason)
+		s.assignGraphToParent(ctx, parent, result.GraphID, result.Toolchain, result.Reason)
 	case result.Rejected && len(result.Tasks) > 0:
 		s.replaceParentWithSubtasks(ctx, parent, result)
 	default:
@@ -252,8 +289,10 @@ func (s *LocalService) applyFineResult(ctx context.Context, parentID string, res
 }
 
 // assignGraphToParent wires the selected graph to the parent task and
-// kicks off normal execution via the executor.
-func (s *LocalService) assignGraphToParent(ctx context.Context, parent *db.Task, graphID, reason string) {
+// kicks off normal execution via the executor. toolchain is the toolchain
+// id chosen by fine-decompose to bind slot-bearing roles inside the graph;
+// it may be empty when the graph has no slot-bearing roles.
+func (s *LocalService) assignGraphToParent(ctx context.Context, parent *db.Task, graphID, toolchain, reason string) {
 	job, err := s.cfg.Store.GetJob(ctx, parent.JobID)
 	if err != nil {
 		slog.Error("failed to fetch job for graph assignment",
@@ -264,12 +303,12 @@ func (s *LocalService) assignGraphToParent(ctx context.Context, parent *db.Task,
 	// If a sibling is already in progress, defer execution via
 	// PreAssignTaskGraph — same serial-execution semantics the operator
 	// uses for manually-assigned tasks.
-	siblings, err := s.cfg.Store.ListTasksForJob(ctx, parent.JobID)
+	jobTasks, err := s.cfg.Store.ListTasksForJob(ctx, parent.JobID)
 	if err != nil {
 		slog.Error("failed to list sibling tasks", "task_id", parent.ID, "error", err)
 		return
 	}
-	for _, t := range siblings {
+	for _, t := range jobTasks {
 		if t.ID != parent.ID && t.Status == db.TaskStatusInProgress && !isDecompositionGraph(t.GraphID) {
 			if err := s.cfg.Store.PreAssignTaskGraph(ctx, parent.ID, graphID); err != nil {
 				slog.Error("pre-assign failed", "task_id", parent.ID, "error", err)
@@ -294,6 +333,8 @@ func (s *LocalService) assignGraphToParent(ctx context.Context, parent *db.Task,
 		TaskID:         parent.ID,
 		TaskTitle:      parent.Title,
 		GraphID:        graphID,
+		Toolchain:      toolchain,
+		Siblings:       graphexec.FormatSiblingTitles(graphexec.SiblingTitles(jobTasks, parent.ID)),
 		WorkspaceDir:   job.WorkspaceDir,
 		ProviderName:   s.cfg.DefaultProvider,
 		Model:          s.cfg.DefaultModel,
@@ -319,6 +360,7 @@ func (s *LocalService) replaceParentWithSubtasks(ctx context.Context, parent *db
 		return
 	}
 	childDepth := parent.DecomposeDepth + 1
+	ids := make([]string, len(result.Tasks))
 	for i, t := range result.Tasks {
 		task := &db.Task{
 			ID:             newTaskID(),
@@ -335,17 +377,37 @@ func (s *LocalService) replaceParentWithSubtasks(ctx context.Context, parent *db
 				"parent_id", parent.ID, "index", i, "error", err)
 			continue
 		}
-		s.BroadcastTaskCreated(task.ID, parent.JobID, task.Title, "")
+		ids[i] = task.ID
+	}
+	for i, t := range result.Tasks {
+		if ids[i] == "" {
+			continue
+		}
+		for _, depIdx := range t.DependsOn {
+			if depIdx < 0 || depIdx >= len(ids) || ids[depIdx] == "" {
+				slog.Warn("ignoring invalid dependency index from fine-decompose rejection",
+					"task_id", ids[i], "index", depIdx, "parent_id", parent.ID)
+				continue
+			}
+			if err := s.cfg.Store.AddTaskDependency(ctx, ids[i], ids[depIdx]); err != nil {
+				slog.Error("failed to persist subtask dependency",
+					"task_id", ids[i], "depends_on", ids[depIdx], "error", err)
+			}
+		}
+	}
+	for i, t := range result.Tasks {
+		if ids[i] == "" {
+			continue
+		}
+		s.BroadcastTaskCreated(ids[i], parent.JobID, t.Title, "")
 	}
 	slog.Info("fine-decompose rejected parent; replaced with subtasks",
 		"parent_id", parent.ID, "children", len(result.Tasks), "depth", childDepth, "reason", result.Reason)
 }
 
-// isDecompositionGraph reports whether a graph id is one of the internal
-// decomposition graphs, so scheduling logic can ignore decomposition
-// bootstrap tasks when checking for "real" in-progress siblings.
+// isDecompositionGraph is a short local alias for the shared predicate.
 func isDecompositionGraph(id string) bool {
-	return id == graphCoarseDecompose || id == graphFineDecompose
+	return graphexec.IsDecompositionGraph(id)
 }
 
 // newTaskID returns a fresh task UUID string. Mirrors the format used by

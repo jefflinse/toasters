@@ -363,7 +363,7 @@ func (ct *CoreTools) Definitions() []ToolDef {
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
-					"role":    {"type": "string", "description": "Worker role name (e.g. 'go-coder', 'go-tester', 'go-reviewer'). Must match a role loaded in the prompt engine."},
+					"role":    {"type": "string", "description": "Worker role name (e.g. 'coder', 'tester', 'reviewer'). Must match a role loaded in the prompt engine."},
 					"message": {"type": "string", "description": "Task instruction to send to the worker."},
 					"task":    {"type": "string", "description": "Short human-readable description of what this worker is doing (\u226460 chars), shown in the TUI card."}
 				},
@@ -963,7 +963,7 @@ func (ct *CoreTools) spawnWorker(ctx context.Context, args json.RawMessage) (str
 	}
 
 	// Compose the system prompt from the role definition.
-	systemPrompt, err := ct.promptEngine.Compose(params.Role, nil)
+	systemPrompt, err := ct.promptEngine.Compose(params.Role, nil, nil)
 	if err != nil {
 		return "", fmt.Errorf("composing prompt for role %q: %w", params.Role, err)
 	}

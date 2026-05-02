@@ -12,8 +12,8 @@ import (
 
 // RoleBuilder constructs a rhizome NodeFunc for a single role. The same
 // builder is reused across graphs — each call returns a fresh NodeFunc
-// bound to the supplied TemplateConfig and node id.
-type RoleBuilder func(cfg TemplateConfig, nodeID string) rhizome.NodeFunc[*TaskState]
+// bound to the supplied TemplateConfig, node id, and slot bindings.
+type RoleBuilder func(cfg TemplateConfig, nodeID string, slots map[string]string) rhizome.NodeFunc[*TaskState]
 
 // RoleRegistry resolves role names to RoleBuilders. The compiler holds one
 // registry per compile; tests may inject fakes via Register. Reads are
@@ -44,16 +44,16 @@ func (r *RoleRegistry) Register(name string, b RoleBuilder) {
 	r.builders[name] = b
 }
 
-// Build returns a NodeFunc for the named role bound to the supplied nodeID.
-// Registered builders take precedence; unregistered names resolve against
-// the prompt engine in cfg. Returns an error when neither path yields a
-// role definition.
-func (r *RoleRegistry) Build(name, nodeID string, cfg TemplateConfig) (rhizome.NodeFunc[*TaskState], error) {
+// Build returns a NodeFunc for the named role bound to the supplied nodeID
+// and slot bindings. Registered builders take precedence; unregistered
+// names resolve against the prompt engine in cfg. Returns an error when
+// neither path yields a role definition.
+func (r *RoleRegistry) Build(name, nodeID string, slots map[string]string, cfg TemplateConfig) (rhizome.NodeFunc[*TaskState], error) {
 	r.mu.RLock()
 	b, ok := r.builders[name]
 	r.mu.RUnlock()
 	if ok {
-		return b(cfg, nodeID), nil
+		return b(cfg, nodeID, slots), nil
 	}
 	if cfg.PromptEngine == nil {
 		return nil, fmt.Errorf("unknown role %q (no prompt engine configured; registered: %s)", name, strings.Join(r.registered(), ", "))
@@ -62,7 +62,7 @@ func (r *RoleRegistry) Build(name, nodeID string, cfg TemplateConfig) (rhizome.N
 	if role == nil {
 		return nil, fmt.Errorf("unknown role %q (not in prompt engine; loaded: %s)", name, strings.Join(cfg.PromptEngine.Roles(), ", "))
 	}
-	return RoleNode(cfg, role, nodeID), nil
+	return RoleNode(cfg, role, nodeID, slots), nil
 }
 
 // Names returns the explicitly registered role names, sorted alphabetically.

@@ -46,13 +46,16 @@ func Compile(def *Definition, cfg TemplateConfig, registry *RoleRegistry) (*rhiz
 			// Subgraphs are reserved for a later phase; reject cleanly for now.
 			return nil, fmt.Errorf("compile %q: node %q references subgraph %q, which is not yet supported", def.ID, n.ID, n.Graph)
 		}
-		fn, err := registry.Build(n.Role, n.ID, cfg)
+		fn, err := registry.Build(n.Role, n.ID, n.Slots, cfg)
 		if err != nil {
 			return nil, fmt.Errorf("compile %q: node %q: %w", def.ID, n.ID, err)
 		}
 		if cfg.PromptEngine != nil {
 			if role := cfg.PromptEngine.Role(n.Role); role != nil {
 				nodeRoles[n.ID] = role
+				if err := validateSlots(role, n.Slots, cfg.PromptEngine); err != nil {
+					return nil, fmt.Errorf("compile %q: node %q: %w", def.ID, n.ID, err)
+				}
 			}
 		}
 		// Wrap the node so that a NodeContext is always present during the
@@ -242,6 +245,44 @@ func validateRouter(r *Router, nodeRoles map[string]*prompt.Role, engine *prompt
 			names = append(names, name)
 		}
 		return fmt.Errorf("router expression %q: node %q (role %q) emits schema %q which has no field %q (available: %s)", r.On, srcNode, role.Name, schema.Name, head, strings.Join(names, ", "))
+	}
+	return nil
+}
+
+// validateSlots checks at compile time that a node's slot bindings line
+// up with the role's declared slots and that any literal toolchain ids
+// resolve to a loaded toolchain. Template-reference values
+// (`{{ globals.X }}`) are deferred to runtime since the artifacts they
+// resolve against don't exist yet.
+//
+// The runtime path in prompt.Engine.Compose performs the same checks
+// against fully-resolved values; doing them here surfaces typos in
+// graph YAML at compile time so the operator never spawns a job that
+// will fail on the first node.
+func validateSlots(role *prompt.Role, bindings map[string]string, engine *prompt.Engine) error {
+	declared := make(map[string]struct{}, len(role.Slots))
+	for _, name := range role.Slots {
+		declared[name] = struct{}{}
+		if _, ok := bindings[name]; !ok {
+			return fmt.Errorf("role %q declares slot %q but the node binds no value", role.Name, name)
+		}
+	}
+	loaded := engine.Toolchains()
+	loadedSet := make(map[string]struct{}, len(loaded))
+	for _, id := range loaded {
+		loadedSet[id] = struct{}{}
+	}
+	for name, value := range bindings {
+		if _, ok := declared[name]; !ok {
+			return fmt.Errorf("node binds slot %q but role %q declares no such slot (available: %s)", name, role.Name, strings.Join(role.Slots, ", "))
+		}
+		// Skip values that resolve at runtime against task artifacts.
+		if slotRef.MatchString(value) {
+			continue
+		}
+		if _, ok := loadedSet[value]; !ok {
+			return fmt.Errorf("slot %q bound to unknown toolchain %q (loaded: %s)", name, value, strings.Join(loaded, ", "))
+		}
 	}
 	return nil
 }

@@ -408,7 +408,6 @@ func TestSystemToolDefinitions(t *testing.T) {
 		"query_job",
 		"query_job_context",
 		"surface_to_user",
-		"save_work_request",
 	}
 
 	if len(defs) != len(expectedTools) {

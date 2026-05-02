@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -46,7 +47,7 @@ can connect to. By default, authentication is enabled using a bearer token
 stored in ~/.config/toasters/server.token.
 
 Examples:
-  toasters serve                    # Start server on :8080
+  toasters serve                    # Start server on :8421
   toasters serve --addr :3000       # Start server on port 3000
   toasters serve --no-auth          # Start server without authentication`,
 	RunE: runServe,
@@ -54,7 +55,7 @@ Examples:
 
 func init() {
 	rootCmd.AddCommand(serveCmd)
-	serveCmd.Flags().StringVar(&serveAddr, "addr", ":8080", "address to listen on")
+	serveCmd.Flags().StringVar(&serveAddr, "addr", ":8421", "address to listen on")
 	serveCmd.Flags().BoolVar(&serveNoAuth, "no-auth", false, "disable authentication")
 }
 
@@ -128,6 +129,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 		slog.Warn("failed to load user prompt definitions", "dir", userDir, "error", err)
 	}
 	promptEngine.SetGlobal("task.granularity", config.ValidTaskGranularity(cfg.TaskGranularity))
+	promptEngine.SetGlobal("toolchains.available", strings.Join(promptEngine.Toolchains(), ", "))
 	if err := prompt.ApplyGranularity(promptEngine, "coarse", config.ValidGranularity("coarse", cfg.CoarseGranularity)); err != nil {
 		slog.Warn("failed to apply coarse_granularity", "error", err)
 	}
@@ -201,7 +203,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 
 	// Compose the operator agent's system prompt via the prompt engine.
 	var operatorPrompt string
-	if composed, err := promptEngine.Compose("operator", nil); err != nil {
+	if composed, err := promptEngine.Compose("operator", nil, nil); err != nil {
 		slog.Warn("failed to compose operator prompt", "error", err)
 	} else {
 		operatorPrompt = composed

@@ -63,7 +63,7 @@ Write clean Go code.
 		t.Fatalf("LoadDir: %v", err)
 	}
 
-	result, err := engine.Compose("go-coder", nil)
+	result, err := engine.Compose("go-coder", nil, nil)
 	if err != nil {
 		t.Fatalf("Compose: %v", err)
 	}
@@ -120,7 +120,7 @@ Granularity is {{ globals.task.granularity }}.
 		t.Fatalf("LoadDir: %v", err)
 	}
 
-	result, err := engine.Compose("test", nil)
+	result, err := engine.Compose("test", nil, nil)
 	if err != nil {
 		t.Fatalf("Compose: %v", err)
 	}
@@ -147,7 +147,7 @@ Year is {{ globals.now.year }}.
 		t.Fatalf("LoadDir: %v", err)
 	}
 
-	result, err := engine.Compose("test", nil)
+	result, err := engine.Compose("test", nil, nil)
 	if err != nil {
 		t.Fatalf("Compose: %v", err)
 	}
@@ -180,7 +180,7 @@ Done.
 	workers := "- **go-coder**: Implements Go code.\n- **go-tester**: Writes Go tests."
 	result, err := engine.Compose("lead", map[string]string{
 		"team.workers": workers,
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("Compose: %v", err)
 	}
@@ -214,7 +214,7 @@ Value is {{ globals.my.key }}.
 
 	result, err := engine.Compose("test", map[string]string{
 		"my.key": "override-value",
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("Compose: %v", err)
 	}
@@ -252,7 +252,7 @@ name: Test Role
 	// Override the Go version.
 	result, err := engine.Compose("test", map[string]string{
 		"go.version": "1.25.0",
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("Compose: %v", err)
 	}
@@ -267,9 +267,124 @@ name: Test Role
 
 func TestEngine_Compose_MissingRole(t *testing.T) {
 	engine := NewEngine()
-	_, err := engine.Compose("nonexistent", nil)
+	_, err := engine.Compose("nonexistent", nil, nil)
 	if err == nil {
 		t.Fatal("expected error for missing role")
+	}
+}
+
+func TestEngine_Compose_UnresolvedRefsBecomeEmpty(t *testing.T) {
+	dir := t.TempDir()
+	mkdirAll(t, filepath.Join(dir, "roles"))
+	writeFile(t, filepath.Join(dir, "roles", "r.md"), `---
+name: R
+---
+BEFORE
+{{ globals.task.description }}
+{{ instructions.does-not-exist }}
+{{ toolchains.does-not-exist }}
+AFTER
+`)
+	engine := NewEngine()
+	if err := engine.LoadDir(dir, "test"); err != nil {
+		t.Fatalf("LoadDir: %v", err)
+	}
+	got, err := engine.Compose("r", nil, nil)
+	if err != nil {
+		t.Fatalf("Compose: %v", err)
+	}
+	if strings.Contains(got, "{{") {
+		t.Errorf("unresolved template ref left in output: %q", got)
+	}
+	if !strings.Contains(got, "BEFORE") || !strings.Contains(got, "AFTER") {
+		t.Errorf("surrounding text dropped: %q", got)
+	}
+}
+
+// slotEngine returns an engine with one slot-using role and one toolchain
+// loaded. Subtests parameterize the role frontmatter and body via the
+// roleFrontmatter/roleBody args so each failure mode gets its own tiny role.
+func slotEngine(t *testing.T, roleFrontmatter, roleBody string) *Engine {
+	t.Helper()
+	dir := t.TempDir()
+	mkdirAll(t, filepath.Join(dir, "roles"))
+	mkdirAll(t, filepath.Join(dir, "toolchains"))
+
+	writeFile(t, filepath.Join(dir, "toolchains", "go.md"), `---
+id: go
+---
+GO_TOOLCHAIN_BODY
+`)
+
+	writeFile(t, filepath.Join(dir, "roles", "r.md"),
+		"---\nname: R\n"+roleFrontmatter+"---\n"+roleBody+"\n")
+
+	e := NewEngine()
+	if err := e.LoadDir(dir, "test"); err != nil {
+		t.Fatalf("LoadDir: %v", err)
+	}
+	return e
+}
+
+func TestEngine_Compose_Slots_HappyPath(t *testing.T) {
+	e := slotEngine(t, "slots:\n  - toolchain\n", "BEFORE\n{{ slots.toolchain }}\nAFTER")
+	got, err := e.Compose("r", nil, map[string]string{"toolchain": "go"})
+	if err != nil {
+		t.Fatalf("Compose: %v", err)
+	}
+	if !strings.Contains(got, "GO_TOOLCHAIN_BODY") {
+		t.Errorf("expected toolchain body inlined, got:\n%s", got)
+	}
+	if strings.Contains(got, "{{") {
+		t.Errorf("unresolved reference in output:\n%s", got)
+	}
+}
+
+func TestEngine_Compose_Slots_DeclaredButUnbound(t *testing.T) {
+	e := slotEngine(t, "slots:\n  - toolchain\n", "{{ slots.toolchain }}")
+	_, err := e.Compose("r", nil, nil)
+	if err == nil {
+		t.Fatal("expected error when declared slot is unbound")
+	}
+	if !strings.Contains(err.Error(), "toolchain") {
+		t.Errorf("error should name the slot, got: %v", err)
+	}
+}
+
+func TestEngine_Compose_Slots_BoundToUnknownToolchain(t *testing.T) {
+	e := slotEngine(t, "slots:\n  - toolchain\n", "{{ slots.toolchain }}")
+	_, err := e.Compose("r", nil, map[string]string{"toolchain": "rust"})
+	if err == nil {
+		t.Fatal("expected error when slot is bound to unknown toolchain")
+	}
+	if !strings.Contains(err.Error(), "rust") {
+		t.Errorf("error should name the unknown toolchain, got: %v", err)
+	}
+}
+
+func TestEngine_Compose_Slots_BodyReferencesUndeclaredSlot(t *testing.T) {
+	// Role omits the slots: declaration but the body still references one.
+	e := slotEngine(t, "", "{{ slots.toolchain }}")
+	_, err := e.Compose("r", nil, nil)
+	if err == nil {
+		t.Fatal("expected error when body references an undeclared slot")
+	}
+	if !strings.Contains(err.Error(), "toolchain") || !strings.Contains(err.Error(), "not declared") {
+		t.Errorf("error should explain the undeclared slot, got: %v", err)
+	}
+}
+
+func TestEngine_Compose_Slots_UndeclaredBindingIgnored(t *testing.T) {
+	// Role declares no slots and body references none. Caller passes a
+	// stray binding — it should be ignored, not error (matches the
+	// existing leniency for unknown template refs).
+	e := slotEngine(t, "", "no slot ref here")
+	got, err := e.Compose("r", nil, map[string]string{"toolchain": "go"})
+	if err != nil {
+		t.Fatalf("Compose: %v", err)
+	}
+	if !strings.Contains(got, "no slot ref here") {
+		t.Errorf("expected body intact, got: %q", got)
 	}
 }
 
@@ -300,7 +415,7 @@ func TestEngine_Compose_WithActualDefaults(t *testing.T) {
 	}
 	engine.SetGlobal("task.granularity", "moderate")
 
-	result, err := engine.Compose("go-coder", nil)
+	result, err := engine.Compose("coder", nil, map[string]string{"toolchain": "go"})
 	if err != nil {
 		t.Fatalf("Compose: %v", err)
 	}
@@ -315,7 +430,8 @@ func TestEngine_Compose_WithActualDefaults(t *testing.T) {
 		}
 	}
 
-	// Should contain content from all three sources.
+	// Should contain content from all three sources: the toolchain bound
+	// via the slot, the shared do-exact instruction, and the coder body.
 	if !strings.Contains(result, "Go") {
 		t.Error("expected Go toolchain content")
 	}
@@ -346,6 +462,9 @@ func TestEngine_Compose_AllRoles(t *testing.T) {
 		t.Fatalf("LoadDir(user): %v", err)
 	}
 	engine.SetGlobal("task.granularity", "moderate")
+	// fine-decomposer references {{ globals.toolchains.available }} —
+	// startup wires this from engine.Toolchains(); mirror that here.
+	engine.SetGlobal("toolchains.available", strings.Join(engine.Toolchains(), ", "))
 	// The decomposer roles reference the synthetic
 	// {{ instructions.coarse-granularity }} / {{ instructions.fine-granularity }}
 	// instructions registered at startup by ApplyGranularity. Do the same
@@ -379,10 +498,20 @@ func TestEngine_Compose_AllRoles(t *testing.T) {
 			}
 			// Lead roles require team.workers, injected at spawn time by
 			// system_tools.go.
-			if role := engine.Role(name); role != nil && role.Mode == "lead" {
+			role := engine.Role(name)
+			if role != nil && role.Mode == "lead" {
 				overrides["team.workers"] = "- **test-worker**: A test worker."
 			}
-			result, err := engine.Compose(name, overrides)
+			// Roles that declare slots need bindings; bind to "go" since
+			// the Go toolchain is loaded as part of the user defaults.
+			var slots map[string]string
+			if role != nil && len(role.Slots) > 0 {
+				slots = make(map[string]string, len(role.Slots))
+				for _, s := range role.Slots {
+					slots[s] = "go"
+				}
+			}
+			result, err := engine.Compose(name, overrides, slots)
 			if err != nil {
 				t.Fatalf("Compose(%q): %v", name, err)
 			}

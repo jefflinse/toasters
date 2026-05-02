@@ -87,6 +87,11 @@ type Node struct {
 	// work is handled by a nested runner. Node is either role-bound or
 	// graph-bound, not both. Unused in Phase 2 — reserved for Phase 3.
 	Graph string `yaml:"graph,omitempty" json:"graph,omitempty"`
+
+	// Slots binds the role's declared slot names to concrete values
+	// (currently always toolchain ids). Every slot the role declares in
+	// frontmatter must have a binding here, or compose fails.
+	Slots map[string]string `yaml:"slots,omitempty" json:"slots,omitempty"`
 }
 
 // Edge connects nodes. Exactly one of To or Router must be set.

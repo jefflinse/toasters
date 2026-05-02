@@ -134,11 +134,11 @@ func (ot *operatorTools) Definitions() []runtime.ToolDef {
 		}`),
 	})
 
-	// Append create_job and save_work_request from SystemTools so the operator
-	// can create jobs and persist work requests. Task creation and graph
-	// assignment are no longer operator-driven — coarse-decompose and
-	// fine-decompose handle those automatically after create_job.
-	wantFromSystem := map[string]bool{"create_job": true, "save_work_request": true}
+	// Append create_job from SystemTools so the operator can create jobs.
+	// Task creation and graph assignment are no longer operator-driven —
+	// coarse-decompose and fine-decompose handle those automatically after
+	// create_job.
+	wantFromSystem := map[string]bool{"create_job": true}
 	for _, td := range ot.systemTools.Definitions() {
 		if wantFromSystem[td.Name] {
 			defs = append(defs, td)
@@ -163,8 +163,6 @@ func (ot *operatorTools) Execute(ctx context.Context, name string, args json.Raw
 		return ot.setupWorkspace(ctx, args)
 	case "create_job":
 		return ot.systemTools.Execute(ctx, "create_job", args)
-	case "save_work_request":
-		return ot.systemTools.Execute(ctx, "save_work_request", args)
 	case "ask_user":
 		return ot.askUser(ctx, args)
 	default:

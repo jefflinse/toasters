@@ -16,6 +16,7 @@
 //	{{ globals.now.month }}                   → runtime value (current month name)
 //	{{ globals.now.year }}                    → runtime value (current year)
 //	{{ vars.version }}                        → toolchain variable (within toolchain body)
+//	{{ slots.toolchain }}                     → slot bound at compose time (e.g. to a toolchain)
 package prompt
 
 import (
@@ -24,6 +25,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -73,8 +75,13 @@ type Role struct {
 	// default for this role. Pointer so that 0.0 is distinguishable from
 	// "use global default".
 	Temperature *float64 `yaml:"temperature,omitempty"`
-	Body        string   `yaml:"-"` // template text after frontmatter
-	Source      string   `yaml:"-"` // "system" or "user" — set by LoadDir caller
+	// Slots names parameterized fillers that callers must bind at compose
+	// time. Each name corresponds to a {{ slots.<name> }} reference in the
+	// body. Today the bound value is a toolchain id; in the future the slot
+	// kind may be inferred from the name or declared explicitly.
+	Slots  []string `yaml:"slots,omitempty"`
+	Body   string   `yaml:"-"` // template text after frontmatter
+	Source string   `yaml:"-"` // "system" or "user" — set by LoadDir caller
 }
 
 // Toolchain is language/framework knowledge with typed variables.
@@ -156,8 +163,11 @@ func (e *Engine) LoadDir(dir, source string) error {
 
 // Compose resolves a role's template references and returns the fully composed
 // system prompt. Overrides are passed to toolchain var resolution (e.g.
-// {"go.version": "1.25"} overrides the Go toolchain's version var).
-func (e *Engine) Compose(roleName string, overrides map[string]string) (string, error) {
+// {"go.version": "1.25"} overrides the Go toolchain's version var). Slots
+// binds each name declared in the role's frontmatter to a concrete value
+// (currently always a toolchain id); every declared slot must have a
+// binding or Compose returns an error.
+func (e *Engine) Compose(roleName string, overrides map[string]string, slots map[string]string) (string, error) {
 	e.mu.RLock()
 	role, ok := e.roles[roleName]
 	if !ok {
@@ -196,8 +206,32 @@ func (e *Engine) Compose(roleName string, overrides map[string]string) (string, 
 		resolvedToolchains[id] = resolved
 	}
 
+	// Strict validation: every slot the role declares must have a binding,
+	// and every binding must point to a loaded toolchain. We catch this up
+	// front so jobs fail before spending tokens.
+	declared := make(map[string]struct{}, len(role.Slots))
+	for _, name := range role.Slots {
+		declared[name] = struct{}{}
+		if _, ok := slots[name]; !ok {
+			return "", fmt.Errorf("role %q: slot %q declared but not bound", roleName, name)
+		}
+	}
+	for name, tcID := range slots {
+		if _, ok := declared[name]; !ok {
+			slog.Warn("ignoring slot binding for undeclared slot", "role", roleName, "slot", name)
+			continue
+		}
+		if _, ok := resolvedToolchains[tcID]; !ok {
+			return "", fmt.Errorf("role %q: slot %q bound to unknown toolchain %q", roleName, name, tcID)
+		}
+	}
+
 	// Resolve the role body.
+	var resolveErr error
 	result := templateRef.ReplaceAllStringFunc(role.Body, func(match string) string {
+		if resolveErr != nil {
+			return match
+		}
 		parts := templateRef.FindStringSubmatch(match)
 		if len(parts) != 3 {
 			return match
@@ -209,25 +243,40 @@ func (e *Engine) Compose(roleName string, overrides map[string]string) (string, 
 			if body, ok := resolvedToolchains[name]; ok {
 				return strings.TrimSpace(body)
 			}
-			slog.Warn("unresolved toolchain reference", "role", roleName, "ref", name)
-			return match
+			slog.Warn("unresolved toolchain reference; substituting empty", "role", roleName, "ref", name)
+			return ""
 		case "instructions":
 			if body, ok := instructions[name]; ok {
 				return strings.TrimSpace(body)
 			}
-			slog.Warn("unresolved instruction reference", "role", roleName, "ref", name)
-			return match
+			slog.Warn("unresolved instruction reference; substituting empty", "role", roleName, "ref", name)
+			return ""
 		case "globals":
 			if val, ok := globals[name]; ok {
 				return val
 			}
-			slog.Warn("unresolved global reference", "role", roleName, "ref", name)
-			return match
+			slog.Warn("unresolved global reference; substituting empty", "role", roleName, "ref", name)
+			return ""
+		case "slots":
+			if _, ok := declared[name]; !ok {
+				resolveErr = fmt.Errorf("role %q references slot %q not declared in frontmatter", roleName, name)
+				return match
+			}
+			tcID := slots[name]
+			body, ok := resolvedToolchains[tcID]
+			if !ok {
+				resolveErr = fmt.Errorf("role %q: slot %q bound to unknown toolchain %q", roleName, name, tcID)
+				return match
+			}
+			return strings.TrimSpace(body)
 		default:
 			slog.Warn("unknown template category", "role", roleName, "category", category)
 			return match
 		}
 	})
+	if resolveErr != nil {
+		return "", resolveErr
+	}
 
 	return strings.TrimSpace(result), nil
 }
@@ -244,6 +293,20 @@ func (e *Engine) Roles() []string {
 		names = append(names, name)
 	}
 	return names
+}
+
+// Toolchains returns all loaded toolchain ids in stable (sorted) order.
+// Used by callers that need to enumerate the catalog (e.g. fine-decompose
+// surfacing valid toolchain ids to the LLM).
+func (e *Engine) Toolchains() []string {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	ids := make([]string, 0, len(e.toolchains))
+	for id := range e.toolchains {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return ids
 }
 
 // resolveToolchain resolves {{ vars.X }} references in a toolchain body.

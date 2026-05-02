@@ -16,7 +16,8 @@ import (
 
 // selectedJobsModalGraphTaskState returns the graph state for whichever
 // task is currently selected in the jobs modal, or nil if that task has
-// no graph state (legacy / non-graph task).
+// no graph state (legacy / non-graph task). Refreshes the cached state at
+// access time so the topology fills in after a late-arriving graph_id.
 func (m *Model) selectedJobsModalGraphTaskState() *graphTaskState {
 	if m.jobsModal.jobIdx >= len(m.jobsModal.jobs) || m.jobsModal.jobIdx < 0 {
 		return nil
@@ -26,7 +27,9 @@ func (m *Model) selectedJobsModalGraphTaskState() *graphTaskState {
 	if m.jobsModal.taskIdx >= len(tasks) || m.jobsModal.taskIdx < 0 {
 		return nil
 	}
-	return m.graphTasks[tasks[m.jobsModal.taskIdx].ID]
+	gts := m.graphTasks[tasks[m.jobsModal.taskIdx].ID]
+	m.refreshGraphTaskState(gts)
+	return gts
 }
 
 // renderGraphTaskPane returns lines for the right-pane graph view: a

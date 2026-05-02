@@ -87,6 +87,16 @@ const (
 	// Payload: SessionDonePayload. Carries SessionID.
 	EventTypeSessionDone EventType = "session.done"
 
+	// EventTypeSessionPrompt is sent once per session, after the system
+	// prompt and initial message have been composed but before the LLM
+	// starts streaming. Distinct from session.started because graph-node
+	// sessions create their TUI slot via graph.node_started; this event
+	// fills in the prompt fields on the existing slot. For runtime.Session
+	// workers the slot is created by session.started which already carries
+	// the prompt — they don't need this event but it's harmless if emitted.
+	// Payload: SessionPromptPayload. Carries SessionID.
+	EventTypeSessionPrompt EventType = "session.prompt"
+
 	// EventTypeDefinitionsReloaded is sent when definition files change and are
 	// reloaded by the fsnotify watcher. The TUI should refresh its local copies
 	// of skills, workers, and teams. Payload: nil (no payload needed).
@@ -380,6 +390,17 @@ type SessionDonePayload struct {
 	TaskID     string
 	Status     string // "completed", "failed", "cancelled"
 	FinalText  string // last text output from the session (may be empty)
+}
+
+// SessionPromptPayload is the payload for EventTypeSessionPrompt events.
+// The TUI uses this to populate the system prompt and initial message on
+// an existing session slot so the prompt-viewer modal has content. Graph
+// nodes are the primary emitter; the slot they target was created earlier
+// by graph.node_started.
+type SessionPromptPayload struct {
+	SessionID      string
+	SystemPrompt   string
+	InitialMessage string
 }
 
 // OperationCompletedPayload is the payload for EventTypeOperationCompleted events.

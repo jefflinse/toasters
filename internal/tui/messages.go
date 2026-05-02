@@ -135,6 +135,17 @@ type SessionTextMsg struct {
 	Text      string
 }
 
+// SessionPromptMsg carries the composed system prompt and initial user
+// message for a session. Produced by the event consumer in response to a
+// session.prompt event. The TUI uses this to populate prompt fields on an
+// existing runtime slot (typically created by graph.node_started) so the
+// 'p'-key prompt-viewer modal has content for graph-node sessions.
+type SessionPromptMsg struct {
+	SessionID      string
+	SystemPrompt   string
+	InitialMessage string
+}
+
 // SessionReasoningMsg carries a chunk of streamed reasoning (chain-of-
 // thought) from an agent session. Produced by the event consumer in
 // response to a session.reasoning event.

@@ -26,7 +26,7 @@ name: Worker
 		t.Fatalf("LoadDir: %v", err)
 	}
 
-	got, err := e.Compose("worker", nil)
+	got, err := e.Compose("worker", nil, nil)
 	if err != nil {
 		t.Fatalf("Compose (first): %v", err)
 	}
@@ -36,7 +36,7 @@ name: Worker
 
 	e.SetInstruction("vibe", "replaced vibe")
 
-	got, err = e.Compose("worker", nil)
+	got, err = e.Compose("worker", nil, nil)
 	if err != nil {
 		t.Fatalf("Compose (second): %v", err)
 	}
@@ -82,7 +82,7 @@ COARSE: {{ instructions.coarse-granularity }}
 		t.Fatalf("ApplyGranularity(coarse, xfine): %v", err)
 	}
 
-	got, err := e.Compose("w", nil)
+	got, err := e.Compose("w", nil, nil)
 	if err != nil {
 		t.Fatalf("Compose: %v", err)
 	}
@@ -103,7 +103,7 @@ COARSE: {{ instructions.coarse-granularity }}
 	if err := ApplyGranularity(e, "fine", "xfine"); err != nil {
 		t.Fatalf("ApplyGranularity(fine, xfine): %v", err)
 	}
-	got, err = e.Compose("w", nil)
+	got, err = e.Compose("w", nil, nil)
 	if err != nil {
 		t.Fatalf("Compose (2nd): %v", err)
 	}

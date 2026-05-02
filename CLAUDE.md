@@ -15,7 +15,7 @@ No Makefile or task runner — pure Go module (Go 1.25, see `go.mod`).
 ```bash
 go build -o toasters ./                     # build the binary
 go run . serve                              # HTTP/SSE server mode (start this first)
-go run .                                    # connect TUI to localhost:8080 (default)
+go run .                                    # connect TUI to localhost:8421 (default)
 go run . --server <addr>                    # connect TUI to a different server
 
 go test ./...                               # all tests
@@ -33,7 +33,7 @@ in separate processes. The TUI cannot run "embedded" alongside the backend
 anymore; the embedded mode was removed during the client/server cleanup.
 
 1. **Server** — `cmd/serve.go`. Owns all state: runtime, operator, composer,
-   loader, MCP, SQLite. Exposes REST + SSE on `:8080` by default. Bearer-token
+   loader, MCP, SQLite. Exposes REST + SSE on `:8421` by default. Bearer-token
    auth from `~/.config/toasters/server.token` (mode 0600), constant-time
    comparison; `--no-auth` is dev-only.
 2. **TUI client** — `cmd/root.go`. Always a remote client. TCP-probes the
@@ -47,9 +47,9 @@ The codebase is a layered hub-and-spoke around `internal/service`. Read this sec
 
 - **`internal/service`** is the central hub. The `Service` interface composes 5 sub-interfaces: `OperatorService`, `DefinitionService`, `JobService`, `SessionService`, `SystemService`. `LocalService` in `internal/service/local.go` is the in-process implementation. **All state mutation and queries go through this interface** — the TUI and the HTTP server never touch the DB directly. The service emits a unified event stream that both the local TUI and SSE clients subscribe to. Event types live in `internal/service/events.go`.
 
-- **`internal/runtime`** spawns and manages worker sessions as goroutines. `runtime.go` is the spawner; `session.go` is one worker's conversation loop; `tools.go` is the built-in tool set (file I/O, shell, web, spawn_worker, MCP routing); `team_lead.go` is the coordinator worker for team dispatch; `layered_tools.go` handles tool access scoping.
+- **`internal/runtime`** spawns and manages worker sessions as goroutines. `runtime.go` is the spawner; `session.go` is one worker's conversation loop; `tools.go` is the built-in tool set (file I/O, shell, web, spawn_worker, MCP routing); `team_lead.go` is the team-lead worker for team dispatch; `layered_tools.go` handles tool access scoping.
 
-- **`internal/operator`** is the operator LLM coordination layer — a special "session" with its own tool set (`createJob`, `assignTask`, `reportBlocker`, team queries, decomposer tools). It drives the top-level state machine.
+- **`internal/operator`** is the operator LLM orchestration layer — a special "session" with its own tool set (`createJob`, `assignTask`, `reportBlocker`, team queries, decomposer tools). It drives the top-level state machine.
 
 - **`internal/tui`** is a thin Bubble Tea client. `event_consumer.go` translates service events into Bubble Tea messages; `update.go` / `view.go` / `model.go` are the standard Bubble Tea triplet. **The TUI is fully decoupled from DB and runtime internals — don't reintroduce direct access.** It is also a *viewer*, not a *router*: don't add code that pushes state back into the operator from the TUI (an old `notifyOperator` hack tried this and was deleted; worker completion is reported to the operator via team_lead's `complete_task` tool, not via the TUI).
 
