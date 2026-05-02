@@ -9,6 +9,7 @@ import (
 	"context"
 	"io"
 	"strings"
+	"sync"
 )
 
 // Event represents a single SSE event parsed from the stream.
@@ -27,88 +28,93 @@ type Event struct {
 //
 // For Anthropic SSE, events always have an "event:" line before the "data:" line.
 // For OpenAI SSE, events only have "data:" lines (no "event:" line).
+//
+// Reader runs a single background goroutine that pumps events into a channel;
+// callers read via Next, and the background goroutine exits cleanly when the
+// underlying reader closes or returns an error. To unblock a stuck Scan call
+// (for example, after the caller's ctx is cancelled), close the underlying
+// io.Reader — typically via http.Response.Body.Close() in the caller.
 type Reader struct {
-	scanner   *bufio.Scanner
-	eventType string
+	events chan Event
+	done   chan struct{}
+
+	mu  sync.Mutex
+	err error
 }
 
-// NewReader creates a new SSE reader from the given io.Reader.
+// NewReader creates a new SSE reader from the given io.Reader and starts the
+// background pump goroutine. The goroutine exits when the reader is exhausted
+// or returns an error; callers should close the underlying reader to unblock
+// it during shutdown.
 func NewReader(r io.Reader) *Reader {
-	return &Reader{
-		scanner: bufio.NewScanner(r),
+	rdr := &Reader{
+		events: make(chan Event, 16),
+		done:   make(chan struct{}),
+	}
+	go rdr.pump(r)
+	return rdr
+}
+
+func (r *Reader) pump(src io.Reader) {
+	defer close(r.events)
+	defer close(r.done)
+
+	scanner := bufio.NewScanner(src)
+	var eventType string
+	for scanner.Scan() {
+		line := scanner.Text()
+
+		// Blank line = end of SSE event block.
+		if line == "" {
+			eventType = ""
+			continue
+		}
+
+		// Capture the event type.
+		if strings.HasPrefix(line, "event: ") {
+			eventType = strings.TrimPrefix(line, "event: ")
+			continue
+		}
+
+		// We only process data lines.
+		// Handle both "data: " (with space) and "data:" (without space).
+		if !strings.HasPrefix(line, "data:") {
+			continue
+		}
+
+		data := strings.TrimPrefix(line, "data:")
+		data = strings.TrimSpace(data)
+
+		r.events <- Event{Type: eventType, Data: data}
+	}
+
+	if err := scanner.Err(); err != nil {
+		r.mu.Lock()
+		r.err = err
+		r.mu.Unlock()
 	}
 }
 
 // Next reads the next SSE event from the stream. It returns the event and true
-// if an event was read, or a zero Event and false if the stream ended.
-// The ctx parameter is used for cancellation.
-//
-// Next blocks until a complete event (data line) is available, the stream ends,
-// or ctx is cancelled.
+// if an event was read, or a zero Event and false if the stream ended or ctx
+// was cancelled. Cancellation is checked first, so a cancelled ctx will always
+// return false even if events remain buffered.
 func (r *Reader) Next(ctx context.Context) (Event, bool) {
-	for {
-		// Check context before attempting to read
-		if ctx.Err() != nil {
-			return Event{}, false
-		}
-
-		// Use a goroutine to make scanner.Scan() cancellable
-		type scanResult struct {
-			ok   bool
-			line string
-		}
-
-		resultCh := make(chan scanResult, 1)
-		go func() {
-			if r.scanner.Scan() {
-				resultCh <- scanResult{ok: true, line: r.scanner.Text()}
-			} else {
-				resultCh <- scanResult{ok: false}
-			}
-		}()
-
-		// Wait for either the scan to complete or context cancellation
-		select {
-		case <-ctx.Done():
-			return Event{}, false
-		case result := <-resultCh:
-			if !result.ok {
-				return Event{}, false
-			}
-
-			line := result.line
-
-			// Blank line = end of SSE event block.
-			if line == "" {
-				r.eventType = ""
-				continue
-			}
-
-			// Capture the event type.
-			if strings.HasPrefix(line, "event: ") {
-				r.eventType = strings.TrimPrefix(line, "event: ")
-				continue
-			}
-
-			// We only process data lines.
-			// Handle both "data: " (with space) and "data:" (without space).
-			if !strings.HasPrefix(line, "data:") {
-				continue
-			}
-
-			data := strings.TrimPrefix(line, "data:")
-			data = strings.TrimSpace(data)
-
-			ev := Event{
-				Type: r.eventType,
-				Data: data,
-			}
-			return ev, true
-		}
+	if ctx.Err() != nil {
+		return Event{}, false
+	}
+	select {
+	case <-ctx.Done():
+		return Event{}, false
+	case ev, ok := <-r.events:
+		return ev, ok
 	}
 }
 
 // Err returns the first non-EOF error encountered by the underlying scanner.
+// Safe to call only after Next returns false.
 func (r *Reader) Err() error {
-	return r.scanner.Err()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.err
 }

@@ -85,6 +85,10 @@ type Config struct {
 	OnTurnDone  func(tokensIn, tokensOut, reasoningTokens int)
 	OnPrompt    func(requestID, question string, options []string) // called when the operator calls ask_user
 	SessionFile string                                             // path to persist the operator conversation (e.g. ~/.config/toasters/sessions/operator.json)
+	// LifetimeCtx is the service-level lifetime context, threaded into
+	// SystemTools so detached graph dispatch goroutines are cancelled on
+	// service Shutdown rather than living forever.
+	LifetimeCtx context.Context
 }
 
 // New creates a new Operator. Call Start to begin processing events.
@@ -109,6 +113,7 @@ func New(cfg Config) (*Operator, error) {
 			Broadcaster:     cfg.SystemEventBroadcaster,
 			GraphExecutor:   cfg.GraphExecutor,
 			GraphCatalog:    cfg.GraphCatalog,
+			LifetimeCtx:     cfg.LifetimeCtx,
 		})
 	}
 

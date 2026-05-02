@@ -149,7 +149,7 @@ func (s *LocalService) dispatchBootstrap(bootstrap *db.Task, job *db.Job, descri
 		Model:          s.cfg.DefaultModel,
 	}
 	go func() {
-		if err := s.cfg.GraphExecutor.ExecuteTask(context.Background(), req); err != nil {
+		if err := s.cfg.GraphExecutor.ExecuteTask(s.ctx, req); err != nil {
 			slog.Error("decomposition bootstrap dispatch failed",
 				"bootstrap_task_id", bootstrap.ID,
 				"graph_id", bootstrap.GraphID,
@@ -340,7 +340,7 @@ func (s *LocalService) assignGraphToParent(ctx context.Context, parent *db.Task,
 		Model:          s.cfg.DefaultModel,
 	}
 	go func() {
-		if err := s.cfg.GraphExecutor.ExecuteTask(context.Background(), req); err != nil {
+		if err := s.cfg.GraphExecutor.ExecuteTask(s.ctx, req); err != nil {
 			slog.Error("fine-decompose dispatch failed",
 				"task_id", req.TaskID, "graph_id", req.GraphID, "error", err)
 		}

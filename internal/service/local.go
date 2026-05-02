@@ -196,6 +196,12 @@ func (s *LocalService) Broker() *hitl.Broker { return s.broker }
 // Shutdown cancels the service lifetime context, stopping background goroutines.
 func (s *LocalService) Shutdown() { s.cancel() }
 
+// Ctx returns the service-level lifetime context. It is cancelled by
+// Shutdown. External code (e.g. cmd/serve.go constructing an operator
+// before calling SetOperator) should pass this as operator.Config.LifetimeCtx
+// so detached graph dispatch goroutines are bounded by service lifetime.
+func (s *LocalService) Ctx() context.Context { return s.ctx }
+
 // tryAcquireAsync attempts to acquire a slot for an async operation.
 // Returns false if the semaphore is full (too many concurrent operations).
 func (s *LocalService) tryAcquireAsync() bool {
@@ -2247,6 +2253,7 @@ func (s *LocalService) startOperator(p provider.Provider, providerID, model stri
 		PromptEngine:           s.cfg.PromptEngine,
 		DefaultProvider:        s.cfg.DefaultProvider,
 		DefaultModel:           s.cfg.DefaultModel,
+		LifetimeCtx:            s.ctx,
 		OnText: func(text string) {
 			batcher.Add(text)
 		},

@@ -63,6 +63,7 @@ type SystemTools struct {
 	graphCatalog    GraphCatalog           // optional; backs query_graphs
 	workDir         string                 // global workspace directory; per-job subdirs are created under this
 	broadcaster     SystemEventBroadcaster // optional; nil means no service event broadcast
+	lifetimeCtx     context.Context        // outlives any single operator turn; used for detached graph dispatch
 }
 
 // SystemToolsConfig bundles SystemTools dependencies. Optional fields can be
@@ -78,10 +79,19 @@ type SystemToolsConfig struct {
 	Broadcaster     SystemEventBroadcaster
 	GraphExecutor   GraphTaskExecutor
 	GraphCatalog    GraphCatalog
+	// LifetimeCtx is the context used for graph task dispatch goroutines, which
+	// outlive the operator turn that triggered them. Should be the service-level
+	// lifetime context so dispatched tasks are cancelled on Shutdown. If nil,
+	// context.Background() is used (acceptable for tests but not production).
+	LifetimeCtx context.Context
 }
 
 // NewSystemTools creates a new SystemTools instance from a config struct.
 func NewSystemTools(cfg SystemToolsConfig) *SystemTools {
+	lifetimeCtx := cfg.LifetimeCtx
+	if lifetimeCtx == nil {
+		lifetimeCtx = context.Background()
+	}
 	return &SystemTools{
 		store:           cfg.Store,
 		promptEngine:    cfg.PromptEngine,
@@ -92,6 +102,7 @@ func NewSystemTools(cfg SystemToolsConfig) *SystemTools {
 		graphCatalog:    cfg.GraphCatalog,
 		workDir:         cfg.WorkDir,
 		broadcaster:     cfg.Broadcaster,
+		lifetimeCtx:     lifetimeCtx,
 	}
 }
 
@@ -392,10 +403,9 @@ func (st *SystemTools) dispatchGraphTask(ctx context.Context, task *db.Task, job
 		Model:          st.defaultModel,
 	}
 	go func() {
-		if err := st.graphExecutor.ExecuteTask(
-			context.Background(), // detach from operator context
-			req,
-		); err != nil {
+		// Detach from the per-turn operator ctx, but stay scoped to the
+		// service lifetime so Shutdown cancels in-flight graph tasks.
+		if err := st.graphExecutor.ExecuteTask(st.lifetimeCtx, req); err != nil {
 			slog.Error("graph task execution failed",
 				"task_id", req.TaskID, "job_id", req.JobID, "graph_id", req.GraphID, "error", err)
 		}

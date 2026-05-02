@@ -17,12 +17,16 @@ import (
 
 // ConsumeServiceEvents subscribes to the service event stream and forwards
 // events to the Bubble Tea program as typed TUI messages. It runs until ctx
-// is cancelled or the event channel is closed.
+// is cancelled or the event channel is closed. If subscribed is non-nil, it
+// is closed after the underlying Subscribe call returns, signaling that the
+// consumer is wired and ready to receive events.
 //
 // Call this in a goroutine after creating the tea.Program:
 //
-//	go tui.ConsumeServiceEvents(ctx, svc, &p)
-func ConsumeServiceEvents(ctx context.Context, svc service.Service, prog *atomic.Pointer[tea.Program]) {
+//	ready := make(chan struct{})
+//	go tui.ConsumeServiceEvents(ctx, svc, &p, ready)
+//	<-ready // safe to push events
+func ConsumeServiceEvents(ctx context.Context, svc service.Service, prog *atomic.Pointer[tea.Program], subscribed chan<- struct{}) {
 	defer func() {
 		if r := recover(); r != nil {
 			slog.Error("PANIC in service event consumer — TUI will stop receiving events",
@@ -33,6 +37,9 @@ func ConsumeServiceEvents(ctx context.Context, svc service.Service, prog *atomic
 	}()
 
 	ch := svc.Events().Subscribe(ctx)
+	if subscribed != nil {
+		close(subscribed)
+	}
 	for ev := range ch {
 		// Trace every event so a freeze investigation has timing data.
 		// Filter out heartbeats and progress updates from the trace because

@@ -285,6 +285,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 			WorkDir:                workspaceDir,
 			Store:                  store,
 			SystemPrompt:           operatorPrompt,
+			SessionFile:            filepath.Join(configDir, "sessions", "operator.json"),
 			SystemEventBroadcaster: svc,
 			GraphExecutor:          graphExec,
 			GraphCatalog:           ldr,
@@ -292,6 +293,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 			PromptEngine:           promptEngine,
 			DefaultProvider:        defaultProvider,
 			DefaultModel:           defaultModel,
+			LifetimeCtx:            svc.Ctx(),
 			OnText: func(text string) {
 				batcher.Add(text)
 			},

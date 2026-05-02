@@ -99,12 +99,14 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 	// Start the service event consumer — translates service events to TUI messages.
 	consumerCtx, consumerCancel := context.WithCancel(context.Background())
 	defer consumerCancel()
-	go tui.ConsumeServiceEvents(consumerCtx, svc, &p)
+	consumerReady := make(chan struct{})
+	go tui.ConsumeServiceEvents(consumerCtx, svc, &p, consumerReady)
 
-	// Hydrate teams + transition out of the loading screen as soon as the
+	// Hydrate state + transition out of the loading screen as soon as the
 	// connection is established. Run in a goroutine so the TUI can render
-	// while the initial fetch happens.
-	go sendInitialAppReady(svc, &p, serverAddr)
+	// while the initial fetch happens. Wait for the consumer to be wired
+	// before pushing AppReadyMsg so no startup events are dropped.
+	go sendInitialAppReady(svc, &p, serverAddr, consumerReady)
 
 	_, err = prog.Run()
 	p.Store(nil) // Prevent post-shutdown sends
@@ -124,8 +126,9 @@ func probeServer(addr string) error {
 
 // sendInitialAppReady fetches initial state from the server and sends the
 // AppReadyMsg that transitions the TUI out of the loading screen. Runs in
-// its own goroutine.
-func sendInitialAppReady(svc service.Service, p *atomic.Pointer[tea.Program], serverAddr string) {
+// its own goroutine. ready is closed by the event consumer once it has
+// subscribed, so we don't drop early events.
+func sendInitialAppReady(svc service.Service, p *atomic.Pointer[tea.Program], serverAddr string, ready <-chan struct{}) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -149,9 +152,14 @@ func sendInitialAppReady(svc service.Service, p *atomic.Pointer[tea.Program], se
 		slog.Warn("failed to fetch chat history during startup", "error", err)
 	}
 
-	// Wait briefly for SSE connection to stabilize so the consumer is wired
-	// before any startup events arrive.
-	time.Sleep(200 * time.Millisecond)
+	// Wait for the event consumer to subscribe before pushing AppReadyMsg —
+	// this prevents the consumer from missing startup events that fire as
+	// the connection comes up.
+	select {
+	case <-ready:
+	case <-ctx.Done():
+		slog.Warn("event consumer did not become ready within startup deadline")
+	}
 
 	if prog := p.Load(); prog != nil {
 		greeting := "Connected to " + serverAddr
