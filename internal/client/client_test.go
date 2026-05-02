@@ -32,7 +32,6 @@ type mockService struct {
 	respondToPromptFn  func(ctx context.Context, reqID, resp string) error
 	statusFn           func(ctx context.Context) (service.OperatorStatus, error)
 	historyFn          func(ctx context.Context) ([]service.ChatEntry, error)
-	respondToBlockerFn func(ctx context.Context, jobID, taskID string, answers []string) error
 
 	// Definitions
 	listSkillsFn    func(ctx context.Context) ([]service.Skill, error)
@@ -100,13 +99,6 @@ func (o *mockOperator) History(ctx context.Context) ([]service.ChatEntry, error)
 		return o.s.historyFn(ctx)
 	}
 	return nil, nil
-}
-
-func (o *mockOperator) RespondToBlocker(ctx context.Context, jobID, taskID string, answers []string) error {
-	if o.s.respondToBlockerFn != nil {
-		return o.s.respondToBlockerFn(ctx, jobID, taskID, answers)
-	}
-	return nil
 }
 
 // --- Definitions ---

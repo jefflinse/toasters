@@ -75,7 +75,6 @@ type AgentDefaultsConfig struct {
 type OperatorConfig struct {
 	Provider string `mapstructure:"provider"` // provider ID; empty means operator is disabled until configured
 	Model    string `mapstructure:"model"`
-	TeamsDir string `mapstructure:"teams_dir"`
 }
 
 // Load reads configuration from ~/.config/toasters/config.yaml, applying
@@ -94,7 +93,6 @@ func Load() (*Config, error) {
 	viper.SetDefault("database_path", "")
 	viper.SetDefault("operator.provider", "")
 	viper.SetDefault("operator.model", "")
-	viper.SetDefault("operator.teams_dir", filepath.Join(home, ".config", "toasters", "user", "teams"))
 	viper.SetDefault("task_granularity", "moderate")
 	viper.SetDefault("coarse_granularity", "medium")
 	viper.SetDefault("fine_granularity", "medium")

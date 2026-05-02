@@ -322,8 +322,7 @@ const (
 )
 
 // ToolCall is the service-level representation of a tool invocation by the LLM.
-// Used in promptModeState.pendingDispatch (the "confirm tool dispatch" flow) and
-// in ChatMessage.ToolCalls.
+// Used in ChatMessage.ToolCalls.
 type ToolCall struct {
 	ID        string
 	Name      string

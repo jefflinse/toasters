@@ -670,12 +670,10 @@ type wireOperatorDonePayload struct {
 }
 
 type wireOperatorPromptPayload struct {
-	RequestID       string        `json:"request_id"`
-	Question        string        `json:"question"`
-	Options         []string      `json:"options,omitempty"`
-	Source          string        `json:"source,omitempty"`
-	ConfirmDispatch bool          `json:"confirm_dispatch"`
-	PendingDispatch *wireToolCall `json:"pending_dispatch,omitempty"`
+	RequestID string   `json:"request_id"`
+	Question  string   `json:"question"`
+	Options   []string `json:"options,omitempty"`
+	Source    string   `json:"source,omitempty"`
 }
 
 type wireJobCreatedPayload struct {
@@ -862,20 +860,12 @@ func eventPayloadToWire(ev service.Event) any {
 			TokensOut: p.TokensOut, ReasoningTokens: p.ReasoningTokens,
 		}
 	case service.OperatorPromptPayload:
-		w := wireOperatorPromptPayload{
-			RequestID:       p.RequestID,
-			Question:        p.Question,
-			Options:         p.Options,
-			Source:          p.Source,
-			ConfirmDispatch: p.ConfirmDispatch,
+		return wireOperatorPromptPayload{
+			RequestID: p.RequestID,
+			Question:  p.Question,
+			Options:   p.Options,
+			Source:    p.Source,
 		}
-		if p.PendingDispatch != nil {
-			w.PendingDispatch = &wireToolCall{
-				ID: p.PendingDispatch.ID, Name: p.PendingDispatch.Name,
-				Arguments: p.PendingDispatch.Arguments,
-			}
-		}
-		return w
 	case service.JobCreatedPayload:
 		return wireJobCreatedPayload{JobID: p.JobID, Title: p.Title, Description: p.Description}
 	case service.TaskCreatedPayload:

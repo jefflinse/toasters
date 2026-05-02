@@ -314,12 +314,10 @@ type wireOperatorDonePayload struct {
 }
 
 type wireOperatorPromptPayload struct {
-	RequestID       string        `json:"request_id"`
-	Question        string        `json:"question"`
-	Options         []string      `json:"options,omitempty"`
-	Source          string        `json:"source,omitempty"`
-	ConfirmDispatch bool          `json:"confirm_dispatch"`
-	PendingDispatch *wireToolCall `json:"pending_dispatch,omitempty"`
+	RequestID string   `json:"request_id"`
+	Question  string   `json:"question"`
+	Options   []string `json:"options,omitempty"`
+	Source    string   `json:"source,omitempty"`
 }
 
 type wireJobCreatedPayload struct {
@@ -869,18 +867,12 @@ func parseSSEPayload(eventType string, raw json.RawMessage) (any, error) {
 		if err := json.Unmarshal(raw, &w); err != nil {
 			return nil, fmt.Errorf("decoding operator.prompt payload: %w", err)
 		}
-		p := service.OperatorPromptPayload{
-			RequestID:       w.RequestID,
-			Question:        w.Question,
-			Options:         w.Options,
-			Source:          w.Source,
-			ConfirmDispatch: w.ConfirmDispatch,
-		}
-		if w.PendingDispatch != nil {
-			tc := wireToolCallToService(*w.PendingDispatch)
-			p.PendingDispatch = &tc
-		}
-		return p, nil
+		return service.OperatorPromptPayload{
+			RequestID: w.RequestID,
+			Question:  w.Question,
+			Options:   w.Options,
+			Source:    w.Source,
+		}, nil
 
 	case service.EventTypeJobCreated:
 		var w wireJobCreatedPayload

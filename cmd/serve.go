@@ -99,8 +99,6 @@ func runServe(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	teamsDir := cfg.Operator.TeamsDir
-
 	// Open SQLite database for persistence.
 	var store db.Store
 	dbPath, err := config.DatabasePath(cfg, workspaceDir)
@@ -222,7 +220,6 @@ func runServe(cmd *cobra.Command, args []string) error {
 		Loader:           ldr,
 		ConfigDir:        configDir,
 		WorkspaceDir:     workspaceDir,
-		TeamsDir:         teamsDir,
 		OperatorModel:    cfg.Operator.Model,
 		OperatorEndpoint: operatorEndpoint,
 		StartTime:        time.Now(),

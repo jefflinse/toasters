@@ -52,7 +52,7 @@ type gridState struct {
 }
 
 // promptModeState holds all state for the interactive prompt mode
-// (active when the operator calls ask_user, assign_team, etc.).
+// (active when the operator calls ask_user).
 type promptModeState struct {
 	promptMode     bool
 	promptQuestion string
@@ -60,10 +60,6 @@ type promptModeState struct {
 	promptSelected int      // cursor index
 	promptCustom   bool     // true when user selected "Custom response..." and is typing
 	requestID      string   // correlates with ask_user request for RespondToPrompt
-
-	confirmDispatch bool             // true when promptMode is a dispatch confirmation
-	changingTeam    bool             // true when promptMode is the "change team" sub-prompt
-	pendingDispatch service.ToolCall // the assign_team call awaiting confirmation
 }
 
 // promptModalState holds all state for the prompt-viewing modal overlay.

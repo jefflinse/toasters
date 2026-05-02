@@ -33,31 +33,24 @@ func TestSystemFilesParseCorrectly(t *testing.T) {
 	}
 
 	tests := []struct {
-		path    string
-		wantDef mdfmt.DefType
-		name    string
+		path string
+		name string
 	}{
-		{"system/skills/orchestration.md", mdfmt.DefSkill, "Orchestration"},
+		{"system/skills/orchestration.md", "Orchestration"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.path, func(t *testing.T) {
 			fullPath := filepath.Join(tmpDir, tt.path)
-			defType, def, err := mdfmt.ParseFile(fullPath)
+			def, err := mdfmt.ParseSkill(fullPath)
 			if err != nil {
-				t.Fatalf("ParseFile(%s): %v", tt.path, err)
+				t.Fatalf("ParseSkill(%s): %v", tt.path, err)
 			}
-			if defType != tt.wantDef {
-				t.Errorf("DefType = %q, want %q", defType, tt.wantDef)
+			if def.Name != tt.name {
+				t.Errorf("Name = %q, want %q", def.Name, tt.name)
 			}
-
-			if d, ok := def.(*mdfmt.SkillDef); ok {
-				if d.Name != tt.name {
-					t.Errorf("Name = %q, want %q", d.Name, tt.name)
-				}
-				if d.Body == "" {
-					t.Error("Body is empty")
-				}
+			if def.Body == "" {
+				t.Error("Body is empty")
 			}
 		})
 	}

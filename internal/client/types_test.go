@@ -772,15 +772,14 @@ func TestParseSSEPayload_OperatorDone(t *testing.T) {
 	}
 }
 
-func TestParseSSEPayload_OperatorPrompt_WithPendingDispatch(t *testing.T) {
+func TestParseSSEPayload_OperatorPrompt(t *testing.T) {
 	t.Parallel()
 
 	raw := json.RawMessage(`{
 		"request_id":"req-1",
-		"question":"Assign to backend team?",
+		"question":"What should I do?",
 		"options":["yes","no"],
-		"confirm_dispatch":true,
-		"pending_dispatch":{"id":"tc-1","name":"assign_task","arguments":{"team":"backend"}}
+		"source":"graph:investigate"
 	}`)
 	payload, err := parseSSEPayload("operator.prompt", raw)
 	if err != nil {
@@ -794,48 +793,14 @@ func TestParseSSEPayload_OperatorPrompt_WithPendingDispatch(t *testing.T) {
 	if p.RequestID != "req-1" {
 		t.Errorf("RequestID = %q, want %q", p.RequestID, "req-1")
 	}
-	if p.Question != "Assign to backend team?" {
-		t.Errorf("Question = %q, want %q", p.Question, "Assign to backend team?")
+	if p.Question != "What should I do?" {
+		t.Errorf("Question = %q, want %q", p.Question, "What should I do?")
 	}
 	if len(p.Options) != 2 || p.Options[0] != "yes" || p.Options[1] != "no" {
 		t.Errorf("Options = %v, want [yes no]", p.Options)
 	}
-	if !p.ConfirmDispatch {
-		t.Error("ConfirmDispatch = false, want true")
-	}
-	if p.PendingDispatch == nil {
-		t.Fatal("PendingDispatch is nil, want non-nil")
-	}
-	if p.PendingDispatch.ID != "tc-1" {
-		t.Errorf("PendingDispatch.ID = %q, want %q", p.PendingDispatch.ID, "tc-1")
-	}
-	if p.PendingDispatch.Name != "assign_task" {
-		t.Errorf("PendingDispatch.Name = %q, want %q", p.PendingDispatch.Name, "assign_task")
-	}
-}
-
-func TestParseSSEPayload_OperatorPrompt_WithoutPendingDispatch(t *testing.T) {
-	t.Parallel()
-
-	raw := json.RawMessage(`{
-		"request_id":"req-2",
-		"question":"What should I do?",
-		"confirm_dispatch":false
-	}`)
-	payload, err := parseSSEPayload("operator.prompt", raw)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	p, ok := payload.(service.OperatorPromptPayload)
-	if !ok {
-		t.Fatalf("payload type = %T, want OperatorPromptPayload", payload)
-	}
-	if p.PendingDispatch != nil {
-		t.Errorf("PendingDispatch = %v, want nil", p.PendingDispatch)
-	}
-	if p.ConfirmDispatch {
-		t.Error("ConfirmDispatch = true, want false")
+	if p.Source != "graph:investigate" {
+		t.Errorf("Source = %q, want %q", p.Source, "graph:investigate")
 	}
 }
 

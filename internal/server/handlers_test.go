@@ -51,12 +51,6 @@ type mockOperatorService struct {
 		requestID string
 		response  string
 	}
-	respondToBlockerErr   error
-	respondToBlockerCalls []struct {
-		jobID   string
-		taskID  string
-		answers []string
-	}
 }
 
 func (m *mockOperatorService) SendMessage(_ context.Context, _ string) (string, error) {
@@ -79,14 +73,6 @@ func (m *mockOperatorService) History(_ context.Context) ([]service.ChatEntry, e
 	return nil, nil
 }
 
-func (m *mockOperatorService) RespondToBlocker(_ context.Context, jobID, taskID string, answers []string) error {
-	m.respondToBlockerCalls = append(m.respondToBlockerCalls, struct {
-		jobID   string
-		taskID  string
-		answers []string
-	}{jobID, taskID, answers})
-	return m.respondToBlockerErr
-}
 
 type mockDefinitionService struct{}
 type mockJobService struct{}

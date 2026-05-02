@@ -98,7 +98,6 @@ type LocalConfig struct {
 	Loader           *loader.Loader
 	ConfigDir        string
 	WorkspaceDir     string
-	TeamsDir         string
 	OperatorModel    string                     // for OperatorStatus.ModelName
 	OperatorEndpoint string                     // for OperatorStatus.Endpoint (LLM provider URL)
 	StartTime        time.Time                  // for Health().Uptime
@@ -1625,7 +1624,7 @@ Detailed instructions for the agent using this skill. This is the system prompt 
 
 	content = stripCodeFences(content)
 
-	if _, err := mdfmt.ParseBytes([]byte(content), mdfmt.DefSkill); err != nil {
+	if _, err := mdfmt.ParseBytes([]byte(content)); err != nil {
 		return "", fmt.Errorf("generated content is not a valid skill definition: %w", err)
 	}
 
@@ -2472,12 +2471,10 @@ func (s *LocalService) writeGeneratedSkillFile(content string) (string, error) {
 	}
 
 	slug := "generated-skill"
-	if parsed, err := mdfmt.ParseBytes([]byte(content), mdfmt.DefSkill); err == nil {
-		if skillDef, ok := parsed.(*mdfmt.SkillDef); ok && skillDef.Name != "" {
-			nameSlug := loader.Slugify(skillDef.Name)
-			if nameSlug != "" {
-				slug = nameSlug
-			}
+	if skillDef, err := mdfmt.ParseBytes([]byte(content)); err == nil && skillDef.Name != "" {
+		nameSlug := loader.Slugify(skillDef.Name)
+		if nameSlug != "" {
+			slug = nameSlug
 		}
 	}
 

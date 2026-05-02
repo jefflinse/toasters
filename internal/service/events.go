@@ -233,12 +233,6 @@ type OperatorPromptPayload struct {
 	// rhizome.Interrupt. Lets the TUI render a hint about the asker without
 	// forking the event type.
 	Source string
-	// ConfirmDispatch is true when the prompt is a tool-dispatch confirmation
-	// (the "assign_team" confirm flow). The TUI should show the dispatch UI.
-	ConfirmDispatch bool
-	// PendingDispatch holds the tool call awaiting confirmation, populated only
-	// when ConfirmDispatch is true. The TUI displays this for the user to review.
-	PendingDispatch *ToolCall
 }
 
 // JobCreatedPayload is the payload for EventTypeJobCreated events.

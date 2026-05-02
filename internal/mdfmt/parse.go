@@ -32,70 +32,7 @@ func readDefinitionFile(path string) ([]byte, error) {
 	return data, nil
 }
 
-// teamFields are frontmatter keys that indicate a team definition.
-var teamFields = map[string]bool{
-	"lead":   true,
-	"agents": true,
-	"roles":  true,
-}
-
-// detectType examines raw frontmatter fields and returns the definition type.
-func detectType(raw map[string]any) DefType {
-	for key := range raw {
-		if teamFields[key] {
-			return DefTeam
-		}
-	}
-	return DefSkill
-}
-
-// ParseFile reads a .md file and returns the parsed definition.
-// It auto-detects the definition type based on frontmatter fields:
-//   - Has "lead", "agents", or "roles" field → TeamDef
-//   - Otherwise → SkillDef
-//
-// Returns (DefType, any, error) where any is *SkillDef or *TeamDef.
-func ParseFile(path string) (DefType, any, error) {
-	data, err := readDefinitionFile(path)
-	if err != nil {
-		return "", nil, err
-	}
-
-	fmYAML, body, err := SplitFrontmatter(string(data))
-	if err != nil {
-		return "", nil, fmt.Errorf("parsing definition file %s: %w", path, err)
-	}
-
-	// Unmarshal into a generic map for type detection.
-	var raw map[string]any
-	if err := yaml.Unmarshal([]byte(fmYAML), &raw); err != nil {
-		return "", nil, fmt.Errorf("parsing frontmatter YAML in %s: %w", path, err)
-	}
-	if raw == nil {
-		raw = make(map[string]any)
-	}
-
-	defType := detectType(raw)
-	stem := filenameStem(path)
-
-	switch defType {
-	case DefTeam:
-		def, err := unmarshalTeam(fmYAML, body, stem)
-		if err != nil {
-			return "", nil, fmt.Errorf("parsing team definition %s: %w", path, err)
-		}
-		return DefTeam, def, nil
-
-	default:
-		def, err := unmarshalSkill(fmYAML, body, stem)
-		if err != nil {
-			return "", nil, fmt.Errorf("parsing skill definition %s: %w", path, err)
-		}
-		return DefSkill, def, nil
-	}
-}
-
-// ParseSkill parses a .md file as a SkillDef.
+// ParseSkill reads and parses a .md file as a SkillDef.
 func ParseSkill(path string) (*SkillDef, error) {
 	data, err := readDefinitionFile(path)
 	if err != nil {
@@ -110,37 +47,13 @@ func ParseSkill(path string) (*SkillDef, error) {
 	return unmarshalSkill(fmYAML, body, filenameStem(path))
 }
 
-// ParseTeam parses a .md file as a TeamDef.
-func ParseTeam(path string) (*TeamDef, error) {
-	data, err := readDefinitionFile(path)
-	if err != nil {
-		return nil, err
-	}
-
-	fmYAML, body, err := SplitFrontmatter(string(data))
-	if err != nil {
-		return nil, fmt.Errorf("parsing team file %s: %w", path, err)
-	}
-
-	return unmarshalTeam(fmYAML, body, filenameStem(path))
-}
-
-// ParseBytes parses raw content (frontmatter + body) into the specified type.
-// Returns *SkillDef or *TeamDef depending on defType.
-func ParseBytes(data []byte, defType DefType) (any, error) {
+// ParseBytes parses raw skill definition content (frontmatter + body) into a SkillDef.
+func ParseBytes(data []byte) (*SkillDef, error) {
 	fmYAML, body, err := SplitFrontmatter(string(data))
 	if err != nil {
 		return nil, fmt.Errorf("parsing definition: %w", err)
 	}
-
-	switch defType {
-	case DefSkill:
-		return unmarshalSkill(fmYAML, body, "")
-	case DefTeam:
-		return unmarshalTeam(fmYAML, body, "")
-	default:
-		return nil, fmt.Errorf("unknown definition type: %q", defType)
-	}
+	return unmarshalSkill(fmYAML, body, "")
 }
 
 // SplitFrontmatter extracts the YAML block and body from content delimited by
@@ -191,21 +104,6 @@ func unmarshalSkill(fmYAML, body, defaultName string) (*SkillDef, error) {
 	if fmYAML != "" {
 		if err := yaml.Unmarshal([]byte(fmYAML), &def); err != nil {
 			return nil, fmt.Errorf("unmarshaling skill frontmatter: %w", err)
-		}
-	}
-	if def.Name == "" {
-		def.Name = defaultName
-	}
-	def.Body = body
-	return &def, nil
-}
-
-// unmarshalTeam parses YAML frontmatter into a TeamDef.
-func unmarshalTeam(fmYAML, body, defaultName string) (*TeamDef, error) {
-	var def TeamDef
-	if fmYAML != "" {
-		if err := yaml.Unmarshal([]byte(fmYAML), &def); err != nil {
-			return nil, fmt.Errorf("unmarshaling team frontmatter: %w", err)
 		}
 	}
 	if def.Name == "" {

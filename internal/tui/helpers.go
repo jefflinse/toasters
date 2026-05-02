@@ -463,9 +463,6 @@ func (m *Model) initMessages() {
 	m.chat.selectedMsgIdx = -1
 	m.chat.expandedReasoning = make(map[int]bool)
 	m.chat.collapsedTools = make(map[int]bool)
-	m.prompt.confirmDispatch = false
-	m.prompt.changingTeam = false
-	m.prompt.pendingDispatch = service.ToolCall{}
 }
 
 // appendEntry adds a new chat entry to the conversation history.
