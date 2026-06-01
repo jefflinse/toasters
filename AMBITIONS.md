@@ -12,71 +12,30 @@ The "magic" is just: system prompt + tool permissions + a loop that executes too
 
 ---
 
-## Feature Ambitions
+## Foundation (Realized)
 
-### Direct Provider Auth
-Shelling out to `claude` means being bound to Claude Code's process model, permission system, and streaming format. Hitting LLM APIs directly enables:
-- Full control over the request/response lifecycle
-- Mixing models per agent (cheap models for coordination, powerful models for heavy lifting)
-- Proper token budgeting and cost tracking per job
-- Elimination of subprocess overhead and fragility
-- Independence from any specific CLI tool being installed
+The ambitions that defined the early phases are now built and live in the codebase:
 
-### In-Process Agent Runtime
-Replace `exec.Command("claude", ...)` with goroutines that run LLM conversation loops directly. Each agent session is a goroutine with a context, message history, and tool execution loop. Core tools needed:
-- File I/O: read, write, edit, glob, grep
-- Shell execution: run commands, capture output
-- Web fetch: HTTP GET
-- Subagent spawning: create child agent sessions
-- MCP tools: from configured external servers
-- Toasters MCP tools: progress reporting back to orchestrator
+- **Multi-provider, multi-model** — direct provider auth across Anthropic, OpenAI, and OpenAI-compatible local endpoints; per-worker model selection; token and cost tracking per job.
+- **In-process worker runtime** — each worker session is a goroutine with its own context, message history, and tool loop (file I/O, shell, web fetch, worker spawning, MCP routing).
+- **MCP client and server** — Toasters consumes external MCP tools and runs its own MCP server that exposes progress-reporting tools back to workers; progress flows straight into SQLite.
+- **SQLite persistence** — jobs, tasks, sessions, transcripts, and progress all persist; markdown remains only for human-readable artifacts.
+- **Server/client architecture** — a long-running server owns all state (runtime, operator, graphs, DB); the TUI is a thin remote client over REST + SSE, so work survives client restarts.
+- **Declarative graphs (rhizome)** — workflows are first-class: graph nodes are roles with typed inputs/outputs, edges are static or conditional, and decomposition is itself a graph dispatched through the executor.
 
-### MCP Client Integration
-Toasters becomes an MCP client, connecting to external MCP servers (GitHub, Jira, Linear, etc.) and making their tools available to both the operator and agents. See `docs/mcp-integration-plan.md` for the detailed implementation plan.
+See `CLAUDE.md` for how these fit together today.
 
-### MCP Server — Agent Progress Reporting
-**New idea (2026-02-24).** Toasters runs its own MCP server that agents connect to. This creates a structured bidirectional communication channel:
-- Agents report progress, flag blockers, update task status
-- Agents query job context and ecosystem information
-- All progress data flows directly into SQLite
-- The TUI gets real-time updates without file watching or output parsing
-- Works for both in-process agents and external Claude CLI subprocesses (via `--mcp-config`)
+---
 
-This flips the earlier "we are NOT building an MCP server" decision. The progress-reporting use case is compelling enough to warrant it.
-
-### Ephemeral OpenAPI-to-MCP Bridges
-**New idea (2026-02-24).** Auto-generate MCP servers from OpenAPI specs. Configure a URL, credentials, and point at a spec — Toasters spins up a lightweight MCP server that translates tool calls into HTTP requests against the backend service. Scoped to a job or ecosystem, cleaned up automatically.
-
-This is the bridge between "agents can use MCP tools" and "agents can query your actual backend services." Especially powerful for the ecosystems concept.
-
-### SQLite Persistence
-Operational state moves from markdown files to SQLite:
-- Jobs, tasks, status, assignments
-- Team and agent configurations
-- Slot history, cost tracking
-- Agent progress reports
-- Ecosystem metadata
-- Operator memory
-
-Markdown files remain for human-readable artifacts (reports, overviews, findings).
-
-### Server/Client Architecture
-Extract the orchestration engine into a long-running server process. The TUI becomes a thin client. Benefits:
-- Jobs survive TUI crashes and reconnects
-- Multiple clients: TUI, web UI, CLI, Slack bot
-- Server owns database, job lifecycle, agent sessions
-- Remote operation: run server on a beefy machine, connect from laptop
-
-### Team Templates and Workflows
-Predefined team compositions: "coding team" = team-lead + builder + reviewer. Workflows become first-class: a workflow defines phases, worker assignments, gates, and completion criteria. The operator selects a workflow, not just a team.
+## Forward Ambitions
 
 ### Ecosystems
-**Ephemeral**: A job clones multiple repos into a workspace, sets up cross-repo context, and agents work across all of them. Torn down or archived when done.
+**Ephemeral**: A job clones multiple repos into a workspace, sets up cross-repo context, and workers operate across all of them. Torn down or archived when done.
 
 **Long-lived**: Persistent definitions of service ecosystems — "the backend ecosystem is these 12 services, here's how they connect, here are the MCP servers for their APIs." The staff engineer's dream: ask "which services would be affected if I change the user ID format?" and the system actually knows.
 
 ### Operator Memory
-The operator accumulates knowledge across jobs: which teams succeed at which tasks, which repos have quirks, which patterns need security review. Stored in SQLite, augmented into the operator's system prompt for future dispatching decisions.
+The operator accumulates knowledge across jobs: which roles succeed at which tasks, which repos have quirks, which patterns need security review. Stored in SQLite, augmented into the operator's system prompt for future dispatching decisions.
 
 ### Job Personas
 Each active job gets a dedicated LLM session that accumulates context as the job progresses. The operator can query these: "hey job-47, what's your current blocker?" When a job completes, the persona's knowledge gets distilled into operator memory.
@@ -85,24 +44,18 @@ Each active job gets a dedicated LLM session that accumulates context as the job
 
 ## The Multiplier Effects
 
-These features aren't independent — they multiply each other:
+The forward ambitions aren't independent — they multiply each other and the existing foundation:
 
-**In-process agents + MCP server** = agents report progress in real-time through a structured protocol, no file parsing needed.
+**Ecosystems + MCP** = workers query your actual backend services as part of their work, scoped to the ecosystem they're operating in.
 
-**MCP client + OpenAPI bridges + Ecosystems** = agents can query your actual backend services as part of their work, scoped to the ecosystem they're operating in.
+**Ecosystems + Operator memory** = the operator learns which roles and graphs work best for which kinds of changes in which parts of your ecosystem.
 
-**SQLite + MCP server + TUI** = real-time progress display driven by structured database writes from agents, not file watching.
-
-**Server architecture + Direct API auth + Ecosystems** = a persistent orchestration platform that maintains awareness of your entire engineering surface and dispatches multi-repo work autonomously.
-
-**Ecosystems + Operator memory + Database** = the operator learns which teams and workflows work best for which kinds of changes in which parts of your ecosystem.
+**Job personas + Operator memory** = finished jobs distill into durable institutional knowledge instead of evaporating when their sessions end.
 
 ---
 
 ## What This Becomes
 
-The fun TUI project is still in there. It's just the face of something much bigger:
+The fun TUI project is still in there. It's just the face of something much bigger.
 
-- **Phase 1** gives you a standalone agentic coding tool that doesn't depend on Claude Code or OpenCode.
-- **Phase 2** gives you a resilient platform that integrates with external tools via MCP and reports progress in real-time.
-- **Phase 3** gives you something that doesn't exist yet — an agentic orchestration platform with persistent knowledge of your engineering ecosystem that gets better at its job over time.
+The foundation — a provider-agnostic, in-process orchestration server with persistent state and declarative graphs — is built. What's ahead is the part that doesn't exist yet: an agentic orchestration platform with persistent knowledge of your engineering ecosystem that gets better at its job over time.
