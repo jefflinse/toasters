@@ -3,6 +3,7 @@ package graphexec
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -325,6 +326,52 @@ func TestFanout_JudgeMerge_ReadOnly(t *testing.T) {
 	_ = json.Unmarshal(out.GetNodeOutput("review"), &o)
 	if o["merged_count"] != float64(3) { // node output is the judge's merged output
 		t.Fatalf("merged_count = %v, want 3", o["merged_count"])
+	}
+}
+
+// --- Resilient reduce: a failing judge falls back to first_success ---
+
+func TestFanout_JudgeFailure_FallsBackToFirstSuccess(t *testing.T) {
+	cfg := TemplateConfig{PromptEngine: testEngine(t)}
+	reg := NewRoleRegistry()
+	reg.Register("coder", stubWriter(t))
+	// A judge that always errors: after judgeMaxAttempts retries, reduce must
+	// fall back to first_success rather than failing the (successful) branches.
+	var judgeCalls int
+	reg.Register("flaky-judge", func(_ TemplateConfig, _ string, _ map[string]string) rhizome.NodeFunc[*TaskState] {
+		return func(_ context.Context, s *TaskState) (*TaskState, error) {
+			judgeCalls++
+			return s, errors.New("judge boom")
+		}
+	})
+
+	node := Node{ID: "impl", Fanout: &Fanout{
+		Count:  2,
+		Branch: &FanoutBranch{Role: "coder"},
+		Reduce: &Reduce{Role: "flaky-judge"},
+	}}
+
+	fn, _, err := buildFanoutNode("g", node, cfg, reg)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	base := t.TempDir()
+	state := NewTaskState("j", "t", base, "mock", "test-model")
+
+	if _, err := fn(context.Background(), state); err != nil {
+		t.Fatalf("node should succeed via fallback, got: %v", err)
+	}
+	if judgeCalls != judgeMaxAttempts {
+		t.Errorf("judge called %d times, want %d (retries before fallback)", judgeCalls, judgeMaxAttempts)
+	}
+	// first_success fallback promotes branch 0's workspace.
+	got, err := os.ReadFile(filepath.Join(base, "result.txt"))
+	if err != nil {
+		t.Fatalf("fallback winner not promoted: %v", err)
+	}
+	if string(got) != "by impl#0" {
+		t.Fatalf("promoted file = %q, want %q", got, "by impl#0")
 	}
 }
 

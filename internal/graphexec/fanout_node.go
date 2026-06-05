@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/jefflinse/rhizome"
@@ -256,11 +257,20 @@ func reduceMajority(results []rhizome.BranchResult[json.RawMessage], key string,
 	return best.winnerV, best.winner, nil
 }
 
+// judgeMaxAttempts bounds how many times an LLM reduce role is retried before
+// falling back to a mechanical pick. A flaky local judge should not throw away
+// the (expensive) branch work by failing — and retrying — the whole node.
+const judgeMaxAttempts = 2
+
 // reduceByRole runs an LLM reducer role over the branch outputs. For write-role
-// branches it is a selection judge: its output must carry a "winner" index
-// (the branch to promote), and the node's output is that winning branch's
-// output. For read-only branches it is an aggregator: the node's output is the
-// judge's own merged output.
+// branches it is a selection judge: its output carries a "winner" index (the
+// branch to promote) and the node's output is that winning branch's output. For
+// read-only branches it is an aggregator: the node's output is the judge's own
+// merged output.
+//
+// The judge is retried up to judgeMaxAttempts times; if it still fails to
+// produce a usable verdict, reduceByRole falls back to first_success so the
+// successful branch outputs are not discarded.
 func reduceByRole(ctx context.Context, s *TaskState, fanoutID string, isWrite bool, judgeFn rhizome.NodeFunc[*TaskState], results []rhizome.BranchResult[json.RawMessage]) (json.RawMessage, int, error) {
 	cands := make([]fanoutCandidate, 0, len(results))
 	for _, r := range results {
@@ -277,44 +287,61 @@ func reduceByRole(ctx context.Context, s *TaskState, fanoutID string, isWrite bo
 	}
 
 	judgeLabel := fanoutID + ".judge"
-	judgeState := s.clone()
-	judgeState.SetArtifact(candidatesArtifact, string(candsJSON))
+	for attempt := 1; attempt <= judgeMaxAttempts; attempt++ {
+		judgeState := s.clone()
+		judgeState.SetArtifact(candidatesArtifact, string(candsJSON))
 
-	jctx := branchContext(ctx, judgeLabel, judgeState)
-	emitNodeStarted(jctx, judgeState, judgeLabel)
-	judged, runErr := judgeFn(jctx, judgeState)
-	emitNodeCompleted(jctx, judgeState, judgeLabel, judged, runErr)
-	if runErr != nil {
-		return nil, -1, fmt.Errorf("reduce role: %w", runErr)
+		jctx := branchContext(ctx, judgeLabel, judgeState)
+		emitNodeStarted(jctx, judgeState, judgeLabel)
+		judged, runErr := judgeFn(jctx, judgeState)
+		emitNodeCompleted(jctx, judgeState, judgeLabel, judged, runErr)
+
+		if out, winner, ok := interpretJudge(isWrite, judged, runErr, judgeLabel, results); ok {
+			return out, winner, nil
+		}
+		slog.Warn("fanout judge attempt failed",
+			"fanout", fanoutID, "attempt", attempt, "max", judgeMaxAttempts, "error", runErr)
+	}
+
+	// The judge is unreliable; keep the branch work rather than failing the
+	// node (which would re-run every branch) — fall back to a mechanical pick.
+	slog.Warn("fanout judge unreliable after retries; falling back to first_success",
+		"fanout", fanoutID)
+	return reduceFirstSuccess(results)
+}
+
+// interpretJudge extracts the node output and winning branch index from a judge
+// run, or ok=false when the run errored or produced an unusable verdict (no
+// output, a missing/invalid winner, or a winner pointing at a failed branch).
+func interpretJudge(isWrite bool, judged *TaskState, runErr error, judgeLabel string, results []rhizome.BranchResult[json.RawMessage]) (json.RawMessage, int, bool) {
+	if runErr != nil || judged == nil {
+		return nil, -1, false
 	}
 	judgeOut := judged.GetNodeOutput(judgeLabel)
 	if len(judgeOut) == 0 {
-		return nil, -1, fmt.Errorf("reduce role: judge produced no output")
+		return nil, -1, false
 	}
-
 	if !isWrite {
 		// Aggregator: the merged output is the node's output.
-		return judgeOut, -1, nil
+		return judgeOut, -1, true
 	}
-
-	// Selection judge: read the winning branch index and promote/return it.
 	wv, err := extractField(judgeOut, "winner")
 	if err != nil {
-		return nil, -1, fmt.Errorf("reduce role: judge output must include a \"winner\" index: %w", err)
+		return nil, -1, false
 	}
 	winner, ok := asIndex(wv)
 	if !ok {
-		return nil, -1, fmt.Errorf("reduce role: judge \"winner\" must be an integer index, got %T", wv)
+		return nil, -1, false
 	}
 	for _, r := range results {
 		if r.Index == winner {
 			if r.Err != nil {
-				return nil, -1, fmt.Errorf("reduce role: judge chose failed branch %d", winner)
+				return nil, -1, false
 			}
-			return r.Value, winner, nil
+			return r.Value, winner, true
 		}
 	}
-	return nil, -1, fmt.Errorf("reduce role: judge chose out-of-range branch %d", winner)
+	return nil, -1, false
 }
 
 // asIndex coerces a JSON-decoded number into a non-negative branch index.

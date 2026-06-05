@@ -150,18 +150,25 @@ func (m *Model) recordGraphNodeStarted(jobID, taskID, node string) {
 	ns := gts.nodes[node]
 	ns.Phase = dagmap.PhaseRunning
 	ns.ExecCount++
+	ns.LastStatus = "" // clear a prior run's status; this is a fresh execution
 	gts.nodes[node] = ns
 	m.lastGraphTaskID = taskID
 }
 
-// recordGraphNodeDone marks a node as completed and stores the TaskState
-// status (e.g. "tests_failed", "review_approved") so the user can see what
-// routed the graph.
+// recordGraphNodeDone marks a node finished and stores the TaskState status
+// (e.g. "tests_failed", "review_approved") so the user can see what routed the
+// graph. A "failed" status marks the node failed (✗); other statuses are
+// routing outcomes on a node that completed normally.
 func (m *Model) recordGraphNodeDone(jobID, taskID, node, status string) {
 	gts := m.ensureGraphTaskState(jobID, taskID)
 	ns := gts.nodes[node]
-	ns.Phase = dagmap.PhaseCompleted
-	ns.LastStatus = status
+	if status == "failed" {
+		ns.Phase = dagmap.PhaseFailed
+		ns.LastStatus = "" // the ✗ glyph already conveys failure
+	} else {
+		ns.Phase = dagmap.PhaseCompleted
+		ns.LastStatus = status
+	}
 	gts.nodes[node] = ns
 	m.lastGraphTaskID = taskID
 }
