@@ -381,7 +381,7 @@ func (e *Executor) ExecuteTask(ctx context.Context, req TaskRequest) error {
 	thinking, temperature := e.workerDefaults()
 	tmplCfg := TemplateConfig{
 		Provider:              prov,
-		ToolExecutor:          e.buildToolExecutor(req.WorkspaceDir),
+		ToolExecutorFor:       e.buildToolExecutor,
 		Model:                 model,
 		PromptEngine:          e.promptEngine,
 		Store:                 e.store,

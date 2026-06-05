@@ -92,7 +92,78 @@ type Node struct {
 	// (currently always toolchain ids). Every slot the role declares in
 	// frontmatter must have a binding here, or compose fails.
 	Slots map[string]string `yaml:"slots,omitempty" json:"slots,omitempty"`
+
+	// Fanout, when set, makes this node a homogeneous fan-out: the branch
+	// role runs Count times over independent forks of the state, and Reduce
+	// folds the branch outputs into a single output stored under this node's
+	// ID. Exactly one of Role, Graph, or Fanout must be set.
+	Fanout *Fanout `yaml:"fanout,omitempty" json:"fanout,omitempty"`
 }
+
+// Fanout configures a homogeneous fan-out node. The same branch role runs
+// Count times concurrently over independent forks of the state; Reduce folds
+// the branch outputs into the node's single output. When the branch role has
+// write access its branches run in isolated workspace copies and the reducer's
+// winning branch is promoted back; read-only branches share the workspace.
+type Fanout struct {
+	// Count is the number of identical branches to run. Required, >= 1.
+	Count int `yaml:"count" json:"count"`
+
+	// Branch names the role each branch runs and its slot bindings.
+	Branch *FanoutBranch `yaml:"branch" json:"branch"`
+
+	// Reduce folds the branch outputs into the node's output. Required.
+	Reduce *Reduce `yaml:"reduce" json:"reduce"`
+
+	// MaxParallel bounds how many branches run at once (local to this node).
+	// Zero means unbounded. The global ceiling on concurrent LLM calls is a
+	// separate runtime concern.
+	MaxParallel int `yaml:"max_parallel,omitempty" json:"max_parallel,omitempty"`
+
+	// Quorum, for the majority strategy, is the minimum number of agreeing
+	// branches the winning value must have. Zero means "a plurality is enough."
+	Quorum int `yaml:"quorum,omitempty" json:"quorum,omitempty"`
+
+	// OnError is the branch-failure policy: "continue" (default) runs all
+	// branches and lets Reduce decide; "fail_fast" returns the first branch
+	// error without reducing.
+	OnError string `yaml:"on_error,omitempty" json:"on_error,omitempty"`
+}
+
+// FanoutBranch binds a fan-out's per-branch role and slot values.
+type FanoutBranch struct {
+	Role  string            `yaml:"role" json:"role"`
+	Slots map[string]string `yaml:"slots,omitempty" json:"slots,omitempty"`
+}
+
+// Reduce folds a fan-out's branch outputs into one. Set exactly one of
+// Strategy (mechanical) or Role (an LLM judge/aggregator).
+type Reduce struct {
+	// Strategy is a mechanical reducer: "collect" wraps all branch outputs in
+	// {"branches":[…]}; "first_success" takes the first branch that did not
+	// error; "majority" votes on the Key field's value.
+	Strategy string `yaml:"strategy,omitempty" json:"strategy,omitempty"`
+
+	// Key is the output field the majority strategy votes on. Required for
+	// "majority", ignored otherwise.
+	Key string `yaml:"key,omitempty" json:"key,omitempty"`
+
+	// Role names an LLM reducer role. For write-role branches it selects a
+	// winning branch (its output must carry a "winner" index, which is
+	// promoted); for read-only branches it merges the branch outputs into one
+	// new output. Mutually exclusive with Strategy.
+	Role string `yaml:"role,omitempty" json:"role,omitempty"`
+}
+
+// Reduce strategy and on_error policy names.
+const (
+	ReduceCollect      = "collect"
+	ReduceFirstSuccess = "first_success"
+	ReduceMajority     = "majority"
+
+	OnErrorContinue = "continue"
+	OnErrorFailFast = "fail_fast"
+)
 
 // Edge connects nodes. Exactly one of To or Router must be set.
 type Edge struct {
@@ -218,11 +289,26 @@ func (d *Definition) Validate() error {
 			return fmt.Errorf("graph %q: duplicate node id %q", d.ID, n.ID)
 		}
 		nodeIDs[n.ID] = struct{}{}
-		if strings.TrimSpace(n.Role) == "" && strings.TrimSpace(n.Graph) == "" {
-			return fmt.Errorf("graph %q: node %q must set role or graph", d.ID, n.ID)
+		set := 0
+		if strings.TrimSpace(n.Role) != "" {
+			set++
 		}
-		if n.Role != "" && n.Graph != "" {
-			return fmt.Errorf("graph %q: node %q sets both role and graph (pick one)", d.ID, n.ID)
+		if strings.TrimSpace(n.Graph) != "" {
+			set++
+		}
+		if n.Fanout != nil {
+			set++
+		}
+		if set == 0 {
+			return fmt.Errorf("graph %q: node %q must set role, graph, or fanout", d.ID, n.ID)
+		}
+		if set > 1 {
+			return fmt.Errorf("graph %q: node %q sets more than one of role/graph/fanout (pick one)", d.ID, n.ID)
+		}
+		if n.Fanout != nil {
+			if err := validateFanout(d.ID, n.ID, n.Fanout); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -290,5 +376,49 @@ func (d *Definition) Validate() error {
 		}
 	}
 
+	return nil
+}
+
+// validateFanout checks a fan-out node's shape in isolation. Role resolution
+// and write-vs-readonly handling happen at compile time, not here.
+func validateFanout(graphID, nodeID string, f *Fanout) error {
+	if f.Count < 1 {
+		return fmt.Errorf("graph %q: node %q: fanout count must be >= 1, got %d", graphID, nodeID, f.Count)
+	}
+	if f.Branch == nil || strings.TrimSpace(f.Branch.Role) == "" {
+		return fmt.Errorf("graph %q: node %q: fanout branch.role is required", graphID, nodeID)
+	}
+	if f.MaxParallel < 0 {
+		return fmt.Errorf("graph %q: node %q: fanout max_parallel must be >= 0", graphID, nodeID)
+	}
+	if f.Quorum < 0 {
+		return fmt.Errorf("graph %q: node %q: fanout quorum must be >= 0", graphID, nodeID)
+	}
+	switch f.OnError {
+	case "", OnErrorContinue, OnErrorFailFast:
+	default:
+		return fmt.Errorf("graph %q: node %q: fanout on_error must be %q or %q, got %q", graphID, nodeID, OnErrorContinue, OnErrorFailFast, f.OnError)
+	}
+	if f.Reduce == nil {
+		return fmt.Errorf("graph %q: node %q: fanout reduce is required", graphID, nodeID)
+	}
+	hasStrategy := strings.TrimSpace(f.Reduce.Strategy) != ""
+	hasRole := strings.TrimSpace(f.Reduce.Role) != ""
+	switch {
+	case hasStrategy && hasRole:
+		return fmt.Errorf("graph %q: node %q: fanout reduce sets both strategy and role (pick one)", graphID, nodeID)
+	case !hasStrategy && !hasRole:
+		return fmt.Errorf("graph %q: node %q: fanout reduce must set strategy or role", graphID, nodeID)
+	case hasStrategy:
+		switch f.Reduce.Strategy {
+		case ReduceCollect, ReduceFirstSuccess:
+		case ReduceMajority:
+			if strings.TrimSpace(f.Reduce.Key) == "" {
+				return fmt.Errorf("graph %q: node %q: fanout reduce strategy %q requires a key", graphID, nodeID, ReduceMajority)
+			}
+		default:
+			return fmt.Errorf("graph %q: node %q: unknown fanout reduce strategy %q", graphID, nodeID, f.Reduce.Strategy)
+		}
+	}
 	return nil
 }

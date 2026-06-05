@@ -42,6 +42,19 @@ func Compile(def *Definition, cfg TemplateConfig, registry *RoleRegistry) (*rhiz
 
 	// Nodes.
 	for _, n := range def.Nodes {
+		if n.Fanout != nil {
+			fn, schemaRole, err := buildFanoutNode(def.ID, n, cfg, registry)
+			if err != nil {
+				return nil, fmt.Errorf("compile %q: node %q: %w", def.ID, n.ID, err)
+			}
+			if schemaRole != nil {
+				nodeRoles[n.ID] = schemaRole
+			}
+			if err := g.AddNode(n.ID, withDefaultNodeContext(n.ID, fn)); err != nil {
+				return nil, fmt.Errorf("compile %q: AddNode %q: %w", def.ID, n.ID, err)
+			}
+			continue
+		}
 		if n.Graph != "" {
 			// Subgraphs are reserved for a later phase; reject cleanly for now.
 			return nil, fmt.Errorf("compile %q: node %q references subgraph %q, which is not yet supported", def.ID, n.ID, n.Graph)

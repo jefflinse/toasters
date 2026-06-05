@@ -39,7 +39,11 @@ func RoleNode(cfg TemplateConfig, role *prompt.Role, nodeID string, slots map[st
 			return state, fmt.Errorf("composing prompt for role %q: %w", role.Name, err)
 		}
 
-		tools := toolsForRole(cfg.ToolExecutor, role)
+		exec := cfg.ToolExecutor
+		if cfg.ToolExecutorFor != nil {
+			exec = cfg.ToolExecutorFor(state.WorkspaceDir)
+		}
+		tools := toolsForRole(exec, role)
 		initialMessage := buildInitialMessage(state)
 
 		sess := openGraphSession(ctx, cfg.Store, state, effectiveNodeID(ctx, nodeID), sysPrompt, toolNamesOf(tools), cfg)
