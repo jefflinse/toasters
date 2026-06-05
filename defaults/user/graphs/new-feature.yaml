@@ -19,11 +19,15 @@ nodes:
 
   - id: implement
     fanout:
-      count: 2
-      branch:
-        role: coder
-        slots:
-          toolchain: "{{ globals.task.toolchain }}"
+      branches:                   # diverse consensus: two coders at different temperatures
+        - role: coder
+          temperature: 0.2        # conservative, close to the obvious solution
+          slots:
+            toolchain: "{{ globals.task.toolchain }}"
+        - role: coder
+          temperature: 0.8        # exploratory, more likely to try a different approach
+          slots:
+            toolchain: "{{ globals.task.toolchain }}"
       reduce:
         role: code-judge          # LLM judge selects the winning implementation
       max_parallel: 2             # at most two coders building at once

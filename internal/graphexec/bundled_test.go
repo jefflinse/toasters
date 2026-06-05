@@ -113,14 +113,14 @@ func TestBundled_NewFeature_HappyPath(t *testing.T) {
 	// review runs 3 reviewers (majority). Happy path provider calls:
 	//   plan(1) + coders(2) + judge(1) + test(1) + reviewers(3) = 8.
 	_, calls := runBundled(t, "new-feature", [][]provider.StreamEvent{
-		summaryResp("plan"),       // plan
-		summaryResp("impl-a"),     // implement branch (coder)
-		summaryResp("impl-b"),     // implement branch (coder)
-		selectionResp(0),          // code-judge picks the winning branch
-		testResultResp(true, "ok"),// test
-		reviewResp(true, "lgtm"),  // review branch
-		reviewResp(true, "lgtm"),  // review branch
-		reviewResp(true, "lgtm"),  // review branch
+		summaryResp("plan"),        // plan
+		summaryResp("impl-a"),      // implement branch (coder)
+		summaryResp("impl-b"),      // implement branch (coder)
+		selectionResp(0),           // code-judge picks the winning branch
+		testResultResp(true, "ok"), // test
+		reviewResp(true, "lgtm"),   // review branch
+		reviewResp(true, "lgtm"),   // review branch
+		reviewResp(true, "lgtm"),   // review branch
 	})
 	if calls != 8 {
 		t.Errorf("provider called %d times, want 8", calls)

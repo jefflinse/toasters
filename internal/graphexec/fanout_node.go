@@ -14,11 +14,13 @@ import (
 )
 
 // fanoutBranchInput is the per-branch input type (B) for rhizome.Fanout. It
-// pairs a forked state with a stable label used for the branch's session
+// pairs a forked state with the branch's NodeFunc (each branch may have its own
+// role/temperature/model) and a stable label used for the branch's session
 // identity and TUI attribution.
 type fanoutBranchInput struct {
 	state *TaskState
 	label string
+	fn    rhizome.NodeFunc[*TaskState]
 }
 
 // fanoutCandidate is one branch's output presented to an LLM reducer role.
@@ -41,34 +43,52 @@ func buildFanoutNode(graphID string, n Node, cfg TemplateConfig, registry *RoleR
 	f := n.Fanout
 	fanoutID := n.ID
 
-	// registry.Build is the existence gate (errors when a role is neither
-	// registered nor in the prompt engine). The prompt-engine lookup here is
-	// only for the access decision; an unresolved role defaults to read-only.
-	branchRole := roleByName(cfg, f.Branch.Role)
-	isWrite := branchRole != nil && !isReadOnlyAccess(normalizeAccess(branchRole.Access))
-
-	branchFn, err := registry.Build(f.Branch.Role, fanoutID, f.Branch.Slots, cfg)
-	if err != nil {
-		return nil, nil, fmt.Errorf("fanout node %q: branch: %w", fanoutID, err)
+	// Resolve the branch specs into a uniform list. The count form is N copies
+	// of one spec; the branches form is the explicit list. Each spec may carry
+	// per-branch temperature/thinking/model overrides applied via branchConfig.
+	specs := f.Branches
+	if len(specs) == 0 {
+		specs = make([]FanoutBranch, f.Count)
+		for i := range specs {
+			specs[i] = *f.Branch
+		}
 	}
+
+	// registry.Build is the existence gate (errors when a role is neither
+	// registered nor in the prompt engine). The prompt-engine lookup is only
+	// for the access decision; an unresolved role defaults to read-only.
+	// Isolation is needed when ANY branch writes — a writer makes the shared
+	// workspace unsafe for every concurrent branch.
+	branchFns := make([]rhizome.NodeFunc[*TaskState], len(specs))
+	isWrite := false
+	for i, spec := range specs {
+		fn, err := registry.Build(spec.Role, fanoutID, spec.Slots, branchConfig(cfg, spec))
+		if err != nil {
+			return nil, nil, fmt.Errorf("fanout node %q: branch %d (role %q): %w", fanoutID, i, spec.Role, err)
+		}
+		branchFns[i] = fn
+		if role := roleByName(cfg, spec.Role); role != nil && !isReadOnlyAccess(normalizeAccess(role.Access)) {
+			isWrite = true
+		}
+	}
+	count := len(specs)
 
 	var judgeRole *prompt.Role
 	var judgeFn rhizome.NodeFunc[*TaskState]
 	if f.Reduce.Role != "" {
 		judgeRole = roleByName(cfg, f.Reduce.Role) // for merge-mode schema only; may be nil
-		judgeFn, err = registry.Build(f.Reduce.Role, fanoutID+".judge", nil, cfg)
-		if err != nil {
-			return nil, nil, fmt.Errorf("fanout node %q: reduce role: %w", fanoutID, err)
+		jfn, jerr := registry.Build(f.Reduce.Role, fanoutID+".judge", nil, cfg)
+		if jerr != nil {
+			return nil, nil, fmt.Errorf("fanout node %q: reduce role: %w", fanoutID, jerr)
 		}
+		judgeFn = jfn
 	}
 
 	// A mechanical collect can't pick a single winner to promote, so it cannot
-	// drive a write-role fan-out.
+	// drive a fan-out whose branches write.
 	if isWrite && f.Reduce.Strategy == ReduceCollect {
-		return nil, nil, fmt.Errorf("fanout node %q: reduce strategy %q cannot select a branch to promote for write role %q; use first_success, majority, or a reduce role", fanoutID, ReduceCollect, f.Branch.Role)
+		return nil, nil, fmt.Errorf("fanout node %q: reduce strategy %q cannot select a branch to promote for write branches; use first_success, majority, or a reduce role", fanoutID, ReduceCollect)
 	}
-
-	count := f.Count
 
 	// Per-execution isolation handle, set by split and consumed after the
 	// fan-out returns. Safe because a compiled node executes sequentially
@@ -94,7 +114,7 @@ func buildFanoutNode(graphID string, n Node, cfg TemplateConfig, registry *RoleR
 			if isWrite {
 				fork.WorkspaceDir = iso.dirs[i]
 			}
-			inputs[i] = fanoutBranchInput{state: fork, label: fmt.Sprintf("%s#%d", fanoutID, i)}
+			inputs[i] = fanoutBranchInput{state: fork, label: fmt.Sprintf("%s#%d", fanoutID, i), fn: branchFns[i]}
 		}
 		return inputs, nil
 	}
@@ -102,7 +122,7 @@ func buildFanoutNode(graphID string, n Node, cfg TemplateConfig, registry *RoleR
 	branch := func(ctx context.Context, in fanoutBranchInput) (json.RawMessage, error) {
 		bctx := branchContext(ctx, in.label, in.state)
 		emitNodeStarted(bctx, in.state, in.label)
-		out, runErr := branchFn(bctx, in.state)
+		out, runErr := in.fn(bctx, in.state)
 		emitNodeCompleted(bctx, in.state, in.label, out, runErr)
 		if runErr != nil {
 			return nil, runErr
@@ -146,10 +166,10 @@ func buildFanoutNode(graphID string, n Node, cfg TemplateConfig, registry *RoleR
 	}
 
 	// The role whose schema describes this node's output, for router
-	// validation: collect produces a wrapper shape (none); a read-only LLM
-	// reducer merges into the judge's output; everything else promotes/returns
-	// a branch output.
-	schemaRole := branchRole
+	// validation: the common branch role when all branches share one (else
+	// none); collect produces a wrapper shape (none); a read-only LLM reducer
+	// merges into the judge's output.
+	schemaRole := commonBranchRole(cfg, specs)
 	switch {
 	case f.Reduce.Strategy == ReduceCollect:
 		schemaRole = nil
@@ -367,6 +387,39 @@ func roleByName(cfg TemplateConfig, name string) *prompt.Role {
 		return nil
 	}
 	return cfg.PromptEngine.Role(name)
+}
+
+// branchConfig returns a copy of cfg with the branch spec's per-branch
+// overrides applied. Temperature/Thinking become top-precedence overrides (they
+// beat role frontmatter); Model replaces the graph model when set.
+func branchConfig(cfg TemplateConfig, spec FanoutBranch) TemplateConfig {
+	bcfg := cfg
+	if spec.Temperature != nil {
+		bcfg.TemperatureOverride = spec.Temperature
+	}
+	if spec.Thinking != nil {
+		bcfg.ThinkingOverride = spec.Thinking
+	}
+	if strings.TrimSpace(spec.Model) != "" {
+		bcfg.Model = spec.Model
+	}
+	return bcfg
+}
+
+// commonBranchRole returns the role shared by every branch spec, or nil when
+// the branches use different roles (their outputs may have different schemas,
+// so the node's output schema is not a single role's).
+func commonBranchRole(cfg TemplateConfig, specs []FanoutBranch) *prompt.Role {
+	if len(specs) == 0 {
+		return nil
+	}
+	first := specs[0].Role
+	for _, s := range specs[1:] {
+		if s.Role != first {
+			return nil
+		}
+	}
+	return roleByName(cfg, first)
 }
 
 // normalizeAccess lowercases and trims a role's access value for comparison.

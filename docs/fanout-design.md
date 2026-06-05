@@ -336,6 +336,115 @@ Phased (all done):
   `defaults/user/...` change reaches a running install only after a rebuild **and** a
   fresh `~/.config/toasters` (wipe-and-reseed).
 
+---
+
+## Spec: per-branch overrides — diverse consensus (next increment)
+
+**Motivation.** Today a fan-out is N *identical* branches (same role, same temperature),
+so consensus is *redundant* — N copies of the same call, useful mainly against
+nondeterminism. Per-branch overrides make it *diverse*: branches that differ by
+temperature, model, or even role, then judged/voted. Diversity is what makes an
+ensemble worth more than one call — especially on local models, where a temperature
+spread genuinely explores different solutions.
+
+Headline use case: "fan out implement to 3 coders at temperatures 0.2 / 0.7 / 1.1,
+judge picks the best."
+
+### Config
+
+`FanoutBranch` gains override fields, usable in **both** fan-out forms:
+
+```go
+type FanoutBranch struct {
+    Role        string            `yaml:"role"`
+    Slots       map[string]string `yaml:"slots,omitempty"`
+    Temperature *float64          `yaml:"temperature,omitempty"` // nil = role/global default
+    Thinking    *bool             `yaml:"thinking,omitempty"`    // nil = role/global default
+    Model       string            `yaml:"model,omitempty"`       // "" = inherit cfg.Model
+}
+```
+
+Two mutually-exclusive forms on `Fanout`:
+- `count: N` + `branch: <spec>` — N identical branches (the spec's overrides apply to all N).
+- `branches: [<spec>, …]` — an explicit per-branch list (new field `Branches []FanoutBranch`).
+
+```yaml
+implement:
+  fanout:
+    branches:
+      - { role: coder, temperature: 0.2 }
+      - { role: coder, temperature: 0.7 }
+      - { role: coder, temperature: 1.1 }
+    reduce: { role: code-judge }
+    max_parallel: 2
+```
+
+### Override precedence (the one real seam)
+
+`branch spec > role frontmatter > graph-global default`. Implemented by adding
+`TemperatureOverride *float64` and `ThinkingOverride *bool` to `TemplateConfig`, applied
+with top precedence in `effectiveWorkerDefaults`:
+
+```go
+if cfg.ThinkingOverride != nil    { thinking = *cfg.ThinkingOverride }
+if cfg.TemperatureOverride != nil { temperature = *cfg.TemperatureOverride }
+```
+
+`Model` needs no new field — `RoleNode` already uses `cfg.Model` directly (no role-level
+model override exists), so a per-branch `cfg.Model` is already authoritative. Each branch
+gets a shallow `TemplateConfig` copy with its overrides set; `tunedProvider` already
+injects temperature/thinking per `ChatStream`, so there is **no provider-layer change**.
+
+### Compiler / execution
+
+- Normalize both forms to `[]resolvedBranch{role, slots, cfg}`: `count`+`branch` → N copies
+  of one spec; `branches` → the list as-is.
+- Build a `NodeFunc` per resolved branch via `registry.Build(role, fanoutID, slots, branchCfg)`.
+- `fanoutBranchInput` carries its function: `{state, label, fn}`. `split` assigns each input
+  its branch's `fn` + forked state (+ isolated workspace when writing); the `branch` closure
+  just calls `in.fn`.
+- **Isolation:** `isWrite = ANY branch is write-access` → isolate all branches, promote the
+  winner's workspace. (Same-role diverse-temp = all write = isolate all — the common case.)
+- **Router schema:** if all branches share one role, register that role's output schema for
+  `$node.output.field` validation; mixed roles → skip (like `collect`).
+
+### Validation
+
+- Exactly one of `{count>=1 with branch}` or `{branches non-empty}`; both set → error.
+- Each branch's `role` required.
+- `temperature`, if set, in `[0, 2]`.
+- `reduce` / `quorum` / `max_parallel` / `on_error` unchanged.
+
+### Reduce
+
+Unchanged — the judge/vote now sees genuinely *diverse* candidates, which is the point.
+(Also makes mechanical `majority` more meaningful: a temperature spread over a structured
+decision yields real votes rather than near-identical outputs.)
+
+### Tests
+
+- `branches` form compiles + runs; each branch's effective temperature equals its override
+  (assert via a stub provider that records `req.Temperature` per call).
+- `count`+`branch` with a `temperature` applies it to all N.
+- Override beats role frontmatter (a role with a frontmatter temperature is overridden).
+- Mixed-role branches: isolation = any-write; schema validation skipped.
+- Validation: both forms set → error; empty branch role → error; temp out of `[0,2]` → error.
+
+### Decisions (recommended)
+
+1. **Include `model` and `thinking` overrides now**, not just `temperature` — nearly free
+   given the seam, and unlocks cross-model ensembles (a local coder + a cloud coder, judged).
+2. **Support mixed-role branches** (isolation any-write, schema validation skipped) rather
+   than restricting to same-role — the headline case is same-role, but mixed is free here.
+3. **Validate `temperature` ∈ [0, 2]** at parse time for a clear early error.
+
+### Effort
+
+Moderate, bounded, **no rhizome change**: definition types + validation, `buildFanoutNode`
+refactor (resolve branch list, per-branch cfg + `NodeFunc`, any-write isolation, per-branch
+`fanoutBranchInput.fn`), `TemplateConfig` override fields + `effectiveWorkerDefaults`
+precedence, tests.
+
 Reducers v1 (mechanical): `collect` (wrap branch outputs in `{branches:[…]}`),
 `majority` (vote on a `key:` field, honoring `quorum`), `first_success`. Code-consensus
 can't use `majority` (no voting on diffs) → use `first_success` or a `key`-scored pick;

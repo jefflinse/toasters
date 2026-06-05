@@ -114,5 +114,12 @@ func effectiveWorkerDefaults(cfg TemplateConfig, role *prompt.Role) (bool, float
 			temperature = *role.Temperature
 		}
 	}
+	// Per-node overrides (e.g. a fan-out branch) win over role frontmatter.
+	if cfg.ThinkingOverride != nil {
+		thinking = *cfg.ThinkingOverride
+	}
+	if cfg.TemperatureOverride != nil {
+		temperature = *cfg.TemperatureOverride
+	}
 	return thinking, temperature
 }

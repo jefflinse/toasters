@@ -50,4 +50,12 @@ type TemplateConfig struct {
 	// WorkerTemperature is the default sampling temperature for graph
 	// nodes. Roles may override via their frontmatter.
 	WorkerTemperature float64
+
+	// TemperatureOverride and ThinkingOverride, when non-nil, force the
+	// sampling temperature / reasoning toggle with the highest precedence —
+	// above role frontmatter and the graph-wide default. Set per fan-out
+	// branch (from FanoutBranch overrides) so the same role can run at
+	// different temperatures across branches. nil leaves normal resolution.
+	TemperatureOverride *float64
+	ThinkingOverride    *bool
 }

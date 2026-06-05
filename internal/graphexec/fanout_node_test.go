@@ -6,12 +6,48 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 
 	"github.com/jefflinse/rhizome"
 
 	"github.com/jefflinse/toasters/internal/provider"
 )
+
+// tempCaptureProvider records the temperature on each ChatStream request and
+// replies with a fixed response.
+type tempCaptureProvider struct {
+	mu    sync.Mutex
+	temps []float64
+	resp  []provider.StreamEvent
+}
+
+func (c *tempCaptureProvider) ChatStream(_ context.Context, req provider.ChatRequest) (<-chan provider.StreamEvent, error) {
+	c.mu.Lock()
+	if req.Temperature != nil {
+		c.temps = append(c.temps, *req.Temperature)
+	}
+	c.mu.Unlock()
+	ch := make(chan provider.StreamEvent, len(c.resp)+1)
+	for _, e := range c.resp {
+		ch <- e
+	}
+	ch <- provider.StreamEvent{Type: provider.EventDone}
+	close(ch)
+	return ch, nil
+}
+
+func (c *tempCaptureProvider) Models(_ context.Context) ([]provider.ModelInfo, error) {
+	return nil, nil
+}
+func (c *tempCaptureProvider) Name() string { return "mock" }
+
+func (c *tempCaptureProvider) recorded() []float64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]float64(nil), c.temps...)
+}
 
 // br is a successful BranchResult carrying the given JSON object.
 func br(index int, obj map[string]any) rhizome.BranchResult[json.RawMessage] {
@@ -326,6 +362,84 @@ func TestFanout_JudgeMerge_ReadOnly(t *testing.T) {
 	_ = json.Unmarshal(out.GetNodeOutput("review"), &o)
 	if o["merged_count"] != float64(3) { // node output is the judge's merged output
 		t.Fatalf("merged_count = %v, want 3", o["merged_count"])
+	}
+}
+
+// --- Per-branch overrides: diverse-temperature consensus ---
+
+func TestFanout_Branches_PerBranchTemperature(t *testing.T) {
+	cap := &tempCaptureProvider{resp: reviewResp(true, "ok")}
+	cfg := TemplateConfig{
+		Provider:     cap,
+		ToolExecutor: &mockToolExecutor{},
+		Model:        "test-model",
+		PromptEngine: testEngine(t),
+	}
+
+	t02, t08 := 0.2, 0.8
+	node := Node{ID: "review", Fanout: &Fanout{
+		Branches: []FanoutBranch{
+			{Role: "code-reviewer", Slots: map[string]string{"toolchain": "go"}, Temperature: &t02},
+			{Role: "code-reviewer", Slots: map[string]string{"toolchain": "go"}, Temperature: &t08},
+		},
+		Reduce: &Reduce{Strategy: ReduceMajority, Key: "approved"},
+	}}
+
+	fn, _, err := buildFanoutNode("g", node, cfg, NewRoleRegistry())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	state := NewTaskState("j", "t", t.TempDir(), "mock", "test-model")
+	state.SetArtifact("task.description", "review the change")
+
+	if _, err := fn(context.Background(), state); err != nil {
+		t.Fatal(err)
+	}
+
+	got := cap.recorded()
+	if len(got) != 2 {
+		t.Fatalf("recorded %d temperatures, want 2: %v", len(got), got)
+	}
+	want := map[float64]bool{0.2: true, 0.8: true}
+	for _, temp := range got {
+		if !want[temp] {
+			t.Errorf("branch ran at unexpected temperature %v (want 0.2 or 0.8)", temp)
+		}
+		delete(want, temp)
+	}
+	if len(want) != 0 {
+		t.Errorf("missing per-branch temperatures: %v", want)
+	}
+}
+
+func TestValidateFanout_Forms(t *testing.T) {
+	good := 0.5
+	tooHot := 3.0
+	cases := []struct {
+		name    string
+		f       *Fanout
+		wantErr string
+	}{
+		{"both forms set", &Fanout{Count: 2, Branch: &FanoutBranch{Role: "coder"}, Branches: []FanoutBranch{{Role: "coder"}}, Reduce: &Reduce{Strategy: ReduceFirstSuccess}}, "pick one"},
+		{"neither form set", &Fanout{Reduce: &Reduce{Strategy: ReduceFirstSuccess}}, "must set count+branch or branches"},
+		{"empty branch role", &Fanout{Branches: []FanoutBranch{{Role: ""}}, Reduce: &Reduce{Strategy: ReduceFirstSuccess}}, "role is required"},
+		{"temperature out of range", &Fanout{Branches: []FanoutBranch{{Role: "coder", Temperature: &tooHot}}, Reduce: &Reduce{Strategy: ReduceFirstSuccess}}, "temperature must be in [0, 2]"},
+		{"valid branches form", &Fanout{Branches: []FanoutBranch{{Role: "coder", Temperature: &good}}, Reduce: &Reduce{Strategy: ReduceFirstSuccess}}, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateFanout("g", "n", tc.f)
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("err = %v, want containing %q", err, tc.wantErr)
+			}
+		})
 	}
 }
 

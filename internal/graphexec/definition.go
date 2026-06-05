@@ -109,8 +109,14 @@ type Fanout struct {
 	// Count is the number of identical branches to run. Required, >= 1.
 	Count int `yaml:"count" json:"count"`
 
-	// Branch names the role each branch runs and its slot bindings.
-	Branch *FanoutBranch `yaml:"branch" json:"branch"`
+	// Branch names the role each branch runs and its slot bindings, used with
+	// Count (N identical branches). Mutually exclusive with Branches.
+	Branch *FanoutBranch `yaml:"branch,omitempty" json:"branch,omitempty"`
+
+	// Branches is an explicit per-branch list — one entry per branch, each
+	// able to override temperature/thinking/model/role for diverse consensus.
+	// Mutually exclusive with Count+Branch.
+	Branches []FanoutBranch `yaml:"branches,omitempty" json:"branches,omitempty"`
 
 	// Reduce folds the branch outputs into the node's output. Required.
 	Reduce *Reduce `yaml:"reduce" json:"reduce"`
@@ -130,10 +136,26 @@ type Fanout struct {
 	OnError string `yaml:"on_error,omitempty" json:"on_error,omitempty"`
 }
 
-// FanoutBranch binds a fan-out's per-branch role and slot values.
+// FanoutBranch binds a fan-out branch's role, slot values, and optional
+// per-branch sampling overrides. The overrides take precedence over the role's
+// frontmatter and the graph-wide defaults, which is what enables diverse
+// consensus (e.g. the same role at several temperatures).
 type FanoutBranch struct {
 	Role  string            `yaml:"role" json:"role"`
 	Slots map[string]string `yaml:"slots,omitempty" json:"slots,omitempty"`
+
+	// Temperature overrides the sampling temperature for this branch. nil
+	// leaves the role/global default in place. Range [0, 2] (the permissive
+	// multi-provider bound; backends with a tighter range remain authoritative).
+	Temperature *float64 `yaml:"temperature,omitempty" json:"temperature,omitempty"`
+
+	// Thinking overrides the reasoning toggle for this branch. nil leaves the
+	// role/global default.
+	Thinking *bool `yaml:"thinking,omitempty" json:"thinking,omitempty"`
+
+	// Model overrides the model id for this branch. "" inherits the graph's
+	// model, enabling cross-model ensembles.
+	Model string `yaml:"model,omitempty" json:"model,omitempty"`
 }
 
 // Reduce folds a fan-out's branch outputs into one. Set exactly one of
@@ -382,11 +404,26 @@ func (d *Definition) Validate() error {
 // validateFanout checks a fan-out node's shape in isolation. Role resolution
 // and write-vs-readonly handling happen at compile time, not here.
 func validateFanout(graphID, nodeID string, f *Fanout) error {
-	if f.Count < 1 {
-		return fmt.Errorf("graph %q: node %q: fanout count must be >= 1, got %d", graphID, nodeID, f.Count)
-	}
-	if f.Branch == nil || strings.TrimSpace(f.Branch.Role) == "" {
-		return fmt.Errorf("graph %q: node %q: fanout branch.role is required", graphID, nodeID)
+	hasCountForm := f.Branch != nil
+	hasBranchesForm := len(f.Branches) > 0
+	switch {
+	case hasCountForm && hasBranchesForm:
+		return fmt.Errorf("graph %q: node %q: fanout sets both branch (count form) and branches (list form); pick one", graphID, nodeID)
+	case !hasCountForm && !hasBranchesForm:
+		return fmt.Errorf("graph %q: node %q: fanout must set count+branch or branches", graphID, nodeID)
+	case hasCountForm:
+		if f.Count < 1 {
+			return fmt.Errorf("graph %q: node %q: fanout count must be >= 1, got %d", graphID, nodeID, f.Count)
+		}
+		if err := validateFanoutBranch(graphID, nodeID, *f.Branch); err != nil {
+			return err
+		}
+	case hasBranchesForm:
+		for i, b := range f.Branches {
+			if err := validateFanoutBranch(graphID, nodeID, b); err != nil {
+				return fmt.Errorf("graph %q: node %q: fanout branches[%d]: %w", graphID, nodeID, i, err)
+			}
+		}
 	}
 	if f.MaxParallel < 0 {
 		return fmt.Errorf("graph %q: node %q: fanout max_parallel must be >= 0", graphID, nodeID)
@@ -419,6 +456,17 @@ func validateFanout(graphID, nodeID string, f *Fanout) error {
 		default:
 			return fmt.Errorf("graph %q: node %q: unknown fanout reduce strategy %q", graphID, nodeID, f.Reduce.Strategy)
 		}
+	}
+	return nil
+}
+
+// validateFanoutBranch checks a single fan-out branch spec.
+func validateFanoutBranch(graphID, nodeID string, b FanoutBranch) error {
+	if strings.TrimSpace(b.Role) == "" {
+		return fmt.Errorf("graph %q: node %q: fanout branch role is required", graphID, nodeID)
+	}
+	if b.Temperature != nil && (*b.Temperature < 0 || *b.Temperature > 2) {
+		return fmt.Errorf("graph %q: node %q: fanout branch temperature must be in [0, 2], got %v", graphID, nodeID, *b.Temperature)
 	}
 	return nil
 }
