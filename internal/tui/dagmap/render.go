@@ -37,7 +37,7 @@ func Render(t Topology, states NodeStates) string {
 		style := phaseStyle(states[n].Phase)
 		inner := li.widths[i] - 2
 		top.WriteString(style.Render("┌" + strings.Repeat("─", inner) + "┐"))
-		mid.WriteString(style.Render("│ " + decorate(n, states[n]) + " │"))
+		mid.WriteString(style.Render("│ " + displayName(t, n) + " │"))
 		if incomingBack[n] {
 			half := inner / 2
 			bot.WriteString(style.Render("└" + strings.Repeat("─", half) + "▲" + strings.Repeat("─", inner-half-1) + "┘"))
@@ -84,7 +84,7 @@ func computeLayout(t Topology) layoutInfo {
 	gaps := make([]gapInfo, len(t.Nodes))
 
 	for i, n := range t.Nodes {
-		widths[i] = len(n) + 4
+		widths[i] = len(displayName(t, n)) + 4
 	}
 
 	_, back := Layout(t)

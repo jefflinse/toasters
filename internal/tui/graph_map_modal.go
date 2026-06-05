@@ -27,15 +27,22 @@ const (
 
 var gmViewNames = []string{"List", "Breadcrumb", "Horizontal", "Vertical"}
 
-// fakeGraphState returns a mid-run BugFix fixture used when there is no
-// live graph task to show.
+// fakeGraphState returns a mid-run NewFeature fixture used when there is no
+// live graph task to show. It depicts a fan-out implement step: two coder
+// branches plus a judge, with branch 0 done and branch 1 still running.
 func fakeGraphState() (dagmap.Topology, dagmap.NodeStates) {
-	return dagmap.BugFix(), dagmap.NodeStates{
-		"investigate": {Phase: dagmap.PhaseCompleted},
-		"plan":        {Phase: dagmap.PhaseCompleted},
-		"implement":   {Phase: dagmap.PhaseRunning, ExecCount: 2},
-		"test":        {Phase: dagmap.PhaseCompleted, ExecCount: 1, LastStatus: "tests_failed"},
-		"review":      {Phase: dagmap.PhasePending},
+	topo := dagmap.NewFeature()
+	topo.Children = map[string][]string{
+		"implement": {"implement#0", "implement#1", "implement.judge"},
+	}
+	return topo, dagmap.NodeStates{
+		"plan":            {Phase: dagmap.PhaseCompleted},
+		"implement":       {Phase: dagmap.PhaseRunning, ExecCount: 1},
+		"implement#0":     {Phase: dagmap.PhaseCompleted},
+		"implement#1":     {Phase: dagmap.PhaseRunning},
+		"implement.judge": {Phase: dagmap.PhasePending},
+		"test":            {Phase: dagmap.PhasePending},
+		"review":          {Phase: dagmap.PhasePending},
 	}
 }
 
@@ -50,7 +57,10 @@ func (m *Model) liveGraphState() (dagmap.Topology, dagmap.NodeStates, string, bo
 		label = "graph"
 	}
 	label = label + " · task " + truncateStr(gts.taskID, 8)
-	return gts.topology, gts.nodes, label, true
+	// Expand fan-out branches (recorded as "<node>#<i>" / "<node>.judge"
+	// states) into topology children so the views can show them.
+	topo := withBranchChildren(gts.topology, gts.nodes)
+	return topo, gts.nodes, label, true
 }
 
 func (m *Model) updateGraphMapModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
