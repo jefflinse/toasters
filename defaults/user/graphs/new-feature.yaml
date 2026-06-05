@@ -1,8 +1,12 @@
 id: new-feature
 name: New Feature
 description: >
-  Plan, implement, test, and review a new feature. Skips investigation —
-  the task description is assumed to be sufficient for planning.
+  Plan, implement, test, and review a new feature using fan-out consensus. The
+  implement step runs multiple coders in parallel (each in an isolated
+  workspace); an LLM judge selects the best implementation and its workspace is
+  promoted. The review step runs multiple reviewers in parallel and takes the
+  majority approve/reject decision. Skips investigation — the task description
+  is assumed sufficient for planning.
 tags: [kind:feature]
 
 entry: plan
@@ -12,18 +16,34 @@ max_iterations: 3
 nodes:
   - id: plan
     role: planner
+
   - id: implement
-    role: coder
-    slots:
-      toolchain: "{{ globals.task.toolchain }}"
+    fanout:
+      count: 2
+      branch:
+        role: coder
+        slots:
+          toolchain: "{{ globals.task.toolchain }}"
+      reduce:
+        role: code-judge          # LLM judge selects the winning implementation
+      max_parallel: 2             # at most two coders building at once
+
   - id: test
     role: tester
     slots:
       toolchain: "{{ globals.task.toolchain }}"
+
   - id: review
-    role: code-reviewer
-    slots:
-      toolchain: "{{ globals.task.toolchain }}"
+    fanout:
+      count: 3
+      branch:
+        role: code-reviewer
+        slots:
+          toolchain: "{{ globals.task.toolchain }}"
+      reduce:
+        strategy: majority         # take the majority approve/reject decision
+        key: approved
+      max_parallel: 3
 
 edges:
   - from: plan

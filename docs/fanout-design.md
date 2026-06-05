@@ -323,7 +323,18 @@ Phased (all done):
   `WorkspaceDir` when writing); branch runs the role scoped to its fork; reduce selects a
   winner, promotes its workspace, cleans up. Per-branch session identity threaded through
   `NodeContext` so the TUI doesn't interleave branches.
-- **Phase D — demo graphs + tests.** Best-of-N consensus coder + multi-lens review.
+- **Phase D — graphs + tests.** `new-feature.yaml` *is* the fan-out pipeline now (so
+  feature work actually exercises it — graph selection is by description/tag, and a
+  separate demo graph just sat dormant next to the plain one). `implement` is a 2-coder
+  consensus with a `code-judge` reduce role; `review` is a 3-reviewer `majority` on
+  `approved`. Backed by the `code-judge` role + `branch-selection` schema. The
+  `new-feature` run-through test drives the 8-call fan-out sequence.
+
+  Note on runtime delivery: bundled defaults are embedded (`defaults/embed.go`) and
+  **user-level** defaults are seeded to `~/.config/toasters/user/` only on first run
+  (system files re-sync every start; user files don't, to protect customizations). So a
+  `defaults/user/...` change reaches a running install only after a rebuild **and** a
+  fresh `~/.config/toasters` (wipe-and-reseed).
 
 Reducers v1 (mechanical): `collect` (wrap branch outputs in `{branches:[…]}`),
 `majority` (vote on a `key:` field, honoring `quorum`), `first_success`. Code-consensus

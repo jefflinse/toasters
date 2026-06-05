@@ -43,7 +43,8 @@ func runBundled(t *testing.T, name string, responses [][]provider.StreamEvent) (
 		t.Fatalf("Compile %s: %v", name, err)
 	}
 
-	state := NewTaskState("j", "t", "/w", "mock", "test-model")
+	// A real workspace dir: write-role fan-out branches isolate it into copies.
+	state := NewTaskState("j", "t", t.TempDir(), "mock", "test-model")
 	state.SetArtifact("task.description", "do the thing")
 	state.SetArtifact("task.toolchain", "go")
 
@@ -108,14 +109,21 @@ func TestBundled_BugFix_ReviewRejectionRetry(t *testing.T) {
 // --- new-feature.yaml ---
 
 func TestBundled_NewFeature_HappyPath(t *testing.T) {
+	// new-feature is now a fan-out pipeline: implement runs 2 coders + a judge,
+	// review runs 3 reviewers (majority). Happy path provider calls:
+	//   plan(1) + coders(2) + judge(1) + test(1) + reviewers(3) = 8.
 	_, calls := runBundled(t, "new-feature", [][]provider.StreamEvent{
-		summaryResp("plan"),
-		summaryResp("impl"),
-		testResultResp(true, "ok"),
-		reviewResp(true, "lgtm"),
+		summaryResp("plan"),       // plan
+		summaryResp("impl-a"),     // implement branch (coder)
+		summaryResp("impl-b"),     // implement branch (coder)
+		selectionResp(0),          // code-judge picks the winning branch
+		testResultResp(true, "ok"),// test
+		reviewResp(true, "lgtm"),  // review branch
+		reviewResp(true, "lgtm"),  // review branch
+		reviewResp(true, "lgtm"),  // review branch
 	})
-	if calls != 4 {
-		t.Errorf("provider called %d times, want 4", calls)
+	if calls != 8 {
+		t.Errorf("provider called %d times, want 8", calls)
 	}
 }
 

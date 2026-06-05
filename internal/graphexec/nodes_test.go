@@ -104,6 +104,13 @@ func reviewResp(approved bool, feedback string) []provider.StreamEvent {
 	return completeJSON(string(b))
 }
 
+// selectionResp returns a complete() response for the "branch-selection"
+// schema (an LLM reduce judge picking a winning branch index).
+func selectionResp(winner int) []provider.StreamEvent {
+	b, _ := json.Marshal(map[string]any{"winner": winner, "rationale": "best"})
+	return completeJSON(string(b))
+}
+
 // toolCallResponse returns a non-terminal tool call (e.g. read_file).
 func toolCallResponse(id, name, argsJSON string) []provider.StreamEvent {
 	return []provider.StreamEvent{
