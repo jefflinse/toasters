@@ -5,6 +5,8 @@ mode: worker
 output: summary
 access: readonly
 max_turns: 30
+tools:
+  - ask_user
 ---
 
 Your training data is in the past.

@@ -269,10 +269,12 @@ func buildInitialMessage(state *TaskState) string {
 // write / test / all); any tool names in the role's `tools:` frontmatter
 // list are merged in as explicit opt-ins on top.
 //
-// Read-only roles also get the mid-loop ask_user tool so they can
-// surface clarifying questions. Write/test roles do not by convention:
-// the user should not be asked to choose between variants of "run this
-// or that command."
+// The ask_user human-interrupt tool is opt-in: a role gets it only by
+// listing "ask_user" in its tools frontmatter. It is deliberately NOT
+// granted to every read-only role — a worker that can halt the whole job
+// to ask the user is a footgun for weak local models and for unattended
+// autonomy, so only roles that genuinely clarify requirements (e.g.
+// investigator) should opt in.
 //
 // Opt-in is how narrow-use tools like query_graphs stay off most roles'
 // radar while remaining available to the one role that needs them
@@ -292,7 +294,7 @@ func toolsForRole(exec runtime.ToolExecutor, role *prompt.Role) []agent.Tool {
 		}
 		adapted = AdaptTools(exec, allow)
 	}
-	if isReadOnlyAccess(access) {
+	if slices.Contains(role.Tools, InterruptKindAskUser) {
 		return append([]agent.Tool{AskUserTool()}, adapted...)
 	}
 	return adapted
