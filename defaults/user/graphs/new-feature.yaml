@@ -21,11 +21,11 @@ nodes:
     fanout:
       branches:                   # diverse consensus: two coders at different temperatures
         - role: coder
-          temperature: 0.2        # conservative, close to the obvious solution
+          temperature: 0.1        # conservative, close to the obvious solution
           slots:
             toolchain: "{{ globals.task.toolchain }}"
         - role: coder
-          temperature: 0.8        # exploratory, more likely to try a different approach
+          temperature: 0.5        # exploratory, more likely to try a different approach
           slots:
             toolchain: "{{ globals.task.toolchain }}"
       reduce:
@@ -39,14 +39,21 @@ nodes:
 
   - id: review
     fanout:
-      count: 3
-      branch:
-        role: code-reviewer
-        slots:
-          toolchain: "{{ globals.task.toolchain }}"
+      branches:                   # responsibility fan-out: each reviewer owns one lens
+        - role: lens-reviewer
+          slots:
+            toolchain: "{{ globals.task.toolchain }}"
+            lens: "Correctness: logic errors, off-by-one mistakes, nil/null dereferences, unhandled errors, and data races."
+        - role: lens-reviewer
+          slots:
+            toolchain: "{{ globals.task.toolchain }}"
+            lens: "Security: injection, path traversal, hardcoded secrets, unsafe operations, and missing input validation."
+        - role: lens-reviewer
+          slots:
+            toolchain: "{{ globals.task.toolchain }}"
+            lens: "Performance: unnecessary allocations, N+1 patterns, and redundant work in hot paths."
       reduce:
-        strategy: majority         # take the majority approve/reject decision
-        key: approved
+        role: review-aggregator   # synthesize the lens verdicts into one decision
       max_parallel: 3
 
 edges:

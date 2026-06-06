@@ -109,21 +109,22 @@ func TestBundled_BugFix_ReviewRejectionRetry(t *testing.T) {
 // --- new-feature.yaml ---
 
 func TestBundled_NewFeature_HappyPath(t *testing.T) {
-	// new-feature is now a fan-out pipeline: implement runs 2 coders + a judge,
-	// review runs 3 reviewers (majority). Happy path provider calls:
-	//   plan(1) + coders(2) + judge(1) + test(1) + reviewers(3) = 8.
+	// new-feature is a fan-out pipeline: implement runs 2 coders + a judge,
+	// review runs 3 lens reviewers + an aggregator. Happy path provider calls:
+	//   plan(1) + coders(2) + judge(1) + test(1) + lenses(3) + aggregator(1) = 9.
 	_, calls := runBundled(t, "new-feature", [][]provider.StreamEvent{
 		summaryResp("plan"),        // plan
 		summaryResp("impl-a"),      // implement branch (coder)
 		summaryResp("impl-b"),      // implement branch (coder)
 		selectionResp(0),           // code-judge picks the winning branch
 		testResultResp(true, "ok"), // test
-		reviewResp(true, "lgtm"),   // review branch
-		reviewResp(true, "lgtm"),   // review branch
-		reviewResp(true, "lgtm"),   // review branch
+		reviewResp(true, "lgtm"),   // review lens (correctness)
+		reviewResp(true, "lgtm"),   // review lens (security)
+		reviewResp(true, "lgtm"),   // review lens (performance)
+		reviewResp(true, "lgtm"),   // review-aggregator
 	})
-	if calls != 8 {
-		t.Errorf("provider called %d times, want 8", calls)
+	if calls != 9 {
+		t.Errorf("provider called %d times, want 9", calls)
 	}
 }
 
