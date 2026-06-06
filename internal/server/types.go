@@ -669,11 +669,24 @@ type wireOperatorDonePayload struct {
 	ReasoningTokens int    `json:"reasoning_tokens"`
 }
 
+type wireOperatorToolCallPayload struct {
+	Name    string          `json:"name"`
+	Args    json.RawMessage `json:"args,omitempty"`
+	Result  string          `json:"result,omitempty"`
+	IsError bool            `json:"is_error,omitempty"`
+}
+
 type wireOperatorPromptPayload struct {
-	RequestID string   `json:"request_id"`
-	Question  string   `json:"question"`
-	Options   []string `json:"options,omitempty"`
-	Source    string   `json:"source,omitempty"`
+	RequestID string               `json:"request_id"`
+	Question  string               `json:"question"`
+	Options   []string             `json:"options,omitempty"`
+	Questions []wirePromptQuestion `json:"questions,omitempty"`
+	Source    string               `json:"source,omitempty"`
+}
+
+type wirePromptQuestion struct {
+	Question string   `json:"question"`
+	Options  []string `json:"options,omitempty"`
 }
 
 type wireJobCreatedPayload struct {
@@ -854,18 +867,24 @@ func eventPayloadToWire(ev service.Event) any {
 	switch p := ev.Payload.(type) {
 	case service.OperatorTextPayload:
 		return wireOperatorTextPayload{Text: p.Text, Reasoning: p.Reasoning}
+	case service.OperatorToolCallPayload:
+		return wireOperatorToolCallPayload{Name: p.Name, Args: p.Args, Result: p.Result, IsError: p.IsError}
 	case service.OperatorDonePayload:
 		return wireOperatorDonePayload{
 			ModelName: p.ModelName, TokensIn: p.TokensIn,
 			TokensOut: p.TokensOut, ReasoningTokens: p.ReasoningTokens,
 		}
 	case service.OperatorPromptPayload:
-		return wireOperatorPromptPayload{
+		w := wireOperatorPromptPayload{
 			RequestID: p.RequestID,
 			Question:  p.Question,
 			Options:   p.Options,
 			Source:    p.Source,
 		}
+		for _, q := range p.Questions {
+			w.Questions = append(w.Questions, wirePromptQuestion{Question: q.Question, Options: q.Options})
+		}
+		return w
 	case service.JobCreatedPayload:
 		return wireJobCreatedPayload{JobID: p.JobID, Title: p.Title, Description: p.Description}
 	case service.TaskCreatedPayload:

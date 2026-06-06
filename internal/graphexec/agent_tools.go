@@ -85,6 +85,13 @@ const InterruptKindAskUser = "ask_user"
 // interrupt. Mirrors the old graphexec payload — kept so the executor's
 // interruptHandler contract is unchanged.
 type AskUserPayload struct {
+	Question  string
+	Options   []string
+	Questions []PromptQuestion
+}
+
+// PromptQuestion is a single question in a multi-question ask_user round.
+type PromptQuestion struct {
 	Question string
 	Options  []string
 }
@@ -93,17 +100,32 @@ type AskUserPayload struct {
 var askUserSchema = json.RawMessage(`{
   "type": "object",
   "properties": {
+    "questions": {
+      "type": "array",
+      "description": "Several questions to ask the user at once as one round. Prefer this when you need more than one piece of information so the user answers them together instead of one at a time.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "question": {"type": "string", "description": "The question text."},
+          "options": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Optional 2–4 suggested answers. The user may type a custom response."
+          }
+        },
+        "required": ["question"]
+      }
+    },
     "question": {
       "type": "string",
-      "description": "The question to ask the user."
+      "description": "A single question to ask. Shorthand for a one-question round; prefer the questions array when asking more than one thing."
     },
     "options": {
       "type": "array",
       "items": {"type": "string"},
-      "description": "Optional list of 2–4 suggested answers. The user may type a custom response."
+      "description": "Optional list of 2–4 suggested answers for the single question. The user may type a custom response."
     }
-  },
-  "required": ["question"]
+  }
 }`)
 
 // AskUserTool returns the mid-loop ask_user tool. When the model calls it,
@@ -119,7 +141,7 @@ var askUserSchema = json.RawMessage(`{
 func AskUserTool() agent.Tool {
 	return agent.Tool{
 		Name:        InterruptKindAskUser,
-		Description: "Ask the user a clarifying question and wait for their response. Use this only when the task is genuinely ambiguous and you cannot proceed without human input — prefer a concise question and 2–4 suggested options when possible.",
+		Description: "Ask the user one or more clarifying questions and wait for their answers. Use this only when the task is genuinely ambiguous and you cannot proceed without human input. If you need several pieces of information, pass them all in `questions` so the user answers them in one round rather than one at a time. Prefer 2–4 suggested options per question.",
 		Parameters:  askUserSchema,
 		Handler: func(ctx context.Context, args json.RawMessage) (string, error) {
 			var payload AskUserPayload
@@ -128,8 +150,8 @@ func AskUserTool() agent.Tool {
 					return "", fmt.Errorf("parsing ask_user args: %w", err)
 				}
 			}
-			if payload.Question == "" {
-				return "", fmt.Errorf("ask_user: question is required")
+			if payload.Question == "" && len(payload.Questions) == 0 {
+				return "", fmt.Errorf("ask_user: a question is required")
 			}
 			resp, err := rhizome.Interrupt(ctx, rhizome.InterruptRequest{
 				Kind:    InterruptKindAskUser,

@@ -8,5 +8,8 @@ var SystemFiles embed.FS
 //go:embed user
 var UserFiles embed.FS
 
+//go:embed providers
+var ProviderFiles embed.FS
+
 //go:embed config.yaml
 var DefaultConfig []byte

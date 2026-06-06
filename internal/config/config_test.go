@@ -325,11 +325,11 @@ func TestLoad_MissingConfigFile_AppliesDefaults(t *testing.T) {
 	if cfg.WorkspaceDir != wantWorkspace {
 		t.Errorf("WorkspaceDir: got %q, want %q", cfg.WorkspaceDir, wantWorkspace)
 	}
-	if cfg.Operator.Provider != "" {
-		t.Errorf("Operator.Provider: got %q, want %q", cfg.Operator.Provider, "")
+	if cfg.Operator.Provider != "lmstudio" {
+		t.Errorf("Operator.Provider: got %q, want %q", cfg.Operator.Provider, "lmstudio")
 	}
-	if cfg.Operator.Model != "" {
-		t.Errorf("Operator.Model: got %q, want %q", cfg.Operator.Model, "")
+	if cfg.Operator.Model != "qwen/qwen3.6-35b-a3b" {
+		t.Errorf("Operator.Model: got %q, want %q", cfg.Operator.Model, "qwen/qwen3.6-35b-a3b")
 	}
 }
 
@@ -395,8 +395,8 @@ operator:
 	}
 
 	// Default values should still be applied.
-	if cfg.Operator.Provider != "" {
-		t.Errorf("Operator.Provider: got %q, want %q (default)", cfg.Operator.Provider, "")
+	if cfg.Operator.Provider != "lmstudio" {
+		t.Errorf("Operator.Provider: got %q, want %q (default)", cfg.Operator.Provider, "lmstudio")
 	}
 	wantWorkspace := filepath.Join(tmpHome, "toasters")
 	if cfg.WorkspaceDir != wantWorkspace {
@@ -446,8 +446,8 @@ func TestLoad_EmptyConfigFile_AppliesDefaults(t *testing.T) {
 	}
 
 	// All defaults should be applied.
-	if cfg.Operator.Provider != "" {
-		t.Errorf("Operator.Provider: got %q, want %q", cfg.Operator.Provider, "")
+	if cfg.Operator.Provider != "lmstudio" {
+		t.Errorf("Operator.Provider: got %q, want %q", cfg.Operator.Provider, "lmstudio")
 	}
 }
 

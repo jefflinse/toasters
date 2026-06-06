@@ -26,10 +26,10 @@ type EventSink interface {
 	BroadcastGraphFailed(jobID, taskID, errMsg string)
 	BroadcastTaskCompleted(jobID, taskID, graphID, summary string, output json.RawMessage, hasNextTask bool)
 	BroadcastTaskFailed(jobID, taskID, graphID, errMsg string)
-	// BroadcastPrompt surfaces a HITL question that originated inside a
-	// graph node (via rhizome.Interrupt). Source is typically
-	// "graph:<node>" so the TUI can render an attribution hint.
-	BroadcastPrompt(requestID, question string, options []string, source string)
+	// BroadcastPrompt surfaces a HITL round (one or more questions) that
+	// originated inside a graph node (via rhizome.Interrupt). Source is
+	// typically "graph:<node>" so the TUI can render an attribution hint.
+	BroadcastPrompt(requestID string, questions []PromptQuestion, source string)
 	// BroadcastSessionPrompt fires once per node session, after the system
 	// prompt has been composed and before the LLM starts. The TUI uses it
 	// to populate the prompt-viewer modal for the existing slot created

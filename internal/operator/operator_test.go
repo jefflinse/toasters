@@ -1729,3 +1729,25 @@ func waitFor(t *testing.T, cond func() bool, timeout time.Duration) {
 	}
 	t.Fatal("timed out waiting for condition")
 }
+
+func TestNormalizeToolCallArgs(t *testing.T) {
+	tcs := []provider.ToolCall{
+		{ID: "a", Name: "ask_user", Arguments: json.RawMessage("")},           // empty → repaired
+		{ID: "b", Name: "ask_user", Arguments: json.RawMessage(`{"x":1`)},     // truncated → repaired
+		{ID: "c", Name: "ask_user", Arguments: json.RawMessage(`{"q":"hi"}`)}, // valid → preserved
+		{ID: "d", Name: "ask_user", Arguments: nil},                           // nil → repaired
+	}
+	normalizeToolCallArgs(tcs)
+
+	for _, tc := range tcs {
+		if !json.Valid(tc.Arguments) {
+			t.Errorf("tool call %q has invalid args after normalize: %q", tc.ID, tc.Arguments)
+		}
+	}
+	if string(tcs[0].Arguments) != "{}" || string(tcs[1].Arguments) != "{}" || string(tcs[3].Arguments) != "{}" {
+		t.Errorf("empty/invalid args should become {}: got %q %q %q", tcs[0].Arguments, tcs[1].Arguments, tcs[3].Arguments)
+	}
+	if string(tcs[2].Arguments) != `{"q":"hi"}` {
+		t.Errorf("valid args should be preserved, got %q", tcs[2].Arguments)
+	}
+}

@@ -548,7 +548,9 @@ func (m *Model) buildJobSnapshot(jobID string) *service.JobSnapshot {
 		return nil
 	}
 	var completed, failed int
-	tasks := m.progress.tasks[jobID]
+	// Count only user-facing tasks so the headline "N/M tasks" matches the
+	// task tree (which hides decomposition scaffolding unless --debug).
+	tasks := m.visibleTasks(m.progress.tasks[jobID])
 	for _, t := range tasks {
 		switch t.Status {
 		case service.TaskStatusCompleted:
@@ -579,11 +581,11 @@ func (m *Model) buildJobSnapshot(jobID string) *service.JobSnapshot {
 // the block reads as the current selection — useful when the block is
 // used in a list context like the Jobs pane.
 //
-// spinnerFrame animates the glyph for active/pending jobs. Pass
-// m.spinnerFrame from callers rendered on every tick (sidebar). Callers
-// whose output is cached longer (e.g. chat viewport) can pass any value —
-// they'll just see a fixed frame until the viewport is rebuilt.
-func renderJobUpdateBlock(snap *service.JobSnapshot, width int, selected bool, spinnerFrame int) string {
+// spinnerFrame animates the glyph for active/pending jobs when animated is
+// true. Pass animated=true only from callers rendered on every tick (the
+// sidebar); the chat viewport is re-rendered only on events, so it passes
+// animated=false to get a static glyph instead of a frozen braille frame.
+func renderJobUpdateBlock(snap *service.JobSnapshot, width int, selected bool, spinnerFrame int, animated bool) string {
 	if snap == nil {
 		return ""
 	}
@@ -596,9 +598,10 @@ func renderJobUpdateBlock(snap *service.JobSnapshot, width int, selected bool, s
 	}
 
 	glyph, statusWord, statusStyle, borderColor := jobStatusDecoration(snap)
-	// Active/pending jobs show the same braille spinner used for running
-	// workers in the Workers pane rather than a static dot.
-	if snap.Status == service.JobStatusActive || snap.Status == service.JobStatusPending {
+	// Active/pending jobs show the braille spinner used for running workers —
+	// but only where it actually animates (the sidebar); the chat keeps the
+	// static glyph so it doesn't look like a frozen dot.
+	if animated && (snap.Status == service.JobStatusActive || snap.Status == service.JobStatusPending) {
 		glyph = string(spinnerChars[spinnerFrame%len(spinnerChars)])
 	}
 
@@ -1447,6 +1450,19 @@ func (m *Model) sortedRuntimeSessions() []*runtimeSlot {
 // terminal sessions by start time), so rendering code doesn't need to care.
 func (m *Model) displayRuntimeSessions() []*runtimeSlot {
 	all := m.sortedRuntimeSessions()
+
+	// Hide internal decomposition sessions unless --debug, so the Workers pane
+	// shows real work rather than the planning scaffolding.
+	if !m.debug {
+		filtered := all[:0:0]
+		for _, rs := range all {
+			if rs.system {
+				continue
+			}
+			filtered = append(filtered, rs)
+		}
+		all = filtered
+	}
 
 	// Split active vs. terminal while preserving their existing order.
 	active := make([]*runtimeSlot, 0, len(all))

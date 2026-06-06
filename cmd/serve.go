@@ -70,6 +70,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 	// Bootstrap runs before config.Load() so that the default config.yaml is
 	// written to disk before Viper reads it.
 	bootstrap.UserFS = defaults.UserFiles
+	bootstrap.ProviderFS = defaults.ProviderFiles
 	if err := bootstrap.Run(configDir, defaults.SystemFiles, defaults.DefaultConfig); err != nil {
 		slog.Warn("bootstrap failed", "error", err)
 	}
@@ -308,6 +309,11 @@ func runServe(cmd *cobra.Command, args []string) error {
 				batcher.Flush()
 				svc.BroadcastOperatorDone(cfg.Operator.Model, tokensIn, tokensOut, reasoningTokens)
 			},
+			// Without this, an operator started at boot (the case now that a
+			// provider/model ship as config defaults) calls ask_user but the
+			// prompt is never surfaced to the UI — it just hangs.
+			OnPrompt:   svc.BroadcastOperatorPrompt,
+			OnToolCall: svc.BroadcastOperatorToolCall,
 		})
 		if opErr != nil {
 			slog.Warn("failed to create operator", "error", opErr)

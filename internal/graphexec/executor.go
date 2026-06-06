@@ -172,11 +172,18 @@ func (e *Executor) interruptHandler(ctx context.Context, req rhizome.InterruptRe
 		if !ok {
 			return rhizome.InterruptResponse{}, fmt.Errorf("ask_user: expected AskUserPayload, got %T", req.Payload)
 		}
+		// Prefer the multi-question round; fall back to the single-question
+		// shorthand. The TUI presents them as one form and returns a single
+		// combined answer string.
+		questions := payload.Questions
+		if len(questions) == 0 {
+			questions = []PromptQuestion{{Question: payload.Question, Options: payload.Options}}
+		}
 		requestID := "graph-ask-" + uuid.Must(uuid.NewV4()).String()
 		source := "graph:" + req.Node
 		broadcast := func() {
 			if e.eventSink != nil {
-				e.eventSink.BroadcastPrompt(requestID, payload.Question, payload.Options, source)
+				e.eventSink.BroadcastPrompt(requestID, questions, source)
 			}
 		}
 		text, err := e.broker.Ask(ctx, requestID, broadcast)

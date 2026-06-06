@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"regexp"
 	"slices"
 	"strings"
@@ -54,6 +55,55 @@ func modelsURL(endpoint string) string {
 	return endpoint + "/v1/models"
 }
 
+// samplingParams carries anti-repetition sampler settings. The fields use the
+// llama.cpp / LM Studio JSON names and are pointers so an unset value is simply
+// omitted from the request. They are applied only to local endpoints (see
+// NewOpenAI) because cloud OpenAI-compatible APIs reject unknown fields.
+type samplingParams struct {
+	RepeatPenalty    *float64 `json:"repeat_penalty,omitempty"`
+	RepeatLastN      *int     `json:"repeat_last_n,omitempty"`
+	DRYMultiplier    *float64 `json:"dry_multiplier,omitempty"`
+	DRYBase          *float64 `json:"dry_base,omitempty"`
+	DRYAllowedLength *int     `json:"dry_allowed_length,omitempty"`
+	DRYPenaltyLastN  *int     `json:"dry_penalty_last_n,omitempty"`
+}
+
+// defaultLocalSampling returns anti-degeneration defaults for local models: a
+// light repetition penalty plus the DRY sampler, which targets the repetition
+// loops small quantized models fall into. Gentle enough not to distort normal
+// output but enough to break the death-spiral. See docs/llm-degeneration.md.
+func defaultLocalSampling() samplingParams {
+	f := func(v float64) *float64 { return &v }
+	i := func(v int) *int { return &v }
+	return samplingParams{
+		RepeatPenalty:    f(1.1),
+		RepeatLastN:      i(64),
+		DRYMultiplier:    f(0.8),
+		DRYBase:          f(1.75),
+		DRYAllowedLength: i(2),
+		DRYPenaltyLastN:  i(-1), // -1 = consider the whole context
+	}
+}
+
+// isLocalEndpoint reports whether an endpoint points at a local/LAN inference
+// server (llama.cpp, LM Studio, Ollama). Only such servers get the llama.cpp
+// sampler extensions; cloud APIs would 400 on the unknown fields.
+func isLocalEndpoint(endpoint string) bool {
+	host := endpoint
+	if u, err := url.Parse(endpoint); err == nil && u.Hostname() != "" {
+		host = u.Hostname()
+	}
+	host = strings.TrimSuffix(strings.TrimPrefix(host, "["), "]")
+	switch host {
+	case "localhost", "0.0.0.0", "::1":
+		return true
+	}
+	return strings.HasPrefix(host, "127.") ||
+		strings.HasPrefix(host, "10.") ||
+		strings.HasPrefix(host, "192.168.") ||
+		strings.HasSuffix(host, ".local")
+}
+
 // OpenAIProvider implements Provider for OpenAI-compatible APIs
 // (OpenAI, LM Studio, Ollama, etc.).
 type OpenAIProvider struct {
@@ -62,13 +112,17 @@ type OpenAIProvider struct {
 	apiKey       string
 	defaultModel string
 	httpClient   *http.Client
+	sampling     samplingParams // anti-repetition defaults; zero value for cloud endpoints
 }
 
-// NewOpenAI creates a new OpenAI-compatible provider.
+// NewOpenAI creates a new OpenAI-compatible provider. Local endpoints get
+// anti-degeneration sampler defaults (repetition penalty + DRY); cloud
+// endpoints get none, since they reject unknown request fields.
 func NewOpenAI(name, endpoint, apiKey, defaultModel string) *OpenAIProvider {
-	return &OpenAIProvider{
+	endpoint = strings.TrimRight(endpoint, "/")
+	p := &OpenAIProvider{
 		name:         name,
-		endpoint:     strings.TrimRight(endpoint, "/"),
+		endpoint:     endpoint,
 		apiKey:       apiKey,
 		defaultModel: defaultModel,
 		httpClient: &http.Client{
@@ -83,6 +137,10 @@ func NewOpenAI(name, endpoint, apiKey, defaultModel string) *OpenAIProvider {
 			},
 		},
 	}
+	if isLocalEndpoint(endpoint) {
+		p.sampling = defaultLocalSampling()
+	}
+	return p
 }
 
 // Name returns the provider identifier.
@@ -147,6 +205,9 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, req ChatRequest) (<-cha
 	if len(req.Stop) > 0 {
 		body.Stop = req.Stop
 	}
+	// Apply the provider's anti-repetition sampler defaults (set only for local
+	// endpoints). The zero value is a no-op for cloud endpoints.
+	body.samplingParams = p.sampling
 
 	jsonBody, err := json.Marshal(body)
 	if err != nil {
@@ -448,6 +509,9 @@ type openAIRequest struct {
 	Temperature   *float64             `json:"temperature,omitempty"`
 	MaxTokens     *int                 `json:"max_tokens,omitempty"`
 	Stop          []string             `json:"stop,omitempty"`
+	// Anti-repetition sampler fields (llama.cpp / LM Studio). Promoted to the
+	// top level of the JSON body; omitted entirely when unset (cloud endpoints).
+	samplingParams
 }
 
 type openAIStreamOptions struct {

@@ -313,11 +313,24 @@ type wireOperatorDonePayload struct {
 	ReasoningTokens int    `json:"reasoning_tokens"`
 }
 
+type wireOperatorToolCallPayload struct {
+	Name    string          `json:"name"`
+	Args    json.RawMessage `json:"args,omitempty"`
+	Result  string          `json:"result,omitempty"`
+	IsError bool            `json:"is_error,omitempty"`
+}
+
 type wireOperatorPromptPayload struct {
-	RequestID string   `json:"request_id"`
-	Question  string   `json:"question"`
-	Options   []string `json:"options,omitempty"`
-	Source    string   `json:"source,omitempty"`
+	RequestID string               `json:"request_id"`
+	Question  string               `json:"question"`
+	Options   []string             `json:"options,omitempty"`
+	Questions []wirePromptQuestion `json:"questions,omitempty"`
+	Source    string               `json:"source,omitempty"`
+}
+
+type wirePromptQuestion struct {
+	Question string   `json:"question"`
+	Options  []string `json:"options,omitempty"`
 }
 
 type wireJobCreatedPayload struct {
@@ -827,6 +840,18 @@ func parseSSEPayload(eventType string, raw json.RawMessage) (any, error) {
 			Reasoning: w.Reasoning,
 		}, nil
 
+	case service.EventTypeOperatorToolCall:
+		var w wireOperatorToolCallPayload
+		if err := json.Unmarshal(raw, &w); err != nil {
+			return nil, fmt.Errorf("decoding operator.tool_call payload: %w", err)
+		}
+		return service.OperatorToolCallPayload{
+			Name:    w.Name,
+			Args:    w.Args,
+			Result:  w.Result,
+			IsError: w.IsError,
+		}, nil
+
 	case service.EventTypeOperatorDone:
 		var w wireOperatorDonePayload
 		if err := json.Unmarshal(raw, &w); err != nil {
@@ -844,12 +869,16 @@ func parseSSEPayload(eventType string, raw json.RawMessage) (any, error) {
 		if err := json.Unmarshal(raw, &w); err != nil {
 			return nil, fmt.Errorf("decoding operator.prompt payload: %w", err)
 		}
-		return service.OperatorPromptPayload{
+		p := service.OperatorPromptPayload{
 			RequestID: w.RequestID,
 			Question:  w.Question,
 			Options:   w.Options,
 			Source:    w.Source,
-		}, nil
+		}
+		for _, q := range w.Questions {
+			p.Questions = append(p.Questions, service.PromptQuestion{Question: q.Question, Options: q.Options})
+		}
+		return p, nil
 
 	case service.EventTypeJobCreated:
 		var w wireJobCreatedPayload

@@ -344,8 +344,12 @@ func (m *mockEventSink) BroadcastTaskCompleted(_, _, graphID, _ string, _ json.R
 func (m *mockEventSink) BroadcastTaskFailed(_, _, graphID, errMsg string) {
 	m.record(fmt.Sprintf("task_failed:%s:%s", graphID, errMsg))
 }
-func (m *mockEventSink) BroadcastPrompt(requestID, question string, _ []string, source string) {
-	m.record(fmt.Sprintf("prompt:%s:%s:%s", source, requestID, question))
+func (m *mockEventSink) BroadcastPrompt(requestID string, questions []PromptQuestion, source string) {
+	q := ""
+	if len(questions) > 0 {
+		q = questions[0].Question
+	}
+	m.record(fmt.Sprintf("prompt:%s:%s:%s", source, requestID, q))
 }
 func (m *mockEventSink) BroadcastSessionPrompt(sessionID, _, _ string) {
 	m.record(fmt.Sprintf("session_prompt:%s", sessionID))
@@ -507,8 +511,8 @@ type capturingSink struct {
 	promptID string
 }
 
-func (c *capturingSink) BroadcastPrompt(requestID, question string, options []string, source string) {
-	c.mockEventSink.BroadcastPrompt(requestID, question, options, source)
+func (c *capturingSink) BroadcastPrompt(requestID string, questions []PromptQuestion, source string) {
+	c.mockEventSink.BroadcastPrompt(requestID, questions, source)
 	c.promptMu.Lock()
 	c.promptID = requestID
 	c.promptMu.Unlock()

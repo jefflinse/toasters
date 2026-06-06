@@ -87,6 +87,13 @@ func translateEvent(ev service.Event) tea.Msg {
 		}
 		return OperatorTextMsg{Text: p.Text}
 
+	case service.EventTypeOperatorToolCall:
+		p, ok := ev.Payload.(service.OperatorToolCallPayload)
+		if !ok {
+			return nil
+		}
+		return OperatorToolCallMsg{Name: p.Name, Args: p.Args, Result: p.Result, IsError: p.IsError}
+
 	case service.EventTypeOperatorDone:
 		p, ok := ev.Payload.(service.OperatorDonePayload)
 		if !ok {
@@ -254,6 +261,8 @@ func translateEvent(ev service.Event) tea.Msg {
 			RequestID: p.RequestID,
 			Question:  p.Question,
 			Options:   p.Options,
+			Questions: p.Questions,
+			Source:    p.Source,
 		}
 
 	case service.EventTypeJobCreated,

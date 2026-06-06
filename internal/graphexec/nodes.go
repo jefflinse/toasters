@@ -346,6 +346,11 @@ func onEventSink(ctx context.Context) func(agent.Event) {
 	if nc == nil || nc.Sink == nil {
 		return nil
 	}
+	// mycelium's agent.Event carries the call ID on a ToolCall but not on the
+	// corresponding ToolResult. Track outstanding call IDs in arrival order and
+	// pair each result with its call (results come back in call order), so the
+	// UI can merge a call with its result instead of rendering two items.
+	var pendingCallIDs []string
 	return func(ev agent.Event) {
 		switch ev.Kind {
 		case agent.EventKindText:
@@ -360,9 +365,15 @@ func onEventSink(ctx context.Context) func(agent.Event) {
 			if ev.ToolCall == nil {
 				return
 			}
+			pendingCallIDs = append(pendingCallIDs, ev.ToolCall.ID)
 			nc.Sink.BroadcastSessionToolCall(nc.SessionID, ev.ToolCall.ID, ev.ToolCall.Name, ev.ToolCall.Arguments)
 		case agent.EventKindToolResult:
-			nc.Sink.BroadcastSessionToolResult(nc.SessionID, "", ev.ToolName, ev.Result, "")
+			callID := ""
+			if len(pendingCallIDs) > 0 {
+				callID = pendingCallIDs[0]
+				pendingCallIDs = pendingCallIDs[1:]
+			}
+			nc.Sink.BroadcastSessionToolResult(nc.SessionID, callID, ev.ToolName, ev.Result, "")
 		}
 	}
 }
