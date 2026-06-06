@@ -39,7 +39,11 @@ func RoleNode(cfg TemplateConfig, role *prompt.Role, nodeID string, slots map[st
 			return state, fmt.Errorf("composing prompt for role %q: %w", role.Name, err)
 		}
 
-		tools := toolsForRole(cfg.ToolExecutor, role)
+		exec := cfg.ToolExecutor
+		if cfg.ToolExecutorFor != nil {
+			exec = cfg.ToolExecutorFor(state.WorkspaceDir)
+		}
+		tools := toolsForRole(exec, role)
 		initialMessage := buildInitialMessage(state)
 
 		sess := openGraphSession(ctx, cfg.Store, state, effectiveNodeID(ctx, nodeID), sysPrompt, toolNamesOf(tools), cfg)
@@ -135,10 +139,10 @@ func effectiveNodeID(ctx context.Context, fallback string) string {
 
 // composePrompt resolves a role's system prompt via the prompt engine,
 // passing TaskState artifacts as overrides. Every artifact string value is
-// exposed as a global so role templates can reference `{{ globals.<node-id>.<field> }}`
+// exposed as a data value so role templates can reference `{{ <node-id>.<field> }}`
 // for any upstream node. Slots binds parameterized fillers declared on the
 // role (e.g. {"toolchain": "go"}); slot values may themselves be template
-// references like `{{ globals.task.toolchain }}` that resolve against
+// references like `{{ task.toolchain }}` that resolve against
 // state artifacts at compose time, letting graphs stay toolchain-generic.
 func composePrompt(cfg TemplateConfig, role *prompt.Role, state *TaskState, slots map[string]string) (string, error) {
 	if cfg.PromptEngine == nil {
@@ -150,7 +154,7 @@ func composePrompt(cfg TemplateConfig, role *prompt.Role, state *TaskState, slot
 			overrides[key] = s
 		}
 	}
-	resolved, err := resolveSlotValues(slots, overrides)
+	resolved, err := resolveSlotValues(slots, overrides, cfg.PromptEngine.Instructions())
 	if err != nil {
 		return "", err
 	}
@@ -158,14 +162,16 @@ func composePrompt(cfg TemplateConfig, role *prompt.Role, state *TaskState, slot
 }
 
 // slotRef matches a single template reference that occupies the entire
-// slot value, e.g. `{{ globals.task.toolchain }}`. Slot values are not
+// slot value, e.g. `{{ task.toolchain }}`. Slot values are not
 // arbitrary templates — they're either a literal id or one ref.
 var slotRef = regexp.MustCompile(`^\s*\{\{\s*([\w-]+)\.([\w.-]+)\s*\}\}\s*$`)
 
-// resolveSlotValues replaces `{{ globals.X }}` references in slot values
-// with the matching state artifact. Plain literal values pass through.
-// Returns an error when a referenced artifact is missing or empty.
-func resolveSlotValues(slots, artifacts map[string]string) (map[string]string, error) {
+// resolveSlotValues resolves a single template reference used as a slot value:
+// `{{ instructions.<name> }}` to that instruction's body, and any other
+// `{{ <root>.<key> }}` to the matching task data value (e.g.
+// `{{ task.toolchain }}`). Plain literal values pass through. Returns an error
+// when a reference can't be resolved.
+func resolveSlotValues(slots, artifacts, instructions map[string]string) (map[string]string, error) {
 	if len(slots) == 0 {
 		return slots, nil
 	}
@@ -177,14 +183,23 @@ func resolveSlotValues(slots, artifacts map[string]string) (map[string]string, e
 			continue
 		}
 		category, key := m[1], m[2]
-		if category != "globals" {
-			return nil, fmt.Errorf("slot %q: only globals.* references are supported in slot values, got %q", name, value)
+		switch category {
+		case "instructions":
+			body, ok := instructions[key]
+			if !ok {
+				return nil, fmt.Errorf("slot %q: instruction %q not found", name, value)
+			}
+			out[name] = strings.TrimSpace(body)
+		default:
+			// Any non-instructions reference is a data lookup, keyed by the
+			// full dotted name (e.g. task.toolchain).
+			fullKey := category + "." + key
+			resolved, ok := artifacts[fullKey]
+			if !ok || resolved == "" {
+				return nil, fmt.Errorf("slot %q: reference %q has no value in task data", name, value)
+			}
+			out[name] = resolved
 		}
-		resolved, ok := artifacts[key]
-		if !ok || resolved == "" {
-			return nil, fmt.Errorf("slot %q: reference %q has no value in task artifacts", name, value)
-		}
-		out[name] = resolved
 	}
 	return out, nil
 }
@@ -233,7 +248,7 @@ func slugify(s string) string {
 // upstream node outputs from this graph (artifact keys of the form
 // `<nodeID>.<field>`). Job-level context (`job.title`, `job.description`)
 // and `task.*` artifacts beyond the description are deliberately excluded
-// — roles that need them already pull them in via `{{ globals.* }}`
+// — roles that need them already pull them in via `{{ * }}`
 // references in their templates. Including everything by default makes
 // narrow-scope roles (coder, tester, reviewer) treat the whole job as
 // their scope and overreach.
@@ -265,10 +280,12 @@ func buildInitialMessage(state *TaskState) string {
 // write / test / all); any tool names in the role's `tools:` frontmatter
 // list are merged in as explicit opt-ins on top.
 //
-// Read-only roles also get the mid-loop ask_user tool so they can
-// surface clarifying questions. Write/test roles do not by convention:
-// the user should not be asked to choose between variants of "run this
-// or that command."
+// The ask_user human-interrupt tool is opt-in: a role gets it only by
+// listing "ask_user" in its tools frontmatter. It is deliberately NOT
+// granted to every read-only role — a worker that can halt the whole job
+// to ask the user is a footgun for weak local models and for unattended
+// autonomy, so only roles that genuinely clarify requirements (e.g.
+// investigator) should opt in.
 //
 // Opt-in is how narrow-use tools like query_graphs stay off most roles'
 // radar while remaining available to the one role that needs them
@@ -288,7 +305,7 @@ func toolsForRole(exec runtime.ToolExecutor, role *prompt.Role) []agent.Tool {
 		}
 		adapted = AdaptTools(exec, allow)
 	}
-	if isReadOnlyAccess(access) {
+	if slices.Contains(role.Tools, InterruptKindAskUser) {
 		return append([]agent.Tool{AskUserTool()}, adapted...)
 	}
 	return adapted

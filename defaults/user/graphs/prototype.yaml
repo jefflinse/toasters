@@ -12,11 +12,11 @@ nodes:
   - id: implement
     role: coder
     slots:
-      toolchain: "{{ globals.task.toolchain }}"
+      toolchain: "{{ task.toolchain }}"
   - id: test
     role: tester
     slots:
-      toolchain: "{{ globals.task.toolchain }}"
+      toolchain: "{{ task.toolchain }}"
 
 edges:
   - from: implement

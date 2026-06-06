@@ -13,8 +13,8 @@ func RenderVertical(t Topology, states NodeStates) string {
 
 	boxW := 0
 	for _, n := range t.Nodes {
-		if len(n) > boxW {
-			boxW = len(n)
+		if w := len(displayName(t, n)); w > boxW {
+			boxW = w
 		}
 	}
 	boxW += 4 // " name " padding
@@ -79,7 +79,7 @@ func RenderVertical(t Topology, states NodeStates) string {
 
 	for i, n := range t.Nodes {
 		rr := nodeRows[n]
-		drawBox(c, rr.top, boxLeft, boxW, n, states[n])
+		drawBox(c, rr.top, boxLeft, boxW, displayName(t, n), states[n])
 
 		// Connector below the node, heading to either the next node or End.
 		label := forwardLabel[n]

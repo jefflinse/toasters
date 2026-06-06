@@ -6,9 +6,54 @@
 package tui
 
 import (
+	"sort"
+	"strings"
+
 	"github.com/jefflinse/toasters/internal/service"
 	"github.com/jefflinse/toasters/internal/tui/dagmap"
 )
+
+// withBranchChildren derives the dynamic fan-out children of each node from the
+// recorded node-state keys and returns a topology with Topology.Children
+// populated. A fan-out branch is recorded under "<node>#<index>" and its judge
+// under "<node>.judge"; both attribute to <node> when <node> is a real graph
+// node. Lexical sort puts "#0" < "#1" < ".judge", so branches precede the judge.
+func withBranchChildren(base dagmap.Topology, states dagmap.NodeStates) dagmap.Topology {
+	nodeSet := make(map[string]bool, len(base.Nodes))
+	for _, n := range base.Nodes {
+		nodeSet[n] = true
+	}
+	var children map[string][]string
+	for key := range states {
+		parent, ok := branchParent(key)
+		if !ok || !nodeSet[parent] || nodeSet[key] {
+			continue
+		}
+		if children == nil {
+			children = map[string][]string{}
+		}
+		children[parent] = append(children[parent], key)
+	}
+	for p := range children {
+		sort.Strings(children[p])
+	}
+	out := base
+	out.Children = children
+	return out
+}
+
+// branchParent extracts the parent node id from a fan-out branch or judge
+// session key, e.g. "implement#1" -> "implement", "implement.judge" ->
+// "implement". Returns ok=false for ordinary node keys.
+func branchParent(key string) (string, bool) {
+	if i := strings.LastIndex(key, "#"); i > 0 {
+		return key[:i], true
+	}
+	if p, ok := strings.CutSuffix(key, ".judge"); ok && p != "" {
+		return p, true
+	}
+	return "", false
+}
 
 type graphTaskState struct {
 	jobID    string
@@ -105,18 +150,25 @@ func (m *Model) recordGraphNodeStarted(jobID, taskID, node string) {
 	ns := gts.nodes[node]
 	ns.Phase = dagmap.PhaseRunning
 	ns.ExecCount++
+	ns.LastStatus = "" // clear a prior run's status; this is a fresh execution
 	gts.nodes[node] = ns
 	m.lastGraphTaskID = taskID
 }
 
-// recordGraphNodeDone marks a node as completed and stores the TaskState
-// status (e.g. "tests_failed", "review_approved") so the user can see what
-// routed the graph.
+// recordGraphNodeDone marks a node finished and stores the TaskState status
+// (e.g. "tests_failed", "review_approved") so the user can see what routed the
+// graph. A "failed" status marks the node failed (✗); other statuses are
+// routing outcomes on a node that completed normally.
 func (m *Model) recordGraphNodeDone(jobID, taskID, node, status string) {
 	gts := m.ensureGraphTaskState(jobID, taskID)
 	ns := gts.nodes[node]
-	ns.Phase = dagmap.PhaseCompleted
-	ns.LastStatus = status
+	if status == "failed" {
+		ns.Phase = dagmap.PhaseFailed
+		ns.LastStatus = "" // the ✗ glyph already conveys failure
+	} else {
+		ns.Phase = dagmap.PhaseCompleted
+		ns.LastStatus = status
+	}
 	gts.nodes[node] = ns
 	m.lastGraphTaskID = taskID
 }

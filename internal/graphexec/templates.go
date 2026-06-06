@@ -15,8 +15,18 @@ type TemplateConfig struct {
 	// Provider is the LLM provider for all nodes.
 	Provider provider.Provider
 
-	// ToolExecutor is the base tool executor (typically CompositeTools).
+	// ToolExecutor is a fixed tool executor used only when ToolExecutorFor is
+	// nil — mainly for tests and callers that don't need per-workspace
+	// scoping. Production sets ToolExecutorFor instead.
 	ToolExecutor runtime.ToolExecutor
+
+	// ToolExecutorFor builds a tool executor scoped to a workspace directory.
+	// When non-nil it takes precedence over ToolExecutor: each RoleNode
+	// resolves its tools via ToolExecutorFor(state.WorkspaceDir). This is what
+	// lets a fanout branch operating in an isolated workspace get tools pointed
+	// at that workspace rather than the task's shared one. Production wires
+	// this to Executor.buildToolExecutor.
+	ToolExecutorFor func(workspaceDir string) runtime.ToolExecutor
 
 	// Model is the default model for all nodes.
 	Model string
@@ -40,4 +50,12 @@ type TemplateConfig struct {
 	// WorkerTemperature is the default sampling temperature for graph
 	// nodes. Roles may override via their frontmatter.
 	WorkerTemperature float64
+
+	// TemperatureOverride and ThinkingOverride, when non-nil, force the
+	// sampling temperature / reasoning toggle with the highest precedence —
+	// above role frontmatter and the graph-wide default. Set per fan-out
+	// branch (from FanoutBranch overrides) so the same role can run at
+	// different temperatures across branches. nil leaves normal resolution.
+	TemperatureOverride *float64
+	ThinkingOverride    *bool
 }

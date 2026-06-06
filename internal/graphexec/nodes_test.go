@@ -104,6 +104,13 @@ func reviewResp(approved bool, feedback string) []provider.StreamEvent {
 	return completeJSON(string(b))
 }
 
+// selectionResp returns a complete() response for the "branch-selection"
+// schema (an LLM reduce judge picking a winning branch index).
+func selectionResp(winner int) []provider.StreamEvent {
+	b, _ := json.Marshal(map[string]any{"winner": winner, "rationale": "best"})
+	return completeJSON(string(b))
+}
+
 // toolCallResponse returns a non-terminal tool call (e.g. read_file).
 func toolCallResponse(id, name, argsJSON string) []provider.StreamEvent {
 	return []provider.StreamEvent{
@@ -560,8 +567,8 @@ mode: worker
 output: summary
 ---
 
-TASK_MARKER: {{ globals.task.description }}
-JOB_MARKER: {{ globals.job.title }}
+TASK_MARKER: {{ task.description }}
+JOB_MARKER: {{ job.title }}
 `
 	if err := os.WriteFile(filepath.Join(rolesDir, "test-investigator.md"), []byte(roleContent), 0644); err != nil {
 		t.Fatal(err)
@@ -596,9 +603,12 @@ func TestResolveSlotValues(t *testing.T) {
 		"task.toolchain":   "go",
 		"task.description": "do thing",
 	}
+	instructions := map[string]string{
+		"review-for-x": "  Focus on X.  ",
+	}
 
 	t.Run("literal passes through", func(t *testing.T) {
-		out, err := resolveSlotValues(map[string]string{"toolchain": "python"}, artifacts)
+		out, err := resolveSlotValues(map[string]string{"toolchain": "python"}, artifacts, instructions)
 		if err != nil {
 			t.Fatalf("resolveSlotValues: %v", err)
 		}
@@ -608,7 +618,7 @@ func TestResolveSlotValues(t *testing.T) {
 	})
 
 	t.Run("globals reference resolves", func(t *testing.T) {
-		out, err := resolveSlotValues(map[string]string{"toolchain": "{{ globals.task.toolchain }}"}, artifacts)
+		out, err := resolveSlotValues(map[string]string{"toolchain": "{{ task.toolchain }}"}, artifacts, instructions)
 		if err != nil {
 			t.Fatalf("resolveSlotValues: %v", err)
 		}
@@ -617,8 +627,25 @@ func TestResolveSlotValues(t *testing.T) {
 		}
 	})
 
+	t.Run("instruction reference resolves (trimmed)", func(t *testing.T) {
+		out, err := resolveSlotValues(map[string]string{"lens": "{{ instructions.review-for-x }}"}, artifacts, instructions)
+		if err != nil {
+			t.Fatalf("resolveSlotValues: %v", err)
+		}
+		if out["lens"] != "Focus on X." {
+			t.Errorf("got %q, want %q", out["lens"], "Focus on X.")
+		}
+	})
+
+	t.Run("missing instruction errors", func(t *testing.T) {
+		_, err := resolveSlotValues(map[string]string{"lens": "{{ instructions.nope }}"}, artifacts, instructions)
+		if err == nil || !strings.Contains(err.Error(), "nope") {
+			t.Fatalf("expected error naming the missing instruction, got: %v", err)
+		}
+	})
+
 	t.Run("missing artifact errors", func(t *testing.T) {
-		_, err := resolveSlotValues(map[string]string{"toolchain": "{{ globals.task.toolchain }}"}, map[string]string{})
+		_, err := resolveSlotValues(map[string]string{"toolchain": "{{ task.toolchain }}"}, map[string]string{}, instructions)
 		if err == nil {
 			t.Fatal("expected error for missing artifact")
 		}
@@ -627,10 +654,10 @@ func TestResolveSlotValues(t *testing.T) {
 		}
 	})
 
-	t.Run("non-globals category errors", func(t *testing.T) {
-		_, err := resolveSlotValues(map[string]string{"toolchain": "{{ slots.other }}"}, artifacts)
+	t.Run("unsupported category errors", func(t *testing.T) {
+		_, err := resolveSlotValues(map[string]string{"toolchain": "{{ slots.other }}"}, artifacts, instructions)
 		if err == nil {
-			t.Fatal("expected error for non-globals reference")
+			t.Fatal("expected error for unsupported reference category")
 		}
 	})
 }

@@ -10,7 +10,7 @@ slots:
 ---
 
 Your training data is in the past.
-It is {{ globals.now.month }} {{ globals.now.year }}.
+It is {{ now.month }} {{ now.year }}.
 
 You are the tester for this task. You run the tests that cover the changes
 and report the outcome. You do not modify code — if a test fails, it is
@@ -23,7 +23,7 @@ round can address it.
 
 ## Task
 
-{{ globals.task.description }}
+{{ task.description }}
 
 ## Other tasks in this job
 
@@ -31,11 +31,11 @@ The following tasks are part of the wider job but are NOT your
 responsibility — they are handled by separate runs. Do not run their
 tests, and do not flag the absence of their tests as a failure.
 
-{{ globals.task.siblings }}
+{{ task.siblings }}
 
 ## What was implemented
 
-{{ globals.implement.summary }}
+{{ implement.summary }}
 
 ## How to test
 

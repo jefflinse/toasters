@@ -2,8 +2,44 @@ package dagmap
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 )
+
+// TestRender_FanoutExpansion verifies fan-out children expand as indented rows
+// in the list view and collapse to a "+N" badge in the linear views.
+func TestRender_FanoutExpansion(t *testing.T) {
+	top := NewFeature()
+	top.Children = map[string][]string{
+		"implement": {"implement#0", "implement#1", "implement.judge"},
+	}
+	states := NodeStates{
+		"plan":            {Phase: PhaseCompleted},
+		"implement":       {Phase: PhaseRunning},
+		"implement#0":     {Phase: PhaseCompleted},
+		"implement#1":     {Phase: PhaseRunning},
+		"implement.judge": {Phase: PhasePending},
+		"test":            {Phase: PhasePending},
+		"review":          {Phase: PhasePending},
+	}
+
+	list := RenderList(top, states)
+	for _, want := range []string{"implement#0", "implement#1", "implement.judge"} {
+		if !strings.Contains(list, want) {
+			t.Errorf("list view missing fan-out child %q\n%s", want, list)
+		}
+	}
+	if strings.Contains(list, "plan#") {
+		t.Errorf("unexpected child row for childless node plan:\n%s", list)
+	}
+
+	if got := RenderBreadcrumb(top, states); !strings.Contains(got, "+3") {
+		t.Errorf("breadcrumb missing fan-out badge +3:\n%s", got)
+	}
+	if got := Render(top, states); !strings.Contains(got, "+3") {
+		t.Errorf("horizontal view missing fan-out badge +3:\n%s", got)
+	}
+}
 
 // TestRender_Preview prints each template's rendered topology. Run with
 // `go test -v -run TestRender_Preview ./internal/tui/dagmap/` to iterate

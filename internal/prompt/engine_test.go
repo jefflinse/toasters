@@ -46,7 +46,7 @@ description: Implements Go code.
 mode: worker
 ---
 
-It is {{ globals.now.month }} {{ globals.now.year }}.
+It is {{ now.month }} {{ now.year }}.
 
 {{ toolchains.go }}
 
@@ -111,7 +111,7 @@ func TestEngine_SetGlobal(t *testing.T) {
 	writeFile(t, filepath.Join(dir, "roles", "test.md"), `---
 name: Test Role
 ---
-Granularity is {{ globals.task.granularity }}.
+Granularity is {{ task.granularity }}.
 `)
 
 	engine := NewEngine()
@@ -137,7 +137,7 @@ func TestEngine_SetGlobal_TimeOverrides(t *testing.T) {
 	writeFile(t, filepath.Join(dir, "roles", "test.md"), `---
 name: Test Role
 ---
-Year is {{ globals.now.year }}.
+Year is {{ now.year }}.
 `)
 
 	engine := NewEngine()
@@ -168,7 +168,7 @@ name: Lead
 mode: lead
 ---
 Workers:
-{{ globals.team.workers }}
+{{ team.workers }}
 Done.
 `)
 
@@ -203,7 +203,7 @@ func TestEngine_Compose_OverridesTakePrecedence(t *testing.T) {
 	writeFile(t, filepath.Join(dir, "roles", "test.md"), `---
 name: Test
 ---
-Value is {{ globals.my.key }}.
+Value is {{ my.key }}.
 `)
 
 	engine := NewEngine()
@@ -280,7 +280,7 @@ func TestEngine_Compose_UnresolvedRefsBecomeEmpty(t *testing.T) {
 name: R
 ---
 BEFORE
-{{ globals.task.description }}
+{{ task.description }}
 {{ instructions.does-not-exist }}
 {{ toolchains.does-not-exist }}
 AFTER
@@ -351,14 +351,16 @@ func TestEngine_Compose_Slots_DeclaredButUnbound(t *testing.T) {
 	}
 }
 
-func TestEngine_Compose_Slots_BoundToUnknownToolchain(t *testing.T) {
-	e := slotEngine(t, "slots:\n  - toolchain\n", "{{ slots.toolchain }}")
-	_, err := e.Compose("r", nil, map[string]string{"toolchain": "rust"})
-	if err == nil {
-		t.Fatal("expected error when slot is bound to unknown toolchain")
+func TestEngine_Compose_Slots_LiteralText(t *testing.T) {
+	// A slot value that doesn't name a loaded toolchain is substituted as
+	// literal text, so slots work as general parameters (e.g. a review lens).
+	e := slotEngine(t, "slots:\n  - lens\n", "Focus on {{ slots.lens }}.")
+	got, err := e.Compose("r", nil, map[string]string{"lens": "correctness and security"})
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(err.Error(), "rust") {
-		t.Errorf("error should name the unknown toolchain, got: %v", err)
+	if !strings.Contains(got, "Focus on correctness and security.") {
+		t.Errorf("literal slot not substituted, got: %q", got)
 	}
 }
 
@@ -462,9 +464,9 @@ func TestEngine_Compose_AllRoles(t *testing.T) {
 		t.Fatalf("LoadDir(user): %v", err)
 	}
 	engine.SetGlobal("task.granularity", "moderate")
-	// fine-decomposer references {{ globals.toolchains.available }} —
+	// fine-decomposer references {{ available.toolchains }} —
 	// startup wires this from engine.Toolchains(); mirror that here.
-	engine.SetGlobal("toolchains.available", strings.Join(engine.Toolchains(), ", "))
+	engine.SetGlobal("available.toolchains", strings.Join(engine.Toolchains(), ", "))
 	// The decomposer roles reference the synthetic
 	// {{ instructions.coarse-granularity }} / {{ instructions.fine-granularity }}
 	// instructions registered at startup by ApplyGranularity. Do the same

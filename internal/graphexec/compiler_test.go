@@ -335,14 +335,12 @@ func TestCompile_SlotValidation_BindingForUndeclaredSlot(t *testing.T) {
 	}
 }
 
-func TestCompile_SlotValidation_BindingToUnknownToolchain(t *testing.T) {
+func TestCompile_SlotValidation_LiteralBindingAllowed(t *testing.T) {
+	// A slot bound to a non-toolchain value is valid: it becomes literal text
+	// at compose time, so generic slots (e.g. a review lens) compile fine.
 	cfg := compilerTemplate(t, nil)
-	_, err := Compile(slotDef(map[string]string{"toolchain": "rust"}), cfg, nil)
-	if err == nil {
-		t.Fatal("expected error for binding to unknown toolchain")
-	}
-	if !strings.Contains(err.Error(), "rust") || !strings.Contains(err.Error(), "unknown toolchain") {
-		t.Errorf("err = %v, want to flag the unknown toolchain id", err)
+	if _, err := Compile(slotDef(map[string]string{"toolchain": "anything"}), cfg, nil); err != nil {
+		t.Fatalf("free-text slot binding should compile, got: %v", err)
 	}
 }
 
@@ -351,7 +349,7 @@ func TestCompile_SlotValidation_TemplateRefDeferredToRuntime(t *testing.T) {
 	// catalog at compile time — the artifact doesn't exist yet. Compile
 	// must succeed; runtime resolves and validates.
 	cfg := compilerTemplate(t, nil)
-	_, err := Compile(slotDef(map[string]string{"toolchain": "{{ globals.task.toolchain }}"}), cfg, nil)
+	_, err := Compile(slotDef(map[string]string{"toolchain": "{{ task.toolchain }}"}), cfg, nil)
 	if err != nil {
 		t.Fatalf("expected compile to defer template-ref binding to runtime, got: %v", err)
 	}

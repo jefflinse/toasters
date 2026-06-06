@@ -103,10 +103,10 @@ func TestValidate_RejectsBadInputs(t *testing.T) {
 			d.Nodes[0].ID = EndNode
 			d.Entry = EndNode
 		}, "end sentinel"},
-		{"node missing role", func(d *Definition) { d.Nodes[0].Role = "" }, "must set role or graph"},
+		{"node missing role", func(d *Definition) { d.Nodes[0].Role = "" }, "must set role, graph, or fanout"},
 		{"node sets both role and graph", func(d *Definition) {
 			d.Nodes[0].Graph = "other"
-		}, "both role and graph"},
+		}, "more than one of role/graph/fanout"},
 		{"edge unknown from", func(d *Definition) {
 			d.Edges[0].From = "nope"
 		}, "from"},

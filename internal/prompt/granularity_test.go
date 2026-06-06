@@ -65,7 +65,7 @@ func TestApplyGranularity_RoutesBodyThroughSyntheticName(t *testing.T) {
 	writeFile(t, filepath.Join(dir, "roles", "w.md"), `---
 name: W
 ---
-fine={{ globals.fine.granularity }} / coarse={{ globals.coarse.granularity }}
+fine={{ fine.granularity }} / coarse={{ coarse.granularity }}
 FINE: {{ instructions.fine-granularity }}
 COARSE: {{ instructions.coarse-granularity }}
 `)

@@ -6,6 +6,7 @@ package graphexec
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 )
 
 // TaskState is the state type for rhizome graphs (the S in Graph[S]).
@@ -79,6 +80,36 @@ func NewTaskState(jobID, taskID, workspaceDir, providerName, model string) *Task
 		Artifacts:    make(map[string]any),
 		NodeOutputs:  make(map[string]json.RawMessage),
 	}
+}
+
+// clone returns an independent copy of the state safe for a fan-out branch to
+// mutate concurrently: the Artifacts and NodeOutputs maps (and the Inputs
+// slice) are deep-copied so branches never share mutable backing storage.
+// Scalar fields are copied by value; Err is shared (errors are treated as
+// immutable).
+func (s *TaskState) clone() *TaskState {
+	if s == nil {
+		return nil
+	}
+	cp := *s
+	if s.Artifacts != nil {
+		cp.Artifacts = make(map[string]any, len(s.Artifacts))
+		maps.Copy(cp.Artifacts, s.Artifacts)
+	}
+	if s.NodeOutputs != nil {
+		cp.NodeOutputs = make(map[string]json.RawMessage, len(s.NodeOutputs))
+		for k, v := range s.NodeOutputs {
+			b := make(json.RawMessage, len(v))
+			copy(b, v)
+			cp.NodeOutputs[k] = b
+		}
+	}
+	if s.Inputs != nil {
+		b := make(json.RawMessage, len(s.Inputs))
+		copy(b, s.Inputs)
+		cp.Inputs = b
+	}
+	return &cp
 }
 
 // SetArtifact stores a named artifact in the state.

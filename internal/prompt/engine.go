@@ -9,14 +9,18 @@
 //   - Instructions (instructions/*.md): reusable behavioral directives.
 //     Plain markdown, no frontmatter, no vars.
 //
-// Template syntax uses {{ category.name }} references:
+// Template syntax uses {{ root.name }} references. Three roots are reserved
+// for special lookups; every other reference is a data lookup into the
+// per-compose data bag (task fields, node outputs, the current time, …):
 //
-//	{{ toolchains.go }}                       → inlines the Go toolchain body
-//	{{ instructions.do-exact }}               → inlines the instruction body
-//	{{ globals.now.month }}                   → runtime value (current month name)
-//	{{ globals.now.year }}                    → runtime value (current year)
-//	{{ vars.version }}                        → toolchain variable (within toolchain body)
-//	{{ slots.toolchain }}                     → slot bound at compose time (e.g. to a toolchain)
+//	{{ toolchains.go }}          → inlines the Go toolchain body   (reserved)
+//	{{ instructions.do-exact }}  → inlines the instruction body    (reserved)
+//	{{ slots.lens }}             → a slot bound at compose time     (reserved)
+//	{{ task.description }}        → a data value (any non-reserved root)
+//	{{ now.year }}               → a data value (current year)
+//	{{ fanout.candidates }}      → a data value (reducer-injected)
+//
+// (Within a toolchain body, {{ vars.version }} resolves the toolchain's vars.)
 package prompt
 
 import (
@@ -77,8 +81,8 @@ type Role struct {
 	Temperature *float64 `yaml:"temperature,omitempty"`
 	// Slots names parameterized fillers that callers must bind at compose
 	// time. Each name corresponds to a {{ slots.<name> }} reference in the
-	// body. Today the bound value is a toolchain id; in the future the slot
-	// kind may be inferred from the name or declared explicitly.
+	// body. The bound value is either a toolchain id (which inlines that
+	// toolchain's resolved body) or arbitrary text (substituted literally).
 	Slots  []string `yaml:"slots,omitempty"`
 	Body   string   `yaml:"-"` // template text after frontmatter
 	Source string   `yaml:"-"` // "system" or "user" — set by LoadDir caller
@@ -114,7 +118,7 @@ func NewEngine() *Engine {
 }
 
 // SetGlobal registers a global template variable that will be available as
-// {{ globals.<key> }} in role templates. Safe to call concurrently with
+// {{ <key> }} in role templates. Safe to call concurrently with
 // Compose.
 func (e *Engine) SetGlobal(key, value string) {
 	e.mu.Lock()
@@ -166,7 +170,9 @@ func (e *Engine) LoadDir(dir, source string) error {
 // {"go.version": "1.25"} overrides the Go toolchain's version var). Slots
 // binds each name declared in the role's frontmatter to a concrete value
 // (currently always a toolchain id); every declared slot must have a
-// binding or Compose returns an error.
+// binding or Compose returns an error. A slot bound to a loaded toolchain id
+// inlines that toolchain's body at {{ slots.<name> }}; any other binding is
+// substituted as literal text.
 func (e *Engine) Compose(roleName string, overrides map[string]string, slots map[string]string) (string, error) {
 	e.mu.RLock()
 	role, ok := e.roles[roleName]
@@ -216,13 +222,9 @@ func (e *Engine) Compose(roleName string, overrides map[string]string, slots map
 			return "", fmt.Errorf("role %q: slot %q declared but not bound", roleName, name)
 		}
 	}
-	for name, tcID := range slots {
+	for name := range slots {
 		if _, ok := declared[name]; !ok {
 			slog.Warn("ignoring slot binding for undeclared slot", "role", roleName, "slot", name)
-			continue
-		}
-		if _, ok := resolvedToolchains[tcID]; !ok {
-			return "", fmt.Errorf("role %q: slot %q bound to unknown toolchain %q", roleName, name, tcID)
 		}
 	}
 
@@ -251,27 +253,28 @@ func (e *Engine) Compose(roleName string, overrides map[string]string, slots map
 			}
 			slog.Warn("unresolved instruction reference; substituting empty", "role", roleName, "ref", name)
 			return ""
-		case "globals":
-			if val, ok := globals[name]; ok {
-				return val
-			}
-			slog.Warn("unresolved global reference; substituting empty", "role", roleName, "ref", name)
-			return ""
 		case "slots":
 			if _, ok := declared[name]; !ok {
 				resolveErr = fmt.Errorf("role %q references slot %q not declared in frontmatter", roleName, name)
 				return match
 			}
-			tcID := slots[name]
-			body, ok := resolvedToolchains[tcID]
-			if !ok {
-				resolveErr = fmt.Errorf("role %q: slot %q bound to unknown toolchain %q", roleName, name, tcID)
-				return match
+			val := slots[name]
+			// A slot value that names a loaded toolchain inlines that
+			// toolchain's resolved body; any other value is literal text.
+			if body, ok := resolvedToolchains[val]; ok {
+				return strings.TrimSpace(body)
 			}
-			return strings.TrimSpace(body)
+			return val
 		default:
-			slog.Warn("unknown template category", "role", roleName, "category", category)
-			return match
+			// toolchains/instructions/slots are the reserved roots; every
+			// other reference is a data lookup keyed by the full dotted name
+			// (e.g. task.description, fanout.candidates, now.year, job.title).
+			key := category + "." + name
+			if val, ok := globals[key]; ok {
+				return val
+			}
+			slog.Warn("unresolved data reference; substituting empty", "role", roleName, "ref", key)
+			return ""
 		}
 	})
 	if resolveErr != nil {
@@ -293,6 +296,19 @@ func (e *Engine) Roles() []string {
 		names = append(names, name)
 	}
 	return names
+}
+
+// Instructions returns a copy of the loaded instruction bodies, keyed by name.
+// Used by callers that resolve {{ instructions.<name> }} references outside the
+// role-body template — e.g. an instruction-valued slot binding.
+func (e *Engine) Instructions() map[string]string {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	out := make(map[string]string, len(e.instructions))
+	for k, v := range e.instructions {
+		out[k] = v
+	}
+	return out
 }
 
 // Toolchains returns all loaded toolchain ids in stable (sorted) order.

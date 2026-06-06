@@ -1,0 +1,17 @@
+name: branch-selection
+description: >
+  A judge's selection of the winning candidate from a set of parallel branch
+  outputs. Used by an LLM reduce role on a write-role fan-out: the chosen
+  branch's workspace is promoted and its output becomes the node's output.
+fields:
+  winner:
+    type: integer
+    description: >
+      The index of the chosen candidate, matching the candidate's "index"
+      field. Must be one of the indices present in the candidate list.
+    required: true
+  rationale:
+    type: string
+    description: >
+      Brief justification for why this candidate was selected over the others.
+    required: true
