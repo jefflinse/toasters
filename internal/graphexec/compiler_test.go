@@ -349,7 +349,7 @@ func TestCompile_SlotValidation_TemplateRefDeferredToRuntime(t *testing.T) {
 	// catalog at compile time — the artifact doesn't exist yet. Compile
 	// must succeed; runtime resolves and validates.
 	cfg := compilerTemplate(t, nil)
-	_, err := Compile(slotDef(map[string]string{"toolchain": "{{ globals.task.toolchain }}"}), cfg, nil)
+	_, err := Compile(slotDef(map[string]string{"toolchain": "{{ task.toolchain }}"}), cfg, nil)
 	if err != nil {
 		t.Fatalf("expected compile to defer template-ref binding to runtime, got: %v", err)
 	}

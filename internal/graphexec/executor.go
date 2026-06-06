@@ -336,7 +336,7 @@ type TaskRequest struct {
 	// Toolchain names the toolchain id (e.g. "go", "python", "typescript")
 	// the task should execute against. Surfaced to graphs via the
 	// `task.toolchain` artifact so slot bindings like
-	// `slots: { toolchain: "{{ globals.task.toolchain }}" }` resolve.
+	// `slots: { toolchain: "{{ task.toolchain }}" }` resolve.
 	// Required for graphs whose roles bind toolchain slots; optional
 	// otherwise. Set by fine-decompose; callers without a real source
 	// should leave empty rather than defaulting.
@@ -346,7 +346,7 @@ type TaskRequest struct {
 	// the same job, excluding this task and any decomposition bootstrap
 	// tasks. Empty string is treated as "no siblings"; the executor
 	// substitutes a placeholder so role templates that reference
-	// `{{ globals.task.siblings }}` always render meaningful text.
+	// `{{ task.siblings }}` always render meaningful text.
 	Siblings string
 
 	WorkspaceDir string

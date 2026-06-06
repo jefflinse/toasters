@@ -139,10 +139,10 @@ func effectiveNodeID(ctx context.Context, fallback string) string {
 
 // composePrompt resolves a role's system prompt via the prompt engine,
 // passing TaskState artifacts as overrides. Every artifact string value is
-// exposed as a global so role templates can reference `{{ globals.<node-id>.<field> }}`
+// exposed as a data value so role templates can reference `{{ <node-id>.<field> }}`
 // for any upstream node. Slots binds parameterized fillers declared on the
 // role (e.g. {"toolchain": "go"}); slot values may themselves be template
-// references like `{{ globals.task.toolchain }}` that resolve against
+// references like `{{ task.toolchain }}` that resolve against
 // state artifacts at compose time, letting graphs stay toolchain-generic.
 func composePrompt(cfg TemplateConfig, role *prompt.Role, state *TaskState, slots map[string]string) (string, error) {
 	if cfg.PromptEngine == nil {
@@ -162,14 +162,15 @@ func composePrompt(cfg TemplateConfig, role *prompt.Role, state *TaskState, slot
 }
 
 // slotRef matches a single template reference that occupies the entire
-// slot value, e.g. `{{ globals.task.toolchain }}`. Slot values are not
+// slot value, e.g. `{{ task.toolchain }}`. Slot values are not
 // arbitrary templates — they're either a literal id or one ref.
 var slotRef = regexp.MustCompile(`^\s*\{\{\s*([\w-]+)\.([\w.-]+)\s*\}\}\s*$`)
 
-// resolveSlotValues replaces `{{ globals.X }}` and `{{ instructions.X }}`
-// references in slot values with the matching state artifact or instruction
-// body. Plain literal values pass through. Returns an error when a reference
-// can't be resolved or uses an unsupported category.
+// resolveSlotValues resolves a single template reference used as a slot value:
+// `{{ instructions.<name> }}` to that instruction's body, and any other
+// `{{ <root>.<key> }}` to the matching task data value (e.g.
+// `{{ task.toolchain }}`). Plain literal values pass through. Returns an error
+// when a reference can't be resolved.
 func resolveSlotValues(slots, artifacts, instructions map[string]string) (map[string]string, error) {
 	if len(slots) == 0 {
 		return slots, nil
@@ -183,12 +184,6 @@ func resolveSlotValues(slots, artifacts, instructions map[string]string) (map[st
 		}
 		category, key := m[1], m[2]
 		switch category {
-		case "globals":
-			resolved, ok := artifacts[key]
-			if !ok || resolved == "" {
-				return nil, fmt.Errorf("slot %q: reference %q has no value in task artifacts", name, value)
-			}
-			out[name] = resolved
 		case "instructions":
 			body, ok := instructions[key]
 			if !ok {
@@ -196,7 +191,14 @@ func resolveSlotValues(slots, artifacts, instructions map[string]string) (map[st
 			}
 			out[name] = strings.TrimSpace(body)
 		default:
-			return nil, fmt.Errorf("slot %q: only globals.* and instructions.* references are supported in slot values, got %q", name, value)
+			// Any non-instructions reference is a data lookup, keyed by the
+			// full dotted name (e.g. task.toolchain).
+			fullKey := category + "." + key
+			resolved, ok := artifacts[fullKey]
+			if !ok || resolved == "" {
+				return nil, fmt.Errorf("slot %q: reference %q has no value in task data", name, value)
+			}
+			out[name] = resolved
 		}
 	}
 	return out, nil
@@ -246,7 +248,7 @@ func slugify(s string) string {
 // upstream node outputs from this graph (artifact keys of the form
 // `<nodeID>.<field>`). Job-level context (`job.title`, `job.description`)
 // and `task.*` artifacts beyond the description are deliberately excluded
-// — roles that need them already pull them in via `{{ globals.* }}`
+// — roles that need them already pull them in via `{{ * }}`
 // references in their templates. Including everything by default makes
 // narrow-scope roles (coder, tester, reviewer) treat the whole job as
 // their scope and overreach.

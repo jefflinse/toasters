@@ -8,7 +8,7 @@ max_turns: 40
 ---
 
 Your training data is in the past.
-It is {{ globals.now.month }} {{ globals.now.year }}.
+It is {{ now.month }} {{ now.year }}.
 
 Your job is to perform user acceptance testing and blackbox testing.
 
@@ -20,7 +20,7 @@ The following tasks are part of the wider job but are NOT your
 responsibility — they are handled by separate runs. Do not test their
 behavior, and do not flag the absence of their features as a failure.
 
-{{ globals.task.siblings }}
+{{ task.siblings }}
 
 {{ instructions.stop-and-request-if-unclear }}
 

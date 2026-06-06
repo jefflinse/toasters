@@ -7,7 +7,7 @@ access: readonly
 ---
 
 Your training data is in the past.
-It is {{ globals.now.month }} {{ globals.now.year }}.
+It is {{ now.month }} {{ now.year }}.
 
 Several implementations of the same task were produced independently and in
 parallel. Each candidate has an `index` and an `output` describing the work it
@@ -15,7 +15,7 @@ did.
 
 ## Candidates
 
-{{ globals.fanout.candidates }}
+{{ fanout.candidates }}
 
 Your job is to select the single best candidate.
 

@@ -567,8 +567,8 @@ mode: worker
 output: summary
 ---
 
-TASK_MARKER: {{ globals.task.description }}
-JOB_MARKER: {{ globals.job.title }}
+TASK_MARKER: {{ task.description }}
+JOB_MARKER: {{ job.title }}
 `
 	if err := os.WriteFile(filepath.Join(rolesDir, "test-investigator.md"), []byte(roleContent), 0644); err != nil {
 		t.Fatal(err)
@@ -618,7 +618,7 @@ func TestResolveSlotValues(t *testing.T) {
 	})
 
 	t.Run("globals reference resolves", func(t *testing.T) {
-		out, err := resolveSlotValues(map[string]string{"toolchain": "{{ globals.task.toolchain }}"}, artifacts, instructions)
+		out, err := resolveSlotValues(map[string]string{"toolchain": "{{ task.toolchain }}"}, artifacts, instructions)
 		if err != nil {
 			t.Fatalf("resolveSlotValues: %v", err)
 		}
@@ -645,7 +645,7 @@ func TestResolveSlotValues(t *testing.T) {
 	})
 
 	t.Run("missing artifact errors", func(t *testing.T) {
-		_, err := resolveSlotValues(map[string]string{"toolchain": "{{ globals.task.toolchain }}"}, map[string]string{}, instructions)
+		_, err := resolveSlotValues(map[string]string{"toolchain": "{{ task.toolchain }}"}, map[string]string{}, instructions)
 		if err == nil {
 			t.Fatal("expected error for missing artifact")
 		}

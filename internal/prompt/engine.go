@@ -9,14 +9,18 @@
 //   - Instructions (instructions/*.md): reusable behavioral directives.
 //     Plain markdown, no frontmatter, no vars.
 //
-// Template syntax uses {{ category.name }} references:
+// Template syntax uses {{ root.name }} references. Three roots are reserved
+// for special lookups; every other reference is a data lookup into the
+// per-compose data bag (task fields, node outputs, the current time, …):
 //
-//	{{ toolchains.go }}                       → inlines the Go toolchain body
-//	{{ instructions.do-exact }}               → inlines the instruction body
-//	{{ globals.now.month }}                   → runtime value (current month name)
-//	{{ globals.now.year }}                    → runtime value (current year)
-//	{{ vars.version }}                        → toolchain variable (within toolchain body)
-//	{{ slots.toolchain }}                     → slot bound at compose time (e.g. to a toolchain)
+//	{{ toolchains.go }}          → inlines the Go toolchain body   (reserved)
+//	{{ instructions.do-exact }}  → inlines the instruction body    (reserved)
+//	{{ slots.lens }}             → a slot bound at compose time     (reserved)
+//	{{ task.description }}        → a data value (any non-reserved root)
+//	{{ now.year }}               → a data value (current year)
+//	{{ fanout.candidates }}      → a data value (reducer-injected)
+//
+// (Within a toolchain body, {{ vars.version }} resolves the toolchain's vars.)
 package prompt
 
 import (
@@ -114,7 +118,7 @@ func NewEngine() *Engine {
 }
 
 // SetGlobal registers a global template variable that will be available as
-// {{ globals.<key> }} in role templates. Safe to call concurrently with
+// {{ <key> }} in role templates. Safe to call concurrently with
 // Compose.
 func (e *Engine) SetGlobal(key, value string) {
 	e.mu.Lock()
@@ -249,12 +253,6 @@ func (e *Engine) Compose(roleName string, overrides map[string]string, slots map
 			}
 			slog.Warn("unresolved instruction reference; substituting empty", "role", roleName, "ref", name)
 			return ""
-		case "globals":
-			if val, ok := globals[name]; ok {
-				return val
-			}
-			slog.Warn("unresolved global reference; substituting empty", "role", roleName, "ref", name)
-			return ""
 		case "slots":
 			if _, ok := declared[name]; !ok {
 				resolveErr = fmt.Errorf("role %q references slot %q not declared in frontmatter", roleName, name)
@@ -268,8 +266,15 @@ func (e *Engine) Compose(roleName string, overrides map[string]string, slots map
 			}
 			return val
 		default:
-			slog.Warn("unknown template category", "role", roleName, "category", category)
-			return match
+			// toolchains/instructions/slots are the reserved roots; every
+			// other reference is a data lookup keyed by the full dotted name
+			// (e.g. task.description, fanout.candidates, now.year, job.title).
+			key := category + "." + name
+			if val, ok := globals[key]; ok {
+				return val
+			}
+			slog.Warn("unresolved data reference; substituting empty", "role", roleName, "ref", key)
+			return ""
 		}
 	})
 	if resolveErr != nil {

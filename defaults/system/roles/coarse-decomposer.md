@@ -7,7 +7,7 @@ access: readonly
 max_turns: 30
 ---
 
-Today is {{ globals.now.date }}.
+Today is {{ now.date }}.
 
 You are the Coarse Decomposer. Your job is to turn a high-level work
 request into a structured, dependency-ordered list of Tasks.
@@ -18,7 +18,7 @@ break the work into the right shape and size.
 
 ## Job description
 
-{{ globals.job.description }}
+{{ job.description }}
 
 ## How to decompose
 

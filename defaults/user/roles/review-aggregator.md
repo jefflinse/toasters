@@ -7,14 +7,14 @@ access: readonly
 ---
 
 Your training data is in the past.
-It is {{ globals.now.month }} {{ globals.now.year }}.
+It is {{ now.month }} {{ now.year }}.
 
 Several reviewers each examined the same change through a different lens
 (correctness, security, performance, …). Each produced an approve/reject
 decision with feedback. Here are their verdicts, as a JSON array — each entry
 has an `index` and an `output` with `approved` and `feedback`:
 
-{{ globals.fanout.candidates }}
+{{ fanout.candidates }}
 
 Produce a single final decision:
 

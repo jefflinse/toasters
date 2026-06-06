@@ -13,7 +13,7 @@ import (
 // instruction `<kind>-granularity` so role templates can reference
 // `{{ instructions.coarse-granularity }}` or `{{ instructions.fine-granularity }}`
 // without knowing which level is active. It also exposes the raw level
-// string as `{{ globals.<kind>.granularity }}` for roles that want the
+// string as `{{ <kind>.granularity }}` for roles that want the
 // value directly.
 //
 // Returns an error only when the per-level instruction file was not loaded.

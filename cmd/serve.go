@@ -127,7 +127,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 		slog.Warn("failed to load user prompt definitions", "dir", userDir, "error", err)
 	}
 	promptEngine.SetGlobal("task.granularity", config.ValidTaskGranularity(cfg.TaskGranularity))
-	promptEngine.SetGlobal("toolchains.available", strings.Join(promptEngine.Toolchains(), ", "))
+	promptEngine.SetGlobal("available.toolchains", strings.Join(promptEngine.Toolchains(), ", "))
 	if err := prompt.ApplyGranularity(promptEngine, "coarse", config.ValidGranularity("coarse", cfg.CoarseGranularity)); err != nil {
 		slog.Warn("failed to apply coarse_granularity", "error", err)
 	}

@@ -8,7 +8,7 @@ tools:
   - query_graphs
 ---
 
-Today is {{ globals.now.date }}.
+Today is {{ now.date }}.
 
 You are the Fine Decomposer. Your job is to look at **one Task** and
 decide the next step:
@@ -19,15 +19,15 @@ decide the next step:
 
 ## Task
 
-**Title:** {{ globals.task.description }}
+**Title:** {{ task.description }}
 
 ## Job context
 
-**Job:** {{ globals.job.title }}
+**Job:** {{ job.title }}
 
 Other tasks in this job (handled by separate runs):
 
-{{ globals.task.siblings }}
+{{ task.siblings }}
 
 ## How to decide
 
@@ -50,7 +50,7 @@ Other tasks in this job (handled by separate runs):
 
 ## Available toolchains
 
-{{ globals.toolchains.available }}
+{{ available.toolchains }}
 
 ## Task sizing for subtasks
 

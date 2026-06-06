@@ -23,11 +23,11 @@ nodes:
         - role: coder
           temperature: 0.1        # conservative, close to the obvious solution
           slots:
-            toolchain: "{{ globals.task.toolchain }}"
+            toolchain: "{{ task.toolchain }}"
         - role: coder
           temperature: 0.5        # exploratory, more likely to try a different approach
           slots:
-            toolchain: "{{ globals.task.toolchain }}"
+            toolchain: "{{ task.toolchain }}"
       reduce:
         role: code-judge          # LLM judge selects the winning implementation
       max_parallel: 2             # at most two coders building at once
@@ -35,22 +35,22 @@ nodes:
   - id: test
     role: tester
     slots:
-      toolchain: "{{ globals.task.toolchain }}"
+      toolchain: "{{ task.toolchain }}"
 
   - id: review
     fanout:
       branches:                   # responsibility fan-out: each reviewer owns one lens
         - role: lens-reviewer
           slots:
-            toolchain: "{{ globals.task.toolchain }}"
+            toolchain: "{{ task.toolchain }}"
             lens: "{{ instructions.review-for-correctness }}"
         - role: lens-reviewer
           slots:
-            toolchain: "{{ globals.task.toolchain }}"
+            toolchain: "{{ task.toolchain }}"
             lens: "{{ instructions.review-for-security }}"
         - role: lens-reviewer
           slots:
-            toolchain: "{{ globals.task.toolchain }}"
+            toolchain: "{{ task.toolchain }}"
             lens: "{{ instructions.review-for-performance }}"
       reduce:
         role: review-aggregator   # synthesize the lens verdicts into one decision
