@@ -351,14 +351,16 @@ func TestEngine_Compose_Slots_DeclaredButUnbound(t *testing.T) {
 	}
 }
 
-func TestEngine_Compose_Slots_BoundToUnknownToolchain(t *testing.T) {
-	e := slotEngine(t, "slots:\n  - toolchain\n", "{{ slots.toolchain }}")
-	_, err := e.Compose("r", nil, map[string]string{"toolchain": "rust"})
-	if err == nil {
-		t.Fatal("expected error when slot is bound to unknown toolchain")
+func TestEngine_Compose_Slots_LiteralText(t *testing.T) {
+	// A slot value that doesn't name a loaded toolchain is substituted as
+	// literal text, so slots work as general parameters (e.g. a review lens).
+	e := slotEngine(t, "slots:\n  - lens\n", "Focus on {{ slots.lens }}.")
+	got, err := e.Compose("r", nil, map[string]string{"lens": "correctness and security"})
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(err.Error(), "rust") {
-		t.Errorf("error should name the unknown toolchain, got: %v", err)
+	if !strings.Contains(got, "Focus on correctness and security.") {
+		t.Errorf("literal slot not substituted, got: %q", got)
 	}
 }
 

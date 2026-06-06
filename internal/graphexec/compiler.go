@@ -66,7 +66,7 @@ func Compile(def *Definition, cfg TemplateConfig, registry *RoleRegistry) (*rhiz
 		if cfg.PromptEngine != nil {
 			if role := cfg.PromptEngine.Role(n.Role); role != nil {
 				nodeRoles[n.ID] = role
-				if err := validateSlots(role, n.Slots, cfg.PromptEngine); err != nil {
+				if err := validateSlots(role, n.Slots); err != nil {
 					return nil, fmt.Errorf("compile %q: node %q: %w", def.ID, n.ID, err)
 				}
 			}
@@ -262,17 +262,14 @@ func validateRouter(r *Router, nodeRoles map[string]*prompt.Role, engine *prompt
 	return nil
 }
 
-// validateSlots checks at compile time that a node's slot bindings line
-// up with the role's declared slots and that any literal toolchain ids
-// resolve to a loaded toolchain. Template-reference values
-// (`{{ globals.X }}`) are deferred to runtime since the artifacts they
-// resolve against don't exist yet.
-//
-// The runtime path in prompt.Engine.Compose performs the same checks
-// against fully-resolved values; doing them here surfaces typos in
-// graph YAML at compile time so the operator never spawns a job that
-// will fail on the first node.
-func validateSlots(role *prompt.Role, bindings map[string]string, engine *prompt.Engine) error {
+// validateSlots checks at compile time that a node's slot bindings line up
+// structurally with the role's declared slots: every declared slot is bound,
+// and no binding names an undeclared slot. The binding *value* is not
+// constrained — a slot may be bound to a toolchain id (inlined at compose
+// time) or to arbitrary text — so value resolution is left to the prompt
+// engine. Catching shape errors here surfaces typos in graph YAML before the
+// operator spawns a job that would fail on the first node.
+func validateSlots(role *prompt.Role, bindings map[string]string) error {
 	declared := make(map[string]struct{}, len(role.Slots))
 	for _, name := range role.Slots {
 		declared[name] = struct{}{}
@@ -280,21 +277,9 @@ func validateSlots(role *prompt.Role, bindings map[string]string, engine *prompt
 			return fmt.Errorf("role %q declares slot %q but the node binds no value", role.Name, name)
 		}
 	}
-	loaded := engine.Toolchains()
-	loadedSet := make(map[string]struct{}, len(loaded))
-	for _, id := range loaded {
-		loadedSet[id] = struct{}{}
-	}
-	for name, value := range bindings {
+	for name := range bindings {
 		if _, ok := declared[name]; !ok {
 			return fmt.Errorf("node binds slot %q but role %q declares no such slot (available: %s)", name, role.Name, strings.Join(role.Slots, ", "))
-		}
-		// Skip values that resolve at runtime against task artifacts.
-		if slotRef.MatchString(value) {
-			continue
-		}
-		if _, ok := loadedSet[value]; !ok {
-			return fmt.Errorf("slot %q bound to unknown toolchain %q (loaded: %s)", name, value, strings.Join(loaded, ", "))
 		}
 	}
 	return nil

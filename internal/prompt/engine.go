@@ -77,8 +77,8 @@ type Role struct {
 	Temperature *float64 `yaml:"temperature,omitempty"`
 	// Slots names parameterized fillers that callers must bind at compose
 	// time. Each name corresponds to a {{ slots.<name> }} reference in the
-	// body. Today the bound value is a toolchain id; in the future the slot
-	// kind may be inferred from the name or declared explicitly.
+	// body. The bound value is either a toolchain id (which inlines that
+	// toolchain's resolved body) or arbitrary text (substituted literally).
 	Slots  []string `yaml:"slots,omitempty"`
 	Body   string   `yaml:"-"` // template text after frontmatter
 	Source string   `yaml:"-"` // "system" or "user" — set by LoadDir caller
@@ -166,7 +166,9 @@ func (e *Engine) LoadDir(dir, source string) error {
 // {"go.version": "1.25"} overrides the Go toolchain's version var). Slots
 // binds each name declared in the role's frontmatter to a concrete value
 // (currently always a toolchain id); every declared slot must have a
-// binding or Compose returns an error.
+// binding or Compose returns an error. A slot bound to a loaded toolchain id
+// inlines that toolchain's body at {{ slots.<name> }}; any other binding is
+// substituted as literal text.
 func (e *Engine) Compose(roleName string, overrides map[string]string, slots map[string]string) (string, error) {
 	e.mu.RLock()
 	role, ok := e.roles[roleName]
@@ -216,13 +218,9 @@ func (e *Engine) Compose(roleName string, overrides map[string]string, slots map
 			return "", fmt.Errorf("role %q: slot %q declared but not bound", roleName, name)
 		}
 	}
-	for name, tcID := range slots {
+	for name := range slots {
 		if _, ok := declared[name]; !ok {
 			slog.Warn("ignoring slot binding for undeclared slot", "role", roleName, "slot", name)
-			continue
-		}
-		if _, ok := resolvedToolchains[tcID]; !ok {
-			return "", fmt.Errorf("role %q: slot %q bound to unknown toolchain %q", roleName, name, tcID)
 		}
 	}
 
@@ -262,13 +260,13 @@ func (e *Engine) Compose(roleName string, overrides map[string]string, slots map
 				resolveErr = fmt.Errorf("role %q references slot %q not declared in frontmatter", roleName, name)
 				return match
 			}
-			tcID := slots[name]
-			body, ok := resolvedToolchains[tcID]
-			if !ok {
-				resolveErr = fmt.Errorf("role %q: slot %q bound to unknown toolchain %q", roleName, name, tcID)
-				return match
+			val := slots[name]
+			// A slot value that names a loaded toolchain inlines that
+			// toolchain's resolved body; any other value is literal text.
+			if body, ok := resolvedToolchains[val]; ok {
+				return strings.TrimSpace(body)
 			}
-			return strings.TrimSpace(body)
+			return val
 		default:
 			slog.Warn("unknown template category", "role", roleName, "category", category)
 			return match
