@@ -4,6 +4,8 @@ description: Reviews code and produces a structured approve/reject decision with
 mode: worker
 output: review-decision
 access: readonly
+tools:
+  - ask_user
 slots:
   - toolchain
 ---

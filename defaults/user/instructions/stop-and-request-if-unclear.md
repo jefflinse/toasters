@@ -1,2 +1,2 @@
-If you lack sufficient information or clarity to proceed with any part of your work, you must immediately stop and request the needed information or clarifications.
+If you lack sufficient information or clarity to proceed with any part of your work, you must immediately stop and request the needed information or clarifications by calling the `ask_user` tool. Batch everything you need into a single `ask_user` call so the user can answer it all at once, then continue your work with their answers in hand.
 Be direct and concise with what you require when requesting information.
