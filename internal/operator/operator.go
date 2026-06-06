@@ -359,12 +359,22 @@ func (o *Operator) assignNextTask(ctx context.Context, jobID string) {
 		return
 	}
 
-	task := readyTasks[0]
-	if task.GraphID == "" {
-		// No pre-assigned graph — need LLM to decide.
-		msg := fmt.Sprintf("Task %q (id: %s) is ready but has no graph assigned. Please assign it to an appropriate graph.",
-			task.Title, task.ID)
-		o.sendToLLM(ctx, msg)
+	// Graph assignment is the service's job: tasks without a graph are picked
+	// up by fine-decompose (dispatchFineDecomposeForReadyTasks runs just before
+	// this handler fires) and re-advanced once it completes. The operator only
+	// dispatches tasks that already have a graph — it has no tool to assign one,
+	// so prompting the LLM here would just produce confused prose about graphs
+	// it cannot act on. Skip graphless tasks and dispatch the first graphed one.
+	var task *db.Task
+	for i := range readyTasks {
+		if readyTasks[i].GraphID != "" {
+			task = readyTasks[i]
+			break
+		}
+	}
+	if task == nil {
+		slog.Info("no graphed ready tasks to assign; fine-decompose in flight",
+			"job_id", jobID, "ready", len(readyTasks))
 		return
 	}
 
