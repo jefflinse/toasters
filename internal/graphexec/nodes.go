@@ -154,7 +154,7 @@ func composePrompt(cfg TemplateConfig, role *prompt.Role, state *TaskState, slot
 			overrides[key] = s
 		}
 	}
-	resolved, err := resolveSlotValues(slots, overrides)
+	resolved, err := resolveSlotValues(slots, overrides, cfg.PromptEngine.Instructions())
 	if err != nil {
 		return "", err
 	}
@@ -166,10 +166,11 @@ func composePrompt(cfg TemplateConfig, role *prompt.Role, state *TaskState, slot
 // arbitrary templates — they're either a literal id or one ref.
 var slotRef = regexp.MustCompile(`^\s*\{\{\s*([\w-]+)\.([\w.-]+)\s*\}\}\s*$`)
 
-// resolveSlotValues replaces `{{ globals.X }}` references in slot values
-// with the matching state artifact. Plain literal values pass through.
-// Returns an error when a referenced artifact is missing or empty.
-func resolveSlotValues(slots, artifacts map[string]string) (map[string]string, error) {
+// resolveSlotValues replaces `{{ globals.X }}` and `{{ instructions.X }}`
+// references in slot values with the matching state artifact or instruction
+// body. Plain literal values pass through. Returns an error when a reference
+// can't be resolved or uses an unsupported category.
+func resolveSlotValues(slots, artifacts, instructions map[string]string) (map[string]string, error) {
 	if len(slots) == 0 {
 		return slots, nil
 	}
@@ -181,14 +182,22 @@ func resolveSlotValues(slots, artifacts map[string]string) (map[string]string, e
 			continue
 		}
 		category, key := m[1], m[2]
-		if category != "globals" {
-			return nil, fmt.Errorf("slot %q: only globals.* references are supported in slot values, got %q", name, value)
+		switch category {
+		case "globals":
+			resolved, ok := artifacts[key]
+			if !ok || resolved == "" {
+				return nil, fmt.Errorf("slot %q: reference %q has no value in task artifacts", name, value)
+			}
+			out[name] = resolved
+		case "instructions":
+			body, ok := instructions[key]
+			if !ok {
+				return nil, fmt.Errorf("slot %q: instruction %q not found", name, value)
+			}
+			out[name] = strings.TrimSpace(body)
+		default:
+			return nil, fmt.Errorf("slot %q: only globals.* and instructions.* references are supported in slot values, got %q", name, value)
 		}
-		resolved, ok := artifacts[key]
-		if !ok || resolved == "" {
-			return nil, fmt.Errorf("slot %q: reference %q has no value in task artifacts", name, value)
-		}
-		out[name] = resolved
 	}
 	return out, nil
 }

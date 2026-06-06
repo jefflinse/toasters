@@ -43,15 +43,15 @@ nodes:
         - role: lens-reviewer
           slots:
             toolchain: "{{ globals.task.toolchain }}"
-            lens: "Correctness: logic errors, off-by-one mistakes, nil/null dereferences, unhandled errors, and data races."
+            lens: "{{ instructions.review-for-correctness }}"
         - role: lens-reviewer
           slots:
             toolchain: "{{ globals.task.toolchain }}"
-            lens: "Security: injection, path traversal, hardcoded secrets, unsafe operations, and missing input validation."
+            lens: "{{ instructions.review-for-security }}"
         - role: lens-reviewer
           slots:
             toolchain: "{{ globals.task.toolchain }}"
-            lens: "Performance: unnecessary allocations, N+1 patterns, and redundant work in hot paths."
+            lens: "{{ instructions.review-for-performance }}"
       reduce:
         role: review-aggregator   # synthesize the lens verdicts into one decision
       max_parallel: 3

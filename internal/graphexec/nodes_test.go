@@ -603,9 +603,12 @@ func TestResolveSlotValues(t *testing.T) {
 		"task.toolchain":   "go",
 		"task.description": "do thing",
 	}
+	instructions := map[string]string{
+		"review-for-x": "  Focus on X.  ",
+	}
 
 	t.Run("literal passes through", func(t *testing.T) {
-		out, err := resolveSlotValues(map[string]string{"toolchain": "python"}, artifacts)
+		out, err := resolveSlotValues(map[string]string{"toolchain": "python"}, artifacts, instructions)
 		if err != nil {
 			t.Fatalf("resolveSlotValues: %v", err)
 		}
@@ -615,7 +618,7 @@ func TestResolveSlotValues(t *testing.T) {
 	})
 
 	t.Run("globals reference resolves", func(t *testing.T) {
-		out, err := resolveSlotValues(map[string]string{"toolchain": "{{ globals.task.toolchain }}"}, artifacts)
+		out, err := resolveSlotValues(map[string]string{"toolchain": "{{ globals.task.toolchain }}"}, artifacts, instructions)
 		if err != nil {
 			t.Fatalf("resolveSlotValues: %v", err)
 		}
@@ -624,8 +627,25 @@ func TestResolveSlotValues(t *testing.T) {
 		}
 	})
 
+	t.Run("instruction reference resolves (trimmed)", func(t *testing.T) {
+		out, err := resolveSlotValues(map[string]string{"lens": "{{ instructions.review-for-x }}"}, artifacts, instructions)
+		if err != nil {
+			t.Fatalf("resolveSlotValues: %v", err)
+		}
+		if out["lens"] != "Focus on X." {
+			t.Errorf("got %q, want %q", out["lens"], "Focus on X.")
+		}
+	})
+
+	t.Run("missing instruction errors", func(t *testing.T) {
+		_, err := resolveSlotValues(map[string]string{"lens": "{{ instructions.nope }}"}, artifacts, instructions)
+		if err == nil || !strings.Contains(err.Error(), "nope") {
+			t.Fatalf("expected error naming the missing instruction, got: %v", err)
+		}
+	})
+
 	t.Run("missing artifact errors", func(t *testing.T) {
-		_, err := resolveSlotValues(map[string]string{"toolchain": "{{ globals.task.toolchain }}"}, map[string]string{})
+		_, err := resolveSlotValues(map[string]string{"toolchain": "{{ globals.task.toolchain }}"}, map[string]string{}, instructions)
 		if err == nil {
 			t.Fatal("expected error for missing artifact")
 		}
@@ -634,10 +654,10 @@ func TestResolveSlotValues(t *testing.T) {
 		}
 	})
 
-	t.Run("non-globals category errors", func(t *testing.T) {
-		_, err := resolveSlotValues(map[string]string{"toolchain": "{{ slots.other }}"}, artifacts)
+	t.Run("unsupported category errors", func(t *testing.T) {
+		_, err := resolveSlotValues(map[string]string{"toolchain": "{{ slots.other }}"}, artifacts, instructions)
 		if err == nil {
-			t.Fatal("expected error for non-globals reference")
+			t.Fatal("expected error for unsupported reference category")
 		}
 	})
 }

@@ -293,6 +293,19 @@ func (e *Engine) Roles() []string {
 	return names
 }
 
+// Instructions returns a copy of the loaded instruction bodies, keyed by name.
+// Used by callers that resolve {{ instructions.<name> }} references outside the
+// role-body template — e.g. an instruction-valued slot binding.
+func (e *Engine) Instructions() map[string]string {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	out := make(map[string]string, len(e.instructions))
+	for k, v := range e.instructions {
+		out[k] = v
+	}
+	return out
+}
+
 // Toolchains returns all loaded toolchain ids in stable (sorted) order.
 // Used by callers that need to enumerate the catalog (e.g. fine-decompose
 // surfacing valid toolchain ids to the LLM).
