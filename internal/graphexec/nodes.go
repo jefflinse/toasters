@@ -422,6 +422,21 @@ func isReadOnlyAccess(access string) bool {
 	return access == "" || access == "readonly" || access == "read-only"
 }
 
+// accessWritesWorkspace reports whether an access level grants file-mutating
+// tools (write_file/edit_file). Only "write" and "all" do; "test" runs and
+// reads (shell + read tools, see TestTools) but cannot edit source. This is
+// what fan-out keys off to decide isolation: write branches need a private
+// workspace and winner-promotion, while test/read-only branches share the
+// workspace and have their outputs aggregated.
+func accessWritesWorkspace(access string) bool {
+	switch normalizeAccess(access) {
+	case "write", "all":
+		return true
+	default:
+		return false
+	}
+}
+
 // onEventSink returns an agent OnEvent handler that broadcasts streaming
 // text, tool calls, and tool results to the EventSink attached to the
 // current NodeContext. No-op when no sink is configured — tests and

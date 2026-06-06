@@ -57,16 +57,27 @@ func runBundled(t *testing.T, name string, responses [][]provider.StreamEvent) (
 
 // --- bug-fix.yaml ---
 
+// bug-fix is now a fan-out pipeline: implement runs 2 coders + a code-judge,
+// review runs 3 lens reviewers + an aggregator. One pass is therefore
+//   investigate(1) + plan(1) + coders(2) + judge(1) + test(1)
+//     + lenses(3) + aggregator(1) = 10 provider calls.
+// Concurrent branch responses are kept identical so the sequential mock is not
+// sensitive to goroutine ordering; the reducer is always the post-barrier call.
 func TestBundled_BugFix_HappyPath(t *testing.T) {
 	state, calls := runBundled(t, "bug-fix", [][]provider.StreamEvent{
-		summaryResp("found bug"),
-		summaryResp("fix it"),
-		summaryResp("patch"),
-		testResultResp(true, "pass"),
-		reviewResp(true, "lgtm"),
+		summaryResp("found bug"),   // investigate
+		summaryResp("fix it"),      // plan
+		summaryResp("patch"),       // coder branch
+		summaryResp("patch"),       // coder branch (identical: order-independent)
+		selectionResp(0),           // code-judge promotes a branch
+		testResultResp(true, "pass"), // test
+		reviewResp(true, "lgtm"),   // review lens
+		reviewResp(true, "lgtm"),   // review lens
+		reviewResp(true, "lgtm"),   // review lens
+		reviewResp(true, "lgtm"),   // review-aggregator
 	})
-	if calls != 5 {
-		t.Errorf("provider called %d times, want 5", calls)
+	if calls != 10 {
+		t.Errorf("provider called %d times, want 10", calls)
 	}
 	for _, key := range []string{"investigate.summary", "plan.summary", "implement.summary", "test.summary", "review.feedback"} {
 		if got := state.GetArtifactString(key); got == "" {
@@ -76,33 +87,77 @@ func TestBundled_BugFix_HappyPath(t *testing.T) {
 }
 
 func TestBundled_BugFix_TestFailureRetry(t *testing.T) {
+	// Two implement→test passes (test fails first), then review:
+	//   inv+plan(2) + [coders(2)+judge(1)+test(1)]x2 + lenses(3)+agg(1) = 14.
 	_, calls := runBundled(t, "bug-fix", [][]provider.StreamEvent{
-		summaryResp("f"),
-		summaryResp("p"),
-		summaryResp("i1"),
-		testResultResp(false, "fail"),
-		summaryResp("i2"),
-		testResultResp(true, "ok"),
-		reviewResp(true, "ok"),
+		summaryResp("f"),              // investigate
+		summaryResp("p"),              // plan
+		summaryResp("i1"),             // coder branch
+		summaryResp("i1"),             // coder branch
+		selectionResp(0),              // judge
+		testResultResp(false, "fail"), // test fails → back to implement
+		summaryResp("i2"),             // coder branch
+		summaryResp("i2"),             // coder branch
+		selectionResp(0),              // judge
+		testResultResp(true, "ok"),    // test passes → review
+		reviewResp(true, "ok"),        // lens
+		reviewResp(true, "ok"),        // lens
+		reviewResp(true, "ok"),        // lens
+		reviewResp(true, "ok"),        // aggregator
 	})
-	if calls != 7 {
-		t.Errorf("provider called %d times, want 7", calls)
+	if calls != 14 {
+		t.Errorf("provider called %d times, want 14", calls)
 	}
 }
 
 func TestBundled_BugFix_ReviewRejectionRetry(t *testing.T) {
+	// First review rejects (aggregator returns approved=false), looping back to
+	// implement, then a clean second pass:
+	//   inv+plan(2) + impl(3)+test(1) + review(4 reject)
+	//     + impl(3)+test(1) + review(4 approve) = 18.
 	_, calls := runBundled(t, "bug-fix", [][]provider.StreamEvent{
-		summaryResp("f"),
-		summaryResp("p"),
-		summaryResp("i1"),
-		testResultResp(true, "pass"),
-		reviewResp(false, "fix more"),
-		summaryResp("i2"),
-		testResultResp(true, "still pass"),
-		reviewResp(true, "ok"),
+		summaryResp("f"),              // investigate
+		summaryResp("p"),              // plan
+		summaryResp("i1"),             // coder branch
+		summaryResp("i1"),             // coder branch
+		selectionResp(0),              // judge
+		testResultResp(true, "pass"),  // test
+		reviewResp(true, "ok"),        // lens
+		reviewResp(true, "ok"),        // lens
+		reviewResp(true, "ok"),        // lens
+		reviewResp(false, "fix more"), // aggregator rejects → back to implement
+		summaryResp("i2"),             // coder branch
+		summaryResp("i2"),             // coder branch
+		selectionResp(0),              // judge
+		testResultResp(true, "still pass"), // test
+		reviewResp(true, "ok"),        // lens
+		reviewResp(true, "ok"),        // lens
+		reviewResp(true, "ok"),        // lens
+		reviewResp(true, "ok"),        // aggregator approves
 	})
-	if calls != 8 {
-		t.Errorf("provider called %d times, want 8", calls)
+	if calls != 18 {
+		t.Errorf("provider called %d times, want 18", calls)
+	}
+}
+
+// --- qa-verify.yaml ---
+
+func TestBundled_QAVerify_AggregatesCategories(t *testing.T) {
+	// verify fans out 3 qa-testers (one per lens) + a qa-aggregator.
+	// qa-tester is test-access (shell + read tools, no write tools), so the
+	// branches share the workspace and the role reducer aggregates their
+	// results rather than selecting a winner: 3 testers + 1 aggregator = 4.
+	state, calls := runBundled(t, "qa-verify", [][]provider.StreamEvent{
+		testResultResp(true, "lens ok"), // qa-tester branch
+		testResultResp(true, "lens ok"), // qa-tester branch
+		testResultResp(true, "lens ok"), // qa-tester branch
+		testResultResp(true, "all lenses passed"), // qa-aggregator
+	})
+	if calls != 4 {
+		t.Errorf("provider called %d times, want 4", calls)
+	}
+	if got := state.GetArtifactString("verify.summary"); got == "" {
+		t.Error("artifact verify.summary unset")
 	}
 }
 
