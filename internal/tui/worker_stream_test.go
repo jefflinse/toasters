@@ -104,3 +104,29 @@ func TestWorkerStreamToolResultEmptyCallIDFallback(t *testing.T) {
 		t.Errorf("result not merged into the pending call: %+v", card.Items[0])
 	}
 }
+
+func TestWorkerStreamDisplayOrder(t *testing.T) {
+	card := func(done bool) service.ChatEntry {
+		return service.ChatEntry{
+			Kind:         service.ChatEntryKindWorkerStream,
+			WorkerStream: &service.WorkerStreamSnapshot{Done: done},
+		}
+	}
+	other := service.ChatEntry{Message: service.ChatMessage{Role: service.MessageRoleAssistant, Content: "hi"}}
+
+	// [other, done, active, done, other, active]
+	entries := []service.ChatEntry{other, card(true), card(false), card(true), other, card(false)}
+	got := workerStreamDisplayOrder(entries)
+
+	// Run at 1..3 reorders to done-first (1,3) then active (2); singles unchanged.
+	want := []int{0, 1, 3, 2, 4, 5}
+	if len(got) != len(want) {
+		t.Fatalf("len = %d, want %d (%v)", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("order = %v, want %v", got, want)
+			break
+		}
+	}
+}

@@ -1135,7 +1135,12 @@ func (m *Model) updateViewportContent() {
 		}
 	}
 
-	for i, entry := range m.chat.entries {
+	// Within a contiguous run of worker-stream cards, draw finished ones first
+	// so the still-running cards sink to the bottom of the run and stay the most
+	// visible. i remains the real entry index, so selection/collapse maps and
+	// the streaming tail below are unaffected — only render order changes.
+	for _, i := range workerStreamDisplayOrder(m.chat.entries) {
+		entry := m.chat.entries[i]
 		// Structured entries render from a typed payload, bypassing the
 		// role-based message dispatch.
 		if entry.Kind == service.ChatEntryKindJobUpdate {

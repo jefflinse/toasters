@@ -17,6 +17,37 @@ import (
 	"github.com/jefflinse/toasters/internal/service"
 )
 
+// workerStreamDisplayOrder returns a permutation of entry indices that, within
+// each contiguous run of worker-stream cards, lists finished cards before
+// still-running ones (preserving each group's relative order). Non-worker
+// entries keep their position. This sinks active cards to the bottom of a run
+// so the work in progress stays the most visible, without mutating the
+// underlying transcript order.
+func workerStreamDisplayOrder(entries []service.ChatEntry) []int {
+	isCard := func(e service.ChatEntry) bool {
+		return e.Kind == service.ChatEntryKindWorkerStream && e.WorkerStream != nil
+	}
+	order := make([]int, 0, len(entries))
+	for i := 0; i < len(entries); {
+		if !isCard(entries[i]) {
+			order = append(order, i)
+			i++
+			continue
+		}
+		var done, active []int
+		for ; i < len(entries) && isCard(entries[i]); i++ {
+			if entries[i].WorkerStream.Done {
+				done = append(done, i)
+			} else {
+				active = append(active, i)
+			}
+		}
+		order = append(order, done...)
+		order = append(order, active...)
+	}
+	return order
+}
+
 // taskTitleByID returns the title of a task within a job, or "" if not found.
 func (m *Model) taskTitleByID(jobID, taskID string) string {
 	for _, t := range m.progress.tasks[jobID] {
