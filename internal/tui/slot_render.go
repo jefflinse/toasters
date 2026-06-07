@@ -117,8 +117,11 @@ func (m *Model) renderSlotOutputContent(slot *runtimeSlot, width int) string {
 // preview of the result. Width is the available column count for
 // truncation.
 func renderToolBlock(it *outputItem, width int) string {
-	nameStyle := lipgloss.NewStyle().Foreground(ColorAccent).Bold(true)
-	gear := lipgloss.NewStyle().Foreground(ColorAccent).Render("⚙")
+	// Tool names use a distinct hue (ColorPrimary) rather than the bold cyan
+	// ColorAccent of the card's task headline, so a tool-call line reads as its
+	// own kind of element instead of blending into the header.
+	nameStyle := lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true)
+	gear := lipgloss.NewStyle().Foreground(ColorPrimary).Render("⚙")
 
 	header := gear + " " + nameStyle.Render(it.toolName)
 	if argSummary := summarizeToolArgs(it.toolName, it.toolArgs); argSummary != "" {
