@@ -325,14 +325,20 @@ func (m *Model) renderWorkerStreamBlock(snap *service.WorkerStreamSnapshot, widt
 		line2 += DimStyle.Render(" · " + truncateStr(jobTitle, innerW/2))
 	}
 
-	// Indent the body to the same column as the title/task text (past the "🍞 "
-	// icon — 3 cells), and render it that much narrower so it doesn't overflow.
-	const bodyIndent = 3
-	body := m.renderWorkerStreamItems(snap.Items, innerW-bodyIndent)
-
+	// Finished cards collapse to just their two header rows so a completed run
+	// stays scannable instead of a wall of stale output. The body is shown only
+	// while the card is still streaming, or when the user has selected it
+	// (arrow-navigation peek). Full output is always reachable via [enter to
+	// view] regardless.
 	content := line1 + "\n" + line2
-	if body != "" {
-		content += "\n" + indentLines(body, bodyIndent)
+	if !snap.Done || selected {
+		// Indent the body to the same column as the title/task text (past the
+		// "🍞 " icon — 3 cells), rendered that much narrower so it doesn't overflow.
+		const bodyIndent = 3
+		body := m.renderWorkerStreamItems(snap.Items, innerW-bodyIndent)
+		if body != "" {
+			content += "\n" + indentLines(body, bodyIndent)
+		}
 	}
 
 	borderColor := ColorAccent

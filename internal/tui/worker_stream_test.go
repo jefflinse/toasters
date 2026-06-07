@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/jefflinse/toasters/internal/service"
@@ -128,5 +129,42 @@ func TestWorkerStreamDisplayOrder(t *testing.T) {
 			t.Errorf("order = %v, want %v", got, want)
 			break
 		}
+	}
+}
+
+// TestWorkerStreamBlock_FinishedCardsCollapse verifies a finished card renders
+// only its two header rows (body hidden) unless it's selected, while a running
+// card always shows its body.
+func TestWorkerStreamBlock_FinishedCardsCollapse(t *testing.T) {
+	m := newMinimalModel(t)
+	const marker = "UNIQUE_BODY_MARKER_TEXT"
+
+	mk := func(done bool) *service.WorkerStreamSnapshot {
+		return &service.WorkerStreamSnapshot{
+			SessionID:  "graph:t:plan",
+			WorkerName: "graph:plan",
+			JobID:      "j1",
+			Done:       done,
+			Items:      []service.WorkerStreamItem{{Kind: service.WorkerStreamItemText, Text: marker}},
+		}
+	}
+
+	cases := []struct {
+		name     string
+		done     bool
+		selected bool
+		wantBody bool
+	}{
+		{"running shows body", false, false, true},
+		{"finished unselected collapses", true, false, false},
+		{"finished selected peeks inline", true, true, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			out := m.renderWorkerStreamBlock(mk(c.done), 80, c.selected)
+			if got := strings.Contains(out, marker); got != c.wantBody {
+				t.Errorf("body present = %v, want %v", got, c.wantBody)
+			}
+		})
 	}
 }
