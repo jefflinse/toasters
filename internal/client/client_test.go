@@ -28,10 +28,10 @@ var testTime = time.Date(2026, 3, 2, 12, 0, 0, 0, time.UTC)
 
 type mockService struct {
 	// Operator
-	sendMessageFn      func(ctx context.Context, msg string) (string, error)
-	respondToPromptFn  func(ctx context.Context, reqID, resp string) error
-	statusFn           func(ctx context.Context) (service.OperatorStatus, error)
-	historyFn          func(ctx context.Context) ([]service.ChatEntry, error)
+	sendMessageFn     func(ctx context.Context, msg string) (string, error)
+	respondToPromptFn func(ctx context.Context, reqID, resp string) error
+	statusFn          func(ctx context.Context) (service.OperatorStatus, error)
+	historyFn         func(ctx context.Context) ([]service.ChatEntry, error)
 
 	// Definitions
 	listSkillsFn    func(ctx context.Context) ([]service.Skill, error)
@@ -45,6 +45,7 @@ type mockService struct {
 	listAllJobsFn func(ctx context.Context) ([]service.Job, error)
 	getJobFn      func(ctx context.Context, id string) (service.JobDetail, error)
 	cancelJobFn   func(ctx context.Context, id string) error
+	retryTaskFn   func(ctx context.Context, taskID string) error
 
 	// Sessions
 	listSessionsFn  func(ctx context.Context) ([]service.SessionSnapshot, error)
@@ -175,6 +176,13 @@ func (j *mockJobs) Get(ctx context.Context, id string) (service.JobDetail, error
 func (j *mockJobs) Cancel(ctx context.Context, id string) error {
 	if j.s.cancelJobFn != nil {
 		return j.s.cancelJobFn(ctx, id)
+	}
+	return nil
+}
+
+func (j *mockJobs) RetryTask(ctx context.Context, taskID string) error {
+	if j.s.retryTaskFn != nil {
+		return j.s.retryTaskFn(ctx, taskID)
 	}
 	return nil
 }
@@ -562,6 +570,45 @@ func TestJobs_Cancel_Success(t *testing.T) {
 
 	if err := rc.Jobs().Cancel(ctx, "job-99"); err != nil {
 		t.Fatalf("Cancel: %v", err)
+	}
+}
+
+func TestJobs_RetryTask_Success(t *testing.T) {
+	t.Parallel()
+
+	var gotID string
+	mock := &mockService{
+		retryTaskFn: func(_ context.Context, taskID string) error {
+			gotID = taskID
+			return nil
+		},
+	}
+
+	rc := setupTestServer(t, mock)
+	if err := rc.Jobs().RetryTask(context.Background(), "task-7"); err != nil {
+		t.Fatalf("RetryTask: %v", err)
+	}
+	if gotID != "task-7" {
+		t.Errorf("server saw task id %q, want task-7", gotID)
+	}
+}
+
+func TestJobs_RetryTask_NotFound(t *testing.T) {
+	t.Parallel()
+
+	mock := &mockService{
+		retryTaskFn: func(_ context.Context, _ string) error {
+			return fmt.Errorf("%w: task not found", service.ErrNotFound)
+		},
+	}
+
+	rc := setupTestServer(t, mock)
+	err := rc.Jobs().RetryTask(context.Background(), "nope")
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !errors.Is(err, service.ErrNotFound) {
+		t.Errorf("expected ErrNotFound, got: %v", err)
 	}
 }
 

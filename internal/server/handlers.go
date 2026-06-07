@@ -342,6 +342,16 @@ func (s *Server) cancelJob(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// retryTask handles POST /api/v1/tasks/{id}/retry.
+func (s *Server) retryTask(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if err := s.svc.Jobs().RetryTask(r.Context(), id); err != nil {
+		handleServiceError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // ---------------------------------------------------------------------------
 // Sessions handlers
 // ---------------------------------------------------------------------------

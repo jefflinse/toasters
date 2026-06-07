@@ -275,6 +275,10 @@ func (m *mockJobService) Cancel(ctx context.Context, id string) error {
 	return nil
 }
 
+func (m *mockJobService) RetryTask(ctx context.Context, taskID string) error {
+	return nil
+}
+
 // mockSessionService implements service.SessionService
 type mockSessionService struct{}
 

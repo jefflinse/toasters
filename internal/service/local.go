@@ -1883,6 +1883,40 @@ func (s *localJobService) Cancel(ctx context.Context, id string) error {
 	return nil
 }
 
+// RetryTask re-dispatches a failed, graph-bound task. It resets the task to
+// in_progress (clearing stale result fields) and re-runs its bound graph on the
+// executor, deterministically and without involving the operator LLM.
+func (s *localJobService) RetryTask(ctx context.Context, taskID string) error {
+	if s.svc.cfg.Store == nil {
+		return fmt.Errorf("store not configured")
+	}
+	if s.svc.cfg.GraphExecutor == nil {
+		return fmt.Errorf("no graph executor configured")
+	}
+	task, err := s.svc.cfg.Store.GetTask(ctx, taskID)
+	if err != nil {
+		if errors.Is(err, db.ErrNotFound) {
+			return fmt.Errorf("getting task %s: %w", taskID, ErrNotFound)
+		}
+		return fmt.Errorf("getting task %s: %w", taskID, err)
+	}
+	if task.Status != db.TaskStatusFailed {
+		return fmt.Errorf("task %s cannot be retried (status: %s)", taskID, task.Status)
+	}
+	if task.GraphID == "" {
+		return fmt.Errorf("task %s has no bound graph to retry", taskID)
+	}
+	job, err := s.svc.cfg.Store.GetJob(ctx, task.JobID)
+	if err != nil {
+		return fmt.Errorf("getting job for task %s: %w", taskID, err)
+	}
+	if err := s.svc.cfg.Store.RetryTask(ctx, taskID, task.GraphID); err != nil {
+		return fmt.Errorf("resetting task %s for retry: %w", taskID, err)
+	}
+	s.svc.redispatchTaskGraph(ctx, task, job, task.GraphID)
+	return nil
+}
+
 // ---------------------------------------------------------------------------
 // SessionService (via localSessionService)
 // ---------------------------------------------------------------------------
