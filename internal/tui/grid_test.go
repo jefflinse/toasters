@@ -1199,6 +1199,16 @@ func TestAgentCardMeta(t *testing.T) {
 			contains: []string{"p/m", "↑", "↓", "~$0.01"},
 		},
 		{
+			name:     "temperature shown when known",
+			rs:       &runtimeSlot{model: "m", hasTemp: true, temperature: 0.5},
+			contains: []string{"m", "t0.5"},
+		},
+		{
+			name:     "thinking indicator with temperature",
+			rs:       &runtimeSlot{model: "m", hasTemp: true, temperature: 0.2, thinking: true},
+			contains: []string{"t0.2", "🧠"},
+		},
+		{
 			name:  "zero cost omitted",
 			rs:    &runtimeSlot{model: "m", costUSD: 0},
 			want:  "m",

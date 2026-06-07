@@ -15,8 +15,8 @@ import (
 )
 
 const (
-	minGridCellInnerW = 40 // minimum inner cell width
-	minGridCellInnerH = 8  // minimum inner cell height
+	minGridCellInnerW = 36 // minimum inner cell width
+	minGridCellInnerH = 5  // minimum inner cell height: header + meta + separator + 2 activity lines
 	gridHotkeyBarH    = 1  // hotkey bar height
 	gridCellBorderW   = 4  // total horizontal border+padding per cell
 	gridCellBorderH   = 2  // total vertical border+padding per cell
@@ -349,6 +349,13 @@ func agentCardMeta(rs *runtimeSlot) string {
 		segs = append(segs, rs.model)
 	case rs.provider != "":
 		segs = append(segs, rs.provider)
+	}
+	if rs.hasTemp {
+		seg := fmt.Sprintf("t%.1f", rs.temperature)
+		if rs.thinking {
+			seg += " 🧠"
+		}
+		segs = append(segs, seg)
 	}
 	if rs.tokensIn > 0 || rs.tokensOut > 0 {
 		segs = append(segs, formatTokenCount(rs.tokensIn)+"↑ "+formatTokenCount(rs.tokensOut)+"↓")

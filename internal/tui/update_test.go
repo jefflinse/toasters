@@ -1060,3 +1060,31 @@ func TestUpdateGrid_KillConfirmation(t *testing.T) {
 		}
 	})
 }
+
+func TestSessionMetaMsg_UpdatesSlot(t *testing.T) {
+	t.Parallel()
+
+	m := newMinimalModel(t)
+	m.runtimeSessions["graph:t1:plan"] = &runtimeSlot{sessionID: "graph:t1:plan", status: "active"}
+
+	res, _ := m.Update(SessionMetaMsg{
+		SessionID:   "graph:t1:plan",
+		Model:       "qwen3",
+		Provider:    "lmstudio",
+		Temperature: 0.7,
+		Thinking:    true,
+	})
+	slot := res.(*Model).runtimeSessions["graph:t1:plan"]
+	if slot.model != "qwen3" || slot.provider != "lmstudio" {
+		t.Errorf("model/provider = %q/%q, want qwen3/lmstudio", slot.model, slot.provider)
+	}
+	if !slot.hasTemp || slot.temperature != 0.7 || !slot.thinking {
+		t.Errorf("temp/thinking = %v/%v/%v, want set/0.7/true", slot.hasTemp, slot.temperature, slot.thinking)
+	}
+
+	// Unknown session is a no-op (no panic, no slot created).
+	res2, _ := m.Update(SessionMetaMsg{SessionID: "nope", Model: "x"})
+	if _, ok := res2.(*Model).runtimeSessions["nope"]; ok {
+		t.Error("meta for unknown session should not create a slot")
+	}
+}

@@ -323,6 +323,14 @@ type runtimeSlot struct {
 	tokensIn  int64
 	tokensOut int64
 	costUSD   float64
+
+	// temperature/thinking are the sampling settings the session runs with.
+	// Set from a session.meta event (graph nodes) since they aren't carried
+	// in the active-session snapshot. hasTemp distinguishes "0.0 temperature"
+	// from "unknown".
+	temperature float64
+	hasTemp     bool
+	thinking    bool
 }
 
 // NewModel returns an initialized root model.
@@ -1015,7 +1023,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.grid.gridCols, m.grid.gridRows = computeGridDimensions(m.width, m.height)
 		// Clamp page and focus cell to new bounds.
 		cellsPerPage := m.grid.gridCols * m.grid.gridRows
-		totalPages := (maxGridSlots + cellsPerPage - 1) / cellsPerPage
+		totalPages := m.gridTotalPages(cellsPerPage)
 		if m.grid.gridPage >= totalPages {
 			m.grid.gridPage = totalPages - 1
 		}
@@ -1274,6 +1282,18 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.updateViewportContent()
 		if !m.scroll.userScrolled {
 			m.chatViewport.GotoBottom()
+		}
+		return m, nil
+
+	case SessionMetaMsg:
+		// May arrive before or after the slot is created (event ordering);
+		// only apply when the slot exists. Graph nodes are the primary emitter.
+		if slot, ok := m.runtimeSessions[msg.SessionID]; ok {
+			slot.model = msg.Model
+			slot.provider = msg.Provider
+			slot.temperature = msg.Temperature
+			slot.hasTemp = true
+			slot.thinking = msg.Thinking
 		}
 		return m, nil
 

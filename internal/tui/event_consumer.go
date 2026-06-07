@@ -145,6 +145,19 @@ func translateEvent(ev service.Event) tea.Msg {
 			Text:      p.Text,
 		}
 
+	case service.EventTypeSessionMeta:
+		p, ok := ev.Payload.(service.SessionMetaPayload)
+		if !ok {
+			return nil
+		}
+		return SessionMetaMsg{
+			SessionID:   p.SessionID,
+			Model:       p.Model,
+			Provider:    p.Provider,
+			Temperature: p.Temperature,
+			Thinking:    p.Thinking,
+		}
+
 	case service.EventTypeSessionReasoning:
 		p, ok := ev.Payload.(service.SessionReasoningPayload)
 		if !ok {

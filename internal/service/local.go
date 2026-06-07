@@ -972,6 +972,25 @@ func (s *LocalService) BroadcastSessionPrompt(sessionID, systemPrompt, initialMe
 	})
 }
 
+// BroadcastSessionMeta broadcasts a session.meta event carrying the model,
+// provider, temperature, and thinking flag a node session is running with.
+func (s *LocalService) BroadcastSessionMeta(sessionID, model, provider string, temperature float64, thinking bool) {
+	if sessionID == "" {
+		return
+	}
+	s.broadcast(Event{
+		Type:      EventTypeSessionMeta,
+		SessionID: sessionID,
+		Payload: SessionMetaPayload{
+			SessionID:   sessionID,
+			Model:       model,
+			Provider:    provider,
+			Temperature: temperature,
+			Thinking:    thinking,
+		},
+	})
+}
+
 // BroadcastSessionText broadcasts a session.text event for an arbitrary
 // session id. Used by graph nodes (which synthesize session ids of the form
 // "graph:<TaskID>:<Node>") to stream LLM text through the same pipeline as

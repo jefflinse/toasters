@@ -65,6 +65,7 @@ func RoleNode(cfg TemplateConfig, role *prompt.Role, nodeID string, slots map[st
 			if round == 0 {
 				if nc := NodeContextFromContext(ctx); nc != nil && nc.Sink != nil {
 					nc.Sink.BroadcastSessionPrompt(nc.SessionID, sysPrompt, messages[0].Content)
+					nc.Sink.BroadcastSessionMeta(nc.SessionID, cfg.Model, state.ProviderName, temperature, thinkingEnabled)
 				}
 			}
 
