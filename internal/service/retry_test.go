@@ -109,3 +109,41 @@ func TestRetryTask_Errors(t *testing.T) {
 		t.Error("expected error retrying task with no graph")
 	}
 }
+
+func TestBroadcastTaskFailed_DecompositionMarksJobFailed(t *testing.T) {
+	svc, store := newRetryTestService(t)
+	ctx := context.Background()
+	if err := store.CreateJob(ctx, &db.Job{ID: "job-d", Title: "J", Type: "t", Status: db.JobStatusActive}); err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+	// A failed coarse-decompose bootstrap (no operator wired) must still flip
+	// the job to failed rather than leaving it stranded at running.
+	svc.BroadcastTaskFailed("job-d", "bootstrap-task", graphCoarseDecompose, "node crashed")
+
+	got, err := store.GetJob(ctx, "job-d")
+	if err != nil {
+		t.Fatalf("GetJob: %v", err)
+	}
+	if got.Status != db.JobStatusFailed {
+		t.Errorf("job status = %q, want failed", got.Status)
+	}
+}
+
+func TestBroadcastTaskFailed_NonDecompositionLeavesJobStatus(t *testing.T) {
+	svc, store := newRetryTestService(t)
+	ctx := context.Background()
+	if err := store.CreateJob(ctx, &db.Job{ID: "job-n", Title: "J", Type: "t", Status: db.JobStatusActive}); err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+	// A regular (non-decomposition) task failure must not touch job status here;
+	// the operator's blocker-handler owns that decision.
+	svc.BroadcastTaskFailed("job-n", "task-1", "bug-fix", "boom")
+
+	got, err := store.GetJob(ctx, "job-n")
+	if err != nil {
+		t.Fatalf("GetJob: %v", err)
+	}
+	if got.Status != db.JobStatusActive {
+		t.Errorf("job status = %q, want active (unchanged)", got.Status)
+	}
+}

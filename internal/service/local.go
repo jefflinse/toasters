@@ -1135,6 +1135,19 @@ func (s *LocalService) BroadcastTaskCompleted(jobID, taskID, graphID, summary st
 // BroadcastTaskFailed signals task failure to the operator's event loop so it
 // can consult the blocker-handler.
 func (s *LocalService) BroadcastTaskFailed(jobID, taskID, graphID, errMsg string) {
+	// A failed decomposition bootstrap produces no real tasks, so the job would
+	// otherwise strand at "running · 0/0 tasks" forever (there's nothing to
+	// retry). Mark it failed so the Jobs panel reflects reality; the operator is
+	// still notified below so it can surface the failure and offer to recreate.
+	if isDecompositionGraph(graphID) && s.cfg.Store != nil {
+		ctx, cancel := context.WithTimeout(s.ctx, 5*time.Second)
+		if err := s.cfg.Store.UpdateJobStatus(ctx, jobID, db.JobStatusFailed); err != nil {
+			slog.Error("failed to mark job failed after decomposition failure",
+				"job_id", jobID, "graph_id", graphID, "error", err)
+		}
+		cancel()
+	}
+
 	op := s.currentOperator()
 	if op == nil {
 		slog.Warn("graph task failed but operator unavailable",
