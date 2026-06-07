@@ -17,6 +17,7 @@ const (
 	toastInfo toastLevel = iota
 	toastSuccess
 	toastWarning
+	toastError
 )
 
 type toast struct {
@@ -205,6 +206,16 @@ type GraphNodeDoneMsg struct {
 	JobID     string
 	TaskID    string
 	Status    string
+}
+
+// GraphFailedMsg is sent when a task's graph execution fails outright.
+// Produced by the event consumer from a graph.failed event. The handler
+// surfaces the failure reason and, by inspecting recorded node state, which
+// node it failed at — context the operator-advance path otherwise swallows.
+type GraphFailedMsg struct {
+	JobID  string
+	TaskID string
+	Error  string
 }
 
 // JobsReloadedMsg is sent when jobs are reloaded (e.g. from SQLite polling).

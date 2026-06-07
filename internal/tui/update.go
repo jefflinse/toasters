@@ -2,7 +2,9 @@
 package tui
 
 import (
+	"context"
 	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 )
@@ -82,13 +84,47 @@ func (m *Model) updateGrid(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		rows = 1
 	}
 	cellsPerPage := cols * rows
-	totalPages := (maxGridSlots + cellsPerPage - 1) / cellsPerPage
+	totalPages := m.gridTotalPages(cellsPerPage)
+
+	// While capturing a filter, keystrokes edit the query rather than drive
+	// navigation. Esc clears and exits; Enter applies (keeps the filter, exits
+	// capture); printable runes and backspace edit the query.
+	if m.grid.filterActive {
+		return m.updateGridFilter(msg)
+	}
 
 	switch msg.String() {
+	case "/":
+		m.grid.filterActive = true
+		return m, nil
 	case "ctrl+g", "esc":
+		// Esc first dismisses a pending kill confirmation rather than closing
+		// the grid, mirroring the jobs modal's confirm-cancel behavior.
+		if m.grid.confirmKill {
+			m.grid.confirmKill = false
+			m.grid.confirmKillSessionID = ""
+			return m, nil
+		}
 		m.grid.showGrid = false
 		return m, nil
+	case "x":
+		// Arm the kill confirmation for the focused cell, but only for a live,
+		// real worker session. Graph nodes are stateless pseudo-sessions
+		// ("graph:<task>:<node>") with no runtime.Session to cancel.
+		if rs := m.runtimeSessionForGridCell(m.grid.gridFocusCell); rs != nil &&
+			rs.status == "active" && !strings.HasPrefix(rs.sessionID, "graph:") {
+			m.grid.confirmKill = true
+			m.grid.confirmKillSessionID = rs.sessionID
+		}
+		return m, nil
 	case "enter":
+		// Enter confirms a pending kill before its normal output-modal role.
+		if m.grid.confirmKill {
+			sid := m.grid.confirmKillSessionID
+			m.grid.confirmKill = false
+			m.grid.confirmKillSessionID = ""
+			return m, m.killWorkerSession(sid)
+		}
 		// Check for runtime session in this cell.
 		if rs := m.runtimeSessionForGridCell(m.grid.gridFocusCell); rs != nil {
 			output := rs.outputText()
@@ -157,6 +193,55 @@ func (m *Model) updateGrid(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	return m, nil
+}
+
+// updateGridFilter handles keystrokes while the grid filter is being typed.
+// Any query change resets the page and focus so navigation never lands off the
+// end of a now-shorter list.
+func (m *Model) updateGridFilter(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		m.grid.filterActive = false
+		m.grid.filterQuery = ""
+		m.grid.gridPage = 0
+		m.grid.gridFocusCell = 0
+		return m, nil
+	case "enter":
+		// Apply: keep the query, leave capture mode.
+		m.grid.filterActive = false
+		return m, nil
+	case "backspace":
+		if n := len(m.grid.filterQuery); n > 0 {
+			m.grid.filterQuery = m.grid.filterQuery[:n-1]
+			m.grid.gridPage = 0
+			m.grid.gridFocusCell = 0
+		}
+		return m, nil
+	}
+	// Printable single runes extend the query.
+	if msg.Text != "" {
+		m.grid.filterQuery += msg.Text
+		m.grid.gridPage = 0
+		m.grid.gridFocusCell = 0
+	}
+	return m, nil
+}
+
+// killWorkerSession cancels a running worker session through the service and
+// returns a toast command reporting the outcome. Cancellation is cooperative —
+// the worker stops at its next tool-call boundary — so the toast says so. The
+// resulting session.done(cancelled) event repaints the cell on its own.
+func (m *Model) killWorkerSession(sessionID string) tea.Cmd {
+	if sessionID == "" {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	err := m.svc.Sessions().Cancel(ctx, sessionID)
+	cancel()
+	if err != nil {
+		return m.addToast("⚠ Kill failed: "+err.Error(), toastWarning)
+	}
+	return m.addToast("🔪 Worker killed (stops at next tool boundary)", toastInfo)
 }
 
 // updateCmdPopup handles key events when the slash command popup is visible.

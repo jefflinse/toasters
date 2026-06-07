@@ -230,10 +230,16 @@ func translateEvent(ev service.Event) tea.Msg {
 			Status:    p.Status,
 		}
 
-	case service.EventTypeGraphCompleted, service.EventTypeGraphFailed:
-		// Task-level graph events — the operator advances via task_completed
-		// / task_failed. Nothing extra for the TUI to do here.
+	case service.EventTypeGraphCompleted:
+		// The operator advances via task_completed; nothing extra to render.
 		return nil
+
+	case service.EventTypeGraphFailed:
+		p, ok := ev.Payload.(service.GraphFailedPayload)
+		if !ok {
+			return nil
+		}
+		return GraphFailedMsg{JobID: p.JobID, TaskID: p.TaskID, Error: p.Error}
 
 	case service.EventTypeDefinitionsReloaded:
 		return DefinitionsReloadedMsg{}

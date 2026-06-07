@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jefflinse/toasters/internal/tui/dagmap"
 )
 
 // --------------------------------------------------------------------------
@@ -1166,5 +1168,89 @@ func TestRuntimeSessionForGridCell(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestAgentCardMeta(t *testing.T) {
+	t.Parallel()
+
+	cost := 0.0123
+	cases := []struct {
+		name     string
+		rs       *runtimeSlot
+		want     string
+		contains []string
+		empty    bool
+	}{
+		{name: "empty when no metrics", rs: &runtimeSlot{}, empty: true},
+		{
+			name:     "provider and model joined",
+			rs:       &runtimeSlot{provider: "lmstudio", model: "qwen3"},
+			contains: []string{"lmstudio/qwen3"},
+		},
+		{
+			name:     "model only",
+			rs:       &runtimeSlot{model: "qwen3"},
+			contains: []string{"qwen3"},
+		},
+		{
+			name:     "tokens and cost",
+			rs:       &runtimeSlot{provider: "p", model: "m", tokensIn: 1200, tokensOut: 3400, costUSD: cost},
+			contains: []string{"p/m", "↑", "↓", "~$0.01"},
+		},
+		{
+			name:  "zero cost omitted",
+			rs:    &runtimeSlot{model: "m", costUSD: 0},
+			want:  "m",
+			empty: false,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			got := agentCardMeta(c.rs)
+			if c.empty && got != "" {
+				t.Fatalf("expected empty, got %q", got)
+			}
+			if c.want != "" && got != c.want {
+				t.Fatalf("got %q, want %q", got, c.want)
+			}
+			for _, sub := range c.contains {
+				if !strings.Contains(got, sub) {
+					t.Errorf("got %q, want it to contain %q", got, sub)
+				}
+			}
+		})
+	}
+}
+
+func TestFailedGraphNode(t *testing.T) {
+	t.Parallel()
+
+	m := &Model{}
+	if got := m.failedGraphNode("nope"); got != "" {
+		t.Errorf("unknown task: got %q, want empty", got)
+	}
+
+	m.graphTasks = map[string]*graphTaskState{
+		"task-1": {
+			taskID: "task-1",
+			nodes: dagmap.NodeStates{
+				"investigate": {Phase: dagmap.PhaseCompleted},
+				"implement":   {Phase: dagmap.PhaseFailed},
+				"plan":        {Phase: dagmap.PhaseCompleted},
+			},
+		},
+	}
+	if got := m.failedGraphNode("task-1"); got != "implement" {
+		t.Errorf("got %q, want %q", got, "implement")
+	}
+
+	m.graphTasks["task-2"] = &graphTaskState{
+		taskID: "task-2",
+		nodes:  dagmap.NodeStates{"a": {Phase: dagmap.PhaseCompleted}},
+	}
+	if got := m.failedGraphNode("task-2"); got != "" {
+		t.Errorf("no failed node: got %q, want empty", got)
 	}
 }

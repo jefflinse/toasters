@@ -83,8 +83,8 @@ func (m *Model) renderGrid() string {
 
 	cells := make([]string, cellsPerPage)
 
-	// Collect sorted runtime sessions for display.
-	sortedRT := m.sortedRuntimeSessions()
+	// Collect sorted runtime sessions for display (narrowed by any filter).
+	sortedRT := m.filteredGridSessions()
 	pageOffset := m.grid.gridPage * cellsPerPage
 
 	for i := range cellsPerPage {
@@ -108,11 +108,27 @@ func (m *Model) renderGrid() string {
 		}
 	}
 
-	totalPages := (maxGridSlots + cellsPerPage - 1) / cellsPerPage
-	hotkeyBar := DimStyle.Render(fmt.Sprintf(
-		"  arrows: navigate   ·   enter: view output   ·   p: view prompt   ·   [/]: page %d/%d   ·   ctrl+g / esc: close",
-		m.grid.gridPage+1, totalPages,
-	))
+	totalPages := m.gridTotalPages(cellsPerPage)
+	var hotkeyBar string
+	switch {
+	case m.grid.confirmKill:
+		hotkeyBar = ModalWarningStyle.Render("  ⚠ Kill this worker?  [Enter] confirm   [Esc] cancel")
+	case m.grid.filterActive:
+		matches := len(m.filteredGridSessions())
+		hotkeyBar = DimStyle.Render(fmt.Sprintf(
+			"  filter: %s_   ·   %d match(es)   ·   enter: apply   ·   esc: clear",
+			m.grid.filterQuery, matches,
+		))
+	default:
+		bar := fmt.Sprintf(
+			"  arrows: navigate   ·   enter: view output   ·   p: view prompt   ·   x: kill   ·   /: filter   ·   [/]: page %d/%d   ·   ctrl+g / esc: close",
+			m.grid.gridPage+1, totalPages,
+		)
+		if m.grid.filterQuery != "" {
+			bar += fmt.Sprintf("   ·   filter: %s", m.grid.filterQuery)
+		}
+		hotkeyBar = DimStyle.Render(bar)
+	}
 	hotkeyBar = lipgloss.NewStyle().Width(m.width).Render(hotkeyBar)
 
 	rowStrings := make([]string, rows)
@@ -220,6 +236,17 @@ func renderAgentCard(rs *runtimeSlot, innerW, innerH int, focused bool, spinnerF
 	header := fmt.Sprintf("%s %s · %s · %s", statusMark, agentLabel, shortJobID, elapsed)
 	headerLine := hdrStyle.Render(truncateStr(header, innerW))
 
+	// --- Meta line (model/provider · tokens · cost) ---
+	// Only shown when there's vertical room (>= 5 inner lines) so the
+	// graceful-degrade and tiny-cell paths are untouched.
+	metaLine := ""
+	if innerH >= 5 {
+		if meta := agentCardMeta(rs); meta != "" {
+			metaLine = DimStyle.Render(truncateStr(meta, innerW))
+		}
+	}
+	hasMeta := metaLine != ""
+
 	// --- Separator after header ---
 	separator := DimStyle.Render(strings.Repeat("─", innerW))
 
@@ -252,7 +279,11 @@ func renderAgentCard(rs *runtimeSlot, innerW, innerH int, focused bool, spinnerF
 	}
 	// activityH may be 0 when the task section fills the available height;
 	// the hard-clamp below ensures we never overflow innerH.
-	activityH := innerH - 2 - taskSectionLines
+	metaLines := 0
+	if hasMeta {
+		metaLines = 1
+	}
+	activityH := innerH - 2 - metaLines - taskSectionLines
 	if activityH < 0 {
 		activityH = 0
 	}
@@ -286,6 +317,9 @@ func renderAgentCard(rs *runtimeSlot, innerW, innerH int, focused bool, spinnerF
 	// --- Assemble lines slice ---
 	var lines []string
 	lines = append(lines, headerLine)
+	if hasMeta {
+		lines = append(lines, metaLine)
+	}
 	lines = append(lines, separator)
 	if hasTask {
 		lines = append(lines, taskLines...)
@@ -301,6 +335,28 @@ func renderAgentCard(rs *runtimeSlot, innerW, innerH int, focused bool, spinnerF
 	_ = spinnerFrame // reserved for future animated content in the card body
 
 	return strings.Join(lines, "\n")
+}
+
+// agentCardMeta builds the compact provider/model · tokens · cost line shown
+// under a worker card header. Each segment is omitted when its value is
+// zero/empty, so a freshly-started worker (no snapshot yet) renders nothing.
+func agentCardMeta(rs *runtimeSlot) string {
+	var segs []string
+	switch {
+	case rs.model != "" && rs.provider != "":
+		segs = append(segs, rs.provider+"/"+rs.model)
+	case rs.model != "":
+		segs = append(segs, rs.model)
+	case rs.provider != "":
+		segs = append(segs, rs.provider)
+	}
+	if rs.tokensIn > 0 || rs.tokensOut > 0 {
+		segs = append(segs, formatTokenCount(rs.tokensIn)+"↑ "+formatTokenCount(rs.tokensOut)+"↓")
+	}
+	if rs.costUSD > 0 {
+		segs = append(segs, fmt.Sprintf("~$%.2f", rs.costUSD))
+	}
+	return strings.Join(segs, " · ")
 }
 
 // commaInt formats an integer with comma-separated thousands (e.g. 200000 → "200,000").

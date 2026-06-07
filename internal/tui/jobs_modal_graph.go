@@ -123,6 +123,21 @@ func (m *Model) renderGraphTaskPane(gts *graphTaskState, innerW, innerH int) []s
 
 	bodyLines := m.renderGraphPaneOutputViewport(displaySlot, innerW, bodyH)
 
+	// Scroll-position indicator: once content overflows the viewport, append a
+	// "L<first>-<last>/<total>" readout to the Output title so the user knows
+	// there's more above/below and roughly where they are.
+	if displaySlot != nil && m.jobsModal.outputViewportInit {
+		vp := &m.jobsModal.outputViewport
+		if total := vp.TotalLineCount(); total > vp.VisibleLineCount() {
+			first := vp.YOffset() + 1
+			last := vp.YOffset() + vp.VisibleLineCount()
+			if last > total {
+				last = total
+			}
+			headerLines[0] += DimStyle.Render(fmt.Sprintf("  L%d-%d/%d", first, last, total))
+		}
+	}
+
 	outputLines := append(headerLines, bodyLines...)
 	for len(outputLines) < outputH {
 		outputLines = append(outputLines, "")

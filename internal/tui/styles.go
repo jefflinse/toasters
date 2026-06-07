@@ -297,6 +297,11 @@ var (
 				BorderForeground(ColorStreaming).
 				BorderBackground(lipgloss.Color("235"))
 
+	ToastErrorStyle = ToastBaseStyle.
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(ColorError).
+			BorderBackground(lipgloss.Color("235"))
+
 	// TaskPendingStyle styles a pending task subitem under a job.
 	TaskPendingStyle = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("245"))
