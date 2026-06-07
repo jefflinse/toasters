@@ -168,3 +168,21 @@ func TestWorkerStreamBlock_FinishedCardsCollapse(t *testing.T) {
 		})
 	}
 }
+
+func TestCollapseBlankLines(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"", ""},
+		{"one line", "one line"},
+		{"a\n\n\n\nb", "a\n\nb"},       // run collapsed to one blank
+		{"\n\n\nLeading", "Leading"},   // leading blanks dropped
+		{"Trailing\n\n\n", "Trailing"}, // trailing blanks dropped
+		{"a\n  \n\t\nb", "a\n\nb"},     // whitespace-only lines are blank
+		{"verify the file.\n\n\n\nread", "verify the file.\n\nread"}, // the motivating case
+		{"p1\n\np2\n\np3", "p1\n\np2\n\np3"},                         // single blanks preserved
+	}
+	for _, c := range cases {
+		if got := collapseBlankLines(c.in); got != c.want {
+			t.Errorf("collapseBlankLines(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
