@@ -375,6 +375,9 @@ func (m *mockEventSink) BroadcastPrompt(requestID string, questions []PromptQues
 func (m *mockEventSink) BroadcastSessionPrompt(sessionID, _, _ string) {
 	m.record(fmt.Sprintf("session_prompt:%s", sessionID))
 }
+func (m *mockEventSink) BroadcastSessionMeta(sessionID, model, _ string, temperature float64, _ bool) {
+	m.record(fmt.Sprintf("session_meta:%s:%s:%.1f", sessionID, model, temperature))
+}
 func (m *mockEventSink) BroadcastSessionText(sessionID, text string) {
 	m.record(fmt.Sprintf("session_text:%s:%s", sessionID, text))
 }

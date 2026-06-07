@@ -145,6 +145,19 @@ func translateEvent(ev service.Event) tea.Msg {
 			Text:      p.Text,
 		}
 
+	case service.EventTypeSessionMeta:
+		p, ok := ev.Payload.(service.SessionMetaPayload)
+		if !ok {
+			return nil
+		}
+		return SessionMetaMsg{
+			SessionID:   p.SessionID,
+			Model:       p.Model,
+			Provider:    p.Provider,
+			Temperature: p.Temperature,
+			Thinking:    p.Thinking,
+		}
+
 	case service.EventTypeSessionReasoning:
 		p, ok := ev.Payload.(service.SessionReasoningPayload)
 		if !ok {
@@ -230,10 +243,16 @@ func translateEvent(ev service.Event) tea.Msg {
 			Status:    p.Status,
 		}
 
-	case service.EventTypeGraphCompleted, service.EventTypeGraphFailed:
-		// Task-level graph events — the operator advances via task_completed
-		// / task_failed. Nothing extra for the TUI to do here.
+	case service.EventTypeGraphCompleted:
+		// The operator advances via task_completed; nothing extra to render.
 		return nil
+
+	case service.EventTypeGraphFailed:
+		p, ok := ev.Payload.(service.GraphFailedPayload)
+		if !ok {
+			return nil
+		}
+		return GraphFailedMsg{JobID: p.JobID, TaskID: p.TaskID, Error: p.Error}
 
 	case service.EventTypeDefinitionsReloaded:
 		return DefinitionsReloadedMsg{}

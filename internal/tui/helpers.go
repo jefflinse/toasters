@@ -239,6 +239,8 @@ func (m *Model) renderToasts(maxOuterWidth int) string {
 			rendered = ToastSuccessStyle.MaxWidth(maxOuterWidth).Render(msg)
 		case toastWarning:
 			rendered = ToastWarningStyle.MaxWidth(maxOuterWidth).Render(msg)
+		case toastError:
+			rendered = ToastErrorStyle.MaxWidth(maxOuterWidth).Render(msg)
 		default:
 			rendered = ToastInfoStyle.MaxWidth(maxOuterWidth).Render(msg)
 		}
@@ -1443,6 +1445,42 @@ func (m *Model) sortedRuntimeSessions() []*runtimeSlot {
 	return slots
 }
 
+// filteredGridSessions returns the sorted runtime sessions narrowed by the
+// grid's filter query (case-insensitive substring over job id, role/agent
+// name, and status). With an empty query it is exactly sortedRuntimeSessions,
+// so the grid render path and cell-resolution helper can share one source.
+func (m *Model) filteredGridSessions() []*runtimeSlot {
+	all := m.sortedRuntimeSessions()
+	q := strings.ToLower(strings.TrimSpace(m.grid.filterQuery))
+	if q == "" {
+		return all
+	}
+	out := make([]*runtimeSlot, 0, len(all))
+	for _, rs := range all {
+		hay := strings.ToLower(rs.jobID + " " + rs.agentName + " " + rs.teamName + " " + rs.status)
+		if strings.Contains(hay, q) {
+			out = append(out, rs)
+		}
+	}
+	return out
+}
+
+// gridTotalPages returns the number of grid pages for the current filtered
+// session count and per-page cell capacity, always at least 1. This replaces
+// the prior maxGridSlots-based count, which showed phantom pages whenever the
+// live session count was below the 16-slot ceiling.
+func (m *Model) gridTotalPages(cellsPerPage int) int {
+	if cellsPerPage < 1 {
+		cellsPerPage = 1
+	}
+	n := len(m.filteredGridSessions())
+	pages := (n + cellsPerPage - 1) / cellsPerPage
+	if pages < 1 {
+		pages = 1
+	}
+	return pages
+}
+
 // displayRuntimeSessions returns the runtime sessions filtered for display
 // in the Workers pane: every active session, plus at most
 // maxCompletedWorkersInPane most-recently-ended non-active sessions.
@@ -1629,7 +1667,7 @@ func (m *Model) runtimeSessionForGridCell(cellIdx int) *runtimeSlot {
 	cellsPerPage := cols * rows
 	pageOffset := m.grid.gridPage * cellsPerPage
 
-	sortedRT := m.sortedRuntimeSessions()
+	sortedRT := m.filteredGridSessions()
 
 	// The absolute index into the sorted runtime session list for the given cell.
 	absIdx := pageOffset + cellIdx

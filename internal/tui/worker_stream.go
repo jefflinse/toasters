@@ -325,14 +325,20 @@ func (m *Model) renderWorkerStreamBlock(snap *service.WorkerStreamSnapshot, widt
 		line2 += DimStyle.Render(" · " + truncateStr(jobTitle, innerW/2))
 	}
 
-	// Indent the body to the same column as the title/task text (past the "🍞 "
-	// icon — 3 cells), and render it that much narrower so it doesn't overflow.
-	const bodyIndent = 3
-	body := m.renderWorkerStreamItems(snap.Items, innerW-bodyIndent)
-
+	// Finished cards collapse to just their two header rows so a completed run
+	// stays scannable instead of a wall of stale output. The body is shown only
+	// while the card is still streaming, or when the user has selected it
+	// (arrow-navigation peek). Full output is always reachable via [enter to
+	// view] regardless.
 	content := line1 + "\n" + line2
-	if body != "" {
-		content += "\n" + indentLines(body, bodyIndent)
+	if !snap.Done || selected {
+		// Indent the body to the same column as the title/task text (past the
+		// "🍞 " icon — 3 cells), rendered that much narrower so it doesn't overflow.
+		const bodyIndent = 3
+		body := m.renderWorkerStreamItems(snap.Items, innerW-bodyIndent)
+		if body != "" {
+			content += "\n" + indentLines(body, bodyIndent)
+		}
 	}
 
 	borderColor := ColorAccent
@@ -362,32 +368,56 @@ func (m *Model) renderWorkerStreamItems(items []service.WorkerStreamItem, width 
 	if len(items) == 0 {
 		return DimStyle.Italic(true).Render("(waiting for output…)")
 	}
-	var b strings.Builder
+	var parts []string
 	for i := range items {
 		it := &items[i]
-		if b.Len() > 0 {
-			b.WriteString("\n")
-		}
 		switch it.Kind {
 		case service.WorkerStreamItemText:
-			if it.Text == "" {
+			// Streamed model output often carries stray blank-line runs that
+			// render as large vertical gaps inside the card; collapse them.
+			txt := collapseBlankLines(it.Text)
+			if txt == "" {
 				continue
 			}
 			// Wrap to the block's exact content width rather than markdown-
 			// rendering at the wider chat width — the latter overflows this
 			// narrower card and the frame re-wraps it, orphaning trailing words.
 			// The full markdown view is still available via Enter-to-deep-link.
-			b.WriteString(wrapText(it.Text, width))
+			parts = append(parts, wrapText(txt, width))
 		case service.WorkerStreamItemTool:
-			b.WriteString(renderToolBlock(workerStreamItemAsOutputItem(it), width))
+			parts = append(parts, renderToolBlock(workerStreamItemAsOutputItem(it), width))
 		}
 	}
-	full := strings.TrimRight(b.String(), "\n")
+	full := strings.TrimRight(strings.Join(parts, "\n"), "\n")
 	lines := strings.Split(full, "\n")
 	if len(lines) <= workerStreamChatMaxLines {
 		return full
 	}
 	return strings.Join(lines[len(lines)-workerStreamChatMaxLines:], "\n")
+}
+
+// collapseBlankLines trims trailing whitespace from each line, drops leading
+// and trailing blank lines, and collapses any run of blank lines down to a
+// single one. A streaming model frequently emits stray blank runs that would
+// otherwise open large vertical gaps inside a worker card; a single blank line
+// is kept so genuine paragraph breaks survive.
+func collapseBlankLines(s string) string {
+	lines := strings.Split(s, "\n")
+	out := make([]string, 0, len(lines))
+	prevBlank := true // seeded true so leading blank lines are dropped
+	for _, ln := range lines {
+		ln = strings.TrimRight(ln, " \t")
+		blank := ln == ""
+		if blank && prevBlank {
+			continue
+		}
+		out = append(out, ln)
+		prevBlank = blank
+	}
+	for len(out) > 0 && out[len(out)-1] == "" {
+		out = out[:len(out)-1]
+	}
+	return strings.Join(out, "\n")
 }
 
 // workerStreamItemAsOutputItem adapts a service.WorkerStreamItem to

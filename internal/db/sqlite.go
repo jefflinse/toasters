@@ -352,6 +352,22 @@ func (s *SQLiteStore) PreAssignTaskGraph(ctx context.Context, id string, graphID
 	return checkRowsAffected(result, "task", id)
 }
 
+// RetryTask transitions a failed task back to in_progress, re-sets its graph_id,
+// and clears the stale result fields so a fresh graph run starts clean. The
+// failed→in_progress move is a single guarded statement so there is no
+// transient pending window for the operator's ready-task scan to race on. A
+// task that is not currently failed (or missing) yields ErrNotFound.
+func (s *SQLiteStore) RetryTask(ctx context.Context, id string, graphID string) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	result, err := s.db.ExecContext(ctx,
+		"UPDATE tasks SET graph_id = ?, status = ?, summary = '', result_summary = '', recommendations = '', updated_at = ? WHERE id = ? AND status = ?",
+		graphID, string(TaskStatusInProgress), now, id, string(TaskStatusFailed))
+	if err != nil {
+		return fmt.Errorf("retrying task: %w", err)
+	}
+	return checkRowsAffected(result, "task", id)
+}
+
 func (s *SQLiteStore) AddTaskDependency(ctx context.Context, taskID, dependsOn string) error {
 	_, err := s.db.ExecContext(ctx,
 		"INSERT INTO task_dependencies (task_id, depends_on) VALUES (?, ?)",

@@ -277,7 +277,6 @@ func (s *remoteDefinitionService) GenerateSkill(ctx context.Context, prompt stri
 	return ar.OperationID, nil
 }
 
-
 // --- Graphs ---
 
 func (s *remoteDefinitionService) ListGraphs(ctx context.Context) ([]service.GraphDefinition, error) {
@@ -384,6 +383,17 @@ func (s *remoteJobService) Cancel(ctx context.Context, id string) error {
 	}
 	if err := decodeNoContent(resp); err != nil {
 		return fmt.Errorf("cancel job: %w", err)
+	}
+	return nil
+}
+
+func (s *remoteJobService) RetryTask(ctx context.Context, taskID string) error {
+	resp, err := s.c.http.post(ctx, fmt.Sprintf("/api/v1/tasks/%s/retry", url.PathEscape(taskID)), nil)
+	if err != nil {
+		return fmt.Errorf("retry task: %w", err)
+	}
+	if err := decodeNoContent(resp); err != nil {
+		return fmt.Errorf("retry task: %w", err)
 	}
 	return nil
 }

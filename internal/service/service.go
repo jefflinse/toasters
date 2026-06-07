@@ -155,6 +155,13 @@ type JobService interface {
 	// status can be cancelled; others return an error. The cancellation is
 	// persisted to the DB immediately.
 	Cancel(ctx context.Context, id string) error
+
+	// RetryTask re-dispatches a failed task by re-running its bound graph from
+	// the start. Only tasks in Failed status with a non-empty graph binding can
+	// be retried; others return an error. The task is reset to in_progress and
+	// dispatched through the same graph-execution path used for initial
+	// assignment, bypassing the operator so the action is deterministic.
+	RetryTask(ctx context.Context, taskID string) error
 }
 
 // ---------------------------------------------------------------------------

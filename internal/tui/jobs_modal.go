@@ -3,7 +3,7 @@ package tui
 
 import (
 	"context"
-	"image/color"
+	"fmt"
 	"log/slog"
 	"strings"
 	"time"
@@ -17,17 +17,18 @@ import (
 
 // jobsModalState holds all state for the /jobs modal overlay.
 type jobsModalState struct {
-	show              bool
-	jobs              []service.Job
-	jobIdx            int
-	tasks             map[string][]service.Task
-	progress          map[string][]service.ProgressReport
-	focus             int // 0=jobs list, 1=tasks list, 2=agent detail
-	taskIdx           int
-	confirmCancel     bool
-	agentScrollOffset int // TODO: implement scrolling in the agent detail panel (v2)
-	graphNodeIdx      int // focused node when the selected task has graph state
-	taskScrollOffset  int // line offset into the middle panel's task list
+	show             bool
+	jobs             []service.Job
+	jobIdx           int
+	tasks            map[string][]service.Task
+	progress         map[string][]service.ProgressReport
+	focus            int // 0=jobs list, 1=tasks list, 2=agent detail
+	taskIdx          int
+	confirmCancel    bool
+	confirmRetry     bool // armed by 'r' on a failed task; confirmed with Enter
+	agentCardIdx     int  // focused worker among a non-graph task's sessions (legacy card pane)
+	graphNodeIdx     int  // focused node when the selected task has graph state
+	taskScrollOffset int  // line offset into the middle panel's task list
 
 	// outputViewport scrolls the worker's streamed output in the graph
 	// pane. It is shared across all displayed slots — when the focused
@@ -217,10 +218,22 @@ func (m *Model) updateJobsModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	switch msg.String() {
 	case "esc":
-		if m.jobsModal.confirmCancel {
+		switch {
+		case m.jobsModal.confirmCancel:
 			m.jobsModal.confirmCancel = false
-		} else {
+		case m.jobsModal.confirmRetry:
+			m.jobsModal.confirmRetry = false
+		default:
 			m.jobsModal.show = false
+		}
+
+	case "r":
+		// Arm a retry confirmation for the selected task when it has failed.
+		// Available from the tasks list (focus 1) or the graph pane (focus 2).
+		if m.jobsModal.focus == 1 || m.jobsModal.focus == 2 {
+			if t := m.selectedModalTask(); t != nil && t.Status == service.TaskStatusFailed {
+				m.jobsModal.confirmRetry = true
+			}
 		}
 
 	case "tab":
@@ -235,14 +248,14 @@ func (m *Model) updateJobsModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			if m.jobsModal.jobIdx > 0 {
 				m.jobsModal.jobIdx--
 				m.jobsModal.taskIdx = 0
-				m.jobsModal.agentScrollOffset = 0
+				m.jobsModal.agentCardIdx = 0
 				m.jobsModal.graphNodeIdx = 0
 				m.loadJobDetail()
 			}
 		case 1:
 			if m.jobsModal.taskIdx > 0 {
 				m.jobsModal.taskIdx--
-				m.jobsModal.agentScrollOffset = 0
+				m.jobsModal.agentCardIdx = 0
 				m.jobsModal.graphNodeIdx = 0
 			}
 		case 2:
@@ -250,6 +263,9 @@ func (m *Model) updateJobsModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				if m.jobsModal.graphNodeIdx > 0 {
 					m.jobsModal.graphNodeIdx--
 				}
+			} else if m.jobsModal.agentCardIdx > 0 {
+				// Non-graph task: cycle the focused worker card.
+				m.jobsModal.agentCardIdx--
 			}
 		}
 
@@ -259,7 +275,7 @@ func (m *Model) updateJobsModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			if m.jobsModal.jobIdx < len(m.jobsModal.jobs)-1 {
 				m.jobsModal.jobIdx++
 				m.jobsModal.taskIdx = 0
-				m.jobsModal.agentScrollOffset = 0
+				m.jobsModal.agentCardIdx = 0
 				m.jobsModal.graphNodeIdx = 0
 				m.loadJobDetail()
 			}
@@ -269,7 +285,7 @@ func (m *Model) updateJobsModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				tasks := m.modalTasks(job.ID)
 				if m.jobsModal.taskIdx < len(tasks)-1 {
 					m.jobsModal.taskIdx++
-					m.jobsModal.agentScrollOffset = 0
+					m.jobsModal.agentCardIdx = 0
 					m.jobsModal.graphNodeIdx = 0
 				}
 			}
@@ -277,6 +293,11 @@ func (m *Model) updateJobsModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			if gts := m.selectedJobsModalGraphTaskState(); gts != nil {
 				if m.jobsModal.graphNodeIdx < len(gts.topology.Nodes)-1 {
 					m.jobsModal.graphNodeIdx++
+				}
+			} else if t := m.selectedModalTask(); t != nil {
+				// Non-graph task: cycle the focused worker card.
+				if n := len(m.runtimeSessionsForTask(t.ID)); m.jobsModal.agentCardIdx < n-1 {
+					m.jobsModal.agentCardIdx++
 				}
 			}
 		}
@@ -291,7 +312,22 @@ func (m *Model) updateJobsModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 
 	case "enter":
-		if m.jobsModal.confirmCancel && len(m.jobsModal.jobs) > 0 && m.jobsModal.jobIdx < len(m.jobsModal.jobs) {
+		if m.jobsModal.confirmRetry {
+			if t := m.selectedModalTask(); t != nil {
+				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+				err := m.svc.Jobs().RetryTask(ctx, t.ID)
+				cancel()
+				if err != nil {
+					slog.Warn("failed to retry task", "task", t.ID, "error", err)
+					modalCmds = append(modalCmds, m.addToast("⚠ Retry failed: "+err.Error(), toastWarning))
+				} else {
+					m.loadJobsForModal()
+					m.loadJobDetail()
+					modalCmds = append(modalCmds, m.addToast("↻ Task retrying", toastSuccess))
+				}
+			}
+			m.jobsModal.confirmRetry = false
+		} else if m.jobsModal.confirmCancel && len(m.jobsModal.jobs) > 0 && m.jobsModal.jobIdx < len(m.jobsModal.jobs) {
 			job := m.jobsModal.jobs[m.jobsModal.jobIdx]
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 			err := m.svc.Jobs().Cancel(ctx, job.ID)
@@ -489,6 +525,12 @@ func (m *Model) renderJobsModal() string {
 		}
 		midLines = append(midLines, midTitle)
 
+		// Type tag (e.g. bug_fix, new_feature) — classifies the job at a
+		// glance; previously computed but never surfaced.
+		if selectedJob.Type != "" {
+			midLines = append(midLines, dimBg.Render("Type: "+truncateStr(selectedJob.Type, midInnerW-6)))
+		}
+
 		// Status line with color coding.
 		var statusStr string
 		switch selectedJob.Status {
@@ -510,12 +552,46 @@ func (m *Model) renderJobsModal() string {
 		// Created timestamp.
 		midLines = append(midLines, dimBg.Render("Created: "+selectedJob.CreatedAt.Format("2006-01-02 15:04")))
 
+		// Description — capped at 3 lines so it doesn't crowd the task list.
+		if selectedJob.Description != "" {
+			for _, l := range wrapToWidth(selectedJob.Description, midInnerW, 3) {
+				midLines = append(midLines, dimBg.Render(l))
+			}
+		}
+
 		// Separator.
 		midLines = append(midLines, dimBg.Render(strings.Repeat("─", midInnerW)))
+
+		// Recommendations for the selected task — follow-up guidance that's
+		// otherwise dropped from the event stream. Shown above the task list so
+		// it stays associated with the highlighted task. Capped to keep room.
+		if len(selectedJobTasks) > 0 {
+			ti := m.jobsModal.taskIdx
+			if ti < 0 {
+				ti = 0
+			}
+			if ti >= len(selectedJobTasks) {
+				ti = len(selectedJobTasks) - 1
+			}
+			if rec := selectedJobTasks[ti].Recommendations; rec != "" {
+				midLines = append(midLines, headerBg.Render("Recommendations"))
+				for _, l := range wrapToWidth(rec, midInnerW, 4) {
+					midLines = append(midLines, dimBg.Render(l))
+				}
+				midLines = append(midLines, dimBg.Render(strings.Repeat("─", midInnerW)))
+			}
+		}
 
 		// Cancel confirmation (shown in middle panel when active).
 		if m.jobsModal.confirmCancel {
 			midLines = append(midLines, ModalWarningStyle.Background(bgColor).Render("⚠ Cancel this job?"))
+			midLines = append(midLines, dimBg.Render("[Enter] confirm  [Esc] cancel"))
+			midLines = append(midLines, "")
+		}
+
+		// Retry confirmation (shown in middle panel when active).
+		if m.jobsModal.confirmRetry {
+			midLines = append(midLines, ModalWarningStyle.Background(bgColor).Render("↻ Retry this failed task?"))
 			midLines = append(midLines, dimBg.Render("[Enter] confirm  [Esc] cancel"))
 			midLines = append(midLines, "")
 		}
@@ -533,6 +609,26 @@ func (m *Model) renderJobsModal() string {
 				taskIdx = 0
 			}
 
+			// Depth of each visible task in the decomposition hierarchy, so
+			// subtasks render indented under their parent and deep graphs read
+			// as a tree instead of a flat list.
+			taskByID := make(map[string]service.Task, len(selectedJobTasks))
+			for _, t := range selectedJobTasks {
+				taskByID[t.ID] = t
+			}
+			depthOf := func(t service.Task) int {
+				d := 0
+				for t.ParentID != "" && d <= 8 { // depth cap guards against cycles
+					p, ok := taskByID[t.ParentID]
+					if !ok {
+						break
+					}
+					d++
+					t = p
+				}
+				return d
+			}
+
 			// Build per-task blocks (1 or 2 lines each) so the visible
 			// window can include/exclude a whole task at a time. Keeping
 			// the "task line" and its "graph-name sub-row" together in
@@ -543,11 +639,15 @@ func (m *Model) renderJobsModal() string {
 			for i, task := range selectedJobTasks {
 				var b taskBlock
 				indicator, style := taskStatusIndicator(task.Status)
-				taskTitle := truncateStr(task.Title, midInnerW-4)
+				treePrefix := ""
+				if d := depthOf(task); d > 0 {
+					treePrefix = strings.Repeat("  ", d-1) + "└ "
+				}
+				taskTitle := truncateStr(task.Title, midInnerW-4-lipgloss.Width(treePrefix))
 				if i == taskIdx {
-					b.lines = append(b.lines, ModalSelectedStyle.Width(midInnerW).Render(indicator+" "+taskTitle))
+					b.lines = append(b.lines, ModalSelectedStyle.Width(midInnerW).Render(treePrefix+indicator+" "+taskTitle))
 				} else {
-					b.lines = append(b.lines, style.Background(bgColor).Render(indicator+" "+taskTitle))
+					b.lines = append(b.lines, style.Background(bgColor).Render(treePrefix+indicator+" "+taskTitle))
 				}
 				if task.GraphID != "" {
 					graphIndicator, _ := taskStatusIndicator(task.Status)
@@ -690,47 +790,31 @@ func (m *Model) renderJobsModal() string {
 				rightLines = append(rightLines, "")
 				rightLines = append(rightLines, lipgloss.PlaceHorizontal(rightInnerW, lipgloss.Center, dimBg.Render(placeholder), lipgloss.WithWhitespaceStyle(bgFill)))
 			} else {
-				// Compute card height: divide available height evenly among sessions.
-				// Available height = panelInnerH - 1 (title line already added).
-				availH := panelInnerH - 1
-				if availH < 1 {
-					availH = 1
+				// Non-graph task: focus one worker and stream its output through
+				// the shared scrollable viewport so long output is no longer
+				// clipped (the old fixed-height cards silently truncated). ↑↓
+				// cycle workers; the graph-pane scroll handlers move the body.
+				idx := m.jobsModal.agentCardIdx
+				if idx >= len(sessions) {
+					idx = len(sessions) - 1
 				}
-				cardH := availH / len(sessions)
-				if cardH < 6 {
-					cardH = 6
+				if idx < 0 {
+					idx = 0
 				}
-				if cardH > 12 {
-					cardH = 12
-				}
-				cardInnerH := cardH - 2 // subtract border top+bottom
-				if cardInnerH < 1 {
-					cardInnerH = 1
-				}
-				cardInnerW := rightInnerW - 4 // subtract border (2) + padding (2)
-				if cardInnerW < 1 {
-					cardInnerW = 1
+				focused := sessions[idx]
+
+				if len(sessions) > 1 {
+					rightLines = append(rightLines, dimBg.Render(fmt.Sprintf(
+						"worker %d/%d · %s  (↑↓ switch)", idx+1, len(sessions), focused.agentName)))
+				} else {
+					rightLines = append(rightLines, dimBg.Render("worker: "+focused.agentName+" · "+focused.status))
 				}
 
-				for _, rs := range sessions {
-					// Choose border color: green for active, dim for completed.
-					var borderColor color.Color
-					if rs.status == "active" {
-						borderColor = ColorConnected
-					} else {
-						borderColor = ColorDim
-					}
-					cardStyle := lipgloss.NewStyle().
-						Width(rightInnerW).
-						Height(cardH).
-						Border(lipgloss.RoundedBorder()).
-						BorderForeground(borderColor).
-						Padding(0, 1)
-
-					cardContent := renderAgentCard(rs, cardInnerW, cardInnerH, false, m.spinnerFrame)
-					rendered := cardStyle.Render(cardContent)
-					rightLines = append(rightLines, strings.Split(rendered, "\n")...)
+				bodyH := panelInnerH - len(rightLines)
+				if bodyH < 1 {
+					bodyH = 1
 				}
+				rightLines = append(rightLines, m.renderGraphPaneOutputViewport(focused, rightInnerW, bodyH)...)
 			}
 		}
 
@@ -774,6 +858,12 @@ func (m *Model) renderJobsModal() string {
 	if m.jobsModal.focus == 1 {
 		enterHint = dimBg.Render("[Enter] View Workers")
 	}
+	// Retry hint — only meaningful (and only highlighted) when the selected
+	// task has actually failed.
+	retryHint := ""
+	if st := m.selectedModalTask(); st != nil && st.Status == service.TaskStatusFailed {
+		retryHint = bgFill.Render("[R] Retry Task")
+	}
 	spacer := bgFill.Render("  ")
 	footerParts := []string{
 		dimBg.Render("[Tab] Switch Panel"), spacer,
@@ -783,6 +873,9 @@ func (m *Model) renderJobsModal() string {
 	}
 	if enterHint != "" {
 		footerParts = append(footerParts, spacer, enterHint)
+	}
+	if retryHint != "" {
+		footerParts = append(footerParts, spacer, retryHint)
 	}
 	footer := bgFill.Width(m.width).Render(lipgloss.JoinHorizontal(lipgloss.Left, footerParts...))
 
@@ -843,4 +936,19 @@ func (m *Model) visibleTasks(tasks []service.Task) []service.Task {
 // the one highlighted.
 func (m *Model) modalTasks(jobID string) []service.Task {
 	return m.visibleTasks(m.jobsModal.tasks[jobID])
+}
+
+// selectedModalTask returns the task currently highlighted in the jobs modal
+// (the taskIdx-th visible task of the selected job), or nil if none. Used by the
+// retry gesture and other per-task actions.
+func (m *Model) selectedModalTask() *service.Task {
+	if len(m.jobsModal.jobs) == 0 || m.jobsModal.jobIdx >= len(m.jobsModal.jobs) {
+		return nil
+	}
+	tasks := m.modalTasks(m.jobsModal.jobs[m.jobsModal.jobIdx].ID)
+	idx := m.jobsModal.taskIdx
+	if idx < 0 || idx >= len(tasks) {
+		return nil
+	}
+	return &tasks[idx]
 }

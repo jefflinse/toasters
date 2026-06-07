@@ -50,6 +50,16 @@ type gridState struct {
 	gridPage      int // current page index
 	gridCols      int // computed from terminal width
 	gridRows      int // computed from terminal height
+
+	// confirmKill gates the destructive "kill worker" action behind an
+	// Enter/Esc confirmation, mirroring the jobs modal's confirmCancel.
+	confirmKill          bool
+	confirmKillSessionID string
+
+	// filterActive is true while "/" capture is on; filterQuery narrows the
+	// displayed sessions by job id / role / status (case-insensitive substring).
+	filterActive bool
+	filterQuery  string
 }
 
 // promptModeState holds all state for the interactive prompt mode
@@ -304,6 +314,23 @@ type runtimeSlot struct {
 	systemPrompt   string         // the system prompt given to the LLM
 	initialMessage string         // the initial user message / task description
 	activities     []activityItem // recent tool-call activities; newest appended last, capped at 6
+
+	// Provider/model/cost metrics, copied from the progress snapshot's active
+	// sessions on each tick (session.* events don't carry them). Zero/empty
+	// until the first snapshot that includes this session.
+	model     string
+	provider  string
+	tokensIn  int64
+	tokensOut int64
+	costUSD   float64
+
+	// temperature/thinking are the sampling settings the session runs with.
+	// Set from a session.meta event (graph nodes) since they aren't carried
+	// in the active-session snapshot. hasTemp distinguishes "0.0 temperature"
+	// from "unknown".
+	temperature float64
+	hasTemp     bool
+	thinking    bool
 }
 
 // NewModel returns an initialized root model.
@@ -996,7 +1023,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.grid.gridCols, m.grid.gridRows = computeGridDimensions(m.width, m.height)
 		// Clamp page and focus cell to new bounds.
 		cellsPerPage := m.grid.gridCols * m.grid.gridRows
-		totalPages := (maxGridSlots + cellsPerPage - 1) / cellsPerPage
+		totalPages := m.gridTotalPages(cellsPerPage)
 		if m.grid.gridPage >= totalPages {
 			m.grid.gridPage = totalPages - 1
 		}
@@ -1258,6 +1285,18 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case SessionMetaMsg:
+		// May arrive before or after the slot is created (event ordering);
+		// only apply when the slot exists. Graph nodes are the primary emitter.
+		if slot, ok := m.runtimeSessions[msg.SessionID]; ok {
+			slot.model = msg.Model
+			slot.provider = msg.Provider
+			slot.temperature = msg.Temperature
+			slot.hasTemp = true
+			slot.thinking = msg.Thinking
+		}
+		return m, nil
+
 	case SessionReasoningMsg:
 		slot, ok := m.runtimeSessions[msg.SessionID]
 		if !ok {
@@ -1315,7 +1354,17 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		slot.endTime = time.Now()
 		m.markWorkerStreamDone(msg.SessionID)
 		m.updateViewportContent()
-		cmds = append(cmds, m.addToast("🍞 "+msg.WorkerName+" is done.", toastSuccess))
+		// Toast reflects the real terminal status rather than always "done":
+		// failures and cancellations read very differently to an operator
+		// watching a long autonomous run.
+		switch msg.Status {
+		case "failed":
+			cmds = append(cmds, m.addToast("✗ "+msg.WorkerName+" failed", toastError))
+		case "cancelled":
+			cmds = append(cmds, m.addToast("— "+msg.WorkerName+" cancelled", toastInfo))
+		default:
+			cmds = append(cmds, m.addToast("🍞 "+msg.WorkerName+" finished", toastSuccess))
+		}
 		// Note: agent completion is no longer reported back to the operator from
 		// the TUI. The server is responsible for routing task completion into the
 		// operator's event channel. The TUI is a viewer, not a router.
@@ -1353,6 +1402,24 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.markWorkerStreamDone(msg.SessionID)
 		m.recordGraphNodeDone(msg.JobID, msg.TaskID, msg.Node, msg.Status)
 		return m, nil
+
+	case GraphFailedMsg:
+		// The graph.failed payload carries a reason but not which node tripped
+		// it. Recover the node from recorded per-node state (recordGraphNodeDone
+		// marks the failing node PhaseFailed) so the toast can name it.
+		short := msg.TaskID
+		if len(short) > 8 {
+			short = short[:8]
+		}
+		line := "✗ " + short + " graph failed"
+		if node := m.failedGraphNode(msg.TaskID); node != "" {
+			line += " at " + node
+		}
+		if reason := firstLineOf(msg.Error); reason != "" {
+			line += ": " + truncateStr(reason, 80)
+		}
+		cmds = append(cmds, m.addToast(line, toastError))
+		return m, tea.Batch(cmds...)
 
 	case tea.MouseClickMsg:
 		// Click-to-focus: route clicks to the appropriate panel.
@@ -1693,6 +1760,22 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			dirty = true
 		}
+		// A failed task otherwise only nudges the job block's failed-count; the
+		// actual reason gets dropped. Surface it as a toast so the operator sees
+		// why a node gave up without digging through transcripts.
+		if msg.Event.Type == service.EventTypeTaskFailed {
+			if p, ok := msg.Event.Payload.(service.TaskFailedPayload); ok {
+				short := p.TaskID
+				if len(short) > 8 {
+					short = short[:8]
+				}
+				line := "✗ task " + short + " failed"
+				if reason := firstLineOf(p.Error); reason != "" {
+					line += ": " + truncateStr(reason, 80)
+				}
+				cmds = append(cmds, m.addToast(line, toastError))
+			}
+		}
 		if dirty {
 			m.updateViewportContent()
 			if !m.scroll.userScrolled {
@@ -1708,6 +1791,21 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.progress.activeSessions = msg.Sessions
 		m.progress.feedEntries = msg.FeedEntries
 		m.progress.mcpServers = msg.MCPServers
+		// Enrich live slots with model/provider/cost the snapshot carries but
+		// the session.* event stream drops, so worker cards can show them.
+		for _, sess := range msg.Sessions {
+			slot, ok := m.runtimeSessions[sess.ID]
+			if !ok {
+				continue
+			}
+			slot.model = sess.Model
+			slot.provider = sess.Provider
+			slot.tokensIn = sess.TokensIn
+			slot.tokensOut = sess.TokensOut
+			if sess.CostUSD != nil {
+				slot.costUSD = *sess.CostUSD
+			}
+		}
 		// Keep m.jobs in sync so the Jobs panel (which reads m.jobs via
 		// displayJobs) reflects the latest polled state.
 		m.jobs = msg.Jobs

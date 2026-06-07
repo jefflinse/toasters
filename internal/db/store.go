@@ -21,6 +21,10 @@ type Store interface {
 	CompleteTask(ctx context.Context, id string, status TaskStatus, summary, recommendations string) error
 	AssignTaskToGraph(ctx context.Context, id string, graphID string) error
 	PreAssignTaskGraph(ctx context.Context, id string, graphID string) error
+	// RetryTask re-dispatches a failed task: it transitions the task from
+	// failed back to in_progress, re-sets the graph_id, and clears the stale
+	// result fields. Only tasks currently in failed status are affected.
+	RetryTask(ctx context.Context, id string, graphID string) error
 	AddTaskDependency(ctx context.Context, taskID, dependsOn string) error
 	GetReadyTasks(ctx context.Context, jobID string) ([]*Task, error)
 

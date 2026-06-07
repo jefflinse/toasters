@@ -350,6 +350,41 @@ func (s *LocalService) assignGraphToParent(ctx context.Context, parent *db.Task,
 		"task_id", parent.ID, "graph_id", graphID, "reason", reason)
 }
 
+// redispatchTaskGraph builds a TaskRequest for an already-graph-bound task and
+// runs it on the graph executor in a detached, service-lifetime-scoped
+// goroutine. Unlike assignGraphToParent it does not touch task status — the
+// caller transitions the task into a runnable state first (job retry resets
+// failed→in_progress via Store.RetryTask). Serial-execution gating is
+// intentionally skipped: a retry is an explicit user override of a terminal
+// task and should start immediately.
+func (s *LocalService) redispatchTaskGraph(ctx context.Context, task *db.Task, job *db.Job, graphID string) {
+	jobTasks, err := s.cfg.Store.ListTasksForJob(ctx, task.JobID)
+	if err != nil {
+		// Non-fatal: dispatch with no sibling context rather than abort.
+		slog.Warn("retry: failed to list sibling tasks", "task_id", task.ID, "error", err)
+	}
+	req := graphexec.TaskRequest{
+		JobID:          task.JobID,
+		JobTitle:       job.Title,
+		JobDescription: job.Description,
+		TaskID:         task.ID,
+		TaskTitle:      task.Title,
+		GraphID:        graphID,
+		Siblings:       graphexec.FormatSiblingTitles(graphexec.SiblingTitles(jobTasks, task.ID)),
+		WorkspaceDir:   job.WorkspaceDir,
+		ProviderName:   s.cfg.DefaultProvider,
+		Model:          s.cfg.DefaultModel,
+	}
+	go func() {
+		if err := s.cfg.GraphExecutor.ExecuteTask(s.ctx, req); err != nil {
+			slog.Error("retry dispatch failed",
+				"task_id", req.TaskID, "graph_id", req.GraphID, "error", err)
+		}
+	}()
+	s.BroadcastTaskAssigned(task.ID, task.JobID, graphID, task.Title)
+	slog.Info("task retry dispatched", "task_id", task.ID, "job_id", task.JobID, "graph_id", graphID)
+}
+
 // replaceParentWithSubtasks marks the parent task as completed (split)
 // and creates N child tasks, each inheriting the parent's incremented
 // decompose_depth so runaway loops are capped.

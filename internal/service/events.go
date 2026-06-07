@@ -104,6 +104,13 @@ const (
 	// Payload: SessionPromptPayload. Carries SessionID.
 	EventTypeSessionPrompt EventType = "session.prompt"
 
+	// EventTypeSessionMeta carries the resolved model/provider/temperature/
+	// thinking for a session. Graph nodes emit it (their persisted session row
+	// is keyed by a UUID, not the "graph:<task>:<node>" slot id), so the grid
+	// card can show what model and sampling settings a node is running with.
+	// Payload: SessionMetaPayload. Carries SessionID.
+	EventTypeSessionMeta EventType = "session.meta"
+
 	// EventTypeDefinitionsReloaded is sent when definition files change and are
 	// reloaded by the fsnotify watcher. The TUI should refresh its local copies
 	// of skills, workers, and teams. Payload: nil (no payload needed).
@@ -416,6 +423,15 @@ type SessionDonePayload struct {
 	TaskID     string
 	Status     string // "completed", "failed", "cancelled"
 	FinalText  string // last text output from the session (may be empty)
+}
+
+// SessionMetaPayload is the payload for EventTypeSessionMeta events.
+type SessionMetaPayload struct {
+	SessionID   string
+	Model       string
+	Provider    string
+	Temperature float64
+	Thinking    bool
 }
 
 // SessionPromptPayload is the payload for EventTypeSessionPrompt events.

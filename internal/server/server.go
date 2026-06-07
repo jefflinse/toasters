@@ -175,6 +175,9 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/jobs/{id}", s.getJob)
 	mux.HandleFunc("POST /api/v1/jobs/{id}/cancel", s.cancelJob)
 
+	// Tasks
+	mux.HandleFunc("POST /api/v1/tasks/{id}/retry", s.retryTask)
+
 	// Sessions
 	mux.HandleFunc("GET /api/v1/sessions", s.listSessions)
 	mux.HandleFunc("GET /api/v1/sessions/{id}", s.getSession)

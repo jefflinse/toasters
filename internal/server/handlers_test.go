@@ -73,7 +73,6 @@ func (m *mockOperatorService) History(_ context.Context) ([]service.ChatEntry, e
 	return nil, nil
 }
 
-
 type mockDefinitionService struct{}
 type mockJobService struct{}
 type mockSessionService struct{}
@@ -109,7 +108,8 @@ func (m *mockJobService) ListAll(_ context.Context) ([]service.Job, error) {
 func (m *mockJobService) Get(_ context.Context, _ string) (service.JobDetail, error) {
 	return service.JobDetail{}, nil
 }
-func (m *mockJobService) Cancel(_ context.Context, _ string) error { return nil }
+func (m *mockJobService) Cancel(_ context.Context, _ string) error    { return nil }
+func (m *mockJobService) RetryTask(_ context.Context, _ string) error { return nil }
 
 func (m *mockSessionService) List(_ context.Context) ([]service.SessionSnapshot, error) {
 	return nil, nil

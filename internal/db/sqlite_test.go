@@ -1628,3 +1628,44 @@ func TestMigration003_TaskNewColumns(t *testing.T) {
 	checkColumn("tasks", "result_summary")
 	checkColumn("tasks", "recommendations")
 }
+
+func TestRetryTask(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+
+	if err := store.CreateJob(ctx, &Job{ID: "job-r", Title: "Retry test", Type: "test", Status: JobStatusActive}); err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	task := &Task{ID: "task-r", JobID: "job-r", Title: "Flaky", Status: TaskStatusFailed, GraphID: "old-graph", Summary: "boom", SortOrder: 1}
+	if err := store.CreateTask(ctx, task); err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+
+	// Retry transitions failed -> in_progress, re-sets graph, clears summary.
+	if err := store.RetryTask(ctx, "task-r", "new-graph"); err != nil {
+		t.Fatalf("RetryTask: %v", err)
+	}
+	got, err := store.GetTask(ctx, "task-r")
+	if err != nil {
+		t.Fatalf("GetTask: %v", err)
+	}
+	if got.Status != TaskStatusInProgress {
+		t.Errorf("Status = %q, want %q", got.Status, TaskStatusInProgress)
+	}
+	if got.GraphID != "new-graph" {
+		t.Errorf("GraphID = %q, want %q", got.GraphID, "new-graph")
+	}
+	if got.Summary != "" {
+		t.Errorf("Summary = %q, want empty", got.Summary)
+	}
+
+	// Retrying a non-failed task is a no-op error (no rows affected).
+	if err := store.RetryTask(ctx, "task-r", "x"); err == nil {
+		t.Error("expected error retrying in-progress task, got nil")
+	}
+
+	// Retrying a missing task errors.
+	if err := store.RetryTask(ctx, "nope", "x"); err == nil {
+		t.Error("expected error retrying missing task, got nil")
+	}
+}

@@ -35,6 +35,12 @@ type EventSink interface {
 	// to populate the prompt-viewer modal for the existing slot created
 	// by graph.node_started.
 	BroadcastSessionPrompt(sessionID, systemPrompt, initialMessage string)
+	// BroadcastSessionMeta carries the resolved model, provider, sampling
+	// temperature, and thinking flag for a node session. Graph nodes don't
+	// surface these through the active-session snapshot (their DB row is keyed
+	// by a UUID, not the "graph:<task>:<node>" slot id), so the executor emits
+	// them explicitly once per node for the grid card to display.
+	BroadcastSessionMeta(sessionID, model, provider string, temperature float64, thinking bool)
 	// BroadcastSessionText carries streamed LLM text from a graph node. The
 	// SessionID convention is "graph:<TaskID>:<Node>" so the TUI's existing
 	// runtimeSlot pipeline picks it up without a special case.

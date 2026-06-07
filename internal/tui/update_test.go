@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
@@ -441,6 +442,13 @@ func TestUpdateGrid_PageNavigation(t *testing.T) {
 			m.grid.showGrid = true
 			m.grid.gridCols = 2
 			m.grid.gridRows = 2
+			// Seed 16 sessions → 4 pages at 4 cells/page, so pages 0..3 exist
+			// and page 3 is genuinely the last (the total-pages count is now
+			// derived from the live session count, not a fixed ceiling).
+			for i := 0; i < 16; i++ {
+				id := fmt.Sprintf("sess-%02d", i)
+				m.runtimeSessions[id] = &runtimeSlot{sessionID: id, status: "active"}
+			}
 			m.grid.gridPage = tt.startPage
 			m.grid.gridFocusCell = tt.startCell
 
@@ -455,6 +463,80 @@ func TestUpdateGrid_PageNavigation(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestUpdateGrid_Filter(t *testing.T) {
+	t.Parallel()
+
+	newGrid := func() *Model {
+		m := newMinimalModel(t)
+		m.grid.showGrid = true
+		m.grid.gridCols = 2
+		m.grid.gridRows = 2
+		m.runtimeSessions["s1"] = &runtimeSlot{sessionID: "s1", jobID: "alpha", agentName: "coder", status: "active"}
+		m.runtimeSessions["s2"] = &runtimeSlot{sessionID: "s2", jobID: "beta", agentName: "tester", status: "active"}
+		m.runtimeSessions["s3"] = &runtimeSlot{sessionID: "s3", jobID: "alpha", agentName: "reviewer", status: "completed"}
+		return &m
+	}
+
+	t.Run("/ enters filter capture", func(t *testing.T) {
+		t.Parallel()
+		m := newGrid()
+		res, _ := m.updateGrid(keyPress('/'))
+		if !res.(*Model).grid.filterActive {
+			t.Fatal("filterActive should be true after '/'")
+		}
+	})
+
+	t.Run("typing narrows by job id and resets page", func(t *testing.T) {
+		t.Parallel()
+		m := newGrid()
+		m.grid.gridPage = 1
+		m.grid.filterActive = true
+		for _, r := range "beta" {
+			res, _ := m.updateGrid(keyPress(r))
+			m = res.(*Model)
+		}
+		if got := m.filteredGridSessions(); len(got) != 1 || got[0].jobID != "beta" {
+			t.Fatalf("filtered = %d sessions, want 1 (beta)", len(got))
+		}
+		if m.grid.gridPage != 0 {
+			t.Errorf("gridPage = %d, want 0 (reset on query change)", m.grid.gridPage)
+		}
+	})
+
+	t.Run("esc clears the filter", func(t *testing.T) {
+		t.Parallel()
+		m := newGrid()
+		m.grid.filterActive = true
+		m.grid.filterQuery = "beta"
+		res, _ := m.updateGrid(specialKey(tea.KeyEscape))
+		got := res.(*Model)
+		if got.grid.filterActive || got.grid.filterQuery != "" {
+			t.Error("esc should clear filter state")
+		}
+		if len(got.filteredGridSessions()) != 3 {
+			t.Errorf("after clear, expected all 3 sessions")
+		}
+	})
+
+	t.Run("enter applies and exits capture", func(t *testing.T) {
+		t.Parallel()
+		m := newGrid()
+		m.grid.filterActive = true
+		m.grid.filterQuery = "alpha"
+		res, _ := m.updateGrid(specialKey(tea.KeyEnter))
+		got := res.(*Model)
+		if got.grid.filterActive {
+			t.Error("enter should exit capture")
+		}
+		if got.grid.filterQuery != "alpha" {
+			t.Error("enter should keep the applied query")
+		}
+		if len(got.filteredGridSessions()) != 2 {
+			t.Errorf("expected 2 alpha sessions, got %d", len(got.filteredGridSessions()))
+		}
+	})
 }
 
 func TestUpdateGrid_EnterWithNoSession(t *testing.T) {
@@ -912,5 +994,97 @@ func TestUpdateCmdPopup_UnhandledKeyFallsThrough(t *testing.T) {
 	}
 	if cmd != nil {
 		t.Error("expected nil cmd for unhandled key")
+	}
+}
+
+func TestUpdateGrid_KillConfirmation(t *testing.T) {
+	t.Parallel()
+
+	setup := func(status, sessionID string) *Model {
+		m := newMinimalModel(t)
+		m.grid.showGrid = true
+		m.grid.gridCols = 1
+		m.grid.gridRows = 1
+		m.grid.gridFocusCell = 0
+		m.runtimeSessions[sessionID] = &runtimeSlot{
+			sessionID: sessionID,
+			agentName: "builder",
+			status:    status,
+		}
+		return &m
+	}
+
+	t.Run("x arms confirmation for an active worker", func(t *testing.T) {
+		t.Parallel()
+		m := setup("active", "sess-1")
+		res, _ := m.updateGrid(keyPress('x'))
+		got := res.(*Model)
+		if !got.grid.confirmKill {
+			t.Fatal("confirmKill should be set")
+		}
+		if got.grid.confirmKillSessionID != "sess-1" {
+			t.Errorf("confirmKillSessionID = %q, want sess-1", got.grid.confirmKillSessionID)
+		}
+	})
+
+	t.Run("x is a no-op for a completed worker", func(t *testing.T) {
+		t.Parallel()
+		m := setup("completed", "sess-2")
+		res, _ := m.updateGrid(keyPress('x'))
+		if res.(*Model).grid.confirmKill {
+			t.Error("confirmKill should not arm for a completed worker")
+		}
+	})
+
+	t.Run("x is a no-op for a graph pseudo-session", func(t *testing.T) {
+		t.Parallel()
+		m := setup("active", "graph:task-1:plan")
+		res, _ := m.updateGrid(keyPress('x'))
+		if res.(*Model).grid.confirmKill {
+			t.Error("confirmKill should not arm for a graph node")
+		}
+	})
+
+	t.Run("esc clears a pending confirmation without closing the grid", func(t *testing.T) {
+		t.Parallel()
+		m := setup("active", "sess-3")
+		m.grid.confirmKill = true
+		m.grid.confirmKillSessionID = "sess-3"
+		res, _ := m.updateGrid(specialKey(tea.KeyEscape))
+		got := res.(*Model)
+		if got.grid.confirmKill {
+			t.Error("confirmKill should be cleared")
+		}
+		if !got.grid.showGrid {
+			t.Error("grid should stay open when only dismissing the confirmation")
+		}
+	})
+}
+
+func TestSessionMetaMsg_UpdatesSlot(t *testing.T) {
+	t.Parallel()
+
+	m := newMinimalModel(t)
+	m.runtimeSessions["graph:t1:plan"] = &runtimeSlot{sessionID: "graph:t1:plan", status: "active"}
+
+	res, _ := m.Update(SessionMetaMsg{
+		SessionID:   "graph:t1:plan",
+		Model:       "qwen3",
+		Provider:    "lmstudio",
+		Temperature: 0.7,
+		Thinking:    true,
+	})
+	slot := res.(*Model).runtimeSessions["graph:t1:plan"]
+	if slot.model != "qwen3" || slot.provider != "lmstudio" {
+		t.Errorf("model/provider = %q/%q, want qwen3/lmstudio", slot.model, slot.provider)
+	}
+	if !slot.hasTemp || slot.temperature != 0.7 || !slot.thinking {
+		t.Errorf("temp/thinking = %v/%v/%v, want set/0.7/true", slot.hasTemp, slot.temperature, slot.thinking)
+	}
+
+	// Unknown session is a no-op (no panic, no slot created).
+	res2, _ := m.Update(SessionMetaMsg{SessionID: "nope", Model: "x"})
+	if _, ok := res2.(*Model).runtimeSessions["nope"]; ok {
+		t.Error("meta for unknown session should not create a slot")
 	}
 }

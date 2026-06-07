@@ -142,6 +142,23 @@ func hasEdgeFrom(edges []dagmap.Edge, from string) bool {
 	return false
 }
 
+// failedGraphNode returns the name of the node recorded as PhaseFailed for a
+// task's graph, or "" if none is recorded. graph.failed events don't name the
+// offending node, but recordGraphNodeDone marks it from the per-node status, so
+// the failure trace can be reconstructed from the cached graph state.
+func (m *Model) failedGraphNode(taskID string) string {
+	gts, ok := m.graphTasks[taskID]
+	if !ok {
+		return ""
+	}
+	for node, ns := range gts.nodes {
+		if ns.Phase == dagmap.PhaseFailed {
+			return node
+		}
+	}
+	return ""
+}
+
 // recordGraphNodeStarted marks a node as running inside its task's graph
 // state. Creates the entry on first sight. Bumps ExecCount each time the
 // node enters so cycles are visible.

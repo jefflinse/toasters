@@ -972,6 +972,25 @@ func (s *LocalService) BroadcastSessionPrompt(sessionID, systemPrompt, initialMe
 	})
 }
 
+// BroadcastSessionMeta broadcasts a session.meta event carrying the model,
+// provider, temperature, and thinking flag a node session is running with.
+func (s *LocalService) BroadcastSessionMeta(sessionID, model, provider string, temperature float64, thinking bool) {
+	if sessionID == "" {
+		return
+	}
+	s.broadcast(Event{
+		Type:      EventTypeSessionMeta,
+		SessionID: sessionID,
+		Payload: SessionMetaPayload{
+			SessionID:   sessionID,
+			Model:       model,
+			Provider:    provider,
+			Temperature: temperature,
+			Thinking:    thinking,
+		},
+	})
+}
+
 // BroadcastSessionText broadcasts a session.text event for an arbitrary
 // session id. Used by graph nodes (which synthesize session ids of the form
 // "graph:<TaskID>:<Node>") to stream LLM text through the same pipeline as
@@ -1116,6 +1135,19 @@ func (s *LocalService) BroadcastTaskCompleted(jobID, taskID, graphID, summary st
 // BroadcastTaskFailed signals task failure to the operator's event loop so it
 // can consult the blocker-handler.
 func (s *LocalService) BroadcastTaskFailed(jobID, taskID, graphID, errMsg string) {
+	// A failed decomposition bootstrap produces no real tasks, so the job would
+	// otherwise strand at "running · 0/0 tasks" forever (there's nothing to
+	// retry). Mark it failed so the Jobs panel reflects reality; the operator is
+	// still notified below so it can surface the failure and offer to recreate.
+	if isDecompositionGraph(graphID) && s.cfg.Store != nil {
+		ctx, cancel := context.WithTimeout(s.ctx, 5*time.Second)
+		if err := s.cfg.Store.UpdateJobStatus(ctx, jobID, db.JobStatusFailed); err != nil {
+			slog.Error("failed to mark job failed after decomposition failure",
+				"job_id", jobID, "graph_id", graphID, "error", err)
+		}
+		cancel()
+	}
+
 	op := s.currentOperator()
 	if op == nil {
 		slog.Warn("graph task failed but operator unavailable",
@@ -1880,6 +1912,40 @@ func (s *localJobService) Cancel(ctx context.Context, id string) error {
 	if err := s.svc.cfg.Store.UpdateJobStatus(ctx, id, db.JobStatusCancelled); err != nil {
 		return fmt.Errorf("cancelling job %s: %w", id, err)
 	}
+	return nil
+}
+
+// RetryTask re-dispatches a failed, graph-bound task. It resets the task to
+// in_progress (clearing stale result fields) and re-runs its bound graph on the
+// executor, deterministically and without involving the operator LLM.
+func (s *localJobService) RetryTask(ctx context.Context, taskID string) error {
+	if s.svc.cfg.Store == nil {
+		return fmt.Errorf("store not configured")
+	}
+	if s.svc.cfg.GraphExecutor == nil {
+		return fmt.Errorf("no graph executor configured")
+	}
+	task, err := s.svc.cfg.Store.GetTask(ctx, taskID)
+	if err != nil {
+		if errors.Is(err, db.ErrNotFound) {
+			return fmt.Errorf("getting task %s: %w", taskID, ErrNotFound)
+		}
+		return fmt.Errorf("getting task %s: %w", taskID, err)
+	}
+	if task.Status != db.TaskStatusFailed {
+		return fmt.Errorf("task %s cannot be retried (status: %s)", taskID, task.Status)
+	}
+	if task.GraphID == "" {
+		return fmt.Errorf("task %s has no bound graph to retry", taskID)
+	}
+	job, err := s.svc.cfg.Store.GetJob(ctx, task.JobID)
+	if err != nil {
+		return fmt.Errorf("getting job for task %s: %w", taskID, err)
+	}
+	if err := s.svc.cfg.Store.RetryTask(ctx, taskID, task.GraphID); err != nil {
+		return fmt.Errorf("resetting task %s for retry: %w", taskID, err)
+	}
+	s.svc.redispatchTaskGraph(ctx, task, job, task.GraphID)
 	return nil
 }
 

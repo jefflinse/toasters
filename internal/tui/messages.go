@@ -17,6 +17,7 @@ const (
 	toastInfo toastLevel = iota
 	toastSuccess
 	toastWarning
+	toastError
 )
 
 type toast struct {
@@ -147,6 +148,18 @@ type SessionPromptMsg struct {
 	InitialMessage string
 }
 
+// SessionMetaMsg carries a session's resolved model/provider/temperature/
+// thinking. Produced from a session.meta event; graph-node slots use it to
+// show what model and sampling settings they're running with, which the
+// active-session snapshot doesn't carry for them.
+type SessionMetaMsg struct {
+	SessionID   string
+	Model       string
+	Provider    string
+	Temperature float64
+	Thinking    bool
+}
+
 // SessionReasoningMsg carries a chunk of streamed reasoning (chain-of-
 // thought) from an agent session. Produced by the event consumer in
 // response to a session.reasoning event.
@@ -205,6 +218,16 @@ type GraphNodeDoneMsg struct {
 	JobID     string
 	TaskID    string
 	Status    string
+}
+
+// GraphFailedMsg is sent when a task's graph execution fails outright.
+// Produced by the event consumer from a graph.failed event. The handler
+// surfaces the failure reason and, by inspecting recorded node state, which
+// node it failed at — context the operator-advance path otherwise swallows.
+type GraphFailedMsg struct {
+	JobID  string
+	TaskID string
+	Error  string
 }
 
 // JobsReloadedMsg is sent when jobs are reloaded (e.g. from SQLite polling).

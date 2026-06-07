@@ -92,6 +92,7 @@ func (s *noopStore) CompleteTask(_ context.Context, _ string, _ db.TaskStatus, _
 }
 func (s *noopStore) AssignTaskToGraph(_ context.Context, _, _ string) error  { return nil }
 func (s *noopStore) PreAssignTaskGraph(_ context.Context, _, _ string) error { return nil }
+func (s *noopStore) RetryTask(_ context.Context, _, _ string) error          { return nil }
 func (s *noopStore) AddTaskDependency(_ context.Context, _, _ string) error  { return nil }
 func (s *noopStore) GetReadyTasks(_ context.Context, _ string) ([]*db.Task, error) {
 	return nil, nil
@@ -100,10 +101,10 @@ func (s *noopStore) ReportProgress(_ context.Context, _ *db.ProgressReport) erro
 func (s *noopStore) GetRecentProgress(_ context.Context, _ string, _ int) ([]*db.ProgressReport, error) {
 	return nil, nil
 }
-func (s *noopStore) UpsertSkill(_ context.Context, _ *db.Skill) error          { return nil }
-func (s *noopStore) GetSkill(_ context.Context, _ string) (*db.Skill, error)   { return nil, nil }
-func (s *noopStore) ListSkills(_ context.Context) ([]*db.Skill, error)         { return nil, nil }
-func (s *noopStore) DeleteAllSkills(_ context.Context) error                   { return nil }
+func (s *noopStore) UpsertSkill(_ context.Context, _ *db.Skill) error         { return nil }
+func (s *noopStore) GetSkill(_ context.Context, _ string) (*db.Skill, error)  { return nil, nil }
+func (s *noopStore) ListSkills(_ context.Context) ([]*db.Skill, error)        { return nil, nil }
+func (s *noopStore) DeleteAllSkills(_ context.Context) error                  { return nil }
 func (s *noopStore) CreateFeedEntry(_ context.Context, _ *db.FeedEntry) error { return nil }
 func (s *noopStore) ListFeedEntries(_ context.Context, _ string, _ int) ([]*db.FeedEntry, error) {
 	return nil, nil
