@@ -291,20 +291,39 @@ func (m *Model) renderWorkerStreamBlock(snap *service.WorkerStreamSnapshot, widt
 		status = lipgloss.NewStyle().Foreground(ColorStreaming).Render("● " + formatStreamDuration(snap.StartedAt, time.Now()))
 	}
 
-	// Two-line header: job title (bold) on top; task · node · status dim beneath.
-	line1 := lipgloss.NewStyle().Bold(true).Foreground(ColorAccent).Render("🍞 " + truncateStr(jobTitle, innerW-3))
+	// Two-line header. The bold headline is the task — the most descriptive,
+	// least-repeated label — with the node id beside it (the per-branch
+	// distinguisher under fan-out). The job title is identical on every card,
+	// so it's demoted to dim context alongside the status on line 2.
+	headline := taskTitle
+	if headline == "" {
+		headline = node // graphless or odd cases: fall back to the node id
+	}
+	nodeSuffix := ""
+	if taskTitle != "" && node != "" {
+		nodeSuffix = node
+	}
+	avail := innerW - 3 // room for the "🍞 " icon
+	if nodeSuffix != "" {
+		avail -= len(nodeSuffix) + 3 // " · " + node
+	}
+	if avail < 10 {
+		avail = 10
+	}
+	line1 := lipgloss.NewStyle().Bold(true).Foreground(ColorAccent).Render("🍞 " + truncateStr(headline, avail))
+	if nodeSuffix != "" {
+		nodeStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("250"))
+		line1 += DimStyle.Render(" · ") + nodeStyle.Render(nodeSuffix)
+	}
 	if selected {
 		line1 += "  " + DimStyle.Render("[enter to view]")
 	}
-	// The task title gets a brighter foreground than the surrounding metadata
-	// so it stands out from the dim tool-call detail lines, without competing
-	// with the bold job title above or the bright body text below.
-	taskStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("250"))
-	line2 := DimStyle.Render("   ")
-	if taskTitle != "" {
-		line2 += taskStyle.Render(truncateStr(taskTitle, innerW/2)) + DimStyle.Render(" · ")
+	// Line 2: status, then the job title in dim as traceable context (it repeats
+	// across every card, so it stays quiet). Indented to align under the icon.
+	line2 := DimStyle.Render("   ") + status
+	if jobTitle != "" {
+		line2 += DimStyle.Render(" · " + truncateStr(jobTitle, innerW/2))
 	}
-	line2 += DimStyle.Render(node+" · ") + status
 
 	// Indent the body to the same column as the title/task text (past the "🍞 "
 	// icon — 3 cells), and render it that much narrower so it doesn't overflow.
