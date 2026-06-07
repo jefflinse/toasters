@@ -44,62 +44,152 @@ func RoleNode(cfg TemplateConfig, role *prompt.Role, nodeID string, slots map[st
 			exec = cfg.ToolExecutorFor(state.WorkspaceDir)
 		}
 		tools := toolsForRole(exec, role)
-		initialMessage := buildInitialMessage(state)
-
-		sess := openGraphSession(ctx, cfg.Store, state, effectiveNodeID(ctx, nodeID), sysPrompt, toolNamesOf(tools), cfg)
-
-		if nc := NodeContextFromContext(ctx); nc != nil && nc.Sink != nil {
-			nc.Sink.BroadcastSessionPrompt(nc.SessionID, sysPrompt, initialMessage)
-		}
-
-		// onEvent fans out: forward to the TUI sink AND accumulate reasoning
-		// locally so it can be persisted as its own session_messages row.
-		// Reasoning is not part of agent.Result.History by design, so we
-		// capture it here or it's lost.
-		baseOnEvent := onEventSink(ctx)
-		var reasoningBuf strings.Builder
-		onEvent := func(ev agent.Event) {
-			if ev.Kind == agent.EventKindReasoning {
-				reasoningBuf.WriteString(ev.Text)
-			}
-			if baseOnEvent != nil {
-				baseOnEvent(ev)
-			}
-		}
-
 		thinkingEnabled, temperature := effectiveWorkerDefaults(cfg, role)
 		tunedProv := newTunedProvider(cfg.Provider, thinkingEnabled, temperature)
+		baseOnEvent := onEventSink(ctx)
 
-		res, runErr := agent.Run(ctx, agent.Config[json.RawMessage]{
-			Provider:     tunedProv,
-			Model:        cfg.Model,
-			System:       sysPrompt,
-			Messages:     []provider.Message{{Role: "user", Content: initialMessage}},
-			Tools:        tools,
-			OutputSchema: schemaRaw,
-			MaxTurns:     role.MaxTurns,
-			OnEvent:      onEvent,
-		})
-		closeGraphSession(ctx, cfg.Store, sess, res, runErr, reasoningBuf.String())
+		messages := []provider.Message{{Role: "user", Content: buildInitialMessage(state)}}
 
-		if runErr != nil {
-			if tail := lastAssistantText(res.History); tail != "" {
-				slog.Warn("role node failed without a terminal tool call",
-					"role", role.Name, "node", nodeID, "error", runErr, "tail_chars", len(tail))
+		// A node terminates with StatusNeedsContext when it calls request_context
+		// because it lacks information to proceed. Rather than failing the task —
+		// which strands the request where the user never sees it — surface the
+		// requested items through the same HITL path as ask_user, then re-run the
+		// node with the supplied context appended. maxContextRounds bounds the
+		// back-and-forth so a confused model can't loop forever.
+		const maxContextRounds = 3
+		for round := 0; ; round++ {
+			sess := openGraphSession(ctx, cfg.Store, state, effectiveNodeID(ctx, nodeID), sysPrompt, toolNamesOf(tools), cfg)
+
+			// The TUI card is keyed by the stable NodeContext session id, so it
+			// persists across re-runs; only announce it once.
+			if round == 0 {
+				if nc := NodeContextFromContext(ctx); nc != nil && nc.Sink != nil {
+					nc.Sink.BroadcastSessionPrompt(nc.SessionID, sysPrompt, messages[0].Content)
+				}
 			}
-			return state, fmt.Errorf("role %q: %w", role.Name, runErr)
-		}
 
-		switch res.Status {
-		case agent.StatusCompleted:
-			return applyOutput(ctx, state, nodeID, res.Output)
-		case agent.StatusNeedsContext:
-			return state, fmt.Errorf("role %q: node requested context: %+v", role.Name, res.Required)
-		case agent.StatusError:
-			return state, fmt.Errorf("role %q: node reported error: %s", role.Name, res.Error.Error())
+			// onEvent fans out: forward to the TUI sink AND accumulate reasoning
+			// locally so it can be persisted as its own session_messages row.
+			// Reasoning is not part of agent.Result.History by design, so we
+			// capture it here or it's lost.
+			var reasoningBuf strings.Builder
+			onEvent := func(ev agent.Event) {
+				if ev.Kind == agent.EventKindReasoning {
+					reasoningBuf.WriteString(ev.Text)
+				}
+				if baseOnEvent != nil {
+					baseOnEvent(ev)
+				}
+			}
+
+			res, runErr := agent.Run(ctx, agent.Config[json.RawMessage]{
+				Provider:     tunedProv,
+				Model:        cfg.Model,
+				System:       sysPrompt,
+				Messages:     messages,
+				Tools:        tools,
+				OutputSchema: schemaRaw,
+				MaxTurns:     role.MaxTurns,
+				OnEvent:      onEvent,
+			})
+			closeGraphSession(ctx, cfg.Store, sess, res, runErr, reasoningBuf.String())
+
+			if runErr != nil {
+				if tail := lastAssistantText(res.History); tail != "" {
+					slog.Warn("role node failed without a terminal tool call",
+						"role", role.Name, "node", nodeID, "error", runErr, "tail_chars", len(tail))
+				}
+				return state, fmt.Errorf("role %q: %w", role.Name, runErr)
+			}
+
+			switch res.Status {
+			case agent.StatusCompleted:
+				return applyOutput(ctx, state, nodeID, res.Output)
+			case agent.StatusNeedsContext:
+				if round >= maxContextRounds {
+					return state, fmt.Errorf("role %q: node still needs context after %d rounds: %s",
+						role.Name, maxContextRounds, formatContextNeeds(res.Required))
+				}
+				answer, err := requestContextViaHITL(ctx, res.Required)
+				if err != nil {
+					// No HITL broker, or the user dismissed the prompt: fail the
+					// task with the request visible rather than looping silently.
+					return state, fmt.Errorf("role %q: node requested context that could not be supplied (%s): %w",
+						role.Name, formatContextNeeds(res.Required), err)
+				}
+				// mycelium appends the request_context tool-call assistant message
+				// to History before returning; re-running with it would leave an
+				// unanswered tool call. Drop it, keep the prior exploration, and
+				// feed the supplied context as the next user turn.
+				messages = append(stripTrailingToolCall(res.History),
+					provider.Message{Role: "user", Content: "Here is the additional context you requested:\n\n" + answer})
+				slog.Info("graph node re-running with supplied context",
+					"role", role.Name, "node", nodeID, "round", round+1)
+				continue
+			case agent.StatusError:
+				return state, fmt.Errorf("role %q: node reported error: %s", role.Name, res.Error.Error())
+			}
+			return state, fmt.Errorf("role %q: unexpected terminal status %q", role.Name, res.Status)
 		}
-		return state, fmt.Errorf("role %q: unexpected terminal status %q", role.Name, res.Status)
 	}
+}
+
+// requestContextViaHITL surfaces a node's request_context items to the user
+// through the same interrupt path as ask_user and returns the combined answer.
+// Each ContextNeed becomes one question; the executor's interrupt handler
+// presents them as a single form and returns one combined string.
+func requestContextViaHITL(ctx context.Context, needs []agent.ContextNeed) (string, error) {
+	questions := make([]PromptQuestion, 0, len(needs))
+	for _, n := range needs {
+		q := strings.TrimSpace(n.Description)
+		if q == "" {
+			q = fmt.Sprintf("Please provide: %s", n.Key)
+		}
+		questions = append(questions, PromptQuestion{Question: q})
+	}
+	if len(questions) == 0 {
+		questions = []PromptQuestion{{Question: "The task needs more information to proceed. What should it know?"}}
+	}
+	resp, err := rhizome.Interrupt(ctx, rhizome.InterruptRequest{
+		Kind:    InterruptKindAskUser,
+		Payload: AskUserPayload{Questions: questions},
+	})
+	if err != nil {
+		return "", err
+	}
+	text, _ := resp.Value.(string)
+	if strings.TrimSpace(text) == "" {
+		return "", fmt.Errorf("empty response")
+	}
+	return text, nil
+}
+
+// formatContextNeeds renders requested context items for an error message.
+func formatContextNeeds(needs []agent.ContextNeed) string {
+	if len(needs) == 0 {
+		return "(unspecified)"
+	}
+	parts := make([]string, 0, len(needs))
+	for _, n := range needs {
+		if n.Description != "" {
+			parts = append(parts, fmt.Sprintf("%s (%s)", n.Key, n.Description))
+		} else {
+			parts = append(parts, n.Key)
+		}
+	}
+	return strings.Join(parts, "; ")
+}
+
+// stripTrailingToolCall drops a final assistant message that carries tool
+// calls with no following tool results — the shape mycelium leaves behind
+// when a node terminates via request_context. Removing it yields a transcript
+// that ends cleanly (on a tool result or user turn) so the re-run's provider
+// call has no dangling tool call.
+func stripTrailingToolCall(history []provider.Message) []provider.Message {
+	if n := len(history); n > 0 && history[n-1].Role == "assistant" && len(history[n-1].ToolCalls) > 0 {
+		return history[:n-1]
+	}
+	return history
 }
 
 // applyOutput folds a node's terminal JSON output into TaskState. The raw
@@ -332,6 +422,21 @@ func isReadOnlyAccess(access string) bool {
 	return access == "" || access == "readonly" || access == "read-only"
 }
 
+// accessWritesWorkspace reports whether an access level grants file-mutating
+// tools (write_file/edit_file). Only "write" and "all" do; "test" runs and
+// reads (shell + read tools, see TestTools) but cannot edit source. This is
+// what fan-out keys off to decide isolation: write branches need a private
+// workspace and winner-promotion, while test/read-only branches share the
+// workspace and have their outputs aggregated.
+func accessWritesWorkspace(access string) bool {
+	switch normalizeAccess(access) {
+	case "write", "all":
+		return true
+	default:
+		return false
+	}
+}
+
 // onEventSink returns an agent OnEvent handler that broadcasts streaming
 // text, tool calls, and tool results to the EventSink attached to the
 // current NodeContext. No-op when no sink is configured — tests and
@@ -346,6 +451,11 @@ func onEventSink(ctx context.Context) func(agent.Event) {
 	if nc == nil || nc.Sink == nil {
 		return nil
 	}
+	// mycelium's agent.Event carries the call ID on a ToolCall but not on the
+	// corresponding ToolResult. Track outstanding call IDs in arrival order and
+	// pair each result with its call (results come back in call order), so the
+	// UI can merge a call with its result instead of rendering two items.
+	var pendingCallIDs []string
 	return func(ev agent.Event) {
 		switch ev.Kind {
 		case agent.EventKindText:
@@ -360,9 +470,15 @@ func onEventSink(ctx context.Context) func(agent.Event) {
 			if ev.ToolCall == nil {
 				return
 			}
+			pendingCallIDs = append(pendingCallIDs, ev.ToolCall.ID)
 			nc.Sink.BroadcastSessionToolCall(nc.SessionID, ev.ToolCall.ID, ev.ToolCall.Name, ev.ToolCall.Arguments)
 		case agent.EventKindToolResult:
-			nc.Sink.BroadcastSessionToolResult(nc.SessionID, "", ev.ToolName, ev.Result, "")
+			callID := ""
+			if len(pendingCallIDs) > 0 {
+				callID = pendingCallIDs[0]
+				pendingCallIDs = pendingCallIDs[1:]
+			}
+			nc.Sink.BroadcastSessionToolResult(nc.SessionID, callID, ev.ToolName, ev.Result, "")
 		}
 	}
 }

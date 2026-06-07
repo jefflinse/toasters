@@ -1,9 +1,12 @@
 id: bug-fix
 name: Bug Fix
 description: >
-  Investigate the bug, plan a fix, implement it, run tests, and review the
-  result. Retries on test failure or review rejection, bounded by
-  max_iterations.
+  Investigate the bug, plan a fix, then implement and review it with fan-out
+  consensus. The implement step runs multiple coders in parallel (each in an
+  isolated workspace) and an LLM judge promotes the best fix; the review step
+  runs focused reviewers in parallel (correctness, security, performance) and
+  an aggregator folds their verdicts. Retries on test failure or review
+  rejection, bounded by max_iterations.
 tags: [kind:bugfix]
 
 entry: investigate
@@ -16,17 +19,41 @@ nodes:
   - id: plan
     role: planner
   - id: implement
-    role: coder
-    slots:
-      toolchain: "{{ task.toolchain }}"
+    fanout:
+      branches:                   # diverse consensus: two coders at different temperatures
+        - role: coder
+          temperature: 0.1        # conservative, close to the obvious fix
+          slots:
+            toolchain: "{{ task.toolchain }}"
+        - role: coder
+          temperature: 0.5        # exploratory, more likely to try a different approach
+          slots:
+            toolchain: "{{ task.toolchain }}"
+      reduce:
+        role: code-judge          # LLM judge selects the winning fix
+      max_parallel: 2             # at most two coders building at once
   - id: test
     role: tester
     slots:
       toolchain: "{{ task.toolchain }}"
   - id: review
-    role: code-reviewer
-    slots:
-      toolchain: "{{ task.toolchain }}"
+    fanout:
+      branches:                   # responsibility fan-out: each reviewer owns one lens
+        - role: lens-reviewer
+          slots:
+            toolchain: "{{ task.toolchain }}"
+            lens: "{{ instructions.review-for-correctness }}"
+        - role: lens-reviewer
+          slots:
+            toolchain: "{{ task.toolchain }}"
+            lens: "{{ instructions.review-for-security }}"
+        - role: lens-reviewer
+          slots:
+            toolchain: "{{ task.toolchain }}"
+            lens: "{{ instructions.review-for-performance }}"
+      reduce:
+        role: review-aggregator   # synthesize the lens verdicts into one decision
+      max_parallel: 3
 
 edges:
   - from: investigate

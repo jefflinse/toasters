@@ -16,11 +16,11 @@ import (
 // Providers are no longer stored here — they live in providers/*.yaml files
 // and are loaded by the Loader.
 type Config struct {
-	WorkspaceDir      string         `mapstructure:"workspace_dir"`
-	DatabasePath      string         `mapstructure:"database_path"`
-	TaskGranularity   string         `mapstructure:"task_granularity"`
-	CoarseGranularity string         `mapstructure:"coarse_granularity"`
-	FineGranularity   string         `mapstructure:"fine_granularity"`
+	WorkspaceDir      string `mapstructure:"workspace_dir"`
+	DatabasePath      string `mapstructure:"database_path"`
+	TaskGranularity   string `mapstructure:"task_granularity"`
+	CoarseGranularity string `mapstructure:"coarse_granularity"`
+	FineGranularity   string `mapstructure:"fine_granularity"`
 	// WorkerThinkingEnabled is the default value of the per-request
 	// thinking/reasoning toggle for worker (graph) nodes. Roles may override
 	// via the `thinking` field in their frontmatter.
@@ -39,8 +39,8 @@ type Config struct {
 	// reveals it via Ctrl+O.
 	ShowOperatorPanelByDefault bool           `mapstructure:"show_operator_panel_by_default"`
 	Operator                   OperatorConfig `mapstructure:"operator"`
-	Agents            AgentsConfig   `mapstructure:"agents"`
-	MCP               MCPConfig      `mapstructure:"mcp"`
+	Agents                     AgentsConfig   `mapstructure:"agents"`
+	MCP                        MCPConfig      `mapstructure:"mcp"`
 }
 
 // MCPServerConfig holds configuration for a single MCP server.
@@ -91,14 +91,14 @@ func Load() (*Config, error) {
 
 	viper.SetDefault("workspace_dir", filepath.Join(home, "toasters"))
 	viper.SetDefault("database_path", "")
-	viper.SetDefault("operator.provider", "")
-	viper.SetDefault("operator.model", "")
+	viper.SetDefault("operator.provider", "lmstudio")
+	viper.SetDefault("operator.model", "qwen/qwen3.6-35b-a3b")
 	viper.SetDefault("task_granularity", "moderate")
 	viper.SetDefault("coarse_granularity", "medium")
-	viper.SetDefault("fine_granularity", "medium")
+	viper.SetDefault("fine_granularity", "xfine")
 	viper.SetDefault("worker_thinking_enabled", false)
 	viper.SetDefault("worker_temperature", 0.1)
-	viper.SetDefault("show_jobs_panel_by_default", false)
+	viper.SetDefault("show_jobs_panel_by_default", true)
 	viper.SetDefault("show_operator_panel_by_default", true)
 	viper.SetDefault("agents.defaults.provider", "")
 	viper.SetDefault("agents.defaults.model", "")

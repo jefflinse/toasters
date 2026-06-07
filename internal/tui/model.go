@@ -32,6 +32,7 @@ const (
 type ModelConfig struct {
 	Service      service.Service
 	OpenInEditor func(path string) tea.Cmd // nil in client mode (remote server can't open local editor)
+	Debug        bool                      // show internal system steps (decomposition/planning) normally hidden
 }
 
 // streamingState holds all state related to the active operator stream.
@@ -60,6 +61,18 @@ type promptModeState struct {
 	promptSelected int      // cursor index
 	promptCustom   bool     // true when user selected "Custom response..." and is typing
 	requestID      string   // correlates with ask_user request for RespondToPrompt
+
+	// Multi-question round (operator ask_user with several questions). The
+	// widget runs as a form: one question shown at a time, ←→ to move between
+	// questions (answers persist), Enter to select and advance, Enter on the
+	// last question submits a single combined string. promptQuestion/
+	// promptOptions always reflect the current question; roundCursor remembers
+	// each question's cursor so revisiting shows the prior selection.
+	round        []service.PromptQuestion
+	roundIndex   int
+	roundAnswers []string // committed answer per question (len == len(round))
+	roundCursor  []int    // remembered cursor per question (len == len(round))
+	source       string   // "" = operator; "graph:<node>" = graph interrupt
 }
 
 // promptModalState holds all state for the prompt-viewing modal overlay.
@@ -126,6 +139,7 @@ type Model struct {
 
 	svc            service.Service
 	openInEditor   func(path string) tea.Cmd
+	debug          bool // show internal system steps (decomposition/planning) normally hidden
 	chatViewport   viewport.Model
 	input          textarea.Model
 	stats          SessionStats
@@ -263,6 +277,7 @@ type runtimeSlot struct {
 	jobID     string
 	taskID    string
 	status    string // "active", "completed", "failed", "cancelled"
+	system    bool   // internal decomposition step; hidden from chat/workers unless --debug
 
 	// items holds typed output blocks (text + tool calls) so the graph
 	// pane can render styled, scrollable output. Replaces the previous
@@ -328,6 +343,7 @@ func NewModel(cfg ModelConfig) Model {
 	m := Model{
 		svc:          cfg.Service,
 		openInEditor: cfg.OpenInEditor,
+		debug:        cfg.Debug,
 		chatViewport: vp,
 		input:        ta,
 		stats: SessionStats{
@@ -1317,6 +1333,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			taskID:    msg.TaskID,
 			status:    "active",
 			startTime: time.Now(),
+			system:    isSystemNode(msg.Node),
 		}
 		m.recordGraphNodeStarted(msg.JobID, msg.TaskID, msg.Node)
 		return m, nil
@@ -1333,6 +1350,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// and drives the router, not the panel icon.
 		slot.status = "completed"
 		slot.endTime = time.Now()
+		m.markWorkerStreamDone(msg.SessionID)
 		m.recordGraphNodeDone(msg.JobID, msg.TaskID, msg.Node, msg.Status)
 		return m, nil
 
@@ -1550,6 +1568,33 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case OperatorToolCallMsg:
+		slog.Debug("operator tool call", "tool", msg.Name, "error", msg.IsError)
+		// Commit any text streamed before this tool call so the chat stays
+		// chronological: text, then the tool indicator, then any following text.
+		m.flushOperatorStream()
+		content := "`" + msg.Name + "`"
+		if r := strings.TrimSpace(msg.Result); r != "" {
+			marker := "→ "
+			if msg.IsError {
+				marker = "✗ "
+			}
+			content += "\n" + marker + r
+		}
+		m.appendEntry(service.ChatEntry{
+			Message: service.ChatMessage{
+				Role:    service.MessageRoleAssistant,
+				Content: content,
+			},
+			Timestamp:  time.Now(),
+			ClaudeMeta: "tool-call-indicator",
+		})
+		m.updateViewportContent()
+		if !m.scroll.userScrolled {
+			m.chatViewport.GotoBottom()
+		}
+		return m, nil
+
 	case OperatorDoneMsg:
 		slog.Debug("operator turn done", "err", msg.Err)
 		m.stream.streaming = false
@@ -1603,27 +1648,29 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(cmds...)
 
 	case OperatorPromptMsg:
-		slog.Debug("operator prompt", "question", msg.Question, "options", msg.Options)
-		// Show the question in the chat feed.
-		m.appendEntry(service.ChatEntry{
-			Message: service.ChatMessage{
-				Role:    service.MessageRoleAssistant,
-				Content: HeaderStyle.Render("? " + msg.Question),
-			},
-			Timestamp:  time.Now(),
-			ClaudeMeta: "ask-user-prompt",
-		})
+		slog.Debug("operator prompt", "question", msg.Question, "questions", len(msg.Questions), "source", msg.Source)
+		// Commit any operator preamble (e.g. "I'll gather a few details…") before
+		// the prompt so the transcript stays chronological. The questions
+		// themselves live in the prompt widget below and are recorded — with the
+		// answers — once the user responds, so no separate history block is added.
+		m.flushOperatorStream()
+		round := msg.Questions
+		if len(round) == 0 {
+			round = []service.PromptQuestion{{Question: msg.Question, Options: msg.Options}}
+		}
 		m.updateViewportContent()
 		if !m.scroll.userScrolled {
 			m.chatViewport.GotoBottom()
 		}
-		// Enter prompt mode so the user can select an option or type a response.
+		// Enter prompt mode — a wizard over the round.
 		m.prompt.promptMode = true
-		m.prompt.promptQuestion = msg.Question
-		m.prompt.promptOptions = msg.Options
-		m.prompt.promptSelected = 0
-		m.prompt.promptCustom = false
+		m.prompt.round = round
+		m.prompt.roundIndex = 0
+		m.prompt.roundAnswers = make([]string, len(round))
+		m.prompt.roundCursor = make([]int, len(round))
+		m.prompt.source = msg.Source
 		m.prompt.requestID = msg.RequestID
+		m.loadPromptQuestion(0)
 		return m, nil
 
 	case OperatorEventMsg:
@@ -1769,4 +1816,3 @@ func extractFrontmatterName(content string) string {
 	}
 	return ""
 }
-

@@ -26,6 +26,7 @@ import (
 const defaultServerAddr = "localhost:8421"
 
 var serverAddr string
+var debugMode bool
 
 var rootCmd = &cobra.Command{
 	Use:   "toasters",
@@ -40,6 +41,8 @@ server with "toasters serve", then run "toasters" to connect.`,
 func init() {
 	rootCmd.Flags().StringVar(&serverAddr, "server", defaultServerAddr,
 		"address of the toasters server (host:port)")
+	rootCmd.Flags().BoolVar(&debugMode, "debug", false,
+		"show internal system steps (decomposition, planning) that are hidden by default")
 }
 
 // Execute runs the root command.
@@ -90,6 +93,7 @@ func runTUI(cmd *cobra.Command, _ []string) error {
 	m := tui.NewModel(tui.ModelConfig{
 		Service:      svc,
 		OpenInEditor: openInEditor,
+		Debug:        debugMode,
 	})
 
 	prog := tea.NewProgram(&m)

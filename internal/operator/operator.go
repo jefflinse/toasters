@@ -52,11 +52,20 @@ type Operator struct {
 	broker *hitl.Broker
 
 	// Callbacks — set at construction time via Config, immutable after New().
-	onText      func(text string)                              // called with streamed text from the operator LLM
-	onReasoning func(text string)                              // called with streamed reasoning chunks; optional
-	onEvent     func(event Event)                              // called when the event loop processes an event
-	onTurnDone  func(tokensIn, tokensOut, reasoningTokens int) // called when the operator finishes processing a user message turn
-	onPrompt   func(requestID, question string, options []string) // called when the operator calls ask_user
+	onText      func(text string)                                                    // called with streamed text from the operator LLM
+	onReasoning func(text string)                                                    // called with streamed reasoning chunks; optional
+	onEvent     func(event Event)                                                    // called when the event loop processes an event
+	onTurnDone  func(tokensIn, tokensOut, reasoningTokens int)                       // called when the operator finishes processing a user message turn
+	onPrompt    func(requestID string, questions []PromptQuestion)                   // called when the operator calls ask_user
+	onToolCall  func(name string, args json.RawMessage, result string, isError bool) // called after each operator tool executes
+}
+
+// PromptQuestion is a single question within an ask_user round. The operator
+// can ask several at once; the TUI presents them together and returns one
+// combined answer string.
+type PromptQuestion struct {
+	Question string
+	Options  []string
 }
 
 // Config holds configuration for creating an Operator.
@@ -83,8 +92,9 @@ type Config struct {
 	// may make several when tool calls are involved). reasoningTokens is 0
 	// for providers that don't surface them.
 	OnTurnDone  func(tokensIn, tokensOut, reasoningTokens int)
-	OnPrompt    func(requestID, question string, options []string) // called when the operator calls ask_user
-	SessionFile string                                             // path to persist the operator conversation (e.g. ~/.config/toasters/sessions/operator.json)
+	OnPrompt    func(requestID string, questions []PromptQuestion)                   // called when the operator calls ask_user
+	OnToolCall  func(name string, args json.RawMessage, result string, isError bool) // called after each operator tool executes
+	SessionFile string                                                               // path to persist the operator conversation (e.g. ~/.config/toasters/sessions/operator.json)
 	// LifetimeCtx is the service-level lifetime context, threaded into
 	// SystemTools so detached graph dispatch goroutines are cancelled on
 	// service Shutdown rather than living forever.
@@ -137,6 +147,7 @@ func New(cfg Config) (*Operator, error) {
 		onEvent:      cfg.OnEvent,
 		onTurnDone:   cfg.OnTurnDone,
 		onPrompt:     cfg.OnPrompt,
+		onToolCall:   cfg.OnToolCall,
 	}
 
 	// Wire the ask_user prompt function into the tool executor.
@@ -348,12 +359,22 @@ func (o *Operator) assignNextTask(ctx context.Context, jobID string) {
 		return
 	}
 
-	task := readyTasks[0]
-	if task.GraphID == "" {
-		// No pre-assigned graph — need LLM to decide.
-		msg := fmt.Sprintf("Task %q (id: %s) is ready but has no graph assigned. Please assign it to an appropriate graph.",
-			task.Title, task.ID)
-		o.sendToLLM(ctx, msg)
+	// Graph assignment is the service's job: tasks without a graph are picked
+	// up by fine-decompose (dispatchFineDecomposeForReadyTasks runs just before
+	// this handler fires) and re-advanced once it completes. The operator only
+	// dispatches tasks that already have a graph — it has no tool to assign one,
+	// so prompting the LLM here would just produce confused prose about graphs
+	// it cannot act on. Skip graphless tasks and dispatch the first graphed one.
+	var task *db.Task
+	for i := range readyTasks {
+		if readyTasks[i].GraphID != "" {
+			task = readyTasks[i]
+			break
+		}
+	}
+	if task == nil {
+		slog.Info("no graphed ready tasks to assign; fine-decompose in flight",
+			"job_id", jobID, "ready", len(readyTasks))
 		return
 	}
 
@@ -473,6 +494,14 @@ func (o *Operator) handleUserMessage(ctx context.Context, payload UserMessagePay
 		}
 		totalIn += usage.InputTokens
 		totalOut += usage.OutputTokens
+
+		// Small local models sometimes emit tool calls with empty or malformed
+		// JSON arguments. Left as-is, that invalid JSON poisons the message
+		// history and the next request to the endpoint fails with a 400. Repair
+		// it to an empty object so the tool handler sees valid args (and reports
+		// its own "missing field" error) and the history stays serializable.
+		normalizeToolCallArgs(assistantMsg.ToolCalls)
+		normalizeToolCallArgs(toolCalls)
 		o.appendMessage(assistantMsg)
 
 		// No tool calls — the operator's turn is done.
@@ -491,6 +520,13 @@ func (o *Operator) handleUserMessage(ctx context.Context, payload UserMessagePay
 				result = fmt.Sprintf("error: %s", execErr.Error())
 			}
 
+			// Surface the tool call to subscribers (the TUI renders it as a
+			// collapsible indicator) so the operator's work between text
+			// segments isn't an invisible pause.
+			if o.onToolCall != nil {
+				o.onToolCall(tc.Name, tc.Arguments, result, execErr != nil)
+			}
+
 			o.appendMessage(provider.Message{
 				Role:       "tool",
 				Content:    result,
@@ -502,19 +538,31 @@ func (o *Operator) handleUserMessage(ctx context.Context, payload UserMessagePay
 	}
 }
 
+// normalizeToolCallArgs repairs tool-call arguments that aren't valid JSON
+// (empty or truncated output from a small model) to an empty object. Invalid
+// JSON in the assistant message both fails session persistence and gets the
+// next request rejected with a 400 by the LLM endpoint.
+func normalizeToolCallArgs(tcs []provider.ToolCall) {
+	for i := range tcs {
+		if len(tcs[i].Arguments) == 0 || !json.Valid(tcs[i].Arguments) {
+			tcs[i].Arguments = json.RawMessage("{}")
+		}
+	}
+}
+
 // promptUser implements the ask_user tool. Delegates to the shared HITL
 // broker, emitting the operator-prompt event via the onPrompt callback so
 // the TUI still sees the prompt the same way it always did. Called from
 // the event loop goroutine — the response arrives on a separate goroutine
 // (HTTP handler → LocalService.RespondToPrompt → broker.Respond), so no
 // deadlock.
-func (o *Operator) promptUser(ctx context.Context, requestID, question string, options []string) (string, error) {
+func (o *Operator) promptUser(ctx context.Context, requestID string, questions []PromptQuestion) (string, error) {
 	if o.broker == nil {
 		return "", fmt.Errorf("operator: no HITL broker configured")
 	}
 	broadcast := func() {
 		if o.onPrompt != nil {
-			o.onPrompt(requestID, question, options)
+			o.onPrompt(requestID, questions)
 		}
 	}
 	return o.broker.Ask(ctx, requestID, broadcast)

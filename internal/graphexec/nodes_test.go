@@ -54,6 +54,12 @@ func (m *mockProvider) Models(_ context.Context) ([]provider.ModelInfo, error) {
 
 func (m *mockProvider) Name() string { return "mock" }
 
+func (m *mockProvider) callCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.calls
+}
+
 // --- Mock tool executor ---
 
 type mockToolExecutor struct {
@@ -118,6 +124,21 @@ func toolCallResponse(id, name, argsJSON string) []provider.StreamEvent {
 			ID:        id,
 			Name:      name,
 			Arguments: json.RawMessage(argsJSON),
+		}},
+	}
+}
+
+// requestContextResp returns stream events for a terminal request_context
+// tool call asking for a single keyed item.
+func requestContextResp(key, desc string) []provider.StreamEvent {
+	args, _ := json.Marshal(map[string]any{
+		"needed": []map[string]string{{"key": key, "description": desc}},
+	})
+	return []provider.StreamEvent{
+		{Type: provider.EventToolCall, ToolCall: &provider.ToolCall{
+			ID:        "call-reqctx",
+			Name:      "request_context",
+			Arguments: args,
 		}},
 	}
 }
@@ -344,8 +365,12 @@ func (m *mockEventSink) BroadcastTaskCompleted(_, _, graphID, _ string, _ json.R
 func (m *mockEventSink) BroadcastTaskFailed(_, _, graphID, errMsg string) {
 	m.record(fmt.Sprintf("task_failed:%s:%s", graphID, errMsg))
 }
-func (m *mockEventSink) BroadcastPrompt(requestID, question string, _ []string, source string) {
-	m.record(fmt.Sprintf("prompt:%s:%s:%s", source, requestID, question))
+func (m *mockEventSink) BroadcastPrompt(requestID string, questions []PromptQuestion, source string) {
+	q := ""
+	if len(questions) > 0 {
+		q = questions[0].Question
+	}
+	m.record(fmt.Sprintf("prompt:%s:%s:%s", source, requestID, q))
 }
 func (m *mockEventSink) BroadcastSessionPrompt(sessionID, _, _ string) {
 	m.record(fmt.Sprintf("session_prompt:%s", sessionID))
@@ -507,8 +532,8 @@ type capturingSink struct {
 	promptID string
 }
 
-func (c *capturingSink) BroadcastPrompt(requestID, question string, options []string, source string) {
-	c.mockEventSink.BroadcastPrompt(requestID, question, options, source)
+func (c *capturingSink) BroadcastPrompt(requestID string, questions []PromptQuestion, source string) {
+	c.mockEventSink.BroadcastPrompt(requestID, questions, source)
 	c.promptMu.Lock()
 	c.promptID = requestID
 	c.promptMu.Unlock()
@@ -548,6 +573,154 @@ func TestInterruptHandler_AskUser_RoutesThroughBroker(t *testing.T) {
 	}
 	if val, _ := resp.Value.(string); val != "42" {
 		t.Errorf("resp.Value = %q, want %q", val, "42")
+	}
+}
+
+// TestExecutor_Execute_RequestContextRoutesToHITLAndResumes verifies the
+// backstop: when a node terminates via request_context, the requested items are
+// surfaced through the HITL broker (like ask_user) and the node re-runs with the
+// supplied answer instead of failing the task.
+func TestExecutor_Execute_RequestContextRoutesToHITLAndResumes(t *testing.T) {
+	// Round 0: the node calls request_context. Round 1 (after the user supplies
+	// context via HITL): the node completes.
+	cfg, prov := templateConfig(t, [][]provider.StreamEvent{
+		requestContextResp("requirements", "What should the CLI do?"),
+		summaryResp("verified against supplied requirements"),
+	})
+
+	graph, err := Compile(&Definition{
+		ID:    "solo",
+		Entry: "work",
+		Nodes: []Node{{ID: "work", Role: "investigator"}},
+		Edges: []Edge{{From: "work", To: EndNode}},
+	}, cfg, nil)
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+
+	broker := hitl.New()
+	sink := &capturingSink{}
+	executor := NewExecutor(ExecutorConfig{EventSink: sink, Broker: broker})
+
+	// Answer the prompt as soon as the node surfaces it.
+	go func() {
+		for i := 0; i < 200; i++ {
+			if id := sink.lastPromptID(); id != "" {
+				_ = broker.Respond(id, "The CLI prints Hello, World!")
+				return
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	state := NewTaskState("job-1", "task-1", "/workspace", "mock", "test-model")
+	if err := executor.Execute(ctx, graph, state, "test-team"); err != nil {
+		t.Fatalf("Execute error (request_context should resume, not fail): %v", err)
+	}
+
+	if got := prov.callCount(); got != 2 {
+		t.Errorf("provider calls = %d, want 2 (initial request + resume)", got)
+	}
+
+	events := sink.snapshot()
+	hasPrefix := func(p string) bool {
+		for _, e := range events {
+			if strings.HasPrefix(e, p) {
+				return true
+			}
+		}
+		return false
+	}
+	if !hasPrefix("prompt:graph:work:") {
+		t.Errorf("expected a HITL prompt surfaced from the node; got %v", events)
+	}
+	if !hasPrefix("node_completed:work:") {
+		t.Errorf("expected node to complete after resume; got %v", events)
+	}
+	if hasPrefix("graph_failed:") || hasPrefix("task_failed:") {
+		t.Errorf("graph/task must not fail when context is supplied; got %v", events)
+	}
+}
+
+// TestExecutor_Execute_RequestContextFailsWithoutBroker verifies that when no
+// HITL broker is configured, a request_context terminal fails the task with the
+// requested items visible in the error rather than looping or panicking.
+func TestExecutor_Execute_RequestContextFailsWithoutBroker(t *testing.T) {
+	cfg, _ := templateConfig(t, [][]provider.StreamEvent{
+		requestContextResp("requirements", "What should the CLI do?"),
+	})
+	graph, err := Compile(&Definition{
+		ID:    "solo",
+		Entry: "work",
+		Nodes: []Node{{ID: "work", Role: "investigator"}},
+		Edges: []Edge{{From: "work", To: EndNode}},
+	}, cfg, nil)
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+
+	sink := &mockEventSink{}
+	// RetryAttempts:1 disables rhizome's node retry so the assertion sees the
+	// request_context failure directly rather than a retry-exhaustion error.
+	executor := NewExecutor(ExecutorConfig{EventSink: sink, RetryAttempts: 1}) // no broker
+	state := NewTaskState("job-1", "task-1", "/workspace", "mock", "test-model")
+	err = executor.Execute(context.Background(), graph, state, "test-team")
+	if err == nil {
+		t.Fatal("expected an error when context cannot be supplied")
+	}
+	if !strings.Contains(err.Error(), "requirements") {
+		t.Errorf("error should name the requested item; got %v", err)
+	}
+}
+
+func TestStripTrailingToolCall(t *testing.T) {
+	// Trailing assistant message with tool calls (the request_context shape)
+	// is dropped.
+	withCall := []provider.Message{
+		{Role: "user", Content: "hi"},
+		{Role: "assistant", ToolCalls: []provider.ToolCall{{ID: "x", Name: "request_context"}}},
+	}
+	if got := stripTrailingToolCall(withCall); len(got) != 1 || got[0].Role != "user" {
+		t.Errorf("trailing tool-call assistant not stripped: %+v", got)
+	}
+
+	// A plain assistant text message is preserved.
+	plain := []provider.Message{
+		{Role: "user", Content: "hi"},
+		{Role: "assistant", Content: "answer"},
+	}
+	if got := stripTrailingToolCall(plain); len(got) != 2 {
+		t.Errorf("plain assistant message should be preserved: %+v", got)
+	}
+
+	// A transcript ending on a tool result is preserved.
+	toolEnd := []provider.Message{
+		{Role: "assistant", ToolCalls: []provider.ToolCall{{ID: "x", Name: "shell"}}},
+		{Role: "tool", Content: "out", ToolCallID: "x"},
+	}
+	if got := stripTrailingToolCall(toolEnd); len(got) != 2 {
+		t.Errorf("tool-result tail should be preserved: %+v", got)
+	}
+
+	if got := stripTrailingToolCall(nil); got != nil {
+		t.Errorf("nil history should stay nil: %+v", got)
+	}
+}
+
+func TestFormatContextNeeds(t *testing.T) {
+	got := formatContextNeeds([]agent.ContextNeed{
+		{Key: "requirements", Description: "the spec"},
+		{Key: "budget"},
+	})
+	want := "requirements (the spec); budget"
+	if got != want {
+		t.Errorf("formatContextNeeds = %q, want %q", got, want)
+	}
+	if got := formatContextNeeds(nil); got != "(unspecified)" {
+		t.Errorf("empty needs = %q, want %q", got, "(unspecified)")
 	}
 }
 

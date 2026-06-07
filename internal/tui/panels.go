@@ -119,7 +119,7 @@ func (m Model) renderLeftPanel(panelWidth, panelHeight int) string {
 			if snap == nil {
 				continue
 			}
-			topLines = append(topLines, renderJobUpdateBlock(snap, contentWidth, i == m.selectedJob, m.spinnerFrame))
+			topLines = append(topLines, renderJobUpdateBlock(snap, contentWidth, i == m.selectedJob, m.spinnerFrame, true))
 		}
 	}
 	// Hint line when jobs pane is focused.

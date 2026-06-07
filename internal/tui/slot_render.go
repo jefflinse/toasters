@@ -117,12 +117,15 @@ func (m *Model) renderSlotOutputContent(slot *runtimeSlot, width int) string {
 // preview of the result. Width is the available column count for
 // truncation.
 func renderToolBlock(it *outputItem, width int) string {
-	nameStyle := lipgloss.NewStyle().Foreground(ColorAccent).Bold(true)
-	gear := lipgloss.NewStyle().Foreground(ColorAccent).Render("⚙")
+	// Tool names use a distinct hue (ColorPrimary) rather than the bold cyan
+	// ColorAccent of the card's task headline, so a tool-call line reads as its
+	// own kind of element instead of blending into the header.
+	nameStyle := lipgloss.NewStyle().Foreground(ColorPrimary).Bold(true)
+	gear := lipgloss.NewStyle().Foreground(ColorPrimary).Render("⚙")
 
 	header := gear + " " + nameStyle.Render(it.toolName)
 	if argSummary := summarizeToolArgs(it.toolName, it.toolArgs); argSummary != "" {
-		header += " " + DimStyle.Render("("+truncate(argSummary, width-len(it.toolName)-6)+")")
+		header += " " + DimStyle.Render("("+truncateMiddle(argSummary, width-len(it.toolName)-6)+")")
 	}
 
 	if it.endedAt.IsZero() {
@@ -145,7 +148,7 @@ func renderToolBlock(it *outputItem, width int) string {
 	out := header + "\n  " + status
 	if it.toolResult != "" {
 		preview := strings.SplitN(it.toolResult, "\n", 2)[0]
-		preview = truncate(preview, width-4)
+		preview = truncateMiddle(preview, width-4)
 		arrowColor := ColorError
 		if !it.toolError {
 			arrowColor = ColorDim
@@ -243,4 +246,25 @@ func truncate(s string, max int) string {
 		return "…"
 	}
 	return string(r[:max-1]) + "…"
+}
+
+// truncateMiddle shortens s to at most max runes by eliding the middle with an
+// ellipsis, preserving both ends. For paths this keeps the leading directories
+// and the filename (and any trailing suffix like ", 3 lines") instead of
+// dropping the tail, which is usually the most informative part.
+func truncateMiddle(s string, max int) string {
+	if max <= 0 {
+		return ""
+	}
+	r := []rune(s)
+	if len(r) <= max {
+		return s
+	}
+	if max <= 1 {
+		return "…"
+	}
+	keep := max - 1 // one rune for the ellipsis
+	head := keep / 2
+	tail := keep - head // tail gets the extra rune when keep is odd
+	return string(r[:head]) + "…" + string(r[len(r)-tail:])
 }

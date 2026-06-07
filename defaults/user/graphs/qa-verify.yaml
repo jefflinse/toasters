@@ -1,11 +1,11 @@
 id: qa-verify
 name: QA Verify
 description: >
-  Black-box verification of an existing, running system. The QA tester
-  exercises public interfaces (CLI, API, TUI), derives tests from
-  requirements and observed behavior, and reports pass/fail per case.
-  No implementation or review — this is a one-shot verification
-  suitable for acceptance gates.
+  Black-box verification of an existing, running system using fan-out
+  coverage. Several QA testers exercise the public interfaces (CLI, API, TUI)
+  in parallel, each focused on a different lens — happy path, edge cases,
+  error handling — and an aggregator folds their results into one overall
+  pass/fail verdict. No implementation or review; a one-shot acceptance gate.
 tags: [kind:qa, mode:blackbox]
 
 entry: verify
@@ -13,7 +13,20 @@ exit: verify
 
 nodes:
   - id: verify
-    role: qa-tester
+    fanout:
+      branches:                   # coverage fan-out: each tester owns one lens
+        - role: qa-tester
+          slots:
+            lens: "{{ instructions.test-happy-path }}"
+        - role: qa-tester
+          slots:
+            lens: "{{ instructions.test-edge-cases }}"
+        - role: qa-tester
+          slots:
+            lens: "{{ instructions.test-error-handling }}"
+      reduce:
+        role: qa-aggregator       # fold per-lens results; pass only if every lens passes
+      max_parallel: 3
 
 edges:
   - from: verify

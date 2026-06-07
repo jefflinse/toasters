@@ -366,6 +366,7 @@ func (m *Model) View() tea.View {
 	// Determine chat content and input area.
 	var chatContent string
 	var inputOrStatus string
+	var promptExtraLines int // lines the prompt widget exceeds the normal input area
 	{
 		chatContent = m.chatViewport.View()
 
@@ -424,6 +425,12 @@ func (m *Model) View() tea.View {
 				inputArea = lipgloss.JoinVertical(lipgloss.Left, inputArea, DimStyle.Render(label))
 			}
 		}
+		if m.prompt.promptMode {
+			normalH := inputHeight + InputAreaStyle.GetVerticalFrameSize()
+			if extra := lipgloss.Height(inputArea) - normalH; extra > 0 {
+				promptExtraLines = extra
+			}
+		}
 		if flashLine != "" {
 			inputOrStatus = lipgloss.JoinVertical(lipgloss.Left, flashLine, inputArea)
 		} else {
@@ -467,22 +474,16 @@ func (m *Model) View() tea.View {
 		chatContent = strings.Join(lines[:trimTo], "\n")
 	}
 
-	// Trim chatContent when in prompt option-selection mode to prevent overflow.
-	// The prompt widget is taller than the normal input area; subtract the extra lines.
-	if m.prompt.promptMode && !m.prompt.promptCustom {
-		allOpts := append(m.prompt.promptOptions, "Custom response...")
-		// Widget inner content: 1 question + 1 blank + N options + 1 blank + 1 hint = N+4 lines.
-		// InputAreaStyle border adds 2 vertical lines. Normal input = inputHeight(3) + 2 = 5 lines.
-		promptWidgetHeight := len(allOpts) + 4 + 2
-		extraLines := promptWidgetHeight - (inputHeight + 2)
-		if extraLines > 0 {
-			lines := strings.Split(chatContent, "\n")
-			trimTo := len(lines) - extraLines
-			if trimTo < 0 {
-				trimTo = 0
-			}
-			chatContent = strings.Join(lines[:trimTo], "\n")
+	// Trim chatContent when in prompt mode to prevent overflow. The prompt
+	// widget is taller than the normal input area (byline + question that may
+	// wrap + N options + hint); promptExtraLines holds its measured overage.
+	if promptExtraLines > 0 {
+		lines := strings.Split(chatContent, "\n")
+		trimTo := len(lines) - promptExtraLines
+		if trimTo < 0 {
+			trimTo = 0
 		}
+		chatContent = strings.Join(lines[:trimTo], "\n")
 	}
 
 	chatView := ChatAreaStyle.Width(mainWidth).Render(chatContent)
@@ -1000,32 +1001,51 @@ func (m *Model) resizeComponents() {
 // In custom-text mode (promptCustom == true) it shows the question above the textarea.
 // style is the InputAreaStyle variant to use (may have dimmed borders when unfocused).
 func (m Model) renderPromptWidget(width int, style lipgloss.Style) string {
+	byline := m.promptByline()
+	question := HeaderStyle.Render(m.prompt.promptQuestion)
+
 	if m.prompt.promptCustom {
-		// Custom text mode: question header above the normal textarea.
-		question := HeaderStyle.Render("? " + m.prompt.promptQuestion)
+		// Custom text mode: byline + question above the normal textarea.
 		hint := DimStyle.Render("Enter to submit · Esc to go back")
-		inner := lipgloss.JoinVertical(lipgloss.Left, question, m.input.View(), hint)
+		inner := lipgloss.JoinVertical(lipgloss.Left, byline, question, m.input.View(), hint)
 		return style.Width(width).Render(inner)
 	}
 
 	// Option selection mode: numbered list with cursor.
 	allOptions := append(m.prompt.promptOptions, "Custom response...")
 
+	// The answer already committed for this question (if revisited via ←→) is
+	// marked with a check so the user can see their prior choice.
+	committed := ""
+	if m.prompt.roundIndex < len(m.prompt.roundAnswers) {
+		committed = m.prompt.roundAnswers[m.prompt.roundIndex]
+	}
+
 	var rows []string
 	for i, opt := range allOptions {
-		label := fmt.Sprintf("%d. %s", i+1, opt)
+		prefix := "  "
 		if i == m.prompt.promptSelected {
-			rows = append(rows, CmdPopupSelectedStyle.Render("▶ "+label))
+			prefix = "▶ "
+		} else if opt == committed && i < len(allOptions)-1 {
+			prefix = "✓ "
+		}
+		label := prefix + fmt.Sprintf("%d. %s", i+1, opt)
+		if i == m.prompt.promptSelected {
+			rows = append(rows, CmdPopupSelectedStyle.Render(label))
 		} else {
-			rows = append(rows, DimStyle.Render("  "+label))
+			rows = append(rows, DimStyle.Render(label))
 		}
 	}
 
-	question := HeaderStyle.Render("? " + m.prompt.promptQuestion)
 	optionList := lipgloss.JoinVertical(lipgloss.Left, rows...)
-	hint := DimStyle.Render("↑↓ navigate · Enter select · Esc cancel")
+	hintText := "↑↓ navigate · Enter select · Esc cancel"
+	if len(m.prompt.round) > 1 {
+		hintText = "↑↓ navigate · ←→ switch question · Enter select · Esc cancel"
+	}
+	hint := DimStyle.Render(hintText)
 
 	inner := lipgloss.JoinVertical(lipgloss.Left,
+		byline,
 		question,
 		"",
 		optionList,
@@ -1033,6 +1053,22 @@ func (m Model) renderPromptWidget(width int, style lipgloss.Style) string {
 		hint,
 	)
 	return style.Width(width).Render(inner)
+}
+
+// promptByline renders the asker label for the live prompt widget, plus the
+// "question N of M" progress indicator when the operator asked a multi-question
+// round.
+func (m Model) promptByline() string {
+	label := "operator asks"
+	if src := m.prompt.source; src != "" {
+		// "graph:<node>" → "<node> asks"
+		label = strings.TrimPrefix(src, "graph:") + " asks"
+	}
+	line := HeaderStyle.Render("◆ " + label)
+	if n := len(m.prompt.round); n > 1 {
+		line += DimStyle.Render(fmt.Sprintf("  ·  question %d of %d", m.prompt.roundIndex+1, n))
+	}
+	return line
 }
 
 // updateViewportContent rebuilds the chat history string and sets it on the viewport.
@@ -1099,11 +1135,16 @@ func (m *Model) updateViewportContent() {
 		}
 	}
 
-	for i, entry := range m.chat.entries {
+	// Within a contiguous run of worker-stream cards, draw finished ones first
+	// so the still-running cards sink to the bottom of the run and stay the most
+	// visible. i remains the real entry index, so selection/collapse maps and
+	// the streaming tail below are unaffected — only render order changes.
+	for _, i := range workerStreamDisplayOrder(m.chat.entries) {
+		entry := m.chat.entries[i]
 		// Structured entries render from a typed payload, bypassing the
 		// role-based message dispatch.
 		if entry.Kind == service.ChatEntryKindJobUpdate {
-			block := renderJobUpdateBlock(entry.JobUpdate, contentWidth, false, m.spinnerFrame)
+			block := renderJobUpdateBlock(entry.JobUpdate, contentWidth, false, m.spinnerFrame, false)
 			if block != "" {
 				sb.WriteString(block + "\n\n")
 			}
@@ -1177,9 +1218,16 @@ func (m *Model) updateViewportContent() {
 			sb.WriteString(block + "\n\n")
 		case "assistant":
 			aIndent := strings.Repeat(" ", AssistantMsgIndent)
-			// ask-user-prompt and escalate-prompt messages render as a styled question header.
+			// ask-user-prompt and escalate-prompt messages render with a byline
+			// identifying the asker, then the question(s) below it — no "?" glyph.
 			if entry.ClaudeMeta == "ask-user-prompt" || entry.ClaudeMeta == "escalate-prompt" {
-				sb.WriteString(aIndent + HeaderStyle.Render("? "+msg.Content) + "\n\n")
+				label := "operator asks"
+				if entry.ClaudeMeta == "escalate-prompt" {
+					label = "needs your input"
+				}
+				byline := HeaderStyle.Render("◆ " + label)
+				body := indentLines(msg.Content, AssistantMsgIndent)
+				sb.WriteString(aIndent + byline + "\n" + body + "\n\n")
 				continue
 			}
 			// Feed event entries render as styled single-line system events.
@@ -1265,18 +1313,21 @@ func (m *Model) updateViewportContent() {
 	// Show streaming response in progress — re-render markdown incrementally.
 	if m.stream.streaming {
 		streamIndent := strings.Repeat(" ", AssistantMsgIndent)
-		// Live reasoning trace while thinking.
-		if m.stream.currentReasoning != "" {
+		switch {
+		case m.stream.currentReasoning != "":
+			// Live reasoning trace — the model is actually thinking out loud.
 			sb.WriteString(indentLines(renderReasoningBlock(m.stream.currentReasoning, contentWidth-AssistantMsgIndent), AssistantMsgIndent))
 			sb.WriteString("\n")
-		} else {
-			sb.WriteString(streamIndent + ReasoningStyle.Render("Thinking...") + "\n\n")
+		case m.stream.currentResponse == "":
+			// Pre-token gap. A static label rather than an animated spinner —
+			// chat content only re-renders on events, so a braille spinner here
+			// just freezes into a meaningless dot.
+			sb.WriteString(streamIndent + ReasoningStyle.Render("working…") + "\n\n")
 		}
-		// Live response content.
+		// Live response content, with a static block cursor to mark the live tail.
 		if m.stream.currentResponse != "" {
 			sb.WriteString(indentLines(m.renderMarkdown(m.stream.currentResponse), AssistantMsgIndent))
-			cursor := string(spinnerChars[m.spinnerFrame%len(spinnerChars)])
-			sb.WriteString(StreamingStyle.Render(" " + cursor))
+			sb.WriteString(StreamingStyle.Render(" ▌"))
 			sb.WriteString("\n\n")
 		}
 	}

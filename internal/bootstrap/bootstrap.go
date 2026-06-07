@@ -28,6 +28,11 @@ import (
 // (roles, toolchains, instructions, teams). Set by the caller before Run().
 var UserFS embed.FS
 
+// ProviderFS is the embedded filesystem containing default provider configs
+// (rooted at "providers/", e.g. defaults.ProviderFiles). Seeded on first run so
+// a fresh install ships with a usable provider. Set by the caller before Run().
+var ProviderFS embed.FS
+
 func Run(configDir string, systemFS embed.FS, defaultConfig []byte) error {
 	if err := firstRun(configDir, systemFS, defaultConfig); err != nil {
 		return fmt.Errorf("first-run bootstrap: %w", err)
@@ -68,6 +73,17 @@ func firstRun(configDir string, systemFS embed.FS, defaultConfig []byte) error {
 			}
 			slog.Info("Wrote default config.yaml", "path", configPath)
 		}
+	}
+
+	// Seed default provider configs when the providers dir is absent, so a
+	// fresh install has a usable provider out of the box. Guarded on absence so
+	// we never clobber the user's own provider files.
+	providersDir := filepath.Join(configDir, "providers")
+	if !dirExists(providersDir) && ProviderFS != (embed.FS{}) {
+		if err := copyEmbeddedFS(ProviderFS, "providers", providersDir); err != nil {
+			return fmt.Errorf("copying default providers: %w", err)
+		}
+		slog.Info("Wrote default providers", "dir", providersDir)
 	}
 
 	isFirstRun := false

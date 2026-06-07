@@ -24,7 +24,7 @@ type operatorTools struct {
 	store           db.Store
 	systemTools     *SystemTools
 	workDir         string
-	promptUser      func(ctx context.Context, requestID, question string, options []string) (string, error) // set by Operator after construction
+	promptUser      func(ctx context.Context, requestID string, questions []PromptQuestion) (string, error) // set by Operator after construction
 }
 
 func newOperatorTools(rt *runtime.Runtime, promptEngine *prompt.Engine, defaultProvider, defaultModel string, store db.Store, systemTools *SystemTools, workDir string) *operatorTools {
@@ -116,21 +116,36 @@ func (ot *operatorTools) Definitions() []runtime.ToolDef {
 
 	defs = append(defs, runtime.ToolDef{
 		Name:        "ask_user",
-		Description: "Ask the user a question and wait for their response. Use this when you need clarification, confirmation, or a decision from the user. Provide suggested options when possible to make it easier for the user to respond.",
+		Description: "Ask the user one or more questions and wait for their answers. Use this whenever you need clarification, confirmation, or a decision. ALWAYS use this tool instead of writing questions as prose — never list clarifying questions in your text response. To ask several things at once (e.g. a round of clarifying questions), pass them all in `questions`; the user answers them together in a single exchange. Provide suggested `options` for each question whenever possible so the user can answer with one selection.",
 		Parameters: json.RawMessage(`{
 			"type": "object",
 			"properties": {
+				"questions": {
+					"type": "array",
+					"description": "The questions to ask, presented to the user as one round. Prefer this over the single-question shorthand whenever you have more than one thing to ask.",
+					"items": {
+						"type": "object",
+						"properties": {
+							"question": {"type": "string", "description": "The question text"},
+							"options": {
+								"type": "array",
+								"items": {"type": "string"},
+								"description": "Optional suggested answers. The user can also type a custom response."
+							}
+						},
+						"required": ["question"]
+					}
+				},
 				"question": {
 					"type": "string",
-					"description": "The question to ask the user"
+					"description": "A single question to ask. Convenience shorthand for a one-question round; prefer the questions array when asking more than one thing."
 				},
 				"options": {
 					"type": "array",
 					"items": {"type": "string"},
-					"description": "Optional list of suggested answers. The user can also type a custom response."
+					"description": "Optional suggested answers for the single question. The user can also type a custom response."
 				}
-			},
-			"required": ["question"]
+			}
 		}`),
 	})
 
@@ -219,21 +234,33 @@ func (ot *operatorTools) queryGraphs(ctx context.Context) (string, error) {
 
 func (ot *operatorTools) askUser(ctx context.Context, args json.RawMessage) (string, error) {
 	var params struct {
-		Question string   `json:"question"`
-		Options  []string `json:"options"`
+		Questions []PromptQuestion `json:"questions"`
+		Question  string           `json:"question"`
+		Options   []string         `json:"options"`
 	}
 	if err := json.Unmarshal(args, &params); err != nil {
 		return "", fmt.Errorf("parsing ask_user args: %w", err)
 	}
-	if params.Question == "" {
-		return "", fmt.Errorf("question is required")
+
+	questions := params.Questions
+	if len(questions) == 0 && params.Question != "" {
+		// Single-question shorthand.
+		questions = []PromptQuestion{{Question: params.Question, Options: params.Options}}
+	}
+	if len(questions) == 0 {
+		return "", fmt.Errorf("ask_user requires at least one question")
+	}
+	for i, q := range questions {
+		if q.Question == "" {
+			return "", fmt.Errorf("question %d is empty", i+1)
+		}
 	}
 	if ot.promptUser == nil {
 		return "", fmt.Errorf("ask_user is not available: no prompt handler configured")
 	}
 
 	requestID := fmt.Sprintf("ask-%d", time.Now().UnixNano())
-	return ot.promptUser(ctx, requestID, params.Question, params.Options)
+	return ot.promptUser(ctx, requestID, questions)
 }
 
 // operatorToolsToProviderTools converts operator tool definitions to provider.Tool format.

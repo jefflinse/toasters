@@ -57,8 +57,9 @@ func buildFanoutNode(graphID string, n Node, cfg TemplateConfig, registry *RoleR
 	// registry.Build is the existence gate (errors when a role is neither
 	// registered nor in the prompt engine). The prompt-engine lookup is only
 	// for the access decision; an unresolved role defaults to read-only.
-	// Isolation is needed when ANY branch writes — a writer makes the shared
-	// workspace unsafe for every concurrent branch.
+	// Isolation is needed when ANY branch can mutate files — a writer makes the
+	// shared workspace unsafe for every concurrent branch. test-access branches
+	// (shell + read tools, no write tools) share the workspace and aggregate.
 	branchFns := make([]rhizome.NodeFunc[*TaskState], len(specs))
 	isWrite := false
 	for i, spec := range specs {
@@ -67,7 +68,7 @@ func buildFanoutNode(graphID string, n Node, cfg TemplateConfig, registry *RoleR
 			return nil, nil, fmt.Errorf("fanout node %q: branch %d (role %q): %w", fanoutID, i, spec.Role, err)
 		}
 		branchFns[i] = fn
-		if role := roleByName(cfg, spec.Role); role != nil && !isReadOnlyAccess(normalizeAccess(role.Access)) {
+		if role := roleByName(cfg, spec.Role); role != nil && accessWritesWorkspace(role.Access) {
 			isWrite = true
 		}
 	}

@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 )
 
@@ -21,6 +22,12 @@ const (
 	// EventTypeOperatorDone signals that the operator has finished a turn.
 	// Payload: OperatorDonePayload. Carries TurnID for correlation.
 	EventTypeOperatorDone EventType = "operator.done"
+
+	// EventTypeOperatorToolCall is sent after the operator executes one of its
+	// tools (create_job, query_graphs, …). Payload: OperatorToolCallPayload.
+	// The TUI renders it as a collapsible indicator so the operator's work
+	// between text segments is visible rather than a silent pause.
+	EventTypeOperatorToolCall EventType = "operator.tool_call"
 
 	// EventTypeOperatorPrompt is sent when the operator calls ask_user and
 	// needs a response from the human. Payload: OperatorPromptPayload.
@@ -201,6 +208,18 @@ type OperatorTextPayload struct {
 	Reasoning string
 }
 
+// OperatorToolCallPayload is the payload for EventTypeOperatorToolCall events.
+type OperatorToolCallPayload struct {
+	// Name is the tool that was invoked (e.g. "create_job", "query_graphs").
+	Name string
+	// Args is the JSON argument object the operator passed (may be empty).
+	Args json.RawMessage
+	// Result is the tool's output (truncated by the server for display).
+	Result string
+	// IsError is true when the tool returned an error.
+	IsError bool
+}
+
 // OperatorDonePayload is the payload for EventTypeOperatorDone events.
 // Signals that the operator has finished processing a turn. The TUI should
 // commit the accumulated response buffer as a ChatEntry and re-enable input.
@@ -224,15 +243,28 @@ type OperatorPromptPayload struct {
 	// RequestID uniquely identifies this prompt request. Must be passed back
 	// to Operator().RespondToPrompt() to correlate the response.
 	RequestID string
-	// Question is the question being asked.
+	// Question is the question being asked. For a multi-question round this
+	// holds the first question (back-compat); prefer Questions when set.
 	Question string
 	// Options is an optional list of suggested answers. Empty means free-form.
 	Options []string
+	// Questions carries a multi-question round (operator ask_user). When
+	// non-empty, the client should present all of them and return a single
+	// combined answer string via RespondToPrompt. Empty means a single
+	// question (use Question/Options) — e.g. a graph-node interrupt.
+	Questions []PromptQuestion
 	// Source identifies who is asking. Empty (the default) means the operator;
 	// "graph:<node>" (e.g. "graph:investigate") means a graph node via
 	// rhizome.Interrupt. Lets the TUI render a hint about the asker without
 	// forking the event type.
 	Source string
+}
+
+// PromptQuestion is a single question within a multi-question ask_user round.
+type PromptQuestion struct {
+	Question string
+	// Options is an optional list of suggested answers for this question.
+	Options []string
 }
 
 // JobCreatedPayload is the payload for EventTypeJobCreated events.

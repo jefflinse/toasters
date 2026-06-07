@@ -74,7 +74,7 @@ func (m *Model) openJobsModalForWorkerStream(snap *service.WorkerStreamSnapshot)
 	}
 	cmd := m.openJobsModalForJob(snap.JobID)
 	if snap.TaskID != "" {
-		for i, t := range m.jobsModal.tasks[snap.JobID] {
+		for i, t := range m.modalTasks(snap.JobID) {
 			if t.ID == snap.TaskID {
 				m.jobsModal.taskIdx = i
 				break
@@ -120,7 +120,7 @@ func (m *Model) syncJobsModalFromProgress() {
 	var selectedJobID, selectedTaskID string
 	if len(m.jobsModal.jobs) > 0 && m.jobsModal.jobIdx < len(m.jobsModal.jobs) {
 		selectedJobID = m.jobsModal.jobs[m.jobsModal.jobIdx].ID
-		if tasks := m.jobsModal.tasks[selectedJobID]; len(tasks) > 0 && m.jobsModal.taskIdx < len(tasks) {
+		if tasks := m.modalTasks(selectedJobID); len(tasks) > 0 && m.jobsModal.taskIdx < len(tasks) {
 			selectedTaskID = tasks[m.jobsModal.taskIdx].ID
 		}
 	}
@@ -151,7 +151,7 @@ func (m *Model) syncJobsModalFromProgress() {
 
 	m.jobsModal.taskIdx = 0
 	if selectedJobID != "" && selectedTaskID != "" {
-		if tasks := m.jobsModal.tasks[selectedJobID]; len(tasks) > 0 {
+		if tasks := m.modalTasks(selectedJobID); len(tasks) > 0 {
 			for i, t := range tasks {
 				if t.ID == selectedTaskID {
 					m.jobsModal.taskIdx = i
@@ -266,7 +266,7 @@ func (m *Model) updateJobsModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		case 1:
 			if len(m.jobsModal.jobs) > 0 && m.jobsModal.jobIdx < len(m.jobsModal.jobs) {
 				job := m.jobsModal.jobs[m.jobsModal.jobIdx]
-				tasks := m.jobsModal.tasks[job.ID]
+				tasks := m.modalTasks(job.ID)
 				if m.jobsModal.taskIdx < len(tasks)-1 {
 					m.jobsModal.taskIdx++
 					m.jobsModal.agentScrollOffset = 0
@@ -445,7 +445,7 @@ func (m *Model) renderJobsModal() string {
 			if snap == nil {
 				continue
 			}
-			leftLines = append(leftLines, renderJobUpdateBlock(snap, leftInnerW, i == jobIdx, m.spinnerFrame))
+			leftLines = append(leftLines, renderJobUpdateBlock(snap, leftInnerW, i == jobIdx, m.spinnerFrame, true))
 		}
 	}
 
@@ -472,7 +472,7 @@ func (m *Model) renderJobsModal() string {
 	if len(displayedJobs) > 0 && jobIdx < len(displayedJobs) {
 		j := displayedJobs[jobIdx]
 		selectedJob = &j
-		selectedJobTasks = m.jobsModal.tasks[selectedJob.ID]
+		selectedJobTasks = m.modalTasks(selectedJob.ID)
 	}
 
 	if selectedJob == nil {
@@ -792,4 +792,55 @@ func (m *Model) renderJobsModal() string {
 	// visually distinct from the main screen.
 	content := lipgloss.JoinVertical(lipgloss.Left, panels, footer)
 	return JobsScreenBgStyle.Width(m.width).Height(m.height).Render(content)
+}
+
+// systemDecomposeGraphs are the internal decomposition graph IDs whose tasks
+// are scaffolding (coarse/fine decomposition + graph selection), not real
+// user-facing work. Their tasks are hidden from the job tree unless --debug.
+var systemDecomposeGraphs = map[string]bool{
+	"coarse-decompose": true,
+	"fine-decompose":   true,
+}
+
+// isSystemNode reports whether a graph node is internal decomposition
+// scaffolding. Both coarse-decompose and fine-decompose use a single node
+// named "decompose" (the coarse-/fine-decomposer roles); real work graphs name
+// their phases otherwise (plan, investigate, implement, …), so the node name is
+// an exact discriminator.
+func isSystemNode(node string) bool {
+	return node == "decompose"
+}
+
+// isSystemTask reports whether a task is internal decomposition scaffolding
+// rather than real user-facing work.
+func isSystemTask(t service.Task) bool {
+	if systemDecomposeGraphs[t.GraphID] {
+		return true
+	}
+	return strings.HasPrefix(t.Title, "Decompose:") || strings.HasPrefix(t.Title, "Pick graph:")
+}
+
+// visibleTasks filters out internal system steps unless debug mode is on, so
+// the job tree shows real work the way Claude Code hides its own planning.
+func (m *Model) visibleTasks(tasks []service.Task) []service.Task {
+	if m.debug {
+		return tasks
+	}
+	out := make([]service.Task, 0, len(tasks))
+	for _, t := range tasks {
+		if isSystemTask(t) {
+			continue
+		}
+		out = append(out, t)
+	}
+	return out
+}
+
+// modalTasks returns a job's task list filtered the same way the task tree
+// renders it. ALL jobs-modal task access (navigation, selection, graph-state
+// lookup, rendering) must go through this so taskIdx stays aligned with what
+// the user actually sees — otherwise the index points at a different task than
+// the one highlighted.
+func (m *Model) modalTasks(jobID string) []service.Task {
+	return m.visibleTasks(m.jobsModal.tasks[jobID])
 }

@@ -23,7 +23,7 @@ func (m *Model) selectedJobsModalGraphTaskState() *graphTaskState {
 		return nil
 	}
 	job := m.jobsModal.jobs[m.jobsModal.jobIdx]
-	tasks := m.jobsModal.tasks[job.ID]
+	tasks := m.modalTasks(job.ID)
 	if m.jobsModal.taskIdx >= len(tasks) || m.jobsModal.taskIdx < 0 {
 		return nil
 	}
@@ -232,22 +232,36 @@ func padViewportLines(view string, height int) []string {
 // identifies which worker is talking.
 func (m *Model) pickGraphPaneDisplay(gts *graphTaskState, focusedName string) (string, *runtimeSlot) {
 	if focusedName != "" {
+		// The user is looking at a specific node: show exactly its session, or
+		// nothing if it hasn't started yet. Falling back to another node's
+		// session here would render an active node's stream under the (pending)
+		// focused node's header — which is exactly the mismatch to avoid.
 		sessionID := "graph:" + gts.taskID + ":" + focusedName
 		if slot, ok := m.runtimeSessions[sessionID]; ok {
 			return focusedName, slot
 		}
-	}
-	slots := m.runtimeSessionsForTask(gts.taskID)
-	if len(slots) == 0 {
+		// Fan-out: the node ran as branches "graph:<task>:<node>#N", so there's
+		// no un-suffixed session. Show the node's first branch (active-first via
+		// runtimeSessionsForTask) so a fanned-out node isn't blank. Still scoped
+		// to THIS node's branches, so a pending node stays empty.
+		prefix := sessionID + "#"
+		for _, slot := range m.runtimeSessionsForTask(gts.taskID) {
+			if strings.HasPrefix(slot.sessionID, prefix) {
+				return graphNodeFromSessionID(slot.sessionID), slot
+			}
+		}
 		return focusedName, nil
 	}
+	// No focused node yet (topology unresolved): show any active session for
+	// the task so the pane is useful immediately.
+	slots := m.runtimeSessionsForTask(gts.taskID)
+	if len(slots) == 0 {
+		return "", nil
+	}
 	slot := slots[0] // active first, then by start time — see runtimeSessionsForTask
-	name := focusedName
+	name := graphNodeFromSessionID(slot.sessionID)
 	if name == "" {
-		name = graphNodeFromSessionID(slot.sessionID)
-		if name == "" {
-			name = slot.agentName
-		}
+		name = slot.agentName
 	}
 	return name, slot
 }

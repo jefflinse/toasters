@@ -638,6 +638,81 @@ func TestEventLoop_TaskCompleted_AssignsNextTask(t *testing.T) {
 	assertEqual(t, string(db.TaskStatusInProgress), string(updatedTask.Status))
 }
 
+// TestEventLoop_TaskCompleted_SkipsGraphlessTask verifies the operator does not
+// prompt the LLM about graphless ready tasks. Graph assignment is the service's
+// job (fine-decompose); the operator has no tool to assign a graph, so prompting
+// it just produces confused prose. assignNextTask must skip graphless tasks and
+// dispatch the first task that already has a graph.
+func TestEventLoop_TaskCompleted_SkipsGraphlessTask(t *testing.T) {
+	store := newOperatorTestStore(t)
+	ctx := context.Background()
+
+	job := &db.Job{
+		ID:     "job-1",
+		Title:  "Test Job",
+		Status: db.JobStatusActive,
+	}
+	assertNoError(t, store.CreateJob(ctx, job))
+
+	// A completed task, a graphless ready task (sorted first), and a graphed
+	// ready task. fine-decompose owns the graphless one; the operator should
+	// skip it and dispatch the graphed one without touching the LLM.
+	assertNoError(t, store.CreateTask(ctx, &db.Task{
+		ID: "task-1", JobID: "job-1", Title: "Done", Status: db.TaskStatusCompleted, GraphID: "bug-fix",
+	}))
+	assertNoError(t, store.CreateTask(ctx, &db.Task{
+		ID: "task-graphless", JobID: "job-1", Title: "No graph yet", Status: db.TaskStatusPending, SortOrder: 1,
+	}))
+	assertNoError(t, store.CreateTask(ctx, &db.Task{
+		ID: "task-graphed", JobID: "job-1", Title: "Has graph", Status: db.TaskStatusPending, GraphID: "bug-fix", SortOrder: 2,
+	}))
+
+	mp := &mockProvider{name: "test-provider", responses: []mockResponse{}} // LLM must not be called
+	reg := newTestRegistry(mp)
+	rt := runtime.New(store, reg)
+	gExec := newMockGraphExecutor()
+
+	engine := testPromptEngine(t, map[string]string{"lead-agent": "You are a test lead."})
+	eventCh := make(chan Event, eventChSize)
+	systemTools := NewSystemTools(SystemToolsConfig{
+		Store: store, PromptEngine: engine,
+		DefaultProvider: "test-provider", DefaultModel: "test-model",
+		EventCh: eventCh, WorkDir: t.TempDir(),
+		GraphExecutor: gExec,
+	})
+	tools := newOperatorTools(rt, engine, "test-provider", "test-model", store, systemTools, t.TempDir())
+	provTools := operatorToolsToProviderTools(tools.Definitions())
+
+	op := &Operator{
+		rt: rt, prov: mp, model: "test-model", tools: tools, store: store,
+		eventCh: eventCh, workDir: t.TempDir(), systemPrompt: "You are the operator.", provTools: provTools,
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	op.Start(ctx)
+
+	_ = op.Send(ctx, Event{
+		Type: EventTaskCompleted,
+		Payload: TaskCompletedPayload{
+			TaskID: "task-1", JobID: "job-1", GraphID: "bug-fix",
+			Summary: "done", HasNextTask: true,
+		},
+	})
+
+	waitFor(t, func() bool { return len(gExec.getCalls()) > 0 }, 3*time.Second)
+
+	calls := gExec.getCalls()
+	if len(calls) != 1 {
+		t.Fatalf("want 1 graph dispatch, got %d", len(calls))
+	}
+	assertEqual(t, "task-graphed", calls[0].TaskID)
+
+	// The graphless task must NOT have triggered an LLM prompt.
+	if reqs := mp.getRequests(); len(reqs) != 0 {
+		t.Fatalf("want 0 ChatStream calls (no LLM prose for graphless task), got %d", len(reqs))
+	}
+}
+
 func TestEventLoop_TaskCompleted_ChecksJobComplete(t *testing.T) {
 	store := newOperatorTestStore(t)
 	ctx := context.Background()
@@ -1728,4 +1803,26 @@ func waitFor(t *testing.T, cond func() bool, timeout time.Duration) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatal("timed out waiting for condition")
+}
+
+func TestNormalizeToolCallArgs(t *testing.T) {
+	tcs := []provider.ToolCall{
+		{ID: "a", Name: "ask_user", Arguments: json.RawMessage("")},           // empty → repaired
+		{ID: "b", Name: "ask_user", Arguments: json.RawMessage(`{"x":1`)},     // truncated → repaired
+		{ID: "c", Name: "ask_user", Arguments: json.RawMessage(`{"q":"hi"}`)}, // valid → preserved
+		{ID: "d", Name: "ask_user", Arguments: nil},                           // nil → repaired
+	}
+	normalizeToolCallArgs(tcs)
+
+	for _, tc := range tcs {
+		if !json.Valid(tc.Arguments) {
+			t.Errorf("tool call %q has invalid args after normalize: %q", tc.ID, tc.Arguments)
+		}
+	}
+	if string(tcs[0].Arguments) != "{}" || string(tcs[1].Arguments) != "{}" || string(tcs[3].Arguments) != "{}" {
+		t.Errorf("empty/invalid args should become {}: got %q %q %q", tcs[0].Arguments, tcs[1].Arguments, tcs[3].Arguments)
+	}
+	if string(tcs[2].Arguments) != `{"q":"hi"}` {
+		t.Errorf("valid args should be preserved, got %q", tcs[2].Arguments)
+	}
 }

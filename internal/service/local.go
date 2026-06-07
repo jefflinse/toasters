@@ -489,6 +489,26 @@ func (s *LocalService) BroadcastOperatorText(text, reasoning string) {
 	})
 }
 
+// BroadcastOperatorToolCall broadcasts an operator.tool_call event. Wired as
+// the operator's OnToolCall callback from both construction paths so the TUI
+// can show what the operator is doing between text segments. The result is
+// truncated to keep the indicator compact.
+func (s *LocalService) BroadcastOperatorToolCall(name string, args json.RawMessage, result string, isError bool) {
+	const maxResult = 500
+	if len(result) > maxResult {
+		result = result[:maxResult] + "…"
+	}
+	s.broadcast(Event{
+		Type: EventTypeOperatorToolCall,
+		Payload: OperatorToolCallPayload{
+			Name:    name,
+			Args:    args,
+			Result:  result,
+			IsError: isError,
+		},
+	})
+}
+
 // BroadcastOperatorEvent broadcasts a service event derived from an operator
 // event. Called from the operator's OnEvent callback.
 func (s *LocalService) BroadcastOperatorEvent(ev operator.Event) {
@@ -1025,16 +1045,36 @@ func (s *LocalService) BroadcastSessionToolResult(sessionID, callID, name, resul
 // rhizome.Interrupt). The operator's own ask_user path emits the same event
 // with an empty Source; both travel through the existing OperatorPrompt
 // pipeline without forking the event type.
-func (s *LocalService) BroadcastPrompt(requestID, question string, options []string, source string) {
-	s.broadcast(Event{
-		Type: EventTypeOperatorPrompt,
-		Payload: OperatorPromptPayload{
-			RequestID: requestID,
-			Question:  question,
-			Options:   options,
-			Source:    source,
-		},
-	})
+func (s *LocalService) BroadcastPrompt(requestID string, questions []graphexec.PromptQuestion, source string) {
+	payload := OperatorPromptPayload{RequestID: requestID, Source: source}
+	payload.Questions = make([]PromptQuestion, len(questions))
+	for i, q := range questions {
+		payload.Questions[i] = PromptQuestion{Question: q.Question, Options: q.Options}
+	}
+	// Mirror the first question into the legacy single-question fields.
+	if len(questions) > 0 {
+		payload.Question = questions[0].Question
+		payload.Options = questions[0].Options
+	}
+	s.broadcast(Event{Type: EventTypeOperatorPrompt, Payload: payload})
+}
+
+// BroadcastOperatorPrompt surfaces an ask_user round from the operator to the
+// TUI. It is the operator's OnPrompt callback, wired from BOTH the boot path
+// (cmd/serve.go) and live activation (startOperator) so a missing wire on one
+// path can't silently swallow operator prompts — the bug where the operator
+// asked but nothing ever reached the UI.
+func (s *LocalService) BroadcastOperatorPrompt(requestID string, questions []operator.PromptQuestion) {
+	payload := OperatorPromptPayload{RequestID: requestID}
+	payload.Questions = make([]PromptQuestion, len(questions))
+	for i, q := range questions {
+		payload.Questions[i] = PromptQuestion{Question: q.Question, Options: q.Options}
+	}
+	if len(questions) > 0 {
+		payload.Question = questions[0].Question
+		payload.Options = questions[0].Options
+	}
+	s.broadcast(Event{Type: EventTypeOperatorPrompt, Payload: payload})
 }
 
 // BroadcastTaskCompleted signals task completion to the operator's event loop
@@ -1947,7 +1987,6 @@ func (s *LocalService) ConfigDir() string {
 	return s.cfg.ConfigDir
 }
 
-
 // GetProgressState returns the current full progress state snapshot.
 func (s *LocalService) GetProgressState(_ context.Context) (ProgressState, error) {
 	return s.buildProgressState(), nil
@@ -2278,16 +2317,8 @@ func (s *LocalService) startOperator(p provider.Provider, providerID, model stri
 			batcher.Flush()
 			s.BroadcastOperatorDone(model, tokensIn, tokensOut, reasoningTokens)
 		},
-		OnPrompt: func(requestID, question string, options []string) {
-			s.broadcast(Event{
-				Type: EventTypeOperatorPrompt,
-				Payload: OperatorPromptPayload{
-					RequestID: requestID,
-					Question:  question,
-					Options:   options,
-				},
-			})
-		},
+		OnPrompt:   s.BroadcastOperatorPrompt,
+		OnToolCall: s.BroadcastOperatorToolCall,
 	})
 	if err != nil {
 		return fmt.Errorf("creating operator: %w", err)

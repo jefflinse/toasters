@@ -5,6 +5,8 @@ mode: worker
 output: summary
 access: write
 max_turns: 50
+tools:
+  - ask_user
 slots:
   - toolchain
 ---

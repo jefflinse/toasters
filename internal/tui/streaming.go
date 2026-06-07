@@ -62,6 +62,30 @@ func (m *Model) sendMessage() tea.Cmd {
 	)
 }
 
+// flushOperatorStream commits any operator text accumulated so far as a chat
+// entry and clears the live buffer. Called when something must be inserted into
+// the transcript mid-turn (e.g. an ask_user prompt) so the operator's preamble
+// stays above what follows it, rather than the streamed text committing later
+// and jumping below. A no-op when nothing has streamed yet.
+func (m *Model) flushOperatorStream() {
+	if m.stream.currentResponse == "" {
+		return
+	}
+	byline := "operator"
+	if m.stats.ModelName != "" {
+		byline = "operator · " + m.stats.ModelName
+	}
+	m.appendEntry(service.ChatEntry{
+		Message: service.ChatMessage{
+			Role:    service.MessageRoleAssistant,
+			Content: m.stream.currentResponse,
+		},
+		Timestamp:  time.Now(),
+		ClaudeMeta: byline,
+	})
+	m.stream.currentResponse = ""
+}
+
 // OperatorStatusRefreshedMsg carries updated operator status after live activation.
 type OperatorStatusRefreshedMsg struct {
 	ModelName string

@@ -2,6 +2,7 @@
 package tui
 
 import (
+	"encoding/json"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -316,6 +317,22 @@ type OperatorPromptMsg struct {
 	RequestID string
 	Question  string
 	Options   []string
+	// Questions carries a multi-question round. When non-empty the TUI runs a
+	// wizard over all of them and returns a single combined answer. When empty,
+	// it's a single Question/Options prompt (e.g. a graph-node interrupt).
+	Questions []service.PromptQuestion
+	// Source identifies the asker: "" = operator, "graph:<node>" = graph interrupt.
+	Source string
+}
+
+// OperatorToolCallMsg is sent after the operator executes one of its tools.
+// The TUI renders it as a collapsible indicator so the operator's work between
+// text segments is visible rather than a silent pause.
+type OperatorToolCallMsg struct {
+	Name    string
+	Args    json.RawMessage
+	Result  string
+	IsError bool
 }
 
 // EditorFinishedMsg is sent when an external $EDITOR process completes.
