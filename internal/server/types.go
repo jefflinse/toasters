@@ -547,7 +547,17 @@ type wireProgressState struct {
 	Reports        map[string][]wireProgressReport `json:"reports"`
 	ActiveSessions []wireWorkerSession             `json:"active_sessions"`
 	LiveSnapshots  []wireSessionSnapshot           `json:"live_snapshots"`
+	GraphNodes     []wireGraphNode                 `json:"active_graph_nodes,omitempty"`
 	FeedEntries    []wireFeedEntry                 `json:"feed_entries"`
+}
+
+// wireGraphNode is the JSON wire representation of a service.GraphNodeSnapshot.
+type wireGraphNode struct {
+	SessionID string    `json:"session_id"`
+	JobID     string    `json:"job_id"`
+	TaskID    string    `json:"task_id"`
+	Node      string    `json:"node"`
+	StartedAt time.Time `json:"started_at"`
 }
 
 // wireWorkerSession is the JSON wire representation of a service.WorkerSession.
@@ -638,6 +648,13 @@ func progressStateToWire(ps service.ProgressState) wireProgressState {
 		liveSnapshots = append(liveSnapshots, sessionSnapshotToWire(s))
 	}
 
+	graphNodes := make([]wireGraphNode, 0, len(ps.ActiveGraphNodes))
+	for _, gn := range ps.ActiveGraphNodes {
+		graphNodes = append(graphNodes, wireGraphNode{
+			SessionID: gn.SessionID, JobID: gn.JobID, TaskID: gn.TaskID, Node: gn.Node, StartedAt: gn.StartedAt,
+		})
+	}
+
 	feedEntries := make([]wireFeedEntry, 0, len(ps.FeedEntries))
 	for _, fe := range ps.FeedEntries {
 		feedEntries = append(feedEntries, feedEntryToWire(fe))
@@ -649,6 +666,7 @@ func progressStateToWire(ps service.ProgressState) wireProgressState {
 		Reports:        reports,
 		ActiveSessions: activeSessions,
 		LiveSnapshots:  liveSnapshots,
+		GraphNodes:     graphNodes,
 		FeedEntries:    feedEntries,
 	}
 }
@@ -676,12 +694,17 @@ type wireOperatorToolCallPayload struct {
 	IsError bool            `json:"is_error,omitempty"`
 }
 
-type wireOperatorPromptPayload struct {
+type wireBlockerPayload struct {
 	RequestID string               `json:"request_id"`
-	Question  string               `json:"question"`
-	Options   []string             `json:"options,omitempty"`
-	Questions []wirePromptQuestion `json:"questions,omitempty"`
 	Source    string               `json:"source,omitempty"`
+	JobID     string               `json:"job_id,omitempty"`
+	TaskID    string               `json:"task_id,omitempty"`
+	Questions []wirePromptQuestion `json:"questions,omitempty"`
+	CreatedAt time.Time            `json:"created_at"`
+}
+
+type wireBlockerResolvedPayload struct {
+	RequestID string `json:"request_id"`
 }
 
 type wirePromptQuestion struct {
@@ -874,17 +897,20 @@ func eventPayloadToWire(ev service.Event) any {
 			ModelName: p.ModelName, TokensIn: p.TokensIn,
 			TokensOut: p.TokensOut, ReasoningTokens: p.ReasoningTokens,
 		}
-	case service.OperatorPromptPayload:
-		w := wireOperatorPromptPayload{
+	case service.Blocker:
+		w := wireBlockerPayload{
 			RequestID: p.RequestID,
-			Question:  p.Question,
-			Options:   p.Options,
 			Source:    p.Source,
+			JobID:     p.JobID,
+			TaskID:    p.TaskID,
+			CreatedAt: p.CreatedAt,
 		}
 		for _, q := range p.Questions {
 			w.Questions = append(w.Questions, wirePromptQuestion{Question: q.Question, Options: q.Options})
 		}
 		return w
+	case service.BlockerResolvedPayload:
+		return wireBlockerResolvedPayload{RequestID: p.RequestID}
 	case service.JobCreatedPayload:
 		return wireJobCreatedPayload{JobID: p.JobID, Title: p.Title, Description: p.Description}
 	case service.TaskCreatedPayload:

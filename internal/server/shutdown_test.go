@@ -277,6 +277,9 @@ func (m *shutdownTestOperator) Status(ctx context.Context) (service.OperatorStat
 func (m *shutdownTestOperator) History(ctx context.Context) ([]service.ChatEntry, error) {
 	return nil, nil
 }
+func (m *shutdownTestOperator) Blockers(ctx context.Context) ([]service.Blocker, error) {
+	return nil, nil
+}
 
 // shutdownTestDefinitions implements service.DefinitionService.
 type shutdownTestDefinitions struct{}

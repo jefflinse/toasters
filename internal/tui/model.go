@@ -83,6 +83,20 @@ type promptModeState struct {
 	roundAnswers []string // committed answer per question (len == len(round))
 	roundCursor  []int    // remembered cursor per question (len == len(round))
 	source       string   // "" = operator; "graph:<node>" = graph interrupt
+	jobID        string   // job the blocker gates (for the byline's job title); "" for operator
+
+	// fromBlocker is true when this round was opened from the Blockers panel
+	// (the only entry point now). It distinguishes Esc-to-back-out (leave the
+	// blocker pending) from an explicit dismiss: cancelPrompt must not resolve
+	// the blocker, only exit prompt mode.
+	fromBlocker bool
+}
+
+// blockersModalState holds the selection dialog shown when the user opens the
+// Blockers panel: a list of pending blockers to choose one to answer.
+type blockersModalState struct {
+	show bool
+	sel  int // cursor index into m.blockers
 }
 
 // promptModalState holds all state for the prompt-viewing modal overlay.
@@ -169,6 +183,14 @@ type Model struct {
 	grid        gridState
 	prompt      promptModeState
 	promptModal promptModalState
+
+	// Blockers panel: pending ask_user requests queued for the user to answer
+	// on their own schedule. blockersSel is the cursor in the panel;
+	// blockersModal is the selection dialog opened with Enter.
+	blockers      []service.Blocker
+	blockersSel   int
+	blockersModal blockersModalState
+
 	outputModal outputModalState
 	cmdPopup    cmdPopupState
 	scroll      scrollState
@@ -457,6 +479,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateJobsModal(msg)
 		}
 
+		// Blockers selection modal — intercept all keys when open.
+		if m.blockersModal.show {
+			return m.updateBlockersModal(msg)
+		}
+
 		// Settings modal key handling — intercept all keys when modal is open.
 		if m.settingsModal.show {
 			return m.updateSettingsModal(msg)
@@ -510,7 +537,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 
 		case "tab":
-			// Cycle focus: chat → jobs → agents → chat.
+			// Cycle focus: chat → jobs → blockers → agents → chat.
 			// Skip hidden panels.
 			// (Tab inside the slash command popup is handled above and returns early.)
 			next := m.focused
@@ -519,6 +546,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				case focusChat:
 					next = focusJobs
 				case focusJobs:
+					next = focusBlockers
+				case focusBlockers:
 					next = focusAgents
 				case focusAgents:
 					next = focusChat
@@ -526,7 +555,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					next = focusChat
 				}
 				// Skip left-panel targets when left panel is hidden or empty.
-				if !m.shouldShowLeftPanel() && (next == focusJobs || next == focusAgents) {
+				if !m.shouldShowLeftPanel() && (next == focusJobs || next == focusBlockers || next == focusAgents) {
 					continue
 				}
 				break
@@ -539,13 +568,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, focusCmd
 
 		case "shift+tab":
-			// Reverse cycle: chat → agents → jobs → chat.
+			// Reverse cycle: chat → agents → blockers → jobs → chat.
 			next := m.focused
 			for {
 				switch next {
 				case focusChat:
 					next = focusAgents
 				case focusAgents:
+					next = focusBlockers
+				case focusBlockers:
 					next = focusJobs
 				case focusJobs:
 					next = focusChat
@@ -553,7 +584,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					next = focusChat
 				}
 				// Skip left-panel targets when left panel is hidden or empty.
-				if !m.shouldShowLeftPanel() && (next == focusJobs || next == focusAgents) {
+				if !m.shouldShowLeftPanel() && (next == focusJobs || next == focusBlockers || next == focusAgents) {
 					continue
 				}
 				break
@@ -633,6 +664,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, nil
 			}
+			// Navigate blockers when that panel is focused.
+			if m.focused == focusBlockers {
+				if m.blockersSel > 0 {
+					m.blockersSel--
+				}
+				return m, nil
+			}
 			// Navigate agent slots when agents pane is focused.
 			if m.focused == focusAgents {
 				if m.selectedAgentSlot > 0 {
@@ -658,6 +696,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				dj := m.displayJobs()
 				if len(dj) > 0 && m.selectedJob < len(dj)-1 {
 					m.selectedJob++
+				}
+				return m, nil
+			}
+			// Navigate blockers when that panel is focused.
+			if m.focused == focusBlockers {
+				if m.blockersSel < len(m.blockers)-1 {
+					m.blockersSel++
 				}
 				return m, nil
 			}
@@ -688,6 +733,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if res := m.selectedJobResult(); res != nil {
 					return m, m.openWorkspaceDir(res.Workspace)
 				}
+			}
+		case "x":
+			// Dismiss the selected blocker when the Blockers panel is focused:
+			// answer the waiting caller with a cancellation so it stops blocking.
+			if m.focused == focusBlockers && m.blockersSel < len(m.blockers) {
+				return m, m.dismissBlocker(m.blockers[m.blockersSel].RequestID)
 			}
 		case "ctrl+x":
 			// Toggle expand/collapse on the selected completion message when chat is focused.
@@ -881,6 +932,18 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					tickCmd = spinnerTick()
 				}
 				return m, tickCmd
+			}
+			// Open the blocker selection modal when the blockers pane is focused.
+			if m.focused == focusBlockers {
+				if len(m.blockers) == 0 {
+					return m, nil
+				}
+				sel := m.blockersSel
+				if sel >= len(m.blockers) {
+					sel = 0
+				}
+				m.blockersModal = blockersModalState{show: true, sel: sel}
+				return m, nil
 			}
 			// Open grid view when agents pane is focused.
 			if m.focused == focusAgents {
@@ -1232,6 +1295,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		for _, entry := range msg.History {
 			m.appendEntry(entry)
 		}
+		// Hydrate pending blockers so the Blockers panel reflects work that's
+		// still waiting on the user across a reconnect.
+		m.blockers = msg.Blockers
+		if m.blockersSel >= len(m.blockers) {
+			m.blockersSel = 0
+		}
 		// Inject the pre-fetched greeting directly — no stream, no flash.
 		// Only fire a greeting when no history exists; otherwise it would
 		// look stale on top of a real conversation.
@@ -1429,18 +1498,24 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			!m.grid.showGrid &&
 			!m.promptModal.show && !m.outputModal.show && !m.loading {
 			if m.shouldShowLeftPanel() && msg.X < m.lpWidth {
-				// Clicked left panel — determine which of the two panes was clicked.
-				// Pane order (top to bottom): Jobs, Agents.
+				// Clicked left panel — determine which of the three panes was
+				// clicked. Pane order (top to bottom): Jobs, Blockers, Agents.
 				agentsPaneH := m.leftPanelAgentsPaneHeight()
+				blockersPaneH := m.leftPanelBlockersPaneHeight()
 				agentsPaneY := m.height - agentsPaneH
-				if msg.Y >= agentsPaneY {
-					// Clicked Agents pane.
+				blockersPaneY := agentsPaneY - blockersPaneH
+				switch {
+				case msg.Y >= agentsPaneY:
 					if m.focused != focusAgents {
 						cmds = append(cmds, m.setFocus(focusAgents))
 						m.input.Blur()
 					}
-				} else {
-					// Clicked Jobs pane.
+				case msg.Y >= blockersPaneY:
+					if m.focused != focusBlockers {
+						cmds = append(cmds, m.setFocus(focusBlockers))
+						m.input.Blur()
+					}
+				default:
 					if m.focused != focusJobs {
 						cmds = append(cmds, m.setFocus(focusJobs))
 						m.input.Blur()
@@ -1714,30 +1789,47 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, tea.Batch(cmds...)
 
-	case OperatorPromptMsg:
-		slog.Debug("operator prompt", "question", msg.Question, "questions", len(msg.Questions), "source", msg.Source)
-		// Commit any operator preamble (e.g. "I'll gather a few details…") before
-		// the prompt so the transcript stays chronological. The questions
-		// themselves live in the prompt widget below and are recorded — with the
-		// answers — once the user responds, so no separate history block is added.
+	case BlockerAddedMsg:
+		b := msg.Blocker
+		slog.Debug("blocker added", "request_id", b.RequestID, "questions", len(b.Questions), "source", b.Source)
+		// A blocker no longer prompts inline. Queue it, record it in the
+		// transcript, and toast — the user answers from the Blockers panel on
+		// their own schedule, so a stray Enter can't misfire a response.
 		m.flushOperatorStream()
-		round := msg.Questions
-		if len(round) == 0 {
-			round = []service.PromptQuestion{{Question: msg.Question, Options: msg.Options}}
+		// Ignore duplicates (e.g. a hydrate that races a live event).
+		known := false
+		for _, existing := range m.blockers {
+			if existing.RequestID == b.RequestID {
+				known = true
+				break
+			}
 		}
-		m.updateViewportContent()
-		if !m.scroll.userScrolled {
-			m.chatViewport.GotoBottom()
+		if !known {
+			m.blockers = append(m.blockers, b)
+			m.appendEntry(service.ChatEntry{
+				Message: service.ChatMessage{
+					Role:    service.MessageRoleAssistant,
+					Content: "⛔ Blocker · " + m.blockerLabel(b) + " needs input:\n" + promptHistoryContent(b.Questions),
+				},
+				Timestamp: time.Now(),
+			})
+			m.updateViewportContent()
+			if !m.scroll.userScrolled {
+				m.chatViewport.GotoBottom()
+			}
+			cmds = append(cmds, m.addToast("⛔ Blocker · "+m.blockerLabel(b)+" — "+blockerFirstQuestion(b), toastWarning))
 		}
-		// Enter prompt mode — a wizard over the round.
-		m.prompt.promptMode = true
-		m.prompt.round = round
-		m.prompt.roundIndex = 0
-		m.prompt.roundAnswers = make([]string, len(round))
-		m.prompt.roundCursor = make([]int, len(round))
-		m.prompt.source = msg.Source
-		m.prompt.requestID = msg.RequestID
-		m.loadPromptQuestion(0)
+		return m, tea.Batch(cmds...)
+
+	case BlockerResolvedMsg:
+		m.removeBlocker(msg.RequestID)
+		// If the user happens to be answering this exact blocker when it's
+		// resolved elsewhere (another client, or the node was cancelled), drop
+		// out of prompt mode so they don't submit into a dead request.
+		if m.prompt.promptMode && m.prompt.requestID == msg.RequestID {
+			m.prompt = promptModeState{}
+			m.input.Reset()
+		}
 		return m, nil
 
 	case OperatorEventMsg:
@@ -1791,6 +1883,48 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.progress.activeSessions = msg.Sessions
 		m.progress.feedEntries = msg.FeedEntries
 		m.progress.mcpServers = msg.MCPServers
+		// Rehydrate the Workers panel from the snapshot. Runtime slots are
+		// normally created only from live session.*/graph.node_* events, which
+		// the SSE stream doesn't replay — so after a reconnect mid-job the panel
+		// would be empty even though work is running. Seed any active graph node
+		// or live worker session we don't already have a slot for. Idempotent:
+		// existing slots are skipped (and just enriched below).
+		for _, gn := range msg.GraphNodes {
+			if _, ok := m.runtimeSessions[gn.SessionID]; ok {
+				continue
+			}
+			m.runtimeSessions[gn.SessionID] = &runtimeSlot{
+				sessionID: gn.SessionID,
+				agentName: "graph:" + gn.Node,
+				jobID:     gn.JobID,
+				taskID:    gn.TaskID,
+				status:    "active",
+				startTime: gn.StartedAt,
+				system:    isSystemNode(gn.Node),
+			}
+			m.recordGraphNodeStarted(gn.JobID, gn.TaskID, gn.Node)
+		}
+		for _, snap := range msg.LiveSnapshots {
+			if _, ok := m.runtimeSessions[snap.ID]; ok {
+				continue
+			}
+			status := snap.Status
+			if status == "" {
+				status = "active"
+			}
+			m.runtimeSessions[snap.ID] = &runtimeSlot{
+				sessionID: snap.ID,
+				agentName: snap.WorkerID,
+				jobID:     snap.JobID,
+				taskID:    snap.TaskID,
+				status:    status,
+				startTime: snap.StartTime,
+				model:     snap.Model,
+				provider:  snap.Provider,
+				tokensIn:  snap.TokensIn,
+				tokensOut: snap.TokensOut,
+			}
+		}
 		// Enrich live slots with model/provider/cost the snapshot carries but
 		// the session.* event stream drops, so worker cards can show them.
 		for _, sess := range msg.Sessions {

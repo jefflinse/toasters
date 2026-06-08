@@ -233,6 +233,9 @@ func (m *mockOperatorService) Status(ctx context.Context) (service.OperatorStatu
 func (m *mockOperatorService) History(ctx context.Context) ([]service.ChatEntry, error) {
 	return nil, nil
 }
+func (m *mockOperatorService) Blockers(ctx context.Context) ([]service.Blocker, error) {
+	return nil, nil
+}
 
 // mockDefinitionService implements service.DefinitionService
 type mockDefinitionService struct{}

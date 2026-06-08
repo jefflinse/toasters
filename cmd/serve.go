@@ -313,6 +313,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 			// provider/model ship as config defaults) calls ask_user but the
 			// prompt is never surfaced to the UI — it just hangs.
 			OnPrompt:   svc.BroadcastOperatorPrompt,
+			OnResolve:  svc.ResolveBlocker,
 			OnToolCall: svc.BroadcastOperatorToolCall,
 		})
 		if opErr != nil {

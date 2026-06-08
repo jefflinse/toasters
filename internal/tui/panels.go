@@ -54,8 +54,8 @@ func (m Model) renderLeftPanel(panelWidth, panelHeight int) string {
 
 	// Each pane border adds 2 vertical rows (top + bottom border line).
 	paneFrameV := FocusedPaneStyle.GetVerticalBorderSize()
-	// 2 panes × 2 rows border = 4 rows of border overhead.
-	borderOverhead := 2 * paneFrameV
+	// 3 panes (Jobs, Blockers, Workers) × 2 rows border = 6 rows of overhead.
+	borderOverhead := 3 * paneFrameV
 
 	// Bottom pane (Agents): content-driven height.
 	// Use the filtered view (active + most-recent completed) so the pane's
@@ -78,20 +78,30 @@ func (m Model) renderLeftPanel(panelWidth, panelHeight int) string {
 		bottomContentH++ // hint line
 	}
 
+	// Middle pane (Blockers): content-driven height, one line per blocker.
+	blockerCount := len(m.blockers)
+	blockersContentH := 1 + blockerCount // "Blockers" header + one line per blocker
+	if blockerCount == 0 {
+		blockersContentH = 2 // header + "No blockers"
+	}
+	if m.focused == focusBlockers {
+		blockersContentH++ // hint line
+	}
+
 	// Jobs hint line appears when the jobs pane is focused.
 	jobsHintH := 0
 	if m.focused == focusJobs && len(m.displayJobs()) > 0 {
 		jobsHintH = 1
 	}
 
-	// Available height for content across all two panes.
+	// Available height for content across all three panes.
 	availableH := panelHeight - borderOverhead
-	if availableH < 6 {
-		availableH = 6
+	if availableH < 9 {
+		availableH = 9
 	}
 
-	// Top pane gets whatever is left after bottom + jobs hint.
-	topContentH := availableH - bottomContentH - jobsHintH
+	// Top pane gets whatever is left after blockers + workers + jobs hint.
+	topContentH := availableH - bottomContentH - blockersContentH - jobsHintH
 	if topContentH < 3 {
 		topContentH = 3
 	}
@@ -134,6 +144,46 @@ func (m Model) renderLeftPanel(panelWidth, panelHeight int) string {
 		topPaneStyle = FocusedPaneStyle
 	}
 	topPane := topPaneStyle.Width(panelWidth).Render(topContent)
+
+	// --- Middle pane: Blockers ---
+	var blockerLines []string
+	blockersTitle := gradientText("Blockers", [3]uint8{255, 175, 0}, [3]uint8{255, 90, 0})
+	if m.focused == focusBlockers {
+		blockersTitle = rainbowText("Blockers", m.spinnerFrame)
+	}
+	blockerLines = append(blockerLines, blockersTitle)
+	if blockerCount == 0 {
+		blockerLines = append(blockerLines, DimStyle.Italic(true).Render("No blockers"))
+	} else {
+		for i, b := range m.blockers {
+			marker := "  "
+			if m.focused == focusBlockers && i == m.blockersSel {
+				marker = "▶ "
+			}
+			label := m.blockerLabel(b) + ": " + blockerFirstQuestion(b)
+			line := "⛔ " + truncateStr(label, contentWidth-5)
+			if m.focused == focusBlockers && i == m.blockersSel {
+				blockerLines = append(blockerLines, BlockerSelectedStyle.Render(marker+line))
+			} else {
+				blockerLines = append(blockerLines, marker+line)
+			}
+		}
+	}
+	if m.focused == focusBlockers {
+		hint := "Enter → answer"
+		if blockerCount > 0 {
+			hint = "↑↓ · Enter → answer · x → dismiss"
+		}
+		blockerLines = append(blockerLines, DimStyle.Render(hint))
+	}
+	blockersContent := lipgloss.NewStyle().Height(blockersContentH).Render(
+		lipgloss.JoinVertical(lipgloss.Left, blockerLines...),
+	)
+	blockersPaneStyle := UnfocusedPaneStyle
+	if m.focused == focusBlockers {
+		blockersPaneStyle = FocusedPaneStyle
+	}
+	blockersPane := blockersPaneStyle.Width(panelWidth).Render(blockersContent)
 
 	// --- Bottom pane: Agents ---
 	var agentLines []string
@@ -202,7 +252,7 @@ func (m Model) renderLeftPanel(panelWidth, panelHeight int) string {
 	}
 	bottomPane := bottomPaneStyle.Width(panelWidth).Render(bottomContent)
 
-	inner := lipgloss.JoinVertical(lipgloss.Left, topPane, bottomPane)
+	inner := lipgloss.JoinVertical(lipgloss.Left, topPane, blockersPane, bottomPane)
 	return LeftPanelStyle.Width(panelWidth).Height(panelHeight).Render(inner)
 }
 
@@ -227,6 +277,22 @@ func (m *Model) leftPanelAgentsPaneHeight() int {
 		bottomContentH++
 	}
 	return bottomContentH + paneFrameV
+}
+
+// leftPanelBlockersPaneHeight returns the rendered height of the Blockers pane
+// in the left panel, for mouse hit-testing. Must stay in sync with the height
+// math inside renderLeftPanel.
+func (m *Model) leftPanelBlockersPaneHeight() int {
+	paneFrameV := FocusedPaneStyle.GetVerticalBorderSize()
+	blockerCount := len(m.blockers)
+	blockersContentH := 1 + blockerCount
+	if blockerCount == 0 {
+		blockersContentH = 2
+	}
+	if m.focused == focusBlockers {
+		blockersContentH++
+	}
+	return blockersContentH + paneFrameV
 }
 
 // renderSidebar builds the right sidebar: a borderless operator/stats pane

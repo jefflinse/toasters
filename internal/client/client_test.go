@@ -32,6 +32,7 @@ type mockService struct {
 	respondToPromptFn func(ctx context.Context, reqID, resp string) error
 	statusFn          func(ctx context.Context) (service.OperatorStatus, error)
 	historyFn         func(ctx context.Context) ([]service.ChatEntry, error)
+	blockersFn        func(ctx context.Context) ([]service.Blocker, error)
 
 	// Definitions
 	listSkillsFn    func(ctx context.Context) ([]service.Skill, error)
@@ -98,6 +99,13 @@ func (o *mockOperator) Status(ctx context.Context) (service.OperatorStatus, erro
 func (o *mockOperator) History(ctx context.Context) ([]service.ChatEntry, error) {
 	if o.s.historyFn != nil {
 		return o.s.historyFn(ctx)
+	}
+	return nil, nil
+}
+
+func (o *mockOperator) Blockers(ctx context.Context) ([]service.Blocker, error) {
+	if o.s.blockersFn != nil {
+		return o.s.blockersFn(ctx)
 	}
 	return nil, nil
 }
@@ -427,6 +435,49 @@ func TestOperator_History(t *testing.T) {
 	}
 	if entries[1].ClaudeMeta != "operator · test-model" {
 		t.Errorf("entry[1] claude_meta = %q, want %q", entries[1].ClaudeMeta, "operator · test-model")
+	}
+}
+
+func TestOperator_Blockers(t *testing.T) {
+	t.Parallel()
+
+	mock := &mockService{
+		blockersFn: func(_ context.Context) ([]service.Blocker, error) {
+			return []service.Blocker{
+				{
+					RequestID: "req-1",
+					Source:    "graph:investigate",
+					JobID:     "job-1",
+					TaskID:    "task-1",
+					Questions: []service.PromptQuestion{{Question: "Which path?", Options: []string{"a", "b"}}},
+					CreatedAt: testTime,
+				},
+			}, nil
+		},
+	}
+
+	rc := setupTestServer(t, mock)
+	ctx := context.Background()
+
+	blockers, err := rc.Operator().Blockers(ctx)
+	if err != nil {
+		t.Fatalf("Blockers: %v", err)
+	}
+	if len(blockers) != 1 {
+		t.Fatalf("got %d blockers, want 1", len(blockers))
+	}
+	b := blockers[0]
+	if b.RequestID != "req-1" || b.Source != "graph:investigate" {
+		t.Errorf("blocker = %+v, want req-1 / graph:investigate", b)
+	}
+	if b.JobID != "job-1" || b.TaskID != "task-1" {
+		t.Errorf("job/task = %q/%q, want job-1/task-1", b.JobID, b.TaskID)
+	}
+	if len(b.Questions) != 1 || b.Questions[0].Question != "Which path?" {
+		t.Errorf("questions = %v, want one 'Which path?'", b.Questions)
+	}
+	if len(b.Questions) == 1 && (len(b.Questions[0].Options) != 2 || b.Questions[0].Options[0] != "a") {
+		t.Errorf("options = %v, want [a b]", b.Questions[0].Options)
 	}
 }
 

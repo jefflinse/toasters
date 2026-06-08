@@ -223,6 +223,11 @@ var (
 				Foreground(lipgloss.Color("237")).
 				Italic(true)
 
+	// BlockerSelectedStyle highlights the selected blocker row in the panel.
+	BlockerSelectedStyle = lipgloss.NewStyle().
+				Background(lipgloss.Color("238")).
+				Bold(true)
+
 	// TaskUpdatesPaneStyle styles the task updates section at the bottom of the right sidebar.
 	TaskUpdatesPaneStyle = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("237")).

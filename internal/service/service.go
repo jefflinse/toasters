@@ -59,10 +59,18 @@ type OperatorService interface {
 	SendMessage(ctx context.Context, message string) (turnID string, err error)
 
 	// RespondToPrompt sends the user's answer to an active ask_user prompt.
-	// requestID must match the RequestID from the OperatorPromptPayload that
-	// triggered the prompt. The response is delivered directly to the operator
-	// (not via the event channel) to avoid deadlocking the event loop.
+	// requestID must match the RequestID of the Blocker that triggered the
+	// prompt. The response is delivered directly to the waiting caller (not via
+	// the event channel) to avoid deadlocking the event loop. Resolving the
+	// blocker (and emitting EventTypeBlockerResolved) happens when the waiter's
+	// broker.Ask returns, not here.
 	RespondToPrompt(ctx context.Context, requestID string, response string) error
+
+	// Blockers returns the pending ask_user requests waiting for a human
+	// response, oldest-first. Clients call this on connect/reconnect to
+	// hydrate the Blockers panel; live changes arrive via EventTypeBlockerAdded
+	// and EventTypeBlockerResolved.
+	Blockers(ctx context.Context) ([]Blocker, error)
 
 	// Status returns the current state of the operator (idle, streaming,
 	// processing) and the model it is using. Used by clients to rebuild state

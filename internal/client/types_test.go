@@ -521,6 +521,9 @@ func TestWireProgressStateToService(t *testing.T) {
 		LiveSnapshots: []wireSessionSnapshot{
 			{ID: "snap-1", WorkerID: "agent-1", Status: "active", StartTime: testTime, TokensIn: 50, TokensOut: 75},
 		},
+		GraphNodes: []wireGraphNode{
+			{SessionID: "graph:task-1:plan", JobID: "job-1", TaskID: "task-1", Node: "plan", StartedAt: testTime},
+		},
 		FeedEntries: []wireFeedEntry{
 			{ID: 1, EntryType: "system_event", Content: "Job started", CreatedAt: testTime},
 		},
@@ -552,6 +555,12 @@ func TestWireProgressStateToService(t *testing.T) {
 	}
 	if len(got.LiveSnapshots) != 1 || got.LiveSnapshots[0].ID != "snap-1" {
 		t.Errorf("LiveSnapshots = %v, want 1 snapshot", got.LiveSnapshots)
+	}
+	if len(got.ActiveGraphNodes) != 1 || got.ActiveGraphNodes[0].SessionID != "graph:task-1:plan" {
+		t.Errorf("ActiveGraphNodes = %v, want 1 graph node", got.ActiveGraphNodes)
+	}
+	if len(got.ActiveGraphNodes) == 1 && got.ActiveGraphNodes[0].Node != "plan" {
+		t.Errorf("graph node Node = %q, want plan", got.ActiveGraphNodes[0].Node)
 	}
 	if len(got.FeedEntries) != 1 || got.FeedEntries[0].Content != "Job started" {
 		t.Errorf("FeedEntries = %v, want 1 entry", got.FeedEntries)
@@ -772,35 +781,57 @@ func TestParseSSEPayload_OperatorDone(t *testing.T) {
 	}
 }
 
-func TestParseSSEPayload_OperatorPrompt(t *testing.T) {
+func TestParseSSEPayload_BlockerAdded(t *testing.T) {
 	t.Parallel()
 
 	raw := json.RawMessage(`{
 		"request_id":"req-1",
-		"question":"What should I do?",
-		"options":["yes","no"],
-		"source":"graph:investigate"
+		"source":"graph:investigate",
+		"job_id":"job-1",
+		"task_id":"task-1",
+		"questions":[{"question":"What should I do?","options":["yes","no"]}],
+		"created_at":"2026-06-06T00:00:00Z"
 	}`)
-	payload, err := parseSSEPayload("operator.prompt", raw)
+	payload, err := parseSSEPayload("blocker.added", raw)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	p, ok := payload.(service.OperatorPromptPayload)
+	p, ok := payload.(service.Blocker)
 	if !ok {
-		t.Fatalf("payload type = %T, want OperatorPromptPayload", payload)
+		t.Fatalf("payload type = %T, want service.Blocker", payload)
 	}
 	if p.RequestID != "req-1" {
 		t.Errorf("RequestID = %q, want %q", p.RequestID, "req-1")
 	}
-	if p.Question != "What should I do?" {
-		t.Errorf("Question = %q, want %q", p.Question, "What should I do?")
+	if p.JobID != "job-1" || p.TaskID != "task-1" {
+		t.Errorf("job/task = %q/%q, want job-1/task-1", p.JobID, p.TaskID)
 	}
-	if len(p.Options) != 2 || p.Options[0] != "yes" || p.Options[1] != "no" {
-		t.Errorf("Options = %v, want [yes no]", p.Options)
+	if len(p.Questions) != 1 || p.Questions[0].Question != "What should I do?" {
+		t.Errorf("Questions = %v, want one question", p.Questions)
+	}
+	if len(p.Questions) == 1 && (len(p.Questions[0].Options) != 2 || p.Questions[0].Options[0] != "yes") {
+		t.Errorf("Options = %v, want [yes no]", p.Questions[0].Options)
 	}
 	if p.Source != "graph:investigate" {
 		t.Errorf("Source = %q, want %q", p.Source, "graph:investigate")
+	}
+}
+
+func TestParseSSEPayload_BlockerResolved(t *testing.T) {
+	t.Parallel()
+
+	raw := json.RawMessage(`{"request_id":"req-1"}`)
+	payload, err := parseSSEPayload("blocker.resolved", raw)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	p, ok := payload.(service.BlockerResolvedPayload)
+	if !ok {
+		t.Fatalf("payload type = %T, want service.BlockerResolvedPayload", payload)
+	}
+	if p.RequestID != "req-1" {
+		t.Errorf("RequestID = %q, want %q", p.RequestID, "req-1")
 	}
 }
 
@@ -1279,10 +1310,16 @@ func TestParseSSEPayload_AllEventTypes(t *testing.T) {
 			wantType:  "service.OperatorDonePayload",
 		},
 		{
-			name:      "operator.prompt",
-			eventType: "operator.prompt",
-			raw:       json.RawMessage(`{"request_id":"r","question":"q","confirm_dispatch":false}`),
-			wantType:  "service.OperatorPromptPayload",
+			name:      "blocker.added",
+			eventType: "blocker.added",
+			raw:       json.RawMessage(`{"request_id":"r","questions":[{"question":"q"}]}`),
+			wantType:  "service.Blocker",
+		},
+		{
+			name:      "blocker.resolved",
+			eventType: "blocker.resolved",
+			raw:       json.RawMessage(`{"request_id":"r"}`),
+			wantType:  "service.BlockerResolvedPayload",
 		},
 		{
 			name:      "task.assigned",
@@ -1414,8 +1451,10 @@ func typeString(v any) string {
 		return "service.OperatorTextPayload"
 	case service.OperatorDonePayload:
 		return "service.OperatorDonePayload"
-	case service.OperatorPromptPayload:
-		return "service.OperatorPromptPayload"
+	case service.Blocker:
+		return "service.Blocker"
+	case service.BlockerResolvedPayload:
+		return "service.BlockerResolvedPayload"
 	case service.TaskAssignedPayload:
 		return "service.TaskAssignedPayload"
 	case service.TaskStartedPayload:

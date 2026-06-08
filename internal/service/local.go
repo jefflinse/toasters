@@ -139,6 +139,21 @@ type LocalService struct {
 	// broker coordinates HITL prompt/response for both the operator's
 	// ask_user tool and any graph node that calls rhizome.Interrupt.
 	broker *hitl.Broker
+
+	// blockers holds pending ask_user requests that have not yet been answered.
+	// Keyed by RequestID. Populated when the operator/a graph node calls
+	// ask_user; removed when the waiter's broker.Ask returns (answered or
+	// cancelled). Guarded by blockerMu.
+	blockerMu sync.Mutex
+	blockers  map[string]Blocker
+
+	// activeGraphNodes tracks currently-executing graph nodes, keyed by their
+	// session id ("graph:<taskID>:<node>"). Graph nodes run via the graph engine
+	// (not runtime worker sessions), so they aren't in Runtime.ActiveSessions;
+	// tracking them here lets a reconnecting client rebuild the Workers panel for
+	// an in-flight graph job from the progress snapshot. Guarded by graphNodeMu.
+	graphNodeMu      sync.Mutex
+	activeGraphNodes map[string]GraphNodeSnapshot
 }
 
 // localJobService wraps LocalService to implement JobService without conflicting
@@ -180,12 +195,14 @@ func NewLocal(cfg LocalConfig) *LocalService {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	return &LocalService{
-		cfg:         cfg,
-		ctx:         ctx,
-		cancel:      cancel,
-		subscribers: make(map[uint64]chan Event),
-		asyncSem:    make(chan struct{}, maxConcurrentOps),
-		broker:      hitl.New(),
+		cfg:              cfg,
+		ctx:              ctx,
+		cancel:           cancel,
+		subscribers:      make(map[uint64]chan Event),
+		asyncSem:         make(chan struct{}, maxConcurrentOps),
+		broker:           hitl.New(),
+		blockers:         make(map[string]Blocker),
+		activeGraphNodes: make(map[string]GraphNodeSnapshot),
 	}
 }
 
@@ -448,6 +465,16 @@ func (s *LocalService) buildProgressState() ProgressState {
 			state.LiveSnapshots = append(state.LiveSnapshots, runtimeSnapshotToService(snap))
 		}
 	}
+
+	// Active graph nodes (not runtime sessions — tracked here for reconnect).
+	s.graphNodeMu.Lock()
+	for _, gn := range s.activeGraphNodes {
+		state.ActiveGraphNodes = append(state.ActiveGraphNodes, gn)
+	}
+	s.graphNodeMu.Unlock()
+	sort.Slice(state.ActiveGraphNodes, func(i, j int) bool {
+		return state.ActiveGraphNodes[i].StartedAt.Before(state.ActiveGraphNodes[j].StartedAt)
+	})
 
 	// Feed entries.
 	dbFeed, err := s.cfg.Store.ListRecentFeedEntries(ctx, 50)
@@ -904,8 +931,21 @@ func (s *LocalService) BroadcastTaskAssigned(taskID, jobID, graphID, title strin
 	})
 }
 
-// BroadcastGraphNodeStarted broadcasts a graph.node_started event.
+// graphNodeSessionID builds the "graph:<taskID>:<node>" id the TUI uses for
+// graph-node pseudo-sessions, matching graphexec's NodeContext convention.
+func graphNodeSessionID(taskID, node string) string {
+	return "graph:" + taskID + ":" + node
+}
+
+// BroadcastGraphNodeStarted broadcasts a graph.node_started event and records
+// the node as active so a reconnecting client can rebuild the Workers panel.
 func (s *LocalService) BroadcastGraphNodeStarted(jobID, taskID, node string) {
+	sid := graphNodeSessionID(taskID, node)
+	s.graphNodeMu.Lock()
+	s.activeGraphNodes[sid] = GraphNodeSnapshot{
+		SessionID: sid, JobID: jobID, TaskID: taskID, Node: node, StartedAt: time.Now(),
+	}
+	s.graphNodeMu.Unlock()
 	s.broadcast(Event{
 		Type: EventTypeGraphNodeStarted,
 		Payload: GraphNodeStartedPayload{
@@ -916,8 +956,12 @@ func (s *LocalService) BroadcastGraphNodeStarted(jobID, taskID, node string) {
 	})
 }
 
-// BroadcastGraphNodeCompleted broadcasts a graph.node_completed event.
+// BroadcastGraphNodeCompleted broadcasts a graph.node_completed event and drops
+// the node from the active set.
 func (s *LocalService) BroadcastGraphNodeCompleted(jobID, taskID, node, status string) {
+	s.graphNodeMu.Lock()
+	delete(s.activeGraphNodes, graphNodeSessionID(taskID, node))
+	s.graphNodeMu.Unlock()
 	s.broadcast(Event{
 		Type: EventTypeGraphNodeCompleted,
 		Payload: GraphNodeCompletedPayload{
@@ -1059,41 +1103,69 @@ func (s *LocalService) BroadcastSessionToolResult(sessionID, callID, name, resul
 	})
 }
 
-// BroadcastPrompt emits an OperatorPromptPayload with Source populated so the
-// TUI can surface a HITL question that originated from a graph node (via
-// rhizome.Interrupt). The operator's own ask_user path emits the same event
-// with an empty Source; both travel through the existing OperatorPrompt
-// pipeline without forking the event type.
-func (s *LocalService) BroadcastPrompt(requestID string, questions []graphexec.PromptQuestion, source string) {
-	payload := OperatorPromptPayload{RequestID: requestID, Source: source}
-	payload.Questions = make([]PromptQuestion, len(questions))
+// BroadcastPrompt registers a blocker for a HITL question that originated
+// inside a graph node (via rhizome.Interrupt) and emits EventTypeBlockerAdded.
+// Source is typically "graph:<node>" so the client can attribute the asker.
+// The operator's own ask_user path goes through BroadcastOperatorPrompt; both
+// funnel into the same blocker queue without forking the event type.
+func (s *LocalService) BroadcastPrompt(requestID string, questions []graphexec.PromptQuestion, source, jobID, taskID string) {
+	qs := make([]PromptQuestion, len(questions))
 	for i, q := range questions {
-		payload.Questions[i] = PromptQuestion{Question: q.Question, Options: q.Options}
+		qs[i] = PromptQuestion{Question: q.Question, Options: q.Options}
 	}
-	// Mirror the first question into the legacy single-question fields.
-	if len(questions) > 0 {
-		payload.Question = questions[0].Question
-		payload.Options = questions[0].Options
-	}
-	s.broadcast(Event{Type: EventTypeOperatorPrompt, Payload: payload})
+	s.addBlocker(Blocker{RequestID: requestID, Source: source, JobID: jobID, TaskID: taskID, Questions: qs})
 }
 
-// BroadcastOperatorPrompt surfaces an ask_user round from the operator to the
-// TUI. It is the operator's OnPrompt callback, wired from BOTH the boot path
-// (cmd/serve.go) and live activation (startOperator) so a missing wire on one
-// path can't silently swallow operator prompts — the bug where the operator
-// asked but nothing ever reached the UI.
+// BroadcastOperatorPrompt registers a blocker for an ask_user round raised by
+// the operator (Source empty) and emits EventTypeBlockerAdded. It is the
+// operator's OnPrompt callback, wired from BOTH the boot path (cmd/serve.go)
+// and live activation (startOperator) so a missing wire on one path can't
+// silently swallow operator prompts.
 func (s *LocalService) BroadcastOperatorPrompt(requestID string, questions []operator.PromptQuestion) {
-	payload := OperatorPromptPayload{RequestID: requestID}
-	payload.Questions = make([]PromptQuestion, len(questions))
+	qs := make([]PromptQuestion, len(questions))
 	for i, q := range questions {
-		payload.Questions[i] = PromptQuestion{Question: q.Question, Options: q.Options}
+		qs[i] = PromptQuestion{Question: q.Question, Options: q.Options}
 	}
-	if len(questions) > 0 {
-		payload.Question = questions[0].Question
-		payload.Options = questions[0].Options
+	s.addBlocker(Blocker{RequestID: requestID, Questions: qs})
+}
+
+// addBlocker stores a pending blocker and emits EventTypeBlockerAdded. The
+// CreatedAt timestamp is stamped here so the queue can be ordered.
+func (s *LocalService) addBlocker(b Blocker) {
+	b.CreatedAt = time.Now()
+	s.blockerMu.Lock()
+	s.blockers[b.RequestID] = b
+	s.blockerMu.Unlock()
+	s.broadcast(Event{Type: EventTypeBlockerAdded, Payload: b})
+}
+
+// ResolveBlocker removes a pending blocker and emits EventTypeBlockerResolved.
+// It is idempotent: resolving an unknown or already-resolved request is a
+// no-op and emits nothing. Called at the broker.Ask return site (both the
+// graph-node and operator paths) so a blocker is cleared whether the user
+// answered or the waiting caller's context was cancelled.
+func (s *LocalService) ResolveBlocker(requestID string) {
+	s.blockerMu.Lock()
+	_, existed := s.blockers[requestID]
+	delete(s.blockers, requestID)
+	s.blockerMu.Unlock()
+	if !existed {
+		return
 	}
-	s.broadcast(Event{Type: EventTypeOperatorPrompt, Payload: payload})
+	s.broadcast(Event{Type: EventTypeBlockerResolved, Payload: BlockerResolvedPayload{RequestID: requestID}})
+}
+
+// Blockers returns a snapshot of the pending blockers, ordered oldest-first.
+// Clients call this on connect/reconnect to hydrate the Blockers panel.
+func (s *LocalService) Blockers(_ context.Context) ([]Blocker, error) {
+	s.blockerMu.Lock()
+	out := make([]Blocker, 0, len(s.blockers))
+	for _, b := range s.blockers {
+		out = append(out, b)
+	}
+	s.blockerMu.Unlock()
+	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
+	return out, nil
 }
 
 // BroadcastTaskCompleted signals task completion to the operator's event loop
@@ -2384,6 +2456,7 @@ func (s *LocalService) startOperator(p provider.Provider, providerID, model stri
 			s.BroadcastOperatorDone(model, tokensIn, tokensOut, reasoningTokens)
 		},
 		OnPrompt:   s.BroadcastOperatorPrompt,
+		OnResolve:  s.ResolveBlocker,
 		OnToolCall: s.BroadcastOperatorToolCall,
 	})
 	if err != nil {

@@ -3,9 +3,175 @@ package tui
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jefflinse/toasters/internal/service"
 )
+
+func TestFanoutGroupKey(t *testing.T) {
+	t.Parallel()
+
+	mk := func(name, taskID string) service.ChatEntry {
+		return service.ChatEntry{
+			Kind:         service.ChatEntryKindWorkerStream,
+			WorkerStream: &service.WorkerStreamSnapshot{WorkerName: name, TaskID: taskID},
+		}
+	}
+
+	if k, ok := fanoutGroupKey(mk("graph:implement#0", "t1")); !ok || k != "t1\x00implement" {
+		t.Errorf("branch key = %q ok=%v, want t1/implement", k, ok)
+	}
+	if k, ok := fanoutGroupKey(mk("graph:implement.judge", "t1")); !ok || k != "t1\x00implement" {
+		t.Errorf("judge key = %q ok=%v, want t1/implement", k, ok)
+	}
+	// Same parent, different task → different key (don't merge across tasks).
+	k1, _ := fanoutGroupKey(mk("graph:implement#0", "t1"))
+	k2, _ := fanoutGroupKey(mk("graph:implement#0", "t2"))
+	if k1 == k2 {
+		t.Error("branches in different tasks must not share a group key")
+	}
+	// Ordinary node and non-worker-stream entries never group.
+	if _, ok := fanoutGroupKey(mk("graph:test", "t1")); ok {
+		t.Error("ordinary node should not produce a group key")
+	}
+	if _, ok := fanoutGroupKey(service.ChatEntry{Message: service.ChatMessage{Role: service.MessageRoleUser}}); ok {
+		t.Error("non-worker-stream entry should not produce a group key")
+	}
+}
+
+func TestRenderFanoutGroupSummary(t *testing.T) {
+	t.Parallel()
+
+	m := newMinimalModel(t)
+	m.progress.tasks = map[string][]service.Task{"job-1": {{ID: "task-1", Title: "DB layer"}}}
+	start := time.Unix(1000, 0)
+	mk := func(node string) service.ChatEntry {
+		return service.ChatEntry{
+			Kind: service.ChatEntryKindWorkerStream,
+			WorkerStream: &service.WorkerStreamSnapshot{
+				WorkerName: "graph:" + node, JobID: "job-1", TaskID: "task-1",
+				Done: true, StartedAt: start, LastActivity: start.Add(90 * time.Second),
+			},
+		}
+	}
+	m.chat.entries = []service.ChatEntry{mk("implement#0"), mk("implement#1"), mk("implement.judge")}
+
+	out := m.renderFanoutGroupSummary([]int{0, 1, 2}, 90)
+	for _, want := range []string{"📦", "DB layer", "implement", "2 branches + judge", "✓", "1m30s"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("summary missing %q; got:\n%s", want, out)
+		}
+	}
+}
+
+func TestUpdateViewportContent_CollapsesCompletedFanout(t *testing.T) {
+	t.Parallel()
+
+	m := newMinimalModel(t)
+	m.width = 100
+	m.height = 40
+	m.chatViewport.SetWidth(90)
+	m.chatViewport.SetHeight(40)
+	m.progress.tasks = map[string][]service.Task{"job-1": {{ID: "task-1", Title: "DB layer"}}}
+
+	// A user message so the welcome screen is skipped and entries render.
+	m.chat.entries = append(m.chat.entries, service.ChatEntry{
+		Message: service.ChatMessage{Role: service.MessageRoleUser, Content: "go"},
+	})
+	start := time.Unix(1000, 0)
+	addCard := func(node string, done bool) {
+		m.chat.entries = append(m.chat.entries, service.ChatEntry{
+			Kind: service.ChatEntryKindWorkerStream,
+			WorkerStream: &service.WorkerStreamSnapshot{
+				WorkerName: "graph:" + node, JobID: "job-1", TaskID: "task-1",
+				SessionID: "graph:task-1:" + node, Done: done,
+				StartedAt: start, LastActivity: start.Add(time.Minute),
+			},
+		})
+	}
+	// Fan-out group is done, but the task isn't (verify still running) — so the
+	// whole-task roll-up doesn't fire and the fan-out group roll-up is exercised.
+	addCard("implement#0", true)
+	addCard("implement#1", true)
+	addCard("implement.judge", true)
+	addCard("verify", false)
+
+	// Nothing selected → group collapses to one summary, branch ids hidden,
+	// the still-running card stays visible.
+	m.chat.selectedMsgIdx = -1
+	m.updateViewportContent()
+	out := m.chatViewport.View()
+	if !strings.Contains(out, "📦") {
+		t.Errorf("expected collapsed fan-out summary; got:\n%s", out)
+	}
+	if strings.Contains(out, "implement#0") {
+		t.Errorf("branch cards should be hidden when group is collapsed; got:\n%s", out)
+	}
+	if !strings.Contains(out, "verify") {
+		t.Errorf("still-running card should remain visible; got:\n%s", out)
+	}
+
+	// Selecting a member expands the group so its branches are reachable again.
+	m.chat.selectedMsgIdx = 1 // first worker-stream entry (index 0 is the user msg)
+	m.updateViewportContent()
+	out2 := m.chatViewport.View()
+	if !strings.Contains(out2, "implement#0") {
+		t.Errorf("expected expanded branch cards when a member is selected; got:\n%s", out2)
+	}
+}
+
+// TestUpdateViewportContent_CollapsesCompletedTask verifies the whole-task
+// roll-up: when every card of a task is done, the task collapses to a single
+// "✓ <task>" line (superseding the per-fan-out-group roll-up), and expands when
+// a member is selected.
+func TestUpdateViewportContent_CollapsesCompletedTask(t *testing.T) {
+	t.Parallel()
+
+	m := newMinimalModel(t)
+	m.width = 100
+	m.height = 40
+	m.chatViewport.SetWidth(90)
+	m.chatViewport.SetHeight(40)
+	m.progress.tasks = map[string][]service.Task{"job-1": {{ID: "task-1", Title: "DB layer"}}}
+
+	m.chat.entries = append(m.chat.entries, service.ChatEntry{
+		Message: service.ChatMessage{Role: service.MessageRoleUser, Content: "go"},
+	})
+	start := time.Unix(1000, 0)
+	for _, node := range []string{"plan", "implement#0", "implement#1", "test"} {
+		m.chat.entries = append(m.chat.entries, service.ChatEntry{
+			Kind: service.ChatEntryKindWorkerStream,
+			WorkerStream: &service.WorkerStreamSnapshot{
+				WorkerName: "graph:" + node, JobID: "job-1", TaskID: "task-1",
+				SessionID: "graph:task-1:" + node, Done: true,
+				StartedAt: start, LastActivity: start.Add(time.Minute),
+			},
+		})
+	}
+
+	// Nothing selected → the whole task collapses to one ✓ line; no fan-out
+	// summary, no individual node ids.
+	m.chat.selectedMsgIdx = -1
+	m.updateViewportContent()
+	out := m.chatViewport.View()
+	if !strings.Contains(out, "✓ DB layer") {
+		t.Errorf("expected whole-task summary '✓ DB layer'; got:\n%s", out)
+	}
+	if strings.Contains(out, "📦") {
+		t.Errorf("whole-task roll-up should supersede the fan-out summary; got:\n%s", out)
+	}
+	if strings.Contains(out, "implement#0") || strings.Contains(out, "· plan") {
+		t.Errorf("node cards should be hidden when the task is collapsed; got:\n%s", out)
+	}
+
+	// Selecting a member expands the task back to its nodes.
+	m.chat.selectedMsgIdx = 1
+	m.updateViewportContent()
+	out2 := m.chatViewport.View()
+	if !strings.Contains(out2, "implement#0") {
+		t.Errorf("expected expanded node cards when a member is selected; got:\n%s", out2)
+	}
+}
 
 func workerStreamCards(m *Model) []*service.WorkerStreamSnapshot {
 	var out []*service.WorkerStreamSnapshot

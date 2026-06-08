@@ -29,11 +29,19 @@ const (
 	// between text segments is visible rather than a silent pause.
 	EventTypeOperatorToolCall EventType = "operator.tool_call"
 
-	// EventTypeOperatorPrompt is sent when the operator calls ask_user and
-	// needs a response from the human. Payload: OperatorPromptPayload.
-	// The client must call Operator().RespondToPrompt() to unblock the
-	// operator.
-	EventTypeOperatorPrompt EventType = "operator.prompt"
+	// EventTypeBlockerAdded is sent when something on the server calls ask_user
+	// (the operator directly, or a graph node via rhizome.Interrupt) and is
+	// waiting on a human response. Payload: Blocker. Rather than prompt the
+	// user inline, the client queues it in the Blockers panel; the user answers
+	// on their own schedule via Operator().RespondToPrompt(), which unblocks the
+	// waiting caller.
+	EventTypeBlockerAdded EventType = "blocker.added"
+
+	// EventTypeBlockerResolved is sent when a pending blocker is resolved —
+	// either the user answered (RespondToPrompt) or the waiting caller's context
+	// was cancelled (task killed / shutdown). Payload: BlockerResolvedPayload.
+	// The client removes it from the Blockers panel.
+	EventTypeBlockerResolved EventType = "blocker.resolved"
 
 	// EventTypeJobCreated is sent when the operator creates a new job via
 	// the create_job system tool. Payload: JobCreatedPayload.
@@ -241,30 +249,37 @@ type OperatorDonePayload struct {
 	ReasoningTokens int
 }
 
-// OperatorPromptPayload is the payload for EventTypeOperatorPrompt events.
-// Something on the server has called ask_user (the operator directly, or a
-// graph node via rhizome.Interrupt) and is waiting for a human response.
-// The TUI should enter prompt mode and call Operator().RespondToPrompt() with
-// the user's answer — both paths funnel through the same broker.
-type OperatorPromptPayload struct {
-	// RequestID uniquely identifies this prompt request. Must be passed back
-	// to Operator().RespondToPrompt() to correlate the response.
+// Blocker is the payload for EventTypeBlockerAdded events and the element type
+// returned by Operator().Blockers(). It represents a pending ask_user request
+// — from the operator directly or a graph node via rhizome.Interrupt — that is
+// waiting for a human response. The client queues it in the Blockers panel and
+// answers via Operator().RespondToPrompt(RequestID, ...); both paths funnel
+// through the same broker.
+type Blocker struct {
+	// RequestID uniquely identifies this request. Must be passed back to
+	// Operator().RespondToPrompt() to correlate the response.
 	RequestID string
-	// Question is the question being asked. For a multi-question round this
-	// holds the first question (back-compat); prefer Questions when set.
-	Question string
-	// Options is an optional list of suggested answers. Empty means free-form.
-	Options []string
-	// Questions carries a multi-question round (operator ask_user). When
-	// non-empty, the client should present all of them and return a single
-	// combined answer string via RespondToPrompt. Empty means a single
-	// question (use Question/Options) — e.g. a graph-node interrupt.
-	Questions []PromptQuestion
 	// Source identifies who is asking. Empty (the default) means the operator;
 	// "graph:<node>" (e.g. "graph:investigate") means a graph node via
-	// rhizome.Interrupt. Lets the TUI render a hint about the asker without
-	// forking the event type.
+	// rhizome.Interrupt. Lets the client render an attribution hint.
 	Source string
+	// JobID and TaskID identify the work this blocker is gating, when it
+	// originated inside a graph node. Empty for operator-raised blocks. The
+	// client uses JobID to resolve the job title for a richer "who/what" label.
+	JobID  string
+	TaskID string
+	// Questions carries the round (one or more questions). The client presents
+	// all of them and returns a single combined answer string via
+	// RespondToPrompt.
+	Questions []PromptQuestion
+	// CreatedAt is when the blocker was raised, used to order the queue.
+	CreatedAt time.Time
+}
+
+// BlockerResolvedPayload is the payload for EventTypeBlockerResolved events.
+type BlockerResolvedPayload struct {
+	// RequestID identifies the blocker that was resolved.
+	RequestID string
 }
 
 // PromptQuestion is a single question within a multi-question ask_user round.

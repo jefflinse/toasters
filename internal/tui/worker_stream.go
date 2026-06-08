@@ -48,6 +48,135 @@ func workerStreamDisplayOrder(entries []service.ChatEntry) []int {
 	return order
 }
 
+// fanoutGroupKey returns a grouping key for a worker-stream entry that is a
+// fan-out branch or judge (e.g. "implement#0", "implement.judge"), keyed by
+// task + parent node so siblings of one fan-out collapse together. ok is false
+// for ordinary (non-fan-out) nodes, which never roll up.
+func fanoutGroupKey(e service.ChatEntry) (string, bool) {
+	if e.Kind != service.ChatEntryKindWorkerStream || e.WorkerStream == nil {
+		return "", false
+	}
+	node := strings.TrimPrefix(e.WorkerStream.WorkerName, "graph:")
+	parent, ok := branchParent(node)
+	if !ok {
+		return "", false
+	}
+	return e.WorkerStream.TaskID + "\x00" + parent, true
+}
+
+// renderTaskSummary collapses all of a completed task's worker-stream cards into
+// a single "✓ <task>" line, so a finished task reads as one entry instead of a
+// stack of per-node cards. Purely visual: selecting the task (via arrow nav)
+// expands it back to its cards / fan-out groups; full detail stays in the grid
+// and Jobs modal.
+func (m *Model) renderTaskSummary(members []int, width int) string {
+	if len(members) == 0 || width < 8 {
+		return ""
+	}
+	first := m.chat.entries[members[0]].WorkerStream
+	title := m.taskTitleByID(first.JobID, first.TaskID)
+	if title == "" {
+		title = strings.TrimPrefix(first.WorkerName, "graph:")
+	}
+
+	start, end := first.StartedAt, first.LastActivity
+	for _, mi := range members {
+		ws := m.chat.entries[mi].WorkerStream
+		if ws.StartedAt.Before(start) {
+			start = ws.StartedAt
+		}
+		if ws.LastActivity.After(end) {
+			end = ws.LastActivity
+		}
+	}
+
+	innerW := width - 4
+	if innerW < 8 {
+		innerW = 8
+	}
+	avail := innerW / 2
+	if avail < 12 {
+		avail = 12
+	}
+	steps := fmt.Sprintf("%d steps", len(members))
+	if len(members) == 1 {
+		steps = "1 step"
+	}
+	head := lipgloss.NewStyle().Bold(true).Foreground(ColorConnected).Render("✓ " + truncateStr(title, avail))
+	meta := DimStyle.Render(fmt.Sprintf("  ·  %s  ·  %s", steps, formatStreamDuration(start, end)))
+
+	frame := lipgloss.NewStyle().
+		Border(lipgloss.Border{Left: "▌"}, false, false, false, true).
+		BorderForeground(ColorBorder).
+		PaddingLeft(1).
+		Width(width - 2)
+	return frame.Render(head + meta)
+}
+
+// renderFanoutGroupSummary collapses a completed fan-out group (all its branch
+// and judge cards) into a single dim summary line, so a finished parallel phase
+// reads as one entry instead of a stack of header rows. Purely visual: the
+// per-branch detail is still reachable by selecting the group (which expands it)
+// or via the grid / Jobs modal.
+func (m *Model) renderFanoutGroupSummary(members []int, width int) string {
+	if len(members) == 0 || width < 8 {
+		return ""
+	}
+	first := m.chat.entries[members[0]].WorkerStream
+	parent, _ := branchParent(strings.TrimPrefix(first.WorkerName, "graph:"))
+
+	branches, hasJudge := 0, false
+	start, end := first.StartedAt, first.LastActivity
+	for _, mi := range members {
+		ws := m.chat.entries[mi].WorkerStream
+		n := strings.TrimPrefix(ws.WorkerName, "graph:")
+		if strings.Contains(n, "#") {
+			branches++
+		}
+		if strings.HasSuffix(n, ".judge") {
+			hasJudge = true
+		}
+		if ws.StartedAt.Before(start) {
+			start = ws.StartedAt
+		}
+		if ws.LastActivity.After(end) {
+			end = ws.LastActivity
+		}
+	}
+
+	headline := m.taskTitleByID(first.JobID, first.TaskID)
+	if headline == "" {
+		headline = parent
+	}
+
+	innerW := width - 4
+	if innerW < 8 {
+		innerW = 8
+	}
+	avail := innerW / 2
+	if avail < 12 {
+		avail = 12
+	}
+
+	countStr := fmt.Sprintf("%d branches", branches)
+	if branches == 1 {
+		countStr = "1 branch"
+	}
+	if hasJudge {
+		countStr += " + judge"
+	}
+	head := lipgloss.NewStyle().Bold(true).Foreground(ColorAccent).Render("📦 " + truncateStr(headline, avail))
+	meta := DimStyle.Render(fmt.Sprintf(" · %s · %s · ", parent, countStr))
+	status := lipgloss.NewStyle().Foreground(ColorConnected).Render("✓ " + formatStreamDuration(start, end))
+
+	frame := lipgloss.NewStyle().
+		Border(lipgloss.Border{Left: "▌"}, false, false, false, true).
+		BorderForeground(ColorBorder).
+		PaddingLeft(1).
+		Width(width - 2)
+	return frame.Render(head + meta + status)
+}
+
 // taskTitleByID returns the title of a task within a job, or "" if not found.
 func (m *Model) taskTitleByID(jobID, taskID string) string {
 	for _, t := range m.progress.tasks[jobID] {

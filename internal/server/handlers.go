@@ -123,6 +123,29 @@ func (s *Server) operatorHistory(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// operatorBlockers handles GET /api/v1/operator/blockers.
+func (s *Server) operatorBlockers(w http.ResponseWriter, r *http.Request) {
+	blockers, err := s.svc.Operator().Blockers(r.Context())
+	if err != nil {
+		handleServiceError(w, r, err)
+		return
+	}
+
+	items := make([]wireBlockerPayload, 0, len(blockers))
+	for _, b := range blockers {
+		w := wireBlockerPayload{RequestID: b.RequestID, Source: b.Source, JobID: b.JobID, TaskID: b.TaskID, CreatedAt: b.CreatedAt}
+		for _, q := range b.Questions {
+			w.Questions = append(w.Questions, wirePromptQuestion{Question: q.Question, Options: q.Options})
+		}
+		items = append(items, w)
+	}
+
+	writeJSON(w, http.StatusOK, PaginatedResponse[wireBlockerPayload]{
+		Items: items,
+		Total: len(items),
+	})
+}
+
 // ---------------------------------------------------------------------------
 // Skills handlers
 // ---------------------------------------------------------------------------

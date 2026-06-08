@@ -365,12 +365,15 @@ func (m *mockEventSink) BroadcastTaskCompleted(_, _, graphID, _ string, _ json.R
 func (m *mockEventSink) BroadcastTaskFailed(_, _, graphID, errMsg string) {
 	m.record(fmt.Sprintf("task_failed:%s:%s", graphID, errMsg))
 }
-func (m *mockEventSink) BroadcastPrompt(requestID string, questions []PromptQuestion, source string) {
+func (m *mockEventSink) BroadcastPrompt(requestID string, questions []PromptQuestion, source, jobID, taskID string) {
 	q := ""
 	if len(questions) > 0 {
 		q = questions[0].Question
 	}
 	m.record(fmt.Sprintf("prompt:%s:%s:%s", source, requestID, q))
+}
+func (m *mockEventSink) ResolveBlocker(requestID string) {
+	m.record(fmt.Sprintf("resolve_blocker:%s", requestID))
 }
 func (m *mockEventSink) BroadcastSessionPrompt(sessionID, _, _ string) {
 	m.record(fmt.Sprintf("session_prompt:%s", sessionID))
@@ -535,8 +538,8 @@ type capturingSink struct {
 	promptID string
 }
 
-func (c *capturingSink) BroadcastPrompt(requestID string, questions []PromptQuestion, source string) {
-	c.mockEventSink.BroadcastPrompt(requestID, questions, source)
+func (c *capturingSink) BroadcastPrompt(requestID string, questions []PromptQuestion, source, jobID, taskID string) {
+	c.mockEventSink.BroadcastPrompt(requestID, questions, source, jobID, taskID)
 	c.promptMu.Lock()
 	c.promptID = requestID
 	c.promptMu.Unlock()

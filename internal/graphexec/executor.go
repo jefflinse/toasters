@@ -181,10 +181,22 @@ func (e *Executor) interruptHandler(ctx context.Context, req rhizome.InterruptRe
 		}
 		requestID := "graph-ask-" + uuid.Must(uuid.NewV4()).String()
 		source := "graph:" + req.Node
+		// The node's ctx carries the NodeContext (job/task identity) injected by
+		// NodeContextMiddleware, so the blocker can name which work it gates.
+		var jobID, taskID string
+		if nc := NodeContextFromContext(ctx); nc != nil {
+			jobID, taskID = nc.JobID, nc.TaskID
+		}
 		broadcast := func() {
 			if e.eventSink != nil {
-				e.eventSink.BroadcastPrompt(requestID, questions, source)
+				e.eventSink.BroadcastPrompt(requestID, questions, source, jobID, taskID)
 			}
+		}
+		// Resolve the blocker once Ask returns, whether the user answered or the
+		// node's context was cancelled (task killed / shutdown). Idempotent with
+		// any concurrent resolution.
+		if e.eventSink != nil {
+			defer e.eventSink.ResolveBlocker(requestID)
 		}
 		text, err := e.broker.Ask(ctx, requestID, broadcast)
 		if err != nil {

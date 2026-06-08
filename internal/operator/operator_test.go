@@ -15,6 +15,7 @@ import (
 
 	"github.com/jefflinse/toasters/internal/db"
 	"github.com/jefflinse/toasters/internal/graphexec"
+	"github.com/jefflinse/toasters/internal/hitl"
 	"github.com/jefflinse/toasters/internal/prompt"
 	"github.com/jefflinse/toasters/internal/provider"
 	"github.com/jefflinse/toasters/internal/runtime"
@@ -1803,6 +1804,131 @@ func waitFor(t *testing.T, cond func() bool, timeout time.Duration) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatal("timed out waiting for condition")
+}
+
+func TestPromptUser_FiresOnResolve(t *testing.T) {
+	broker := hitl.New()
+	mp := &mockProvider{name: "test"}
+
+	var mu sync.Mutex
+	var resolved []string
+
+	op, err := New(Config{
+		Runtime:      runtime.New(nil, newTestRegistry(mp)),
+		Provider:     mp,
+		Model:        "test-model",
+		WorkDir:      t.TempDir(),
+		SystemPrompt: "You are the operator.",
+		Broker:       broker,
+		OnResolve: func(id string) {
+			mu.Lock()
+			resolved = append(resolved, id)
+			mu.Unlock()
+		},
+	})
+	if err != nil {
+		t.Fatalf("creating operator: %v", err)
+	}
+
+	// Answer the prompt once it's registered with the broker.
+	go func() {
+		for i := 0; i < 200; i++ {
+			if broker.Respond("req-1", "answer") == nil {
+				return
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}()
+
+	ans, err := op.promptUser(context.Background(), "req-1", []PromptQuestion{{Question: "Q?"}})
+	if err != nil {
+		t.Fatalf("promptUser: %v", err)
+	}
+	if ans != "answer" {
+		t.Errorf("answer = %q, want %q", ans, "answer")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(resolved) != 1 || resolved[0] != "req-1" {
+		t.Errorf("OnResolve calls = %v, want [req-1]", resolved)
+	}
+}
+
+// newLoopTestOperator builds a minimal operator wired to a mock provider for
+// exercising the turn loop's round cap and failure circuit breaker. Streamed
+// text is captured into textBuf.
+func newLoopTestOperator(t *testing.T, mp *mockProvider, textBuf *strings.Builder) *Operator {
+	t.Helper()
+	rt := runtime.New(nil, newTestRegistry(mp))
+	tools := newTestOperatorTools(t)
+	provTools := operatorToolsToProviderTools(tools.Definitions())
+	var mu sync.Mutex
+	return &Operator{
+		rt:           rt,
+		prov:         mp,
+		model:        "test-model",
+		tools:        tools,
+		eventCh:      make(chan Event, 64),
+		workDir:      t.TempDir(),
+		systemPrompt: "You are the operator.",
+		provTools:    provTools,
+		onText: func(s string) {
+			mu.Lock()
+			textBuf.WriteString(s)
+			mu.Unlock()
+		},
+	}
+}
+
+func toolCallResponse(id, name string) mockResponse {
+	return mockResponse{events: []provider.StreamEvent{
+		{Type: provider.EventToolCall, ToolCall: &provider.ToolCall{ID: id, Name: name, Arguments: json.RawMessage(`{}`)}},
+		{Type: provider.EventDone},
+	}}
+}
+
+// TestHandleUserMessage_AbortsOnConsecutiveToolFailures verifies the circuit
+// breaker: a model that keeps emitting a failing tool call (here, an unknown
+// tool) is stopped after maxConsecutiveFailedRounds instead of looping forever
+// — the bug where qwen mis-formats ask_user/surface_to_user and spins.
+func TestHandleUserMessage_AbortsOnConsecutiveToolFailures(t *testing.T) {
+	mp := &mockProvider{name: "test"}
+	for i := 0; i < 10; i++ {
+		mp.responses = append(mp.responses, toolCallResponse(fmt.Sprintf("tc-%d", i), "no_such_tool"))
+	}
+
+	var textBuf strings.Builder
+	op := newLoopTestOperator(t, mp, &textBuf)
+	op.handleUserMessage(context.Background(), UserMessagePayload{Text: "go"})
+
+	if n := len(mp.getRequests()); n != 3 {
+		t.Errorf("ChatStream calls = %d, want 3 (abort after 3 all-failed rounds)", n)
+	}
+	if !strings.Contains(textBuf.String(), "3 straight rounds of failed tool calls") {
+		t.Errorf("expected circuit-breaker message; got %q", textBuf.String())
+	}
+}
+
+// TestHandleUserMessage_StopsAtRoundCap verifies the per-turn round cap: a model
+// that keeps emitting a *succeeding* tool call (so the failure breaker never
+// trips) is still bounded to maxTurnRounds LLM round-trips.
+func TestHandleUserMessage_StopsAtRoundCap(t *testing.T) {
+	mp := &mockProvider{name: "test"}
+	for i := 0; i < 40; i++ {
+		mp.responses = append(mp.responses, toolCallResponse(fmt.Sprintf("tc-%d", i), "list_jobs"))
+	}
+
+	var textBuf strings.Builder
+	op := newLoopTestOperator(t, mp, &textBuf)
+	op.handleUserMessage(context.Background(), UserMessagePayload{Text: "go"})
+
+	if n := len(mp.getRequests()); n != 25 {
+		t.Errorf("ChatStream calls = %d, want 25 (round cap)", n)
+	}
+	if !strings.Contains(textBuf.String(), "25 tool rounds") {
+		t.Errorf("expected round-cap message; got %q", textBuf.String())
+	}
 }
 
 func TestNormalizeToolCallArgs(t *testing.T) {

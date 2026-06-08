@@ -1,9 +1,11 @@
 package graphexec
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/jefflinse/mycelium/agent"
 	"github.com/jefflinse/rhizome"
@@ -144,11 +146,9 @@ func AskUserTool() agent.Tool {
 		Description: "Ask the user one or more clarifying questions and wait for their answers. Use this only when the task is genuinely ambiguous and you cannot proceed without human input. If you need several pieces of information, pass them all in `questions` so the user answers them in one round rather than one at a time. Prefer 2–4 suggested options per question.",
 		Parameters:  askUserSchema,
 		Handler: func(ctx context.Context, args json.RawMessage) (string, error) {
-			var payload AskUserPayload
-			if len(args) > 0 {
-				if err := json.Unmarshal(args, &payload); err != nil {
-					return "", fmt.Errorf("parsing ask_user args: %w", err)
-				}
+			payload, err := parseAskUserPayload(args)
+			if err != nil {
+				return "", fmt.Errorf("parsing ask_user args: %w", err)
 			}
 			if payload.Question == "" && len(payload.Questions) == 0 {
 				return "", fmt.Errorf("ask_user: a question is required")
@@ -164,4 +164,112 @@ func AskUserTool() agent.Tool {
 			return text, nil
 		},
 	}
+}
+
+// parseAskUserPayload decodes ask_user arguments, tolerating the inconsistent
+// shapes small local models emit for "questions" (a bare string, an array of
+// strings, a single object, or the intended array of objects). Without this a
+// strict unmarshal rejects all but the canonical form and the node can't ask.
+func parseAskUserPayload(args json.RawMessage) (AskUserPayload, error) {
+	var payload AskUserPayload
+	if len(bytes.TrimSpace(args)) == 0 {
+		return payload, nil
+	}
+	var raw struct {
+		Question  string          `json:"question"`
+		Options   []string        `json:"options"`
+		Questions json.RawMessage `json:"questions"`
+	}
+	if err := json.Unmarshal(args, &raw); err != nil {
+		return payload, err
+	}
+	payload.Question = raw.Question
+	payload.Options = raw.Options
+	qs, err := parsePromptQuestions(raw.Questions)
+	if err != nil {
+		return payload, err
+	}
+	payload.Questions = qs
+	// The model sometimes packs the whole questions array into the single
+	// "question" string field too; route it through the same parser.
+	if len(payload.Questions) == 0 && payload.Question != "" {
+		if fromQ, perr := questionsFromString(payload.Question); perr == nil && len(fromQ) > 0 {
+			if !(len(fromQ) == 1 && fromQ[0].Question == payload.Question) {
+				payload.Questions = fromQ
+				payload.Question = ""
+			}
+		}
+	}
+	return payload, nil
+}
+
+// parsePromptQuestions leniently decodes the ask_user "questions" field into
+// graph-node PromptQuestions. See operator.parsePromptQuestions for the same
+// logic on the operator side.
+func parsePromptQuestions(raw json.RawMessage) ([]PromptQuestion, error) {
+	raw = bytes.TrimSpace(raw)
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil, nil
+	}
+	switch raw[0] {
+	case '"':
+		var s string
+		if err := json.Unmarshal(raw, &s); err != nil {
+			return nil, err
+		}
+		return questionsFromString(s)
+	case '{':
+		var q PromptQuestion
+		if err := json.Unmarshal(raw, &q); err != nil {
+			return nil, err
+		}
+		return []PromptQuestion{q}, nil
+	case '[':
+		var elems []json.RawMessage
+		if err := json.Unmarshal(raw, &elems); err != nil {
+			return nil, err
+		}
+		var out []PromptQuestion
+		for _, el := range elems {
+			el = bytes.TrimSpace(el)
+			if len(el) == 0 {
+				continue
+			}
+			if el[0] == '"' {
+				var s string
+				if err := json.Unmarshal(el, &s); err != nil {
+					return nil, err
+				}
+				qs, err := questionsFromString(s)
+				if err != nil {
+					return nil, err
+				}
+				out = append(out, qs...)
+			} else {
+				var q PromptQuestion
+				if err := json.Unmarshal(el, &q); err != nil {
+					return nil, err
+				}
+				out = append(out, q)
+			}
+		}
+		return out, nil
+	default:
+		return nil, fmt.Errorf("unexpected questions JSON: %s", string(raw))
+	}
+}
+
+// questionsFromString turns a string value into questions, recursing when the
+// model double-encoded the array as a JSON string. Mirrors operator.go.
+func questionsFromString(s string) ([]PromptQuestion, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return nil, nil
+	}
+	if s[0] == '[' || s[0] == '{' {
+		if qs, err := parsePromptQuestions(json.RawMessage(s)); err == nil && len(qs) > 0 {
+			return qs, nil
+		}
+	}
+	return []PromptQuestion{{Question: s}}, nil
 }

@@ -6,8 +6,8 @@
 //
 // The broker owns no event-emission concerns: callers pass a broadcast
 // callback to Ask. This keeps the package free of service-layer types and
-// lets each caller choose the event shape they emit (OperatorPromptPayload
-// with Source set, for example).
+// lets each caller choose the event shape they emit (a service.Blocker with
+// Source set, for example).
 package hitl
 
 import (
