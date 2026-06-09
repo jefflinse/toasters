@@ -128,6 +128,24 @@ func (st *SystemTools) Definitions() []runtime.ToolDef {
 			}`),
 		},
 		{
+			Name:        "retry_task",
+			Description: "Re-run a single failed task in place, on the same job, instead of creating a new job to redo the work. Use this when a task fails for a transient or fixable reason (an environment, dependency, or build issue, or something a clearer instruction would resolve). Optionally pass a different graph_id to retry on; by default it retries on the graph it failed on.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"task_id": {
+						"type": "string",
+						"description": "ID of the failed task to retry."
+					},
+					"graph_id": {
+						"type": "string",
+						"description": "Optional graph to retry on. Defaults to the graph the task previously failed on."
+					}
+				},
+				"required": ["task_id"]
+			}`),
+		},
+		{
 			Name:        "query_graphs",
 			Description: "List all available graphs with their ids, names, descriptions, and tags. Graphs are declarative, user-defined pipelines that execute a specific class of work — pick one before creating a task to target it (create_task graph_id, assign_task graph_id).",
 			Parameters: json.RawMessage(`{
@@ -191,6 +209,8 @@ func (st *SystemTools) Execute(ctx context.Context, name string, args json.RawMe
 		// same graph-dispatch code path the retired LLM tool used. Not
 		// exposed in Definitions() — no LLM surface for it.
 		return st.assignTask(ctx, args)
+	case "retry_task":
+		return st.retryTask(ctx, args)
 	case "query_graphs":
 		return st.queryGraphs()
 	case "query_job":
@@ -449,6 +469,98 @@ func (st *SystemTools) dispatchGraphTask(ctx context.Context, task *db.Task, job
 	return string(result), nil
 }
 
+// retryTask re-runs a failed task in place: it clears the prior failure, resets
+// the task to in_progress, and re-dispatches its graph — instead of the operator
+// improvising a whole new job (which duplicates work and leaves the original job
+// running). Mirrors the user-facing RetryTask path. graph_id is optional; it
+// defaults to the graph the task previously failed on.
+func (st *SystemTools) retryTask(ctx context.Context, args json.RawMessage) (string, error) {
+	var params struct {
+		TaskID  string `json:"task_id"`
+		GraphID string `json:"graph_id"`
+	}
+	if err := json.Unmarshal(args, &params); err != nil {
+		return "", fmt.Errorf("parsing retry_task args: %w", err)
+	}
+	if params.TaskID == "" {
+		return "", fmt.Errorf("task_id is required")
+	}
+	if st.graphExecutor == nil {
+		return "", fmt.Errorf("cannot retry task: no graph executor configured")
+	}
+
+	task, err := st.store.GetTask(ctx, params.TaskID)
+	if err != nil {
+		return "", fmt.Errorf("getting task: %w", err)
+	}
+	if task.Status != db.TaskStatusFailed {
+		return "", fmt.Errorf("task %q is %s, not failed — retry_task only re-runs failed tasks", task.Title, task.Status)
+	}
+
+	graphID := params.GraphID
+	if graphID == "" {
+		graphID = task.GraphID
+	}
+	if graphID == "" {
+		return "", fmt.Errorf("task %q has no graph to retry; pass graph_id (use query_graphs to list)", task.Title)
+	}
+	if st.graphCatalog != nil {
+		known := false
+		for _, g := range st.graphCatalog.Graphs() {
+			if g.ID == graphID {
+				known = true
+				break
+			}
+		}
+		if !known {
+			return "", fmt.Errorf("graph %q is not loaded (use query_graphs to list available graphs)", graphID)
+		}
+	}
+
+	job, err := st.store.GetJob(ctx, task.JobID)
+	if err != nil {
+		return "", fmt.Errorf("getting job for workspace: %w", err)
+	}
+	if err := validateWorkDir(job.WorkspaceDir); err != nil {
+		return "", fmt.Errorf("job workspace validation failed: %w", err)
+	}
+
+	// Clear the failure and reset to in_progress on the (possibly new) graph.
+	if err := st.store.RetryTask(ctx, task.ID, graphID); err != nil {
+		return "", fmt.Errorf("resetting task for retry: %w", err)
+	}
+
+	allTasks, err := st.store.ListTasksForJob(ctx, task.JobID)
+	if err != nil {
+		return "", fmt.Errorf("listing job tasks: %w", err)
+	}
+	req := graphexec.TaskRequest{
+		JobID:          task.JobID,
+		JobTitle:       job.Title,
+		JobDescription: job.Description,
+		TaskID:         task.ID,
+		TaskTitle:      task.Title,
+		GraphID:        graphID,
+		Siblings:       graphexec.FormatSiblingTitles(graphexec.SiblingTitles(allTasks, task.ID)),
+		WorkspaceDir:   job.WorkspaceDir,
+		ProviderName:   st.defaultProvider,
+		Model:          st.defaultModel,
+	}
+	go func() {
+		if err := st.graphExecutor.ExecuteTask(st.lifetimeCtx, req); err != nil {
+			slog.Error("retry graph task execution failed",
+				"task_id", req.TaskID, "job_id", req.JobID, "graph_id", req.GraphID, "error", err)
+		}
+	}()
+
+	if st.broadcaster != nil {
+		st.broadcaster.BroadcastTaskAssigned(task.ID, task.JobID, graphID, task.Title)
+	}
+	slog.Info("task retried", "task_id", task.ID, "job_id", task.JobID, "graph_id", graphID, "title", task.Title)
+
+	return fmt.Sprintf("Retrying task %q on graph %q in place (job %q is unchanged).", task.Title, graphID, job.Title), nil
+}
+
 // queryGraphs renders the loaded graph catalog as markdown for the LLM.
 // Each entry lists the graph id (what callers pass in graph_id), its name,
 // description, and tags so the decomposer / operator can pick the right
@@ -568,4 +680,3 @@ func (st *SystemTools) surfaceToUser(ctx context.Context, args json.RawMessage) 
 
 	return fmt.Sprintf("Surfaced to user: %s", params.Text), nil
 }
-

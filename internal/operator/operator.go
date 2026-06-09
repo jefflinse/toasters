@@ -254,7 +254,13 @@ func (o *Operator) handleEvent(ctx context.Context, ev Event) {
 		o.postFeedEntry(ctx, db.FeedEntryTaskFailed, content, payload.JobID)
 		slog.Warn("task failed", "task_id", payload.TaskID, "job_id", payload.JobID, "graph_id", payload.GraphID, "error", payload.Error)
 
-		msg := fmt.Sprintf("Task %q assigned to team %s has failed with error: %s\n\nPlease decide how to proceed.",
+		msg := fmt.Sprintf("Task %q (graph %s) failed with error: %s\n\n"+
+			"Decide how to proceed. If this looks transient or fixable — an environment, "+
+			"dependency, or build issue, or something a clearer instruction would resolve — "+
+			"prefer retry_task with this task_id to re-run it in place. Do NOT create a new "+
+			"job to redo work that is already partly done. If a human decision is needed, use "+
+			"ask_user or surface_to_user. Only create a new job when the work genuinely needs "+
+			"to be re-scoped from scratch.",
 			payload.TaskID, payload.GraphID, payload.Error)
 		o.sendToLLM(ctx, msg)
 

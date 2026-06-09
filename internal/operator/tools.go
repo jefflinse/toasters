@@ -154,7 +154,7 @@ func (ot *operatorTools) Definitions() []runtime.ToolDef {
 	// Task creation and graph assignment are no longer operator-driven —
 	// coarse-decompose and fine-decompose handle those automatically after
 	// create_job.
-	wantFromSystem := map[string]bool{"create_job": true}
+	wantFromSystem := map[string]bool{"create_job": true, "retry_task": true}
 	for _, td := range ot.systemTools.Definitions() {
 		if wantFromSystem[td.Name] {
 			defs = append(defs, td)
@@ -179,6 +179,8 @@ func (ot *operatorTools) Execute(ctx context.Context, name string, args json.Raw
 		return ot.setupWorkspace(ctx, args)
 	case "create_job":
 		return ot.systemTools.Execute(ctx, "create_job", args)
+	case "retry_task":
+		return ot.systemTools.Execute(ctx, "retry_task", args)
 	case "ask_user":
 		return ot.askUser(ctx, args)
 	default:
