@@ -57,6 +57,7 @@ type Operator struct {
 	onEvent     func(event Event)                                                    // called when the event loop processes an event
 	onTurnDone  func(tokensIn, tokensOut, reasoningTokens int)                       // called when the operator finishes processing a user message turn
 	onPrompt    func(requestID string, questions []PromptQuestion)                   // called when the operator calls ask_user
+	onResolve   func(requestID string)                                               // called when an ask_user request finishes (answered or cancelled)
 	onToolCall  func(name string, args json.RawMessage, result string, isError bool) // called after each operator tool executes
 }
 
@@ -93,6 +94,7 @@ type Config struct {
 	// for providers that don't surface them.
 	OnTurnDone  func(tokensIn, tokensOut, reasoningTokens int)
 	OnPrompt    func(requestID string, questions []PromptQuestion)                   // called when the operator calls ask_user
+	OnResolve   func(requestID string)                                               // called when an ask_user request finishes (answered or cancelled)
 	OnToolCall  func(name string, args json.RawMessage, result string, isError bool) // called after each operator tool executes
 	SessionFile string                                                               // path to persist the operator conversation (e.g. ~/.config/toasters/sessions/operator.json)
 	// LifetimeCtx is the service-level lifetime context, threaded into
@@ -147,6 +149,7 @@ func New(cfg Config) (*Operator, error) {
 		onEvent:      cfg.OnEvent,
 		onTurnDone:   cfg.OnTurnDone,
 		onPrompt:     cfg.OnPrompt,
+		onResolve:    cfg.OnResolve,
 		onToolCall:   cfg.OnToolCall,
 	}
 
@@ -251,7 +254,13 @@ func (o *Operator) handleEvent(ctx context.Context, ev Event) {
 		o.postFeedEntry(ctx, db.FeedEntryTaskFailed, content, payload.JobID)
 		slog.Warn("task failed", "task_id", payload.TaskID, "job_id", payload.JobID, "graph_id", payload.GraphID, "error", payload.Error)
 
-		msg := fmt.Sprintf("Task %q assigned to team %s has failed with error: %s\n\nPlease decide how to proceed.",
+		msg := fmt.Sprintf("Task %q (graph %s) failed with error: %s\n\n"+
+			"Decide how to proceed. If this looks transient or fixable — an environment, "+
+			"dependency, or build issue, or something a clearer instruction would resolve — "+
+			"prefer retry_task with this task_id to re-run it in place. Do NOT create a new "+
+			"job to redo work that is already partly done. If a human decision is needed, use "+
+			"ask_user or surface_to_user. Only create a new job when the work genuinely needs "+
+			"to be re-scoped from scratch.",
 			payload.TaskID, payload.GraphID, payload.Error)
 		o.sendToLLM(ctx, msg)
 
@@ -462,9 +471,27 @@ func (o *Operator) handleUserMessage(ctx context.Context, payload UserMessagePay
 	})
 
 	// Run the operator's turn — may involve multiple LLM round-trips if the
-	// LLM makes tool calls.
+	// LLM makes tool calls. Bounded so a model that keeps emitting tool calls,
+	// or keeps emitting malformed ones that fail validation, can't spin forever
+	// (small local models repeatedly mis-format ask_user/surface_to_user and
+	// would otherwise loop indefinitely on the validation error).
+	const (
+		maxTurnRounds              = 25 // LLM round-trips per user message
+		maxConsecutiveFailedRounds = 3  // rounds in which every tool call errored
+	)
+	var (
+		round             int
+		consecutiveFailed int
+		lastToolErr       string
+	)
 	for {
 		if ctx.Err() != nil {
+			return
+		}
+		round++
+		if round > maxTurnRounds {
+			slog.Warn("operator turn hit round cap", "max", maxTurnRounds)
+			o.emitText(fmt.Sprintf("[stopped after %d tool rounds without finishing this turn]", maxTurnRounds))
 			return
 		}
 
@@ -510,6 +537,7 @@ func (o *Operator) handleUserMessage(ctx context.Context, payload UserMessagePay
 		}
 
 		// Execute tool calls and feed results back.
+		failed := 0
 		for _, tc := range toolCalls {
 			slog.Info("operator tool call", "tool", tc.Name, "id", tc.ID)
 
@@ -518,6 +546,8 @@ func (o *Operator) handleUserMessage(ctx context.Context, payload UserMessagePay
 			if execErr != nil {
 				slog.Warn("operator tool execution error", "tool", tc.Name, "error", execErr)
 				result = fmt.Sprintf("error: %s", execErr.Error())
+				failed++
+				lastToolErr = execErr.Error()
 			}
 
 			// Surface the tool call to subscribers (the TUI renders it as a
@@ -532,6 +562,22 @@ func (o *Operator) handleUserMessage(ctx context.Context, payload UserMessagePay
 				Content:    result,
 				ToolCallID: tc.ID,
 			})
+		}
+
+		// Circuit breaker: if every tool call in this round failed, count it.
+		// A run of all-failed rounds means the model is stuck (typically
+		// re-emitting a malformed call against the same schema) — stop and
+		// surface the last error rather than burn the model in a tight loop.
+		if failed == len(toolCalls) {
+			consecutiveFailed++
+			if consecutiveFailed >= maxConsecutiveFailedRounds {
+				slog.Warn("operator turn aborted: consecutive failed tool rounds",
+					"rounds", consecutiveFailed, "last_error", lastToolErr)
+				o.emitText(fmt.Sprintf("[stopped after %d straight rounds of failed tool calls — last error: %s]", consecutiveFailed, lastToolErr))
+				return
+			}
+		} else {
+			consecutiveFailed = 0
 		}
 
 		// Loop — send tool results back to LLM for the next response.
@@ -564,6 +610,12 @@ func (o *Operator) promptUser(ctx context.Context, requestID string, questions [
 		if o.onPrompt != nil {
 			o.onPrompt(requestID, questions)
 		}
+	}
+	// Resolve the blocker once Ask returns, whether the user answered or the
+	// turn's context was cancelled. Mirrors the graph-node path so the Blockers
+	// queue stays consistent regardless of which side raised the request.
+	if o.onResolve != nil {
+		defer o.onResolve(requestID)
 	}
 	return o.broker.Ask(ctx, requestID, broadcast)
 }

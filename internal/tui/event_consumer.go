@@ -112,12 +112,14 @@ func translateEvent(ev service.Event) tea.Msg {
 			return nil
 		}
 		return progressPollMsg{
-			Jobs:        p.State.Jobs,
-			Tasks:       p.State.Tasks,
-			Progress:    p.State.Reports,
-			Sessions:    p.State.ActiveSessions,
-			FeedEntries: p.State.FeedEntries,
-			MCPServers:  p.State.MCPServers,
+			Jobs:          p.State.Jobs,
+			Tasks:         p.State.Tasks,
+			Progress:      p.State.Reports,
+			Sessions:      p.State.ActiveSessions,
+			LiveSnapshots: p.State.LiveSnapshots,
+			GraphNodes:    p.State.ActiveGraphNodes,
+			FeedEntries:   p.State.FeedEntries,
+			MCPServers:    p.State.MCPServers,
 		}
 
 	case service.EventTypeSessionStarted:
@@ -271,18 +273,19 @@ func translateEvent(ev service.Event) tea.Msg {
 		}
 		return handleOperationFailed(p)
 
-	case service.EventTypeOperatorPrompt:
-		p, ok := ev.Payload.(service.OperatorPromptPayload)
+	case service.EventTypeBlockerAdded:
+		p, ok := ev.Payload.(service.Blocker)
 		if !ok {
 			return nil
 		}
-		return OperatorPromptMsg{
-			RequestID: p.RequestID,
-			Question:  p.Question,
-			Options:   p.Options,
-			Questions: p.Questions,
-			Source:    p.Source,
+		return BlockerAddedMsg{Blocker: p}
+
+	case service.EventTypeBlockerResolved:
+		p, ok := ev.Payload.(service.BlockerResolvedPayload)
+		if !ok {
+			return nil
 		}
+		return BlockerResolvedMsg{RequestID: p.RequestID}
 
 	case service.EventTypeJobCreated,
 		service.EventTypeTaskCreated,

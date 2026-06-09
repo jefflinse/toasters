@@ -249,6 +249,24 @@ func (m *Model) View() tea.View {
 		return v
 	}
 
+	// Blockers selection modal — centered overlay.
+	if m.blockersModal.show {
+		v := tea.NewView(m.renderBlockersModal())
+		v.AltScreen = true
+		v.MouseMode = tea.MouseModeCellMotion
+		return v
+	}
+
+	// Blocker answer wizard — centered overlay. Answering happens in a modal,
+	// not the chat input, so it continues on the surface the selection dialog
+	// opened on rather than dropping focus to the bottom of the screen.
+	if m.prompt.promptMode {
+		v := tea.NewView(m.renderPromptModal())
+		v.AltScreen = true
+		v.MouseMode = tea.MouseModeCellMotion
+		return v
+	}
+
 	// Operator modal takes over the full terminal.
 	if m.operatorModal.show {
 		operatorView := m.renderOperatorModal()
@@ -366,7 +384,6 @@ func (m *Model) View() tea.View {
 	// Determine chat content and input area.
 	var chatContent string
 	var inputOrStatus string
-	var promptExtraLines int // lines the prompt widget exceeds the normal input area
 	{
 		chatContent = m.chatViewport.View()
 
@@ -412,24 +429,16 @@ func (m *Model) View() tea.View {
 			}
 		}
 
-		var inputArea string
-		if m.prompt.promptMode {
-			inputArea = m.renderPromptWidget(mainWidth, inputStyle)
-		} else {
-			inputArea = inputStyle.Width(mainWidth).Render(m.input.View())
-			if n := len(m.chat.queuedMessages); n > 0 {
-				label := fmt.Sprintf("  %d queued · sends when operator finishes", n)
-				if n == 1 {
-					label = "  1 queued · sends when operator finishes"
-				}
-				inputArea = lipgloss.JoinVertical(lipgloss.Left, inputArea, DimStyle.Render(label))
+		// Prompt mode (answering a blocker) renders as a centered modal and
+		// returns early from View, so the input area here is always the normal
+		// textarea.
+		inputArea := inputStyle.Width(mainWidth).Render(m.input.View())
+		if n := len(m.chat.queuedMessages); n > 0 {
+			label := fmt.Sprintf("  %d queued · sends when operator finishes", n)
+			if n == 1 {
+				label = "  1 queued · sends when operator finishes"
 			}
-		}
-		if m.prompt.promptMode {
-			normalH := inputHeight + InputAreaStyle.GetVerticalFrameSize()
-			if extra := lipgloss.Height(inputArea) - normalH; extra > 0 {
-				promptExtraLines = extra
-			}
+			inputArea = lipgloss.JoinVertical(lipgloss.Left, inputArea, DimStyle.Render(label))
 		}
 		if flashLine != "" {
 			inputOrStatus = lipgloss.JoinVertical(lipgloss.Left, flashLine, inputArea)
@@ -468,18 +477,6 @@ func (m *Model) View() tea.View {
 		popupHeight := len(m.cmdPopup.filteredCmds)
 		lines := strings.Split(chatContent, "\n")
 		trimTo := len(lines) - popupHeight
-		if trimTo < 0 {
-			trimTo = 0
-		}
-		chatContent = strings.Join(lines[:trimTo], "\n")
-	}
-
-	// Trim chatContent when in prompt mode to prevent overflow. The prompt
-	// widget is taller than the normal input area (byline + question that may
-	// wrap + N options + hint); promptExtraLines holds its measured overage.
-	if promptExtraLines > 0 {
-		lines := strings.Split(chatContent, "\n")
-		trimTo := len(lines) - promptExtraLines
 		if trimTo < 0 {
 			trimTo = 0
 		}
@@ -996,19 +993,17 @@ func (m *Model) resizeComponents() {
 	m.updateViewportContent()
 }
 
-// renderPromptWidget renders the prompt mode input area, replacing the normal textarea.
-// In option-selection mode (promptCustom == false) it shows a numbered list of choices.
-// In custom-text mode (promptCustom == true) it shows the question above the textarea.
-// style is the InputAreaStyle variant to use (may have dimmed borders when unfocused).
-func (m Model) renderPromptWidget(width int, style lipgloss.Style) string {
+// promptWidgetInner builds the prompt wizard content (byline, question, and
+// either the option list or the custom-text input, plus a hint). It is shared
+// by the inline widget and the centered prompt modal.
+func (m Model) promptWidgetInner() string {
 	byline := m.promptByline()
 	question := HeaderStyle.Render(m.prompt.promptQuestion)
 
 	if m.prompt.promptCustom {
 		// Custom text mode: byline + question above the normal textarea.
 		hint := DimStyle.Render("Enter to submit · Esc to go back")
-		inner := lipgloss.JoinVertical(lipgloss.Left, byline, question, m.input.View(), hint)
-		return style.Width(width).Render(inner)
+		return lipgloss.JoinVertical(lipgloss.Left, byline, question, m.input.View(), hint)
 	}
 
 	// Option selection mode: numbered list with cursor.
@@ -1044,7 +1039,7 @@ func (m Model) renderPromptWidget(width int, style lipgloss.Style) string {
 	}
 	hint := DimStyle.Render(hintText)
 
-	inner := lipgloss.JoinVertical(lipgloss.Left,
+	return lipgloss.JoinVertical(lipgloss.Left,
 		byline,
 		question,
 		"",
@@ -1052,7 +1047,39 @@ func (m Model) renderPromptWidget(width int, style lipgloss.Style) string {
 		"",
 		hint,
 	)
-	return style.Width(width).Render(inner)
+}
+
+// renderPromptModal renders the blocker answer wizard as a centered overlay.
+// Blockers are answered in a modal (not the chat input) so the flow continues
+// the same surface the selection dialog opened on. The textarea is sized to the
+// modal for this render and restored afterward so the normal input is unaffected.
+func (m *Model) renderPromptModal() string {
+	modalW := m.width * 2 / 3
+	if modalW < 50 {
+		modalW = 50
+	}
+	if modalW > m.width-4 {
+		modalW = m.width - 4
+	}
+	innerW := modalW - 6
+	if innerW < 1 {
+		innerW = 1
+	}
+
+	saved := m.input.Width()
+	m.input.SetWidth(innerW)
+	content := m.promptWidgetInner()
+	m.input.SetWidth(saved)
+
+	modalStyle := lipgloss.NewStyle().
+		Width(modalW).
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(ColorStreaming).
+		Padding(0, 2)
+	modal := modalStyle.Render(content)
+
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, modal,
+		lipgloss.WithWhitespaceStyle(lipgloss.NewStyle().Background(lipgloss.Color("235"))))
 }
 
 // promptByline renders the asker label for the live prompt widget, plus the
@@ -1065,6 +1092,10 @@ func (m Model) promptByline() string {
 		label = strings.TrimPrefix(src, "graph:") + " asks"
 	}
 	line := HeaderStyle.Render("◆ " + label)
+	// Name the job the blocker is gating so "who is asking about what" is clear.
+	if title := m.jobTitle(m.prompt.jobID); title != "" {
+		line += DimStyle.Render("  ·  " + title)
+	}
 	if n := len(m.prompt.round); n > 1 {
 		line += DimStyle.Render(fmt.Sprintf("  ·  question %d of %d", m.prompt.roundIndex+1, n))
 	}
@@ -1139,7 +1170,9 @@ func (m *Model) updateViewportContent() {
 	// so the still-running cards sink to the bottom of the run and stay the most
 	// visible. i remains the real entry index, so selection/collapse maps and
 	// the streaming tail below are unaffected — only render order changes.
-	for _, i := range workerStreamDisplayOrder(m.chat.entries) {
+	order := workerStreamDisplayOrder(m.chat.entries)
+	for pos := 0; pos < len(order); pos++ {
+		i := order[pos]
 		entry := m.chat.entries[i]
 		// Structured entries render from a typed payload, bypassing the
 		// role-based message dispatch.
@@ -1169,6 +1202,84 @@ func (m *Model) updateViewportContent() {
 			continue
 		}
 		if entry.Kind == service.ChatEntryKindWorkerStream {
+			// Whole-task roll-up: a contiguous run of cards for one task that are
+			// ALL done collapses to a single "✓ <task>" line. Takes precedence
+			// over the fan-out group roll-up below (it subsumes it). Skipped when
+			// the task is still running or a member is selected (then it expands
+			// to its cards / fan-out groups).
+			if taskID := entry.WorkerStream.TaskID; taskID != "" {
+				members := []int{i}
+				j := pos + 1
+				for j < len(order) {
+					e2 := m.chat.entries[order[j]]
+					if e2.Kind == service.ChatEntryKindWorkerStream && e2.WorkerStream != nil && e2.WorkerStream.TaskID == taskID {
+						members = append(members, order[j])
+						j++
+						continue
+					}
+					break
+				}
+				if len(members) >= 2 {
+					allDone, selectedInside := true, false
+					for _, mi := range members {
+						if !m.chat.entries[mi].WorkerStream.Done {
+							allDone = false
+						}
+						if mi == m.chat.selectedMsgIdx {
+							selectedInside = true
+						}
+					}
+					if allDone {
+						if selectedInside {
+							// Expand the whole task to its cards (consuming the run
+							// so the remainder isn't re-collapsed) when a member is
+							// selected — arrow-nav and deep-link reach every node.
+							for _, mi := range members {
+								block := m.renderWorkerStreamBlock(m.chat.entries[mi].WorkerStream, contentWidth, mi == m.chat.selectedMsgIdx)
+								if block != "" {
+									sb.WriteString(block + "\n\n")
+								}
+							}
+						} else if block := m.renderTaskSummary(members, contentWidth); block != "" {
+							sb.WriteString(block + "\n\n")
+						}
+						pos = j - 1
+						continue
+					}
+				}
+			}
+			// Roll up a completed fan-out group (a contiguous run of branch/judge
+			// cards sharing one parent) into a single summary line — unless its
+			// selection is active, in which case expand it so arrow-navigation and
+			// deep-link still reach each branch.
+			if key, ok := fanoutGroupKey(entry); ok {
+				members := []int{i}
+				j := pos + 1
+				for j < len(order) {
+					if k2, ok2 := fanoutGroupKey(m.chat.entries[order[j]]); ok2 && k2 == key {
+						members = append(members, order[j])
+						j++
+						continue
+					}
+					break
+				}
+				allDone, selectedInside := true, false
+				for _, mi := range members {
+					if !m.chat.entries[mi].WorkerStream.Done {
+						allDone = false
+					}
+					if mi == m.chat.selectedMsgIdx {
+						selectedInside = true
+					}
+				}
+				if len(members) >= 2 && allDone && !selectedInside {
+					if block := m.renderFanoutGroupSummary(members, contentWidth); block != "" {
+						sb.WriteString(block + "\n\n")
+					}
+					pos = j - 1
+					continue
+				}
+			}
 			selected := m.chat.selectedMsgIdx == i
 			block := m.renderWorkerStreamBlock(entry.WorkerStream, contentWidth, selected)
 			if block != "" {
@@ -1318,6 +1429,12 @@ func (m *Model) updateViewportContent() {
 			// Live reasoning trace — the model is actually thinking out loud.
 			sb.WriteString(indentLines(renderReasoningBlock(m.stream.currentReasoning, contentWidth-AssistantMsgIndent), AssistantMsgIndent))
 			sb.WriteString("\n")
+		case m.stream.currentResponse == "" && len(m.blockers) > 0:
+			// The turn is parked on an ask_user blocker waiting for a human
+			// response — it's not working, it's blocked. Point the user at the
+			// panel rather than implying progress.
+			label := fmt.Sprintf("⛔ waiting on input · Tab → Blockers (%d)", len(m.blockers))
+			sb.WriteString(streamIndent + ReasoningStyle.Render(label) + "\n\n")
 		case m.stream.currentResponse == "":
 			// Pre-token gap. A static label rather than an animated spinner —
 			// chat content only re-renders on events, so a braille spinner here

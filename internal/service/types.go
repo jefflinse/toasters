@@ -188,6 +188,20 @@ type SessionSnapshot struct {
 	TokensOut int64
 }
 
+// GraphNodeSnapshot describes a graph node that is currently executing. Graph
+// nodes run via the graph engine rather than as runtime worker sessions, so
+// they don't appear in SessionSnapshot/WorkerSession; the progress snapshot
+// carries them separately so a reconnecting client can rebuild the Workers
+// panel for an in-flight graph job. SessionID follows the "graph:<taskID>:<node>"
+// convention the TUI already uses for graph-node pseudo-sessions.
+type GraphNodeSnapshot struct {
+	SessionID string
+	JobID     string
+	TaskID    string
+	Node      string
+	StartedAt time.Time
+}
+
 // SessionDetail is a full view of a session including its accumulated output
 // and activity history. Used for the output modal and for reconnect hydration
 // (B4 concern: clients call Sessions().Get(id) on reconnect to rebuild state).
@@ -645,6 +659,12 @@ type ProgressState struct {
 	// runtime. These carry real-time token counts before the session writes to DB.
 	LiveSnapshots []SessionSnapshot
 
+	// ActiveGraphNodes is the list of currently-executing graph nodes. Graph
+	// nodes aren't runtime worker sessions, so they don't appear in
+	// ActiveSessions/LiveSnapshots; carrying them here lets a reconnecting client
+	// rebuild the Workers panel for an in-flight graph job.
+	ActiveGraphNodes []GraphNodeSnapshot
+
 	// FeedEntries is the most recent activity feed entries (newest first).
 	FeedEntries []FeedEntry
 
@@ -704,4 +724,3 @@ type HealthStatus struct {
 	Version string        // application version
 	Uptime  time.Duration // time since the service started
 }
-

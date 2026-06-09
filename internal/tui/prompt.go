@@ -177,13 +177,19 @@ func (m *Model) finalizePrompt() tea.Cmd {
 	}
 }
 
-// cancelPrompt abandons the whole round and unblocks the waiter with a
-// cancellation marker. No user bubble is echoed for a cancel.
+// cancelPrompt abandons the whole round. When the round was opened from a
+// blocker, Esc merely backs out of answering — the blocker stays queued and the
+// waiter keeps waiting; dismissing a blocker is the panel's explicit 'x'. For a
+// non-blocker round, the waiter is unblocked with a cancellation marker.
 func (m *Model) cancelPrompt() tea.Cmd {
+	fromBlocker := m.prompt.fromBlocker
 	requestID := m.prompt.requestID
 	m.prompt = promptModeState{}
 	m.input.Reset()
 
+	if fromBlocker {
+		return nil
+	}
 	if requestID == "" || m.svc == nil {
 		return nil
 	}

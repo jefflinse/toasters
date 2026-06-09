@@ -1,6 +1,7 @@
 package operator
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -153,7 +154,7 @@ func (ot *operatorTools) Definitions() []runtime.ToolDef {
 	// Task creation and graph assignment are no longer operator-driven —
 	// coarse-decompose and fine-decompose handle those automatically after
 	// create_job.
-	wantFromSystem := map[string]bool{"create_job": true}
+	wantFromSystem := map[string]bool{"create_job": true, "retry_task": true}
 	for _, td := range ot.systemTools.Definitions() {
 		if wantFromSystem[td.Name] {
 			defs = append(defs, td)
@@ -178,6 +179,8 @@ func (ot *operatorTools) Execute(ctx context.Context, name string, args json.Raw
 		return ot.setupWorkspace(ctx, args)
 	case "create_job":
 		return ot.systemTools.Execute(ctx, "create_job", args)
+	case "retry_task":
+		return ot.systemTools.Execute(ctx, "retry_task", args)
 	case "ask_user":
 		return ot.askUser(ctx, args)
 	default:
@@ -234,18 +237,29 @@ func (ot *operatorTools) queryGraphs(ctx context.Context) (string, error) {
 
 func (ot *operatorTools) askUser(ctx context.Context, args json.RawMessage) (string, error) {
 	var params struct {
-		Questions []PromptQuestion `json:"questions"`
-		Question  string           `json:"question"`
-		Options   []string         `json:"options"`
+		Questions json.RawMessage `json:"questions"`
+		Question  string          `json:"question"`
+		Options   []string        `json:"options"`
 	}
 	if err := json.Unmarshal(args, &params); err != nil {
 		return "", fmt.Errorf("parsing ask_user args: %w", err)
 	}
 
-	questions := params.Questions
+	questions, err := parsePromptQuestions(params.Questions)
+	if err != nil {
+		return "", fmt.Errorf("parsing ask_user questions: %w", err)
+	}
 	if len(questions) == 0 && params.Question != "" {
-		// Single-question shorthand.
-		questions = []PromptQuestion{{Question: params.Question, Options: params.Options}}
+		// Single-question shorthand — but the model sometimes packs the whole
+		// questions array into this string field too, so route it through the
+		// same lenient/recursive parser.
+		qs, perr := questionsFromString(params.Question)
+		if perr == nil && len(qs) > 0 {
+			questions = qs
+			if len(questions) == 1 && len(questions[0].Options) == 0 {
+				questions[0].Options = params.Options
+			}
+		}
 	}
 	if len(questions) == 0 {
 		return "", fmt.Errorf("ask_user requires at least one question")
@@ -261,6 +275,85 @@ func (ot *operatorTools) askUser(ctx context.Context, args json.RawMessage) (str
 
 	requestID := fmt.Sprintf("ask-%d", time.Now().UnixNano())
 	return ot.promptUser(ctx, requestID, questions)
+}
+
+// parsePromptQuestions leniently decodes the ask_user "questions" field. Small
+// local models emit it inconsistently — a bare string, an array of strings, a
+// single object, or the intended array of {question, options} objects — and a
+// strict []PromptQuestion unmarshal rejects all but the last, leaving the
+// operator unable to ask anything. Accept all of these shapes.
+func parsePromptQuestions(raw json.RawMessage) ([]PromptQuestion, error) {
+	raw = bytes.TrimSpace(raw)
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil, nil
+	}
+	switch raw[0] {
+	case '"':
+		// Bare string → a free-form question, unless it's itself JSON.
+		var s string
+		if err := json.Unmarshal(raw, &s); err != nil {
+			return nil, err
+		}
+		return questionsFromString(s)
+	case '{':
+		// Single object → one question.
+		var q PromptQuestion
+		if err := json.Unmarshal(raw, &q); err != nil {
+			return nil, err
+		}
+		return []PromptQuestion{q}, nil
+	case '[':
+		// Array of strings and/or objects, mixed.
+		var elems []json.RawMessage
+		if err := json.Unmarshal(raw, &elems); err != nil {
+			return nil, err
+		}
+		var out []PromptQuestion
+		for _, el := range elems {
+			el = bytes.TrimSpace(el)
+			if len(el) == 0 {
+				continue
+			}
+			if el[0] == '"' {
+				var s string
+				if err := json.Unmarshal(el, &s); err != nil {
+					return nil, err
+				}
+				qs, err := questionsFromString(s)
+				if err != nil {
+					return nil, err
+				}
+				out = append(out, qs...)
+			} else {
+				var q PromptQuestion
+				if err := json.Unmarshal(el, &q); err != nil {
+					return nil, err
+				}
+				out = append(out, q)
+			}
+		}
+		return out, nil
+	default:
+		return nil, fmt.Errorf("unexpected questions JSON: %s", string(raw))
+	}
+}
+
+// questionsFromString turns a string value into questions. Models sometimes
+// double-encode — packing the whole questions array into a JSON string — so if
+// the (trimmed) content is itself JSON, parse it recursively; otherwise it's a
+// single free-form question. Recursion is bounded: the recursive call only
+// happens for '['/'{'-leading content, which never re-enters this string path.
+func questionsFromString(s string) ([]PromptQuestion, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return nil, nil
+	}
+	if s[0] == '[' || s[0] == '{' {
+		if qs, err := parsePromptQuestions(json.RawMessage(s)); err == nil && len(qs) > 0 {
+			return qs, nil
+		}
+	}
+	return []PromptQuestion{{Question: s}}, nil
 }
 
 // operatorToolsToProviderTools converts operator tool definitions to provider.Tool format.

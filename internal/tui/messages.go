@@ -53,9 +53,10 @@ func (m *Model) addToast(message string, level toastLevel) tea.Cmd {
 type focusedPanel int
 
 const (
-	focusChat   focusedPanel = iota
-	focusJobs   focusedPanel = iota
-	focusAgents focusedPanel = iota
+	focusChat     focusedPanel = iota
+	focusJobs     focusedPanel = iota
+	focusBlockers focusedPanel = iota
+	focusAgents   focusedPanel = iota
 )
 
 // SessionStats tracks session-level statistics displayed in the sidebar.
@@ -91,12 +92,17 @@ func estimateTokens(s string) int {
 // events. Note: it no longer carries runtime session info — those flow through
 // dedicated session.* events into m.runtimeSessions.
 type progressPollMsg struct {
-	Jobs        []service.Job
-	Tasks       map[string][]service.Task
-	Progress    map[string][]service.ProgressReport
-	Sessions    []service.WorkerSession
-	FeedEntries []service.FeedEntry       // recent activity feed entries
-	MCPServers  []service.MCPServerStatus // MCP server connection status
+	Jobs     []service.Job
+	Tasks    map[string][]service.Task
+	Progress map[string][]service.ProgressReport
+	Sessions []service.WorkerSession
+	// LiveSnapshots and GraphNodes let the handler rebuild runtime slots that
+	// were only ever created from live session.*/graph.node_* events — so the
+	// Workers panel rehydrates after a reconnect (the SSE stream isn't replayed).
+	LiveSnapshots []service.SessionSnapshot
+	GraphNodes    []service.GraphNodeSnapshot
+	FeedEntries   []service.FeedEntry       // recent activity feed entries
+	MCPServers    []service.MCPServerStatus // MCP server connection status
 }
 
 // progressPollTickMsg is an internal tick that triggers the next poll.
@@ -243,6 +249,7 @@ type AppReadyMsg struct {
 	ModelName        string              // canonical operator model name from the server config
 	Endpoint         string              // operator's LLM provider endpoint URL
 	History          []service.ChatEntry // persisted chat history from server (oldest first)
+	Blockers         []service.Blocker   // pending ask_user blockers to rehydrate the panel
 	OperatorDisabled bool                // true if no operator provider is configured
 }
 
@@ -335,17 +342,19 @@ type OperatorEventMsg struct {
 	Event service.Event
 }
 
-// OperatorPromptMsg is sent when the operator calls ask_user and needs input.
-type OperatorPromptMsg struct {
+// BlockerAddedMsg is sent when a new blocker (a pending ask_user request from
+// the operator or a graph node) arrives. Produced by the event consumer from
+// an EventTypeBlockerAdded event. The TUI queues it in the Blockers panel,
+// records it in chat history, and toasts — it does NOT prompt inline.
+type BlockerAddedMsg struct {
+	Blocker service.Blocker
+}
+
+// BlockerResolvedMsg is sent when a pending blocker is resolved (answered here
+// or elsewhere, or its caller's context was cancelled). Produced from an
+// EventTypeBlockerResolved event. The TUI removes it from the Blockers panel.
+type BlockerResolvedMsg struct {
 	RequestID string
-	Question  string
-	Options   []string
-	// Questions carries a multi-question round. When non-empty the TUI runs a
-	// wizard over all of them and returns a single combined answer. When empty,
-	// it's a single Question/Options prompt (e.g. a graph-node interrupt).
-	Questions []service.PromptQuestion
-	// Source identifies the asker: "" = operator, "graph:<node>" = graph interrupt.
-	Source string
 }
 
 // OperatorToolCallMsg is sent after the operator executes one of its tools.

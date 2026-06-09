@@ -156,6 +156,13 @@ func sendInitialAppReady(svc service.Service, p *atomic.Pointer[tea.Program], se
 		slog.Warn("failed to fetch chat history during startup", "error", err)
 	}
 
+	// Pull any pending blockers so the Blockers panel rehydrates on reconnect.
+	// Best-effort — an empty list is fine.
+	blockers, err := svc.Operator().Blockers(ctx)
+	if err != nil {
+		slog.Warn("failed to fetch blockers during startup", "error", err)
+	}
+
 	// Wait for the event consumer to subscribe before pushing AppReadyMsg —
 	// this prevents the consumer from missing startup events that fire as
 	// the connection comes up.
@@ -175,6 +182,7 @@ func sendInitialAppReady(svc service.Service, p *atomic.Pointer[tea.Program], se
 			ModelName:        modelName,
 			Endpoint:         endpoint,
 			History:          history,
+			Blockers:         blockers,
 			OperatorDisabled: operatorDisabled,
 		})
 	}

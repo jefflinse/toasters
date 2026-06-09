@@ -404,6 +404,7 @@ func TestSystemToolDefinitions(t *testing.T) {
 
 	expectedTools := []string{
 		"create_job",
+		"retry_task",
 		"query_graphs",
 		"query_job",
 		"query_job_context",

@@ -1322,7 +1322,7 @@ func (m *Model) setFocus(p focusedPanel) tea.Cmd {
 		return nil
 	}
 	m.focused = p
-	if (p == focusJobs || p == focusAgents) && !m.spinnerRunning {
+	if (p == focusJobs || p == focusBlockers || p == focusAgents) && !m.spinnerRunning {
 		m.spinnerRunning = true
 		return spinnerTick()
 	}

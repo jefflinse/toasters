@@ -210,7 +210,16 @@ type wireProgressState struct {
 	Reports        map[string][]wireProgressReport `json:"reports"`
 	ActiveSessions []wireWorkerSession             `json:"active_sessions"`
 	LiveSnapshots  []wireSessionSnapshot           `json:"live_snapshots"`
+	GraphNodes     []wireGraphNode                 `json:"active_graph_nodes,omitempty"`
 	FeedEntries    []wireFeedEntry                 `json:"feed_entries"`
+}
+
+type wireGraphNode struct {
+	SessionID string    `json:"session_id"`
+	JobID     string    `json:"job_id"`
+	TaskID    string    `json:"task_id"`
+	Node      string    `json:"node"`
+	StartedAt time.Time `json:"started_at"`
 }
 
 type wireWorkerSession struct {
@@ -320,12 +329,17 @@ type wireOperatorToolCallPayload struct {
 	IsError bool            `json:"is_error,omitempty"`
 }
 
-type wireOperatorPromptPayload struct {
+type wireBlockerPayload struct {
 	RequestID string               `json:"request_id"`
-	Question  string               `json:"question"`
-	Options   []string             `json:"options,omitempty"`
-	Questions []wirePromptQuestion `json:"questions,omitempty"`
 	Source    string               `json:"source,omitempty"`
+	JobID     string               `json:"job_id,omitempty"`
+	TaskID    string               `json:"task_id,omitempty"`
+	Questions []wirePromptQuestion `json:"questions,omitempty"`
+	CreatedAt time.Time            `json:"created_at"`
+}
+
+type wireBlockerResolvedPayload struct {
+	RequestID string `json:"request_id"`
 }
 
 type wirePromptQuestion struct {
@@ -793,18 +807,26 @@ func wireProgressStateToService(w wireProgressState) service.ProgressState {
 		liveSnapshots = append(liveSnapshots, wireSessionSnapshotToService(s))
 	}
 
+	graphNodes := make([]service.GraphNodeSnapshot, 0, len(w.GraphNodes))
+	for _, gn := range w.GraphNodes {
+		graphNodes = append(graphNodes, service.GraphNodeSnapshot{
+			SessionID: gn.SessionID, JobID: gn.JobID, TaskID: gn.TaskID, Node: gn.Node, StartedAt: gn.StartedAt,
+		})
+	}
+
 	feedEntries := make([]service.FeedEntry, 0, len(w.FeedEntries))
 	for _, fe := range w.FeedEntries {
 		feedEntries = append(feedEntries, wireFeedEntryToService(fe))
 	}
 
 	return service.ProgressState{
-		Jobs:           jobs,
-		Tasks:          tasks,
-		Reports:        reports,
-		ActiveSessions: activeSessions,
-		LiveSnapshots:  liveSnapshots,
-		FeedEntries:    feedEntries,
+		Jobs:             jobs,
+		Tasks:            tasks,
+		Reports:          reports,
+		ActiveSessions:   activeSessions,
+		LiveSnapshots:    liveSnapshots,
+		ActiveGraphNodes: graphNodes,
+		FeedEntries:      feedEntries,
 	}
 }
 
@@ -864,21 +886,29 @@ func parseSSEPayload(eventType string, raw json.RawMessage) (any, error) {
 			ReasoningTokens: w.ReasoningTokens,
 		}, nil
 
-	case service.EventTypeOperatorPrompt:
-		var w wireOperatorPromptPayload
+	case service.EventTypeBlockerAdded:
+		var w wireBlockerPayload
 		if err := json.Unmarshal(raw, &w); err != nil {
-			return nil, fmt.Errorf("decoding operator.prompt payload: %w", err)
+			return nil, fmt.Errorf("decoding blocker.added payload: %w", err)
 		}
-		p := service.OperatorPromptPayload{
+		p := service.Blocker{
 			RequestID: w.RequestID,
-			Question:  w.Question,
-			Options:   w.Options,
 			Source:    w.Source,
+			JobID:     w.JobID,
+			TaskID:    w.TaskID,
+			CreatedAt: w.CreatedAt,
 		}
 		for _, q := range w.Questions {
 			p.Questions = append(p.Questions, service.PromptQuestion{Question: q.Question, Options: q.Options})
 		}
 		return p, nil
+
+	case service.EventTypeBlockerResolved:
+		var w wireBlockerResolvedPayload
+		if err := json.Unmarshal(raw, &w); err != nil {
+			return nil, fmt.Errorf("decoding blocker.resolved payload: %w", err)
+		}
+		return service.BlockerResolvedPayload{RequestID: w.RequestID}, nil
 
 	case service.EventTypeJobCreated:
 		var w wireJobCreatedPayload

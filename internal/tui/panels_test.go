@@ -3,8 +3,6 @@ package tui
 import (
 	"strings"
 	"testing"
-
-	"charm.land/lipgloss/v2"
 )
 
 func TestLeftPanelWidth(t *testing.T) {
@@ -267,7 +265,7 @@ func TestEffectiveLeftPanelWidth(t *testing.T) {
 	}
 }
 
-func TestRenderPromptWidget(t *testing.T) {
+func TestPromptWidgetInner(t *testing.T) {
 	t.Parallel()
 
 	t.Run("option selection mode shows numbered options", func(t *testing.T) {
@@ -281,7 +279,7 @@ func TestRenderPromptWidget(t *testing.T) {
 		m.prompt.promptOptions = []string{"Team Alpha", "Team Beta"}
 		m.prompt.promptSelected = 0
 
-		result := m.renderPromptWidget(80, lipgloss.NewStyle())
+		result := m.promptWidgetInner()
 
 		// Should contain the question.
 		if !strings.Contains(result, "Which team should handle this?") {
@@ -321,7 +319,7 @@ func TestRenderPromptWidget(t *testing.T) {
 		m.prompt.promptOptions = []string{"Option A", "Option B"}
 		m.prompt.promptSelected = 1
 
-		result := m.renderPromptWidget(80, lipgloss.NewStyle())
+		result := m.promptWidgetInner()
 
 		// Both options should be present.
 		if !strings.Contains(result, "Option A") {
@@ -341,7 +339,7 @@ func TestRenderPromptWidget(t *testing.T) {
 		m.prompt.promptCustom = true
 		m.prompt.promptQuestion = "Enter your custom response"
 
-		result := m.renderPromptWidget(80, InputAreaStyle)
+		result := m.promptWidgetInner()
 
 		// Should contain the question.
 		if !strings.Contains(result, "Enter your custom response") {
@@ -364,7 +362,7 @@ func TestRenderPromptWidget(t *testing.T) {
 		m.prompt.promptOptions = nil
 		m.prompt.promptSelected = 0
 
-		result := m.renderPromptWidget(80, lipgloss.NewStyle())
+		result := m.promptWidgetInner()
 
 		// Should still contain "Custom response..." as the only option.
 		if !strings.Contains(result, "Custom response...") {

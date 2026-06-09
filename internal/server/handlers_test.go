@@ -51,6 +51,8 @@ type mockOperatorService struct {
 		requestID string
 		response  string
 	}
+	blockers    []service.Blocker
+	blockersErr error
 }
 
 func (m *mockOperatorService) SendMessage(_ context.Context, _ string) (string, error) {
@@ -71,6 +73,10 @@ func (m *mockOperatorService) Status(_ context.Context) (service.OperatorStatus,
 
 func (m *mockOperatorService) History(_ context.Context) ([]service.ChatEntry, error) {
 	return nil, nil
+}
+
+func (m *mockOperatorService) Blockers(_ context.Context) ([]service.Blocker, error) {
+	return m.blockers, m.blockersErr
 }
 
 type mockDefinitionService struct{}
@@ -166,6 +172,41 @@ func (m *mockSystemService) UpdateSettings(_ context.Context, _ service.Settings
 // ---------------------------------------------------------------------------
 // Handler tests
 // ---------------------------------------------------------------------------
+
+func TestOperatorBlockers_ReturnsQueue(t *testing.T) {
+	t.Parallel()
+
+	mockSvc := newMockService()
+	mockSvc.operator.blockers = []service.Blocker{
+		{RequestID: "req-1", Source: "graph:investigate", JobID: "job-1", TaskID: "task-1", Questions: []service.PromptQuestion{{Question: "Which?", Options: []string{"a", "b"}}}},
+	}
+	srv := New(mockSvc)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/operator/blockers", nil)
+	rec := httptest.NewRecorder()
+	srv.operatorBlockers(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	var resp PaginatedResponse[wireBlockerPayload]
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if resp.Total != 1 || len(resp.Items) != 1 {
+		t.Fatalf("Total/Items = %d/%d, want 1/1", resp.Total, len(resp.Items))
+	}
+	got := resp.Items[0]
+	if got.RequestID != "req-1" || got.Source != "graph:investigate" {
+		t.Errorf("item = %+v, want req-1 / graph:investigate", got)
+	}
+	if got.JobID != "job-1" || got.TaskID != "task-1" {
+		t.Errorf("job/task = %q/%q, want job-1/task-1", got.JobID, got.TaskID)
+	}
+	if len(got.Questions) != 1 || got.Questions[0].Question != "Which?" {
+		t.Errorf("questions = %v, want one 'Which?'", got.Questions)
+	}
+}
 
 func TestRespondToPrompt_ResponseTooLarge(t *testing.T) {
 	t.Parallel()

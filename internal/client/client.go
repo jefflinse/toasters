@@ -202,6 +202,26 @@ func (s *remoteOperatorService) History(ctx context.Context) ([]service.ChatEntr
 	return entries, nil
 }
 
+func (s *remoteOperatorService) Blockers(ctx context.Context) ([]service.Blocker, error) {
+	resp, err := s.c.http.get(ctx, "/api/v1/operator/blockers")
+	if err != nil {
+		return nil, fmt.Errorf("get operator blockers: %w", err)
+	}
+	pr, err := decodeResponse[paginatedResponse[wireBlockerPayload]](resp)
+	if err != nil {
+		return nil, fmt.Errorf("get operator blockers: %w", err)
+	}
+	blockers := make([]service.Blocker, 0, len(pr.Items))
+	for _, w := range pr.Items {
+		b := service.Blocker{RequestID: w.RequestID, Source: w.Source, JobID: w.JobID, TaskID: w.TaskID, CreatedAt: w.CreatedAt}
+		for _, q := range w.Questions {
+			b.Questions = append(b.Questions, service.PromptQuestion{Question: q.Question, Options: q.Options})
+		}
+		blockers = append(blockers, b)
+	}
+	return blockers, nil
+}
+
 // ---------------------------------------------------------------------------
 // DefinitionService
 // ---------------------------------------------------------------------------
