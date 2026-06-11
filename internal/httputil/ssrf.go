@@ -45,6 +45,12 @@ func IsPrivateIP(ip net.IP) bool {
 	return false
 }
 
+// lookupIPAddr resolves a hostname to IP addresses. Package-level so tests
+// can stub DNS resolution.
+var lookupIPAddr = func(ctx context.Context, host string) ([]net.IPAddr, error) {
+	return net.DefaultResolver.LookupIPAddr(ctx, host)
+}
+
 // NewSafeClient returns an [http.Client] with SSRF protection. The client
 // resolves DNS before connecting and rejects any address that maps to a
 // private or reserved IP range. The provided timeout applies to the overall
@@ -54,11 +60,11 @@ func NewSafeClient(timeout time.Duration) *http.Client {
 		Timeout: timeout,
 		Transport: &http.Transport{
 			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-				host, _, err := net.SplitHostPort(addr)
+				host, port, err := net.SplitHostPort(addr)
 				if err != nil {
 					return nil, err
 				}
-				ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+				ips, err := lookupIPAddr(ctx, host)
 				if err != nil {
 					return nil, err
 				}
@@ -67,8 +73,20 @@ func NewSafeClient(timeout time.Duration) *http.Client {
 						return nil, fmt.Errorf("access to private/reserved IP %s is blocked", ip.IP)
 					}
 				}
+				// Dial the validated IPs directly rather than passing the
+				// hostname back to the dialer: a second DNS resolution could
+				// return a different (private) address than the one checked
+				// above (DNS rebinding).
 				dialer := &net.Dialer{Timeout: 10 * time.Second}
-				return dialer.DialContext(ctx, network, addr)
+				var dialErr error
+				for _, ip := range ips {
+					conn, err := dialer.DialContext(ctx, network, net.JoinHostPort(ip.IP.String(), port))
+					if err == nil {
+						return conn, nil
+					}
+					dialErr = err
+				}
+				return nil, dialErr
 			},
 		},
 	}

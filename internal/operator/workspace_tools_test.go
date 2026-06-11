@@ -1,6 +1,7 @@
 package operator
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 )
@@ -246,4 +247,39 @@ func TestSetupWorkspace_ValidationRejectsAttackVectors(t *testing.T) {
 		assertContains(t, result, "must contain only alphanumeric")
 		assertContains(t, result, "failed")
 	})
+}
+
+func TestValidateCloneHost(t *testing.T) {
+	ctx := context.Background()
+
+	tests := []struct {
+		name    string
+		url     string
+		wantErr bool
+	}{
+		// Literal private/reserved IPs over http(s)/git are blocked.
+		{"loopback http", "http://127.0.0.1/repo.git", true},
+		{"loopback https", "https://127.0.0.1:8443/repo.git", true},
+		{"rfc1918 http", "http://10.0.0.5/repo.git", true},
+		{"link-local metadata", "http://169.254.169.254/latest", true},
+		{"git scheme private", "git://192.168.1.10/repo.git", true},
+		// localhost resolves to loopback locally — blocked without network.
+		{"localhost http", "http://localhost/repo.git", true},
+		// ssh remotes are exempt (require pre-configured keys).
+		{"ssh private host", "ssh://git@10.0.0.5/repo.git", false},
+		// Missing host is rejected.
+		{"missing host", "http:///repo.git", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateCloneHost(ctx, tt.url)
+			if tt.wantErr && err == nil {
+				t.Errorf("validateCloneHost(%q) = nil, want error", tt.url)
+			}
+			if !tt.wantErr && err != nil {
+				t.Errorf("validateCloneHost(%q) = %v, want nil", tt.url, err)
+			}
+		})
+	}
 }

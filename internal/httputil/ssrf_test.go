@@ -126,6 +126,55 @@ func TestNewSafeClient_AllowsPublicIP(t *testing.T) {
 	}
 }
 
+func TestNewSafeClient_DialsValidatedIP(t *testing.T) {
+	// Guard against DNS rebinding: the connection must go to the IP that
+	// passed validation, not to a fresh resolution of the hostname. Stub the
+	// resolver to return an unroutable public IP (TEST-NET-1) and assert the
+	// dial error names that IP — proving the dialer never re-resolved.
+	oldLookup := lookupIPAddr
+	defer func() { lookupIPAddr = oldLookup }()
+	lookupIPAddr = func(_ context.Context, _ string) ([]net.IPAddr, error) {
+		return []net.IPAddr{{IP: net.ParseIP("192.0.2.1")}}, nil
+	}
+
+	client := NewSafeClient(500 * time.Millisecond)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "http://rebind.example:9/", nil)
+	if err != nil {
+		t.Fatalf("creating request: %v", err)
+	}
+
+	_, err = client.Do(req)
+	if err == nil {
+		t.Fatal("expected dial error against unroutable IP, got nil")
+	}
+	if got := err.Error(); !contains(got, "192.0.2.1") {
+		t.Errorf("expected dial against validated IP 192.0.2.1, got: %v", err)
+	}
+}
+
+func TestNewSafeClient_StubbedPrivateResolutionBlocked(t *testing.T) {
+	// A hostname that resolves to a private IP is rejected before any dial.
+	oldLookup := lookupIPAddr
+	defer func() { lookupIPAddr = oldLookup }()
+	lookupIPAddr = func(_ context.Context, _ string) ([]net.IPAddr, error) {
+		return []net.IPAddr{{IP: net.ParseIP("8.8.8.8")}, {IP: net.ParseIP("10.0.0.1")}}, nil
+	}
+
+	client := NewSafeClient(5 * time.Second)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "http://rebind.example:80/", nil)
+	if err != nil {
+		t.Fatalf("creating request: %v", err)
+	}
+
+	_, err = client.Do(req)
+	if err == nil {
+		t.Fatal("expected error when any resolved IP is private, got nil")
+	}
+	if got := err.Error(); !contains(got, "private/reserved IP") {
+		t.Errorf("expected SSRF block error, got: %v", err)
+	}
+}
+
 func TestSafeGet_BlocksPrivateIP(t *testing.T) {
 	_, err := SafeGet(context.Background(), "http://127.0.0.1:9999", 5*time.Second)
 	if err == nil {

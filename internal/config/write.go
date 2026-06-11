@@ -4,9 +4,24 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 
 	"gopkg.in/yaml.v3"
 )
+
+// validProviderID constrains provider IDs to filename-safe characters so the
+// YAML path derived from an ID cannot escape the providers directory. IDs
+// arrive from HTTP request bodies, so this is a security boundary.
+var validProviderID = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]*$`)
+
+// ValidateProviderID returns an error if id is unsafe to use as a provider
+// filename stem.
+func ValidateProviderID(id string) error {
+	if !validProviderID.MatchString(id) {
+		return fmt.Errorf("invalid provider ID %q: must start with an alphanumeric character and contain only alphanumeric characters, dots, underscores, and hyphens", id)
+	}
+	return nil
+}
 
 // ProviderEntry is the data needed to write a provider YAML file.
 type ProviderEntry struct {
@@ -21,6 +36,9 @@ type ProviderEntry struct {
 // The filename is derived from the ID. Returns an error if a file for
 // this provider already exists.
 func AddProvider(configDir string, entry ProviderEntry) error {
+	if err := ValidateProviderID(entry.ID); err != nil {
+		return err
+	}
 	providersDir := filepath.Join(configDir, "providers")
 	if err := os.MkdirAll(providersDir, 0o755); err != nil {
 		return fmt.Errorf("creating providers dir: %w", err)
@@ -226,6 +244,9 @@ func setMappingValue(node *yaml.Node, key, value string) {
 // UpdateProvider overwrites an existing provider YAML file.
 // If the file doesn't exist, it creates it (upsert behavior).
 func UpdateProvider(configDir string, entry ProviderEntry) error {
+	if err := ValidateProviderID(entry.ID); err != nil {
+		return err
+	}
 	providersDir := filepath.Join(configDir, "providers")
 	if err := os.MkdirAll(providersDir, 0o755); err != nil {
 		return fmt.Errorf("creating providers dir: %w", err)

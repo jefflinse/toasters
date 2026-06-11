@@ -147,6 +147,8 @@ func mapServiceError(err error) (status int, code string) {
 		return http.StatusConflict, "conflict"
 	case strings.Contains(msg, "is already complete"):
 		return http.StatusConflict, "conflict"
+	case strings.Contains(msg, "invalid provider ID"):
+		return http.StatusUnprocessableEntity, "unprocessable_entity"
 	case strings.Contains(msg, "cannot delete system"):
 		return http.StatusUnprocessableEntity, "unprocessable_entity"
 	case strings.Contains(msg, "cannot delete read-only"):

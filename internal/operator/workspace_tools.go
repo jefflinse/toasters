@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/url"
 	"os/exec"
 	"path"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"github.com/jefflinse/toasters/internal/db"
+	"github.com/jefflinse/toasters/internal/httputil"
 )
 
 // validRepoName matches alphanumeric characters, dots, underscores, and hyphens.
@@ -81,6 +83,10 @@ func (ot *operatorTools) setupWorkspace(ctx context.Context, args json.RawMessag
 
 		// Validate inputs to prevent command injection via git clone.
 		if err := validateGitCloneArgs(repo.URL, name); err != nil {
+			failed = append(failed, failedEntry{Name: name, Error: err.Error()})
+			continue
+		}
+		if err := validateCloneHost(ctx, repo.URL); err != nil {
 			failed = append(failed, failedEntry{Name: name, Error: err.Error()})
 			continue
 		}
@@ -185,5 +191,38 @@ func validateGitCloneArgs(rawURL, name string) error {
 		return fmt.Errorf("invalid repo name %q: must contain only alphanumeric characters, dots, underscores, and hyphens", name)
 	}
 
+	return nil
+}
+
+// validateCloneHost rejects clone targets that resolve to private or reserved
+// IPs, so the operator can't be steered into fetching from internal services.
+// SSH remotes are exempt: they require pre-configured keys for the target
+// host, and internal git-over-ssh is a legitimate setup.
+func validateCloneHost(ctx context.Context, rawURL string) error {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return fmt.Errorf("invalid git URL: %w", err)
+	}
+	switch u.Scheme {
+	case "http", "https", "git":
+	default:
+		return nil
+	}
+	host := u.Hostname()
+	if host == "" {
+		return fmt.Errorf("invalid git URL: missing host")
+	}
+
+	lookupCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	ips, err := net.DefaultResolver.LookupIPAddr(lookupCtx, host)
+	if err != nil {
+		return fmt.Errorf("resolving clone host %q: %w", host, err)
+	}
+	for _, ip := range ips {
+		if httputil.IsPrivateIP(ip.IP) {
+			return fmt.Errorf("clone host %q resolves to private/reserved IP %s: cloning over %s from private hosts is blocked (use ssh for internal repos)", host, ip.IP, u.Scheme)
+		}
+	}
 	return nil
 }
