@@ -677,3 +677,56 @@ func TestSessionSlowSubscriber(t *testing.T) {
 		t.Fatal("session blocked on slow subscriber")
 	}
 }
+
+// TestSessionConcurrentReads hammers FinalText/InitialMessage while Run is
+// actively appending to the message history across many tool-call turns.
+// Guards the appendMessage locking contract — GET /sessions/{id} reads live
+// sessions in production. Meaningful under -race.
+func TestSessionConcurrentReads(t *testing.T) {
+	const toolTurns = 50
+	responses := make([]mockResponse, 0, toolTurns+1)
+	for range toolTurns {
+		responses = append(responses, mockResponse{events: []provider.StreamEvent{
+			{Type: provider.EventText, Text: "working"},
+			{Type: provider.EventToolCall, ToolCall: &provider.ToolCall{ID: "call", Name: "noop", Arguments: json.RawMessage(`{}`)}},
+			{Type: provider.EventDone},
+		}})
+	}
+	responses = append(responses, mockResponse{events: []provider.StreamEvent{
+		{Type: provider.EventText, Text: "all done"},
+		{Type: provider.EventDone},
+	}})
+
+	mp := &mockProvider{name: "test", responses: responses}
+	sess := newSession("sess-race", mp, SpawnOpts{
+		WorkerID:       "race-worker",
+		InitialMessage: "go",
+		MaxTurns:       toolTurns + 1,
+	}, &mockToolExecutor{})
+
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	for range 4 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+					_ = sess.FinalText()
+					_ = sess.InitialMessage()
+				}
+			}
+		}()
+	}
+
+	err := sess.Run(context.Background())
+	close(stop)
+	wg.Wait()
+
+	assertNoError(t, err)
+	assertEqual(t, "all done", sess.FinalText())
+	assertEqual(t, "go", sess.InitialMessage())
+}

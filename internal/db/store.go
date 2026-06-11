@@ -65,6 +65,16 @@ type Store interface {
 	AppendChatEntry(ctx context.Context, entry *ChatEntry) error
 	ListRecentChatEntries(ctx context.Context, limit int) ([]*ChatEntry, error)
 
+	// Recovery
+	//
+	// ReconcileInterrupted marks rows orphaned by a previous process as
+	// failed: worker sessions still 'active' and tasks still 'in_progress'
+	// belong to a runtime that no longer exists. Without this sweep, ghost
+	// sessions pollute every progress snapshot and a phantom in_progress
+	// task wedges its job's serial-dispatch gate forever. Call once at
+	// startup, before the runtime and graph executor start.
+	ReconcileInterrupted(ctx context.Context) (sessions int, tasks int, err error)
+
 	// Lifecycle
 	Close() error
 }

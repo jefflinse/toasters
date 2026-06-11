@@ -30,12 +30,12 @@ type Session struct {
 	// messages holds the full conversation history (user, assistant, tool messages).
 	//
 	// Concurrency contract:
-	//   - Written only by Run(), which is the session's single main goroutine.
-	//   - Safe to read after <-Done() closes (Run has exited, no further writes).
-	//   - Do NOT read while the session is active without holding mu.
-	//
-	// FinalText() and InitialMessage() acquire mu, so they are safe at any time,
-	// but callers that need a consistent view of the full slice should wait for Done().
+	//   - Appended only by Run() (the session's single main goroutine), always
+	//     via appendMessage, which holds mu — readers like FinalText() and
+	//     InitialMessage() can run concurrently with an active session.
+	//   - Run() itself may read without mu (it is the only writer).
+	//   - Callers that need a consistent view of the full slice should wait
+	//     for Done().
 	messages []provider.Message
 	tools    []provider.Tool
 	toolExec ToolExecutor
@@ -175,7 +175,7 @@ func (s *Session) Run(ctx context.Context) (retErr error) {
 			s.emit(SessionEvent{SessionID: s.id, Type: SessionEventError, Error: err})
 			return fmt.Errorf("collecting response: %w", err)
 		}
-		s.messages = append(s.messages, assistantMsg)
+		s.appendMessage(assistantMsg)
 		s.persistMessage(assistantMsg)
 
 		// 3. If no tool calls, we're done.
@@ -226,7 +226,7 @@ func (s *Session) Run(ctx context.Context) (retErr error) {
 				Content:    result,
 				ToolCallID: tc.ID,
 			}
-			s.messages = append(s.messages, toolMsg)
+			s.appendMessage(toolMsg)
 			s.persistMessage(toolMsg)
 		}
 
@@ -237,6 +237,14 @@ func (s *Session) Run(ctx context.Context) (retErr error) {
 	err := fmt.Errorf("max turns (%d) exceeded", s.maxTurns)
 	s.emit(SessionEvent{SessionID: s.id, Type: SessionEventError, Error: err})
 	return err
+}
+
+// appendMessage adds a message to the history under mu so FinalText and
+// InitialMessage can read concurrently while the session is active.
+func (s *Session) appendMessage(msg provider.Message) {
+	s.mu.Lock()
+	s.messages = append(s.messages, msg)
+	s.mu.Unlock()
 }
 
 // persistMessage writes a message to the session_messages table.

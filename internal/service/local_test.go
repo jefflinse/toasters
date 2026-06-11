@@ -48,6 +48,9 @@ func (m *mockStore) GetSkill(_ context.Context, _ string) (*db.Skill, error) {
 func (m *mockStore) CreateJob(_ context.Context, _ *db.Job) error {
 	return fmt.Errorf("not implemented")
 }
+func (m *mockStore) ReconcileInterrupted(_ context.Context) (int, int, error) {
+	return 0, 0, fmt.Errorf("not implemented")
+}
 func (m *mockStore) GetJob(_ context.Context, _ string) (*db.Job, error) {
 	return nil, fmt.Errorf("not implemented")
 }

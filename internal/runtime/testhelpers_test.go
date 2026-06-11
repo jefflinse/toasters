@@ -71,6 +71,7 @@ func (s *captureProgressStore) GetJob(_ context.Context, jobID string) (*db.Job,
 }
 
 func (s *noopStore) CreateJob(_ context.Context, _ *db.Job) error                  { return nil }
+func (s *noopStore) ReconcileInterrupted(_ context.Context) (int, int, error)      { return 0, 0, nil }
 func (s *noopStore) GetJob(_ context.Context, _ string) (*db.Job, error)           { return nil, nil }
 func (s *noopStore) ListJobs(_ context.Context, _ db.JobFilter) ([]*db.Job, error) { return nil, nil }
 func (s *noopStore) ListAllJobs(_ context.Context) ([]*db.Job, error)              { return nil, nil }

@@ -211,8 +211,19 @@ func NewLocal(cfg LocalConfig) *LocalService {
 // register pending prompts with a single shared coordinator.
 func (s *LocalService) Broker() *hitl.Broker { return s.broker }
 
-// Shutdown cancels the service lifetime context, stopping background goroutines.
-func (s *LocalService) Shutdown() { s.cancel() }
+// Shutdown cancels the service lifetime context, stopping background
+// goroutines, then waits for detached graph dispatch goroutines to persist
+// their terminal task status. The wait must happen here — before the caller's
+// deferred store.Close() runs — or the dispatchers race the closing database
+// and tasks are stranded in_progress.
+func (s *LocalService) Shutdown() {
+	s.cancel()
+	if d, ok := s.cfg.GraphExecutor.(interface{ Drain(time.Duration) bool }); ok {
+		if !d.Drain(15 * time.Second) {
+			slog.Warn("graph executor drain timed out; in-flight tasks may be left in_progress")
+		}
+	}
+}
 
 // Ctx returns the service-level lifetime context. It is cancelled by
 // Shutdown. External code (e.g. cmd/serve.go constructing an operator
