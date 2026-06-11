@@ -96,7 +96,7 @@ func newDecomposeTestService(t *testing.T) (*LocalService, *recordingStore) {
 	// Stub GraphExecutor so dispatchFineDecompose's nil guard short-circuits
 	// before it actually tries to spawn anything. The bootstrap-task
 	// creation is what we're not covering here — only the ready-gating.
-	svc.cfg.GraphExecutor = nil
+	svc.SetGraphExecutor(nil)
 	return svc, store
 }
 

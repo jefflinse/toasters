@@ -58,7 +58,7 @@ type decomposedTask struct {
 // coarse-decompose graph on a new job, then kicks it off. No-op when
 // the graph executor is not wired (test environments).
 func (s *LocalService) dispatchCoarseDecompose(jobID, jobTitle, jobDescription string) {
-	if s.cfg.GraphExecutor == nil || s.cfg.Store == nil {
+	if s.currentGraphExecutor() == nil || s.cfg.Store == nil {
 		return
 	}
 	meta, _ := json.Marshal(decomposeMetadata{DecomposesJob: jobID})
@@ -92,7 +92,7 @@ func (s *LocalService) dispatchCoarseDecompose(jobID, jobTitle, jobDescription s
 // against the parent task, then kicks it off. Called when a task is
 // created without a graph_id.
 func (s *LocalService) dispatchFineDecompose(parent *db.Task, job *db.Job) {
-	if s.cfg.GraphExecutor == nil || s.cfg.Store == nil {
+	if s.currentGraphExecutor() == nil || s.cfg.Store == nil {
 		return
 	}
 	if parent.DecomposeDepth >= maxDecomposeDepth {
@@ -136,6 +136,8 @@ func (s *LocalService) dispatchBootstrap(bootstrap *db.Task, job *db.Job, descri
 			siblings = graphexec.FormatSiblingTitles(graphexec.SiblingTitles(jobTasks, subjectTaskID))
 		}
 	}
+	providerID, model := s.currentDefaults()
+	exec := s.currentGraphExecutor()
 	req := graphexec.TaskRequest{
 		JobID:          bootstrap.JobID,
 		JobTitle:       job.Title,
@@ -145,11 +147,11 @@ func (s *LocalService) dispatchBootstrap(bootstrap *db.Task, job *db.Job, descri
 		GraphID:        bootstrap.GraphID,
 		Siblings:       siblings,
 		WorkspaceDir:   job.WorkspaceDir,
-		ProviderName:   s.cfg.DefaultProvider,
-		Model:          s.cfg.DefaultModel,
+		ProviderName:   providerID,
+		Model:          model,
 	}
 	go func() {
-		if err := s.cfg.GraphExecutor.ExecuteTask(s.ctx, req); err != nil {
+		if err := exec.ExecuteTask(s.ctx, req); err != nil {
 			slog.Error("decomposition bootstrap dispatch failed",
 				"bootstrap_task_id", bootstrap.ID,
 				"graph_id", bootstrap.GraphID,
@@ -326,6 +328,8 @@ func (s *LocalService) assignGraphToParent(ctx context.Context, parent *db.Task,
 		return
 	}
 
+	providerID, model := s.currentDefaults()
+	exec := s.currentGraphExecutor()
 	req := graphexec.TaskRequest{
 		JobID:          parent.JobID,
 		JobTitle:       job.Title,
@@ -336,11 +340,11 @@ func (s *LocalService) assignGraphToParent(ctx context.Context, parent *db.Task,
 		Toolchain:      toolchain,
 		Siblings:       graphexec.FormatSiblingTitles(graphexec.SiblingTitles(jobTasks, parent.ID)),
 		WorkspaceDir:   job.WorkspaceDir,
-		ProviderName:   s.cfg.DefaultProvider,
-		Model:          s.cfg.DefaultModel,
+		ProviderName:   providerID,
+		Model:          model,
 	}
 	go func() {
-		if err := s.cfg.GraphExecutor.ExecuteTask(s.ctx, req); err != nil {
+		if err := exec.ExecuteTask(s.ctx, req); err != nil {
 			slog.Error("fine-decompose dispatch failed",
 				"task_id", req.TaskID, "graph_id", req.GraphID, "error", err)
 		}
@@ -363,6 +367,8 @@ func (s *LocalService) redispatchTaskGraph(ctx context.Context, task *db.Task, j
 		// Non-fatal: dispatch with no sibling context rather than abort.
 		slog.Warn("retry: failed to list sibling tasks", "task_id", task.ID, "error", err)
 	}
+	providerID, model := s.currentDefaults()
+	exec := s.currentGraphExecutor()
 	req := graphexec.TaskRequest{
 		JobID:          task.JobID,
 		JobTitle:       job.Title,
@@ -372,11 +378,11 @@ func (s *LocalService) redispatchTaskGraph(ctx context.Context, task *db.Task, j
 		GraphID:        graphID,
 		Siblings:       graphexec.FormatSiblingTitles(graphexec.SiblingTitles(jobTasks, task.ID)),
 		WorkspaceDir:   job.WorkspaceDir,
-		ProviderName:   s.cfg.DefaultProvider,
-		Model:          s.cfg.DefaultModel,
+		ProviderName:   providerID,
+		Model:          model,
 	}
 	go func() {
-		if err := s.cfg.GraphExecutor.ExecuteTask(s.ctx, req); err != nil {
+		if err := exec.ExecuteTask(s.ctx, req); err != nil {
 			slog.Error("retry dispatch failed",
 				"task_id", req.TaskID, "graph_id", req.GraphID, "error", err)
 		}

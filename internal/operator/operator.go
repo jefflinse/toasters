@@ -8,6 +8,7 @@ package operator
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -26,6 +27,12 @@ import (
 const (
 	eventChSize = 256
 	maxMessages = 200
+
+	// defaultAskUserTimeout is how long ask_user waits for an answer before
+	// returning a no-response message. Long enough that an attended user has
+	// every chance to answer; short enough that an unattended overnight run
+	// stalls for minutes, not until someone wakes up.
+	defaultAskUserTimeout = 10 * time.Minute
 )
 
 // Operator manages the event loop and long-lived operator LLM session.
@@ -50,6 +57,13 @@ type Operator struct {
 	// responses come back via service.LocalService.RespondToPrompt, which
 	// delegates to broker.Respond, routing to whichever path is waiting.
 	broker *hitl.Broker
+
+	// askUserTimeout bounds how long promptUser blocks waiting for an
+	// answer. ask_user runs synchronously on the event-loop goroutine, so
+	// without a deadline one unanswered prompt freezes all event processing
+	// (task completions, failures, new messages) for the life of the
+	// process — fatal for unattended operation.
+	askUserTimeout time.Duration
 
 	// Callbacks — set at construction time via Config, immutable after New().
 	onText      func(text string)                                                    // called with streamed text from the operator LLM
@@ -101,6 +115,10 @@ type Config struct {
 	// SystemTools so detached graph dispatch goroutines are cancelled on
 	// service Shutdown rather than living forever.
 	LifetimeCtx context.Context
+	// AskUserTimeout bounds how long an ask_user prompt waits for an answer
+	// before resolving with a no-response message so the event loop can
+	// keep processing. Zero means defaultAskUserTimeout.
+	AskUserTimeout time.Duration
 }
 
 // New creates a new Operator. Call Start to begin processing events.
@@ -151,6 +169,10 @@ func New(cfg Config) (*Operator, error) {
 		onPrompt:     cfg.OnPrompt,
 		onResolve:    cfg.OnResolve,
 		onToolCall:   cfg.OnToolCall,
+	}
+	op.askUserTimeout = cfg.AskUserTimeout
+	if op.askUserTimeout <= 0 {
+		op.askUserTimeout = defaultAskUserTimeout
 	}
 
 	// Wire the ask_user prompt function into the tool executor.
@@ -602,6 +624,11 @@ func normalizeToolCallArgs(tcs []provider.ToolCall) {
 // the event loop goroutine — the response arrives on a separate goroutine
 // (HTTP handler → LocalService.RespondToPrompt → broker.Respond), so no
 // deadlock.
+//
+// The wait is bounded by askUserTimeout: this blocks the event loop, so an
+// unanswered prompt must resolve eventually or the whole operator freezes.
+// On timeout the tool returns a no-response message (not an error) so the
+// LLM continues the turn with its best judgment.
 func (o *Operator) promptUser(ctx context.Context, requestID string, questions []PromptQuestion) (string, error) {
 	if o.broker == nil {
 		return "", fmt.Errorf("operator: no HITL broker configured")
@@ -611,13 +638,31 @@ func (o *Operator) promptUser(ctx context.Context, requestID string, questions [
 			o.onPrompt(requestID, questions)
 		}
 	}
-	// Resolve the blocker once Ask returns, whether the user answered or the
-	// turn's context was cancelled. Mirrors the graph-node path so the Blockers
-	// queue stays consistent regardless of which side raised the request.
+	// Resolve the blocker once Ask returns, whether the user answered, the
+	// wait timed out, or the turn's context was cancelled. Mirrors the
+	// graph-node path so the Blockers queue stays consistent regardless of
+	// which side raised the request.
 	if o.onResolve != nil {
 		defer o.onResolve(requestID)
 	}
-	return o.broker.Ask(ctx, requestID, broadcast)
+
+	askCtx, cancel := context.WithTimeout(ctx, o.askUserTimeout)
+	defer cancel()
+	answer, err := o.broker.Ask(askCtx, requestID, broadcast)
+	if err != nil {
+		// Distinguish "the user never answered" from real cancellation
+		// (shutdown / operator replacement), which must still propagate.
+		if errors.Is(askCtx.Err(), context.DeadlineExceeded) && ctx.Err() == nil {
+			slog.Warn("ask_user timed out without a response",
+				"request_id", requestID, "timeout", o.askUserTimeout)
+			return fmt.Sprintf(
+				"[No response: the user did not answer within %s. Proceed with your best judgment, "+
+					"state any assumptions you make in your reply, and defer irreversible actions that "+
+					"depend on this answer.]", o.askUserTimeout), nil
+		}
+		return "", err
+	}
+	return answer, nil
 }
 
 // appendMessage adds a message to the conversation history under lock
