@@ -139,6 +139,16 @@ func runServe(cmd *cobra.Command, args []string) error {
 		} else {
 			store = sqliteStore
 			defer func() { _ = sqliteStore.Close() }()
+
+			// Sweep rows orphaned by a previous run (crash or unclean stop):
+			// sessions still 'active' and tasks still 'in_progress' would
+			// otherwise haunt progress snapshots and wedge their jobs forever.
+			if sessions, tasks, recErr := sqliteStore.ReconcileInterrupted(context.Background()); recErr != nil {
+				slog.Warn("failed to reconcile interrupted work", "error", recErr)
+			} else if sessions > 0 || tasks > 0 {
+				slog.Info("reconciled work interrupted by previous shutdown",
+					"sessions_failed", sessions, "tasks_failed", tasks)
+			}
 		}
 	}
 

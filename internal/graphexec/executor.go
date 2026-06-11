@@ -51,6 +51,13 @@ type Executor struct {
 	defaultsMu            sync.RWMutex
 	workerThinkingEnabled bool
 	workerTemperature     float64
+
+	// In-flight task tracking. Callers run ExecuteTask in detached
+	// goroutines; Drain lets shutdown wait for them to persist terminal
+	// task status before the database closes underneath them.
+	drainMu  sync.Mutex
+	draining bool
+	taskWG   sync.WaitGroup
 }
 
 // ExecutorConfig holds configuration for creating an Executor.
@@ -155,6 +162,41 @@ func (e *Executor) workerDefaults() (bool, float64) {
 	e.defaultsMu.RLock()
 	defer e.defaultsMu.RUnlock()
 	return e.workerThinkingEnabled, e.workerTemperature
+}
+
+// beginTask registers an in-flight task, or fails if the executor is
+// draining. The flag check and WaitGroup add happen under one lock so a
+// dispatch can't slip in between Drain setting the flag and waiting.
+func (e *Executor) beginTask() error {
+	e.drainMu.Lock()
+	defer e.drainMu.Unlock()
+	if e.draining {
+		return fmt.Errorf("executor is shutting down")
+	}
+	e.taskWG.Add(1)
+	return nil
+}
+
+// Drain stops accepting new task dispatches and waits up to timeout for
+// in-flight ExecuteTask calls to finish persisting their terminal task
+// status. Call after cancelling the context the tasks run under, and
+// before closing the store. Returns false if the timeout elapsed first.
+func (e *Executor) Drain(timeout time.Duration) bool {
+	e.drainMu.Lock()
+	e.draining = true
+	e.drainMu.Unlock()
+
+	done := make(chan struct{})
+	go func() {
+		e.taskWG.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return true
+	case <-time.After(timeout):
+		return false
+	}
 }
 
 // interruptHandler is registered on every graph Run via
@@ -273,6 +315,13 @@ func (e *Executor) Execute(ctx context.Context, graph *rhizome.CompiledGraph[*Ta
 		rhizome.WithInterruptHandler[*TaskState](e.interruptHandler),
 	)
 
+	// Persist the terminal status on a detached context: when the run failed
+	// because ctx was cancelled (shutdown, kill), reusing ctx would fail the
+	// status write too, stranding the task in_progress forever and wedging
+	// the job's serial-dispatch gate behind it.
+	persistCtx, cancelPersist := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancelPersist()
+
 	// Update task status based on outcome.
 	if err != nil {
 		slog.Error("graph execution failed",
@@ -280,7 +329,7 @@ func (e *Executor) Execute(ctx context.Context, graph *rhizome.CompiledGraph[*Ta
 
 		if e.store != nil {
 			failSummary := fmt.Sprintf("Graph execution failed: %s", err.Error())
-			if dbErr := e.store.UpdateTaskStatus(ctx, state.TaskID, db.TaskStatusFailed, failSummary); dbErr != nil {
+			if dbErr := e.store.UpdateTaskStatus(persistCtx, state.TaskID, db.TaskStatusFailed, failSummary); dbErr != nil {
 				slog.Warn("failed to mark task as failed", "task_id", state.TaskID, "error", dbErr)
 			}
 		}
@@ -307,7 +356,7 @@ func (e *Executor) Execute(ctx context.Context, graph *rhizome.CompiledGraph[*Ta
 		"job_id", state.JobID, "task_id", state.TaskID, "status", result.Status)
 
 	if e.store != nil {
-		if dbErr := e.store.UpdateTaskStatus(ctx, state.TaskID, db.TaskStatusCompleted, summary); dbErr != nil {
+		if dbErr := e.store.UpdateTaskStatus(persistCtx, state.TaskID, db.TaskStatusCompleted, summary); dbErr != nil {
 			slog.Warn("failed to mark task as completed", "task_id", state.TaskID, "error", dbErr)
 		}
 	}
@@ -316,7 +365,7 @@ func (e *Executor) Execute(ctx context.Context, graph *rhizome.CompiledGraph[*Ta
 	// mechanically (next task exists) or consult the scheduler.
 	hasNextTask := false
 	if e.store != nil {
-		if ready, readyErr := e.store.GetReadyTasks(ctx, state.JobID); readyErr == nil {
+		if ready, readyErr := e.store.GetReadyTasks(persistCtx, state.JobID); readyErr == nil {
 			hasNextTask = len(ready) > 0
 		} else {
 			slog.Warn("failed to check ready tasks after graph completion",
@@ -383,13 +432,35 @@ type TaskExecutor interface {
 // ExecuteTask resolves the provider, looks up the declarative graph by id,
 // compiles it, and runs it. All dispatches go through the YAML-driven
 // catalog — there is no hard-coded template fallback.
+//
+// Errors raised before the graph runs (provider missing, graph not found,
+// compile failure, executor draining) mark the task failed and notify the
+// operator, mirroring what Execute does for run failures. Callers dispatch
+// ExecuteTask in detached goroutines that only log the returned error, and
+// the task was already transitioned to in_progress — without this, an early
+// error strands the task there forever and wedges the job's serial gate.
 func (e *Executor) ExecuteTask(ctx context.Context, req TaskRequest) error {
+	if err := e.beginTask(); err != nil {
+		return e.failDispatch(req, err)
+	}
+	defer e.taskWG.Done()
+
+	graph, state, err := e.prepareTask(req)
+	if err != nil {
+		return e.failDispatch(req, err)
+	}
+	return e.Execute(ctx, graph, state, req.GraphID)
+}
+
+// prepareTask validates the request, resolves the provider, and compiles the
+// graph, returning the compiled graph and initial state ready for Execute.
+func (e *Executor) prepareTask(req TaskRequest) (*rhizome.CompiledGraph[*TaskState], *TaskState, error) {
 	if req.GraphID == "" {
-		return fmt.Errorf("ExecuteTask: graph_id is required")
+		return nil, nil, fmt.Errorf("ExecuteTask: graph_id is required")
 	}
 	prov, ok := e.registry.Get(req.ProviderName)
 	if !ok {
-		return fmt.Errorf("provider %q not found in registry", req.ProviderName)
+		return nil, nil, fmt.Errorf("provider %q not found in registry", req.ProviderName)
 	}
 
 	model := req.Model
@@ -409,15 +480,15 @@ func (e *Executor) ExecuteTask(ctx context.Context, req TaskRequest) error {
 	}
 
 	if e.graphs == nil {
-		return fmt.Errorf("graph %q requested but no GraphSource configured", req.GraphID)
+		return nil, nil, fmt.Errorf("graph %q requested but no GraphSource configured", req.GraphID)
 	}
 	def := e.graphs.GraphByID(req.GraphID)
 	if def == nil {
-		return fmt.Errorf("graph %q not found", req.GraphID)
+		return nil, nil, fmt.Errorf("graph %q not found", req.GraphID)
 	}
 	graph, err := Compile(def, tmplCfg, e.roles)
 	if err != nil {
-		return fmt.Errorf("compiling graph %q: %w", req.GraphID, err)
+		return nil, nil, fmt.Errorf("compiling graph %q: %w", req.GraphID, err)
 	}
 
 	state := NewTaskState(req.JobID, req.TaskID, req.WorkspaceDir, req.ProviderName, model)
@@ -430,7 +501,32 @@ func (e *Executor) ExecuteTask(ctx context.Context, req TaskRequest) error {
 	state.SetArtifact("job.description", req.JobDescription)
 	state.ExitNode = def.Exit
 
-	return e.Execute(ctx, graph, state, req.GraphID)
+	return graph, state, nil
+}
+
+// failDispatch marks a task failed and notifies the operator when the task
+// couldn't even start. Uses a detached context so the failure is persisted
+// even when dispatch happens during shutdown. Returns taskErr for the caller
+// to propagate.
+func (e *Executor) failDispatch(req TaskRequest, taskErr error) error {
+	slog.Error("task dispatch failed",
+		"job_id", req.JobID, "task_id", req.TaskID, "graph_id", req.GraphID, "error", taskErr)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if e.store != nil {
+		summary := fmt.Sprintf("Dispatch failed: %s", taskErr.Error())
+		if dbErr := e.store.UpdateTaskStatus(ctx, req.TaskID, db.TaskStatusFailed, summary); dbErr != nil {
+			slog.Warn("failed to mark task as failed after dispatch error",
+				"task_id", req.TaskID, "error", dbErr)
+		}
+	}
+	if e.eventSink != nil {
+		e.eventSink.BroadcastGraphFailed(req.JobID, req.TaskID, taskErr.Error())
+		e.eventSink.BroadcastTaskFailed(req.JobID, req.TaskID, req.GraphID, taskErr.Error())
+	}
+	return taskErr
 }
 
 // exitNodeOutput returns the raw JSON output of the graph's exit node, or

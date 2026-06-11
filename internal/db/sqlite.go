@@ -779,6 +779,33 @@ func (s *SQLiteStore) UpdateSession(ctx context.Context, id string, update Sessi
 	return checkRowsAffected(result, "session", id)
 }
 
+// ReconcileInterrupted marks sessions left 'active' and tasks left
+// 'in_progress' by a previous process as failed. See the Store interface
+// doc for rationale.
+func (s *SQLiteStore) ReconcileInterrupted(ctx context.Context) (int, int, error) {
+	now := time.Now().UTC().Format(time.RFC3339)
+
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE worker_sessions SET status = ?, ended_at = ? WHERE status = ?`,
+		string(SessionStatusFailed), now, string(SessionStatusActive))
+	if err != nil {
+		return 0, 0, fmt.Errorf("reconciling interrupted sessions: %w", err)
+	}
+	sessions, _ := res.RowsAffected()
+
+	res, err = s.db.ExecContext(ctx,
+		`UPDATE tasks SET status = ?, summary = ?, updated_at = ? WHERE status = ?`,
+		string(TaskStatusFailed),
+		"Interrupted: the server stopped while this task was running. Retry to re-run it.",
+		now, string(TaskStatusInProgress))
+	if err != nil {
+		return int(sessions), 0, fmt.Errorf("reconciling interrupted tasks: %w", err)
+	}
+	tasks, _ := res.RowsAffected()
+
+	return int(sessions), int(tasks), nil
+}
+
 // ListSessionsForJob returns every worker session tied to a job id,
 // regardless of status. Used by job-completion summaries to aggregate
 // tokens/cost across the job's nodes without forcing the caller to
