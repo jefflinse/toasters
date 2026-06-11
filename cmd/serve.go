@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -46,21 +47,47 @@ The server exposes a REST API and SSE event stream that remote TUI clients
 can connect to. By default, authentication is enabled using a bearer token
 stored in ~/.config/toasters/server.token.
 
+The server binds to loopback by default. Binding to a non-loopback address
+exposes the API (which can run shell commands via workers) to the network
+over unencrypted HTTP, and is refused entirely when combined with --no-auth.
+
 Examples:
-  toasters serve                    # Start server on :8421
-  toasters serve --addr :3000       # Start server on port 3000
-  toasters serve --no-auth          # Start server without authentication`,
+  toasters serve                          # Start server on 127.0.0.1:8421
+  toasters serve --addr 127.0.0.1:3000    # Start server on port 3000
+  toasters serve --addr 0.0.0.0:8421      # Expose to the network (use with care)
+  toasters serve --no-auth                # Start server without authentication`,
 	RunE: runServe,
 }
 
 func init() {
 	rootCmd.AddCommand(serveCmd)
-	serveCmd.Flags().StringVar(&serveAddr, "addr", ":8421", "address to listen on")
+	serveCmd.Flags().StringVar(&serveAddr, "addr", "127.0.0.1:8421", "address to listen on")
 	serveCmd.Flags().BoolVar(&serveNoAuth, "no-auth", false, "disable authentication")
+}
+
+// isLoopbackAddr reports whether addr binds only to a loopback interface.
+// An empty host (":8421") binds all interfaces and is not loopback.
+func isLoopbackAddr(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil || host == "" {
+		return false
+	}
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func runServe(cmd *cobra.Command, args []string) error {
 	config.BindFlags(cmd)
+
+	if !isLoopbackAddr(serveAddr) {
+		if serveNoAuth {
+			return fmt.Errorf("refusing to listen on non-loopback address %q with --no-auth: anyone on the network could run shell commands through the API; bind to 127.0.0.1 or remove --no-auth", serveAddr)
+		}
+		fmt.Fprintf(os.Stderr, "WARNING: listening on non-loopback address %s — the API is reachable from the network over unencrypted HTTP (the bearer token is sniffable) and workers can run shell commands. Only do this on a trusted network.\n", serveAddr)
+	}
 
 	configDir, err := config.Dir()
 	if err != nil {

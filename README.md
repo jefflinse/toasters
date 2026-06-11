@@ -33,7 +33,7 @@ go install github.com/jefflinse/toasters@latest
 toasters serve
 ```
 
-The server starts on `:8421` by default. Use `--addr` to change the listen address.
+The server starts on `127.0.0.1:8421` by default (loopback only). Use `--addr` to change the listen address.
 
 **2. Connect the TUI**
 

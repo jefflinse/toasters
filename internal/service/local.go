@@ -2,6 +2,7 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -2130,7 +2131,13 @@ func (s *LocalService) GetProgressState(_ context.Context) (ProgressState, error
 	return s.buildProgressState(), nil
 }
 
-// GetLogs returns the contents of the application log file.
+// maxLogResponseBytes caps how much of the log file GetLogs returns. The log
+// contains internal errors, filesystem paths, and tool output, so only a
+// bounded tail goes over the API.
+const maxLogResponseBytes = 256 * 1024
+
+// GetLogs returns the tail of the application log file, capped at
+// maxLogResponseBytes.
 func (s *LocalService) GetLogs(_ context.Context) (string, error) {
 	logPath := filepath.Join(s.cfg.ConfigDir, "toasters.log")
 	data, err := os.ReadFile(logPath)
@@ -2139,6 +2146,13 @@ func (s *LocalService) GetLogs(_ context.Context) (string, error) {
 			return "", nil
 		}
 		return "", fmt.Errorf("reading log file: %w", err)
+	}
+	if len(data) > maxLogResponseBytes {
+		data = data[len(data)-maxLogResponseBytes:]
+		// Drop the (likely partial) first line of the truncated tail.
+		if i := bytes.IndexByte(data, '\n'); i >= 0 {
+			data = data[i+1:]
+		}
 	}
 	return string(data), nil
 }

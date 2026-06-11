@@ -34,7 +34,7 @@ There are exactly two run modes — server and client — and they're always
 in separate processes.
 
 1. **Server** — `cmd/serve.go`. Owns all state: runtime, operator, loader,
-   MCP, SQLite, graph executor. Exposes REST + SSE on `:8421` by default.
+   MCP, SQLite, graph executor. Exposes REST + SSE on `127.0.0.1:8421` by default (loopback only).
    Bearer-token auth from `~/.config/toasters/server.token` (mode 0600),
    constant-time comparison; `--no-auth` is dev-only.
 2. **TUI client** — `cmd/root.go`. Always a remote client. TCP-probes the
