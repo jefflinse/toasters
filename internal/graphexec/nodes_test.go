@@ -156,6 +156,15 @@ func testEngine(t testing.TB) *prompt.Engine {
 	if err := e.LoadDir("../../defaults/user", "user"); err != nil {
 		t.Fatalf("LoadDir user defaults: %v", err)
 	}
+	// Mirror production startup: the decomposer roles reference the synthetic
+	// {{ instructions.*-granularity }} instructions that ApplyGranularity
+	// injects. Compose hard-errors on unknown instructions, so an engine
+	// without them can't compose those roles.
+	for _, kind := range []string{"coarse", "fine"} {
+		if err := prompt.ApplyGranularity(e, kind, "medium"); err != nil {
+			t.Fatalf("ApplyGranularity(%s): %v", kind, err)
+		}
+	}
 	return e
 }
 

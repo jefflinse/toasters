@@ -22,11 +22,11 @@ type jobsModalState struct {
 	jobIdx           int
 	tasks            map[string][]service.Task
 	progress         map[string][]service.ProgressReport
-	focus            int // 0=jobs list, 1=tasks list, 2=agent detail
+	focus            int // 0=jobs list, 1=tasks list, 2=worker detail
 	taskIdx          int
 	confirmCancel    bool
 	confirmRetry     bool // armed by 'r' on a failed task; confirmed with Enter
-	agentCardIdx     int  // focused worker among a non-graph task's sessions (legacy card pane)
+	workerCardIdx    int  // focused worker among a non-graph task's sessions (legacy card pane)
 	graphNodeIdx     int  // focused node when the selected task has graph state
 	taskScrollOffset int  // line offset into the middle panel's task list
 
@@ -248,14 +248,14 @@ func (m *Model) updateJobsModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			if m.jobsModal.jobIdx > 0 {
 				m.jobsModal.jobIdx--
 				m.jobsModal.taskIdx = 0
-				m.jobsModal.agentCardIdx = 0
+				m.jobsModal.workerCardIdx = 0
 				m.jobsModal.graphNodeIdx = 0
 				m.loadJobDetail()
 			}
 		case 1:
 			if m.jobsModal.taskIdx > 0 {
 				m.jobsModal.taskIdx--
-				m.jobsModal.agentCardIdx = 0
+				m.jobsModal.workerCardIdx = 0
 				m.jobsModal.graphNodeIdx = 0
 			}
 		case 2:
@@ -263,9 +263,9 @@ func (m *Model) updateJobsModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				if m.jobsModal.graphNodeIdx > 0 {
 					m.jobsModal.graphNodeIdx--
 				}
-			} else if m.jobsModal.agentCardIdx > 0 {
+			} else if m.jobsModal.workerCardIdx > 0 {
 				// Non-graph task: cycle the focused worker card.
-				m.jobsModal.agentCardIdx--
+				m.jobsModal.workerCardIdx--
 			}
 		}
 
@@ -275,7 +275,7 @@ func (m *Model) updateJobsModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			if m.jobsModal.jobIdx < len(m.jobsModal.jobs)-1 {
 				m.jobsModal.jobIdx++
 				m.jobsModal.taskIdx = 0
-				m.jobsModal.agentCardIdx = 0
+				m.jobsModal.workerCardIdx = 0
 				m.jobsModal.graphNodeIdx = 0
 				m.loadJobDetail()
 			}
@@ -285,7 +285,7 @@ func (m *Model) updateJobsModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				tasks := m.modalTasks(job.ID)
 				if m.jobsModal.taskIdx < len(tasks)-1 {
 					m.jobsModal.taskIdx++
-					m.jobsModal.agentCardIdx = 0
+					m.jobsModal.workerCardIdx = 0
 					m.jobsModal.graphNodeIdx = 0
 				}
 			}
@@ -296,8 +296,8 @@ func (m *Model) updateJobsModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				}
 			} else if t := m.selectedModalTask(); t != nil {
 				// Non-graph task: cycle the focused worker card.
-				if n := len(m.runtimeSessionsForTask(t.ID)); m.jobsModal.agentCardIdx < n-1 {
-					m.jobsModal.agentCardIdx++
+				if n := len(m.runtimeSessionsForTask(t.ID)); m.jobsModal.workerCardIdx < n-1 {
+					m.jobsModal.workerCardIdx++
 				}
 			}
 		}
@@ -342,7 +342,7 @@ func (m *Model) updateJobsModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 			m.jobsModal.confirmCancel = false
 		} else if m.jobsModal.focus == 1 {
-			// Drill into agent detail panel.
+			// Drill into worker detail panel.
 			m.jobsModal.focus = 2
 		}
 		// focus==0: no additional action beyond confirmCancel handling above.
@@ -377,7 +377,7 @@ func (m *Model) updateJobsModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 // renderJobsModal renders the full-screen jobs management modal as a
 // three-panel layout: Left (20%): job list, Middle (30%): task list for
-// selected job, Right (~50%): agent cards for selected task. The modal
+// selected job, Right (~50%): worker cards for selected task. The modal
 // fills the terminal — no outer frame — so it reads as a dedicated screen
 // rather than a floating popup.
 func (m *Model) renderJobsModal() string {
@@ -724,7 +724,7 @@ func (m *Model) renderJobsModal() string {
 		midPanel = panelUnfocused.Width(midPanelW).Height(panelH).Render(midContent)
 	}
 
-	// --- Right panel: graph view (when task has graph state) or agent cards. ---
+	// --- Right panel: graph view (when task has graph state) or worker cards. ---
 	var rightPanel string
 	{
 		var rightLines []string
@@ -757,7 +757,7 @@ func (m *Model) renderJobsModal() string {
 		rightLines = append(rightLines, rightTitleRendered)
 
 		// Branch: if the task has graph state, render graph + output instead
-		// of the legacy agent cards.
+		// of the legacy worker cards.
 		if selectedTask != nil {
 			if gts, ok := m.graphTasks[selectedTask.ID]; ok {
 				rightLines = append(rightLines, m.renderGraphTaskPane(gts, rightInnerW, panelInnerH-1)...)
@@ -794,7 +794,7 @@ func (m *Model) renderJobsModal() string {
 				// the shared scrollable viewport so long output is no longer
 				// clipped (the old fixed-height cards silently truncated). ↑↓
 				// cycle workers; the graph-pane scroll handlers move the body.
-				idx := m.jobsModal.agentCardIdx
+				idx := m.jobsModal.workerCardIdx
 				if idx >= len(sessions) {
 					idx = len(sessions) - 1
 				}
@@ -805,9 +805,9 @@ func (m *Model) renderJobsModal() string {
 
 				if len(sessions) > 1 {
 					rightLines = append(rightLines, dimBg.Render(fmt.Sprintf(
-						"worker %d/%d · %s  (↑↓ switch)", idx+1, len(sessions), focused.agentName)))
+						"worker %d/%d · %s  (↑↓ switch)", idx+1, len(sessions), focused.workerName)))
 				} else {
-					rightLines = append(rightLines, dimBg.Render("worker: "+focused.agentName+" · "+focused.status))
+					rightLines = append(rightLines, dimBg.Render("worker: "+focused.workerName+" · "+focused.status))
 				}
 
 				bodyH := panelInnerH - len(rightLines)

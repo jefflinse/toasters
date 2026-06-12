@@ -1322,7 +1322,7 @@ func (m *Model) setFocus(p focusedPanel) tea.Cmd {
 		return nil
 	}
 	m.focused = p
-	if (p == focusJobs || p == focusBlockers || p == focusAgents) && !m.spinnerRunning {
+	if (p == focusJobs || p == focusBlockers || p == focusWorkers) && !m.spinnerRunning {
 		m.spinnerRunning = true
 		return spinnerTick()
 	}
@@ -1446,7 +1446,7 @@ func (m *Model) sortedRuntimeSessions() []*runtimeSlot {
 }
 
 // filteredGridSessions returns the sorted runtime sessions narrowed by the
-// grid's filter query (case-insensitive substring over job id, role/agent
+// grid's filter query (case-insensitive substring over job id, role/worker
 // name, and status). With an empty query it is exactly sortedRuntimeSessions,
 // so the grid render path and cell-resolution helper can share one source.
 func (m *Model) filteredGridSessions() []*runtimeSlot {
@@ -1457,7 +1457,7 @@ func (m *Model) filteredGridSessions() []*runtimeSlot {
 	}
 	out := make([]*runtimeSlot, 0, len(all))
 	for _, rs := range all {
-		hay := strings.ToLower(rs.jobID + " " + rs.agentName + " " + rs.teamName + " " + rs.status)
+		hay := strings.ToLower(rs.jobID + " " + rs.workerName + " " + rs.teamName + " " + rs.status)
 		if strings.Contains(hay, q) {
 			out = append(out, rs)
 		}

@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -744,6 +745,9 @@ func (ct *CoreTools) globRecursive(root, pattern string) ([]string, error) {
 			return nil // skip errors
 		}
 		if d.IsDir() {
+			if d.Name() == ".git" {
+				return fs.SkipDir
+			}
 			return nil
 		}
 
@@ -752,16 +756,36 @@ func (ct *CoreTools) globRecursive(root, pattern string) ([]string, error) {
 			return nil
 		}
 
-		// Match the filename or relative path against the suffix.
-		name := d.Name()
-		matched, _ := filepath.Match(suffix, name)
-		if matched {
+		rel, relErr := filepath.Rel(absBaseDir, path)
+		if relErr != nil {
+			rel = d.Name()
+		}
+		if matchGlobSuffix(suffix, rel) {
 			matches = append(matches, path)
 		}
 		return nil
 	})
 
 	return matches, err
+}
+
+// matchGlobSuffix reports whether the trailing components of rel match
+// pattern. A bare-name pattern ("*.go") matches the filename anywhere in the
+// tree; a pattern with separators ("dir/*.go", from "**/dir/*.go") matches
+// the same number of trailing path components — filepath.Match alone only
+// compares the filename, silently returning "(no matches)" for such patterns.
+func matchGlobSuffix(pattern, rel string) bool {
+	if ok, _ := filepath.Match(pattern, rel); ok {
+		return true
+	}
+	parts := strings.Split(rel, string(filepath.Separator))
+	n := strings.Count(pattern, string(filepath.Separator)) + 1
+	if len(parts) < n {
+		return false
+	}
+	tail := filepath.Join(parts[len(parts)-n:]...)
+	ok, _ := filepath.Match(pattern, tail)
+	return ok
 }
 
 func (ct *CoreTools) grepFiles(_ context.Context, args json.RawMessage) (string, error) {
@@ -801,6 +825,11 @@ func (ct *CoreTools) grepFiles(_ context.Context, args json.RawMessage) (string,
 			return nil
 		}
 		if d.IsDir() {
+			// .git holds packfiles and object blobs — never useful grep
+			// targets, and big repos make the walk crawl.
+			if d.Name() == ".git" {
+				return fs.SkipDir
+			}
 			return nil
 		}
 		if matchCount >= maxMatches {
@@ -821,9 +850,17 @@ func (ct *CoreTools) grepFiles(_ context.Context, args json.RawMessage) (string,
 		}
 		defer func() { _ = f.Close() }()
 
+		// Binary sniff: a NUL byte in the first 512 bytes means matches
+		// would be unreadable garbage — skip the file.
+		header := make([]byte, 512)
+		n, _ := io.ReadFull(f, header)
+		if bytes.IndexByte(header[:n], 0) != -1 {
+			return nil
+		}
+
 		relPath, _ := filepath.Rel(absSearchDir, path)
 
-		scanner := bufio.NewScanner(f)
+		scanner := bufio.NewScanner(io.MultiReader(bytes.NewReader(header[:n]), f))
 		scanner.Buffer(make([]byte, 0, 64*1024), maxScanLineBytes)
 		lineNum := 0
 		for scanner.Scan() {

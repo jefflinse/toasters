@@ -60,15 +60,24 @@ func ParseBytes(data []byte) (*SkillDef, error) {
 // "---" lines. Returns the raw YAML string and the trimmed body. Delimiter
 // lines are matched after trimming trailing whitespace (including \r for
 // Windows line endings), so "--- " and "---\r" are both accepted.
+//
+// The opening delimiter must be the FIRST non-blank line. Accepting "---"
+// anywhere meant text before the frontmatter was silently dropped, and a
+// horizontal rule in a frontmatter-less skill misparsed as a frontmatter
+// opener.
 func SplitFrontmatter(content string) (string, string, error) {
 	lines := strings.Split(content, "\n")
 
-	// Find opening "---".
+	// Find opening "---" — only blank lines may precede it.
 	start := -1
 	for i, l := range lines {
-		if strings.TrimRight(l, " \t\r") == "---" {
+		trimmed := strings.TrimRight(l, " \t\r")
+		if trimmed == "---" {
 			start = i
 			break
+		}
+		if trimmed != "" {
+			return "", "", errors.New("frontmatter delimiter must be the first non-blank line")
 		}
 	}
 	if start == -1 {

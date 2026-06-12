@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"time"
 
 	mcpclient "github.com/mark3labs/mcp-go/client"
 	mcptypes "github.com/mark3labs/mcp-go/mcp"
@@ -62,6 +63,7 @@ type Manager struct {
 	servers   []serverEntry
 	toolIndex map[string]toolIndexEntry // namespaced tool name → server + original name
 	statuses  []ServerStatus            // per-server connection status (includes failed servers)
+	closed    bool                      // set by Close; reconnects adopted after are discarded
 }
 
 // NewManager creates a new Manager.
@@ -248,6 +250,113 @@ func (m *Manager) Connect(ctx context.Context, servers []config.MCPServerConfig)
 	return nil
 }
 
+// Reconnect backoff bounds. The loop starts at the initial delay, doubles on
+// rounds where nothing recovered, and is capped at the max. Once every server
+// is connected it idles at the max interval (a cheap status scan).
+const (
+	reconnectInitialDelay = 10 * time.Second
+	reconnectMaxDelay     = 5 * time.Minute
+)
+
+// StartReconnectLoop launches a background goroutine that retries failed MCP
+// servers with exponential backoff until ctx is cancelled. A server that
+// failed at startup (or whose process wasn't up yet) is otherwise dead for
+// the life of the process. onChange, if non-nil, is called after any
+// successful reconnect so callers can re-wire tool surfaces (e.g. the
+// runtime's MCP tool defs).
+func (m *Manager) StartReconnectLoop(ctx context.Context, onChange func()) {
+	go func() {
+		delay := reconnectInitialDelay
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(delay):
+			}
+			recovered, remaining := m.retryFailed(ctx)
+			switch {
+			case recovered:
+				if onChange != nil {
+					onChange()
+				}
+				delay = reconnectInitialDelay
+			case remaining == 0:
+				delay = reconnectMaxDelay
+			default:
+				delay = min(delay*2, reconnectMaxDelay)
+			}
+		}
+	}()
+}
+
+// retryFailed attempts to reconnect every currently-failed server. It
+// reports whether any reconnect succeeded and how many servers remain
+// failed.
+func (m *Manager) retryFailed(ctx context.Context) (recovered bool, remaining int) {
+	m.mu.RLock()
+	var failed []config.MCPServerConfig
+	for _, st := range m.statuses {
+		if st.State == ServerFailed {
+			failed = append(failed, st.Config)
+		}
+	}
+	m.mu.RUnlock()
+
+	for _, cfg := range failed {
+		r := connectServer(ctx, cfg)
+		if r.server == nil {
+			remaining++
+			m.setStatus(r.status) // refresh the error message
+			continue
+		}
+		if m.adopt(r) {
+			recovered = true
+			slog.Info("MCP server reconnected", "server", cfg.Name, "tools", len(r.tools))
+		}
+	}
+	return recovered, remaining
+}
+
+// adopt installs a freshly connected server into the live state. Returns
+// false (and closes the client) when the manager has been closed in the
+// meantime.
+func (m *Manager) adopt(r connectResult) bool {
+	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		_ = r.server.client.Close()
+		return false
+	}
+	idx := len(m.servers)
+	m.servers = append(m.servers, *r.server)
+	for _, tool := range r.tools {
+		m.toolIndex[tool.NamespacedName] = toolIndexEntry{
+			serverIdx:    idx,
+			originalName: tool.OriginalName,
+		}
+	}
+	m.statusLocked(r.status)
+	m.mu.Unlock()
+	return true
+}
+
+// setStatus replaces the status entry matching s.Name (or appends one).
+func (m *Manager) setStatus(s ServerStatus) {
+	m.mu.Lock()
+	m.statusLocked(s)
+	m.mu.Unlock()
+}
+
+func (m *Manager) statusLocked(s ServerStatus) {
+	for i := range m.statuses {
+		if m.statuses[i].Name == s.Name {
+			m.statuses[i] = s
+			return
+		}
+	}
+	m.statuses = append(m.statuses, s)
+}
+
 // Call dispatches a tool call to the appropriate MCP server.
 // It holds only a read lock to look up the server, then releases before
 // making the (potentially slow) MCP call.
@@ -348,6 +457,7 @@ func (m *Manager) Servers() []ServerStatus {
 // Close() — this is acceptable for the common case.
 func (m *Manager) Close() error {
 	m.mu.Lock()
+	m.closed = true
 	servers := m.servers
 	m.servers = nil
 	m.toolIndex = make(map[string]toolIndexEntry)

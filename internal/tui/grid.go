@@ -1,4 +1,4 @@
-// Grid screen: dynamic NxM agent slot grid rendering, context bar, token bar, and reasoning block display.
+// Grid screen: dynamic NxM worker slot grid rendering, context bar, token bar, and reasoning block display.
 package tui
 
 import (
@@ -21,7 +21,7 @@ const (
 	gridCellBorderW   = 4  // total horizontal border+padding per cell
 	gridCellBorderH   = 2  // total vertical border+padding per cell
 
-	// maxGridSlots is the maximum number of agent slots displayed in the grid.
+	// maxGridSlots is the maximum number of worker slots displayed in the grid.
 	maxGridSlots = 16
 )
 
@@ -143,7 +143,7 @@ func (m *Model) renderGrid() string {
 // renderRuntimeGridCell renders a single runtime session into a grid cell as a
 // structured smart card:
 //
-//	⚡ team/agent-name · <uuid-short> · 1m24s   ← header
+//	⚡ team/worker-name · <uuid-short> · 1m24s   ← header
 //	──────────────────────────────────────────   ← dim separator
 //	building core data models                    ← task description (word-wrapped, ≤2 lines)
 //	──────────────────────────────────────────   ← dim separator (only if task non-empty)
@@ -178,14 +178,14 @@ func (m *Model) renderRuntimeGridCell(rs *runtimeSlot, cellW, cellH, innerW, inn
 		BorderForeground(borderColor).
 		Padding(0, 1)
 
-	return cellStyle.Render(renderAgentCard(rs, innerW, innerH, focused, m.spinnerFrame))
+	return cellStyle.Render(renderWorkerCard(rs, innerW, innerH, focused, m.spinnerFrame))
 }
 
-// renderAgentCard renders the inner content of an agent smart card (without border).
+// renderWorkerCard renders the inner content of a worker smart card (without border).
 // innerW and innerH define the available content dimensions.
 // focused indicates whether this card has focus (affects header style).
 // spinnerFrame is the current animation frame for the braille spinner.
-func renderAgentCard(rs *runtimeSlot, innerW, innerH int, focused bool, spinnerFrame int) string {
+func renderWorkerCard(rs *runtimeSlot, innerW, innerH int, focused bool, spinnerFrame int) string {
 	// Graceful degrade: too narrow to show a useful card.
 	if innerH < 4 {
 		jobID := rs.jobID
@@ -218,22 +218,22 @@ func renderAgentCard(rs *runtimeSlot, innerW, innerH int, focused bool, spinnerF
 	if rs.status != "active" {
 		statusMark = "✓"
 	}
-	agentLabel := rs.agentName
-	if agentLabel == "" {
-		agentLabel = "runtime"
+	workerLabel := rs.workerName
+	if workerLabel == "" {
+		workerLabel = "runtime"
 	}
-	// The agentName may already be team-scoped (e.g. "auto-opencode/orchestrator")
+	// The workerName may already be team-scoped (e.g. "auto-opencode/orchestrator")
 	// from the loader's ID construction. Only prepend teamName if it's not already
 	// a prefix to avoid double-prefixing like "auto-opencode/auto-opencode/orchestrator".
-	if rs.teamName != "" && !strings.HasPrefix(agentLabel, rs.teamName+"/") {
-		agentLabel = rs.teamName + "/" + agentLabel
+	if rs.teamName != "" && !strings.HasPrefix(workerLabel, rs.teamName+"/") {
+		workerLabel = rs.teamName + "/" + workerLabel
 	}
 	// Short job ID (first 8 chars).
 	shortJobID := rs.jobID
 	if len(shortJobID) > 8 {
 		shortJobID = shortJobID[:8]
 	}
-	header := fmt.Sprintf("%s %s · %s · %s", statusMark, agentLabel, shortJobID, elapsed)
+	header := fmt.Sprintf("%s %s · %s · %s", statusMark, workerLabel, shortJobID, elapsed)
 	headerLine := hdrStyle.Render(truncateStr(header, innerW))
 
 	// --- Meta line (model/provider · tokens · cost) ---
@@ -241,7 +241,7 @@ func renderAgentCard(rs *runtimeSlot, innerW, innerH int, focused bool, spinnerF
 	// graceful-degrade and tiny-cell paths are untouched.
 	metaLine := ""
 	if innerH >= 5 {
-		if meta := agentCardMeta(rs); meta != "" {
+		if meta := workerCardMeta(rs); meta != "" {
 			metaLine = DimStyle.Render(truncateStr(meta, innerW))
 		}
 	}
@@ -337,10 +337,10 @@ func renderAgentCard(rs *runtimeSlot, innerW, innerH int, focused bool, spinnerF
 	return strings.Join(lines, "\n")
 }
 
-// agentCardMeta builds the compact provider/model · tokens · cost line shown
+// workerCardMeta builds the compact provider/model · tokens · cost line shown
 // under a worker card header. Each segment is omitted when its value is
 // zero/empty, so a freshly-started worker (no snapshot yet) renders nothing.
-func agentCardMeta(rs *runtimeSlot) string {
+func workerCardMeta(rs *runtimeSlot) string {
 	var segs []string
 	switch {
 	case rs.model != "" && rs.provider != "":
@@ -558,7 +558,7 @@ func renderReasoningBlock(reasoning string, contentWidth int) string {
 }
 
 // activityLabel returns a short human-readable label for a tool call,
-// suitable for display in a runtime agent card's activity list.
+// suitable for display in a runtime worker card's activity list.
 func activityLabel(toolName string, args json.RawMessage) string {
 	var a map[string]any
 	_ = json.Unmarshal(args, &a)
@@ -584,8 +584,8 @@ func activityLabel(toolName string, args json.RawMessage) string {
 		return "read: " + path.Base(str("path"))
 	case "shell":
 		return "shell: " + trunc(str("command"), 28)
-	case "spawn_agent":
-		name := str("agent_name")
+	case "spawn_worker":
+		name := str("role")
 		if name == "" {
 			name = "worker"
 		}

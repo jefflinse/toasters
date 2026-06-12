@@ -338,10 +338,17 @@ func (s *Server) listJobs(w http.ResponseWriter, r *http.Request) {
 		wireJobs = append(wireJobs, jobToWire(j))
 	}
 
-	// Note: The service layer handles pagination via filter.Limit/Offset,
-	// so we return the results directly. Total is the count of returned items
-	// since the service doesn't return a separate total count.
-	writeJSON(w, http.StatusOK, PaginatedResponse[wireJob]{Items: wireJobs, Total: len(wireJobs)})
+	// The service doesn't return a separate total count, so run the same
+	// filter unpaginated for the real Total — without this, paged responses
+	// reported Total == page size and clients couldn't page. Job counts are
+	// small for a single-user tool, so the second query is cheap.
+	total := len(wireJobs)
+	countFilter := *filter
+	countFilter.Limit, countFilter.Offset = 0, 0
+	if all, countErr := s.svc.Jobs().List(r.Context(), &countFilter); countErr == nil {
+		total = len(all)
+	}
+	writeJSON(w, http.StatusOK, PaginatedResponse[wireJob]{Items: wireJobs, Total: total})
 }
 
 // getJob handles GET /api/v1/jobs/{id}.

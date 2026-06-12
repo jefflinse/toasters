@@ -273,31 +273,51 @@ func TestEngine_Compose_MissingRole(t *testing.T) {
 	}
 }
 
-func TestEngine_Compose_UnresolvedRefsBecomeEmpty(t *testing.T) {
+// Unresolved DATA refs substitute empty (caller-supplied values may
+// legitimately be absent), but unresolved RESERVED-root refs (instructions,
+// toolchains) are structural breakage and must fail the compose instead of
+// silently sending a worker off with half its guidance (Q3).
+func TestEngine_Compose_UnresolvedRefs(t *testing.T) {
 	dir := t.TempDir()
 	mkdirAll(t, filepath.Join(dir, "roles"))
-	writeFile(t, filepath.Join(dir, "roles", "r.md"), `---
-name: R
+	writeFile(t, filepath.Join(dir, "roles", "data.md"), `---
+name: Data
 ---
 BEFORE
 {{ task.description }}
-{{ instructions.does-not-exist }}
-{{ toolchains.does-not-exist }}
 AFTER
+`)
+	writeFile(t, filepath.Join(dir, "roles", "badinst.md"), `---
+name: BadInst
+---
+{{ instructions.does-not-exist }}
+`)
+	writeFile(t, filepath.Join(dir, "roles", "badtc.md"), `---
+name: BadTC
+---
+{{ toolchains.does-not-exist }}
 `)
 	engine := NewEngine()
 	if err := engine.LoadDir(dir, "test"); err != nil {
 		t.Fatalf("LoadDir: %v", err)
 	}
-	got, err := engine.Compose("r", nil, nil)
+
+	got, err := engine.Compose("data", nil, nil)
 	if err != nil {
-		t.Fatalf("Compose: %v", err)
+		t.Fatalf("Compose with unresolved data ref should succeed: %v", err)
 	}
 	if strings.Contains(got, "{{") {
 		t.Errorf("unresolved template ref left in output: %q", got)
 	}
 	if !strings.Contains(got, "BEFORE") || !strings.Contains(got, "AFTER") {
 		t.Errorf("surrounding text dropped: %q", got)
+	}
+
+	if _, err := engine.Compose("badinst", nil, nil); err == nil {
+		t.Error("Compose with unknown instruction should fail")
+	}
+	if _, err := engine.Compose("badtc", nil, nil); err == nil {
+		t.Error("Compose with unknown toolchain should fail")
 	}
 }
 

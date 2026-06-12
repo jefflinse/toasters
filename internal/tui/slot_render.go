@@ -184,8 +184,8 @@ func summarizeToolArgs(toolName string, args json.RawMessage) string {
 		return str("path")
 	case "shell":
 		return str("command")
-	case "spawn_agent":
-		if name := str("agent_name"); name != "" {
+	case "spawn_worker":
+		if name := str("role"); name != "" {
 			return name
 		}
 		return ""

@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"regexp"
 	"slices"
+	"sort"
 	"strings"
 
 	"github.com/jefflinse/mycelium/agent"
@@ -352,11 +353,18 @@ func buildInitialMessage(state *TaskState) string {
 	if state.WorkspaceDir != "" {
 		parts = append(parts, fmt.Sprintf("Workspace: %s", state.WorkspaceDir))
 	}
-	for key, val := range state.Artifacts {
+	// Deterministic order: map iteration would shuffle sections between
+	// composes, hurting prompt-cache hits and making transcripts hard to diff.
+	keys := make([]string, 0, len(state.Artifacts))
+	for key := range state.Artifacts {
 		if strings.HasPrefix(key, "task.") || strings.HasPrefix(key, "job.") {
 			continue
 		}
-		if s, ok := val.(string); ok && s != "" {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		if s, ok := state.Artifacts[key].(string); ok && s != "" {
 			parts = append(parts, fmt.Sprintf("## %s\n%s", key, s))
 		}
 	}
@@ -438,7 +446,7 @@ func accessWritesWorkspace(access string) bool {
 	}
 }
 
-// onEventSink returns an agent OnEvent handler that broadcasts streaming
+// onEventSink returns a mycelium agent OnEvent handler that broadcasts streaming
 // text, tool calls, and tool results to the EventSink attached to the
 // current NodeContext. No-op when no sink is configured — tests and
 // library-only uses pay nothing.

@@ -106,7 +106,7 @@ func NewSystemTools(cfg SystemToolsConfig) *SystemTools {
 	}
 }
 
-// Definitions returns the tool definitions available to system agents.
+// Definitions returns the tool definitions available to system workers.
 func (st *SystemTools) Definitions() []runtime.ToolDef {
 	return []runtime.ToolDef{
 		{
@@ -181,21 +181,7 @@ func (st *SystemTools) Definitions() []runtime.ToolDef {
 		},
 		{
 			Name:        "query_job",
-			Description: "Get the current state of a job including all its tasks and their statuses.",
-			Parameters: json.RawMessage(`{
-				"type": "object",
-				"properties": {
-					"job_id": {
-						"type": "string",
-						"description": "ID of the job to query"
-					}
-				},
-				"required": ["job_id"]
-			}`),
-		},
-		{
-			Name:        "query_job_context",
-			Description: "Query the context of a job, including its tasks and their current status.",
+			Description: "Get the full current state of a job: title, status, description, workspace, and every task with its status, graph, IDs, and result summary. This is the ONE tool for inspecting a job — use it before retrying tasks, answering status questions, or deciding on follow-up work.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
@@ -244,7 +230,10 @@ func (st *SystemTools) Execute(ctx context.Context, name string, args json.RawMe
 	case "query_job":
 		return st.queryJob(ctx, args)
 	case "query_job_context":
-		return st.queryJobContext(ctx, args)
+		// Retired alias — query_job now carries everything it returned.
+		// Kept dispatchable so a stale persisted conversation replaying an
+		// old tool call doesn't hard-error.
+		return st.queryJob(ctx, args)
 	case "surface_to_user":
 		return st.surfaceToUser(ctx, args)
 	default:
@@ -764,24 +753,14 @@ func (st *SystemTools) queryJob(ctx context.Context, args json.RawMessage) (stri
 			if task.GraphID != "" {
 				fmt.Fprintf(&b, " → graph %s", task.GraphID)
 			}
+			if task.Summary != "" {
+				fmt.Fprintf(&b, " — %s", task.Summary)
+			}
 			b.WriteString("\n")
 		}
 	}
 
 	return b.String(), nil
-}
-
-func (st *SystemTools) queryJobContext(ctx context.Context, args json.RawMessage) (string, error) {
-	var params struct {
-		JobID string `json:"job_id"`
-	}
-	if err := json.Unmarshal(args, &params); err != nil {
-		return "", fmt.Errorf("parsing query_job_context args: %w", err)
-	}
-	if params.JobID == "" {
-		return "", fmt.Errorf("job_id is required")
-	}
-	return formatJobContext(ctx, st.store, params.JobID)
 }
 
 func (st *SystemTools) surfaceToUser(ctx context.Context, args json.RawMessage) (string, error) {

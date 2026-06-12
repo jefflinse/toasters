@@ -473,9 +473,9 @@ func TestUpdateGrid_Filter(t *testing.T) {
 		m.grid.showGrid = true
 		m.grid.gridCols = 2
 		m.grid.gridRows = 2
-		m.runtimeSessions["s1"] = &runtimeSlot{sessionID: "s1", jobID: "alpha", agentName: "coder", status: "active"}
-		m.runtimeSessions["s2"] = &runtimeSlot{sessionID: "s2", jobID: "beta", agentName: "tester", status: "active"}
-		m.runtimeSessions["s3"] = &runtimeSlot{sessionID: "s3", jobID: "alpha", agentName: "reviewer", status: "completed"}
+		m.runtimeSessions["s1"] = &runtimeSlot{sessionID: "s1", jobID: "alpha", workerName: "coder", status: "active"}
+		m.runtimeSessions["s2"] = &runtimeSlot{sessionID: "s2", jobID: "beta", workerName: "tester", status: "active"}
+		m.runtimeSessions["s3"] = &runtimeSlot{sessionID: "s3", jobID: "alpha", workerName: "reviewer", status: "completed"}
 		return &m
 	}
 
@@ -1007,9 +1007,9 @@ func TestUpdateGrid_KillConfirmation(t *testing.T) {
 		m.grid.gridRows = 1
 		m.grid.gridFocusCell = 0
 		m.runtimeSessions[sessionID] = &runtimeSlot{
-			sessionID: sessionID,
-			agentName: "builder",
-			status:    status,
+			sessionID:  sessionID,
+			workerName: "builder",
+			status:     status,
 		}
 		return &m
 	}

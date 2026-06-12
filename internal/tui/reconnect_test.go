@@ -30,16 +30,16 @@ func TestProgressPollMsg_SeedsRuntimeSlots(t *testing.T) {
 	if !ok {
 		t.Fatal("graph node slot not seeded from snapshot")
 	}
-	if gslot.agentName != "graph:plan" || gslot.status != "active" {
-		t.Errorf("graph slot = %+v, want agentName graph:plan / active", gslot)
+	if gslot.workerName != "graph:plan" || gslot.status != "active" {
+		t.Errorf("graph slot = %+v, want workerName graph:plan / active", gslot)
 	}
 
 	wslot, ok := got.runtimeSessions["sess-1"]
 	if !ok {
 		t.Fatal("worker slot not seeded from snapshot")
 	}
-	if wslot.agentName != "coder" || wslot.model != "qwen" {
-		t.Errorf("worker slot = %+v, want agentName coder / model qwen", wslot)
+	if wslot.workerName != "coder" || wslot.model != "qwen" {
+		t.Errorf("worker slot = %+v, want workerName coder / model qwen", wslot)
 	}
 }
 
@@ -49,7 +49,7 @@ func TestProgressPollMsg_SeedsRuntimeSlots(t *testing.T) {
 func TestProgressPollMsg_SeedIsIdempotent(t *testing.T) {
 	m := newMinimalModel(t)
 	m.runtimeSessions["graph:t1:plan"] = &runtimeSlot{
-		sessionID: "graph:t1:plan", agentName: "graph:plan", status: "completed",
+		sessionID: "graph:t1:plan", workerName: "graph:plan", status: "completed",
 	}
 
 	res, _ := m.Update(progressPollMsg{

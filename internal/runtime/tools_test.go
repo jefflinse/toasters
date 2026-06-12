@@ -301,6 +301,28 @@ func TestGlob(t *testing.T) {
 		assertNoError(t, err)
 		assertContains(t, result, "no matches")
 	})
+
+	// "**/sub/*.go" has a separator in the suffix; matching only d.Name()
+	// silently returned "(no matches)" (C23/Q5).
+	t.Run("recursive pattern with directory suffix", func(t *testing.T) {
+		result, err := ct.Execute(context.Background(), "glob", mustJSON(t, map[string]any{
+			"pattern": "**/sub/*.go",
+		}))
+		assertNoError(t, err)
+		assertContains(t, result, "d.go")
+		assertNotContains(t, result, "a.go")
+		assertNotContains(t, result, "e.txt")
+	})
+
+	t.Run("skips .git", func(t *testing.T) {
+		mkdirAll(t, dir, ".git/objects")
+		writeTestFile(t, dir, ".git/objects/pack.go", "package fake")
+		result, err := ct.Execute(context.Background(), "glob", mustJSON(t, map[string]any{
+			"pattern": "**/*.go",
+		}))
+		assertNoError(t, err)
+		assertNotContains(t, result, "pack.go")
+	})
 }
 
 func TestGrep(t *testing.T) {
@@ -344,6 +366,20 @@ func TestGrep(t *testing.T) {
 		}))
 		assertNoError(t, err)
 		assertContains(t, result, "no matches")
+	})
+
+	t.Run("skips .git and binary files", func(t *testing.T) {
+		mkdirAll(t, dir, ".git/objects")
+		writeTestFile(t, dir, ".git/objects/blob", "hello inside git object\n")
+		writeTestFile(t, dir, "binary.bin", "hello\x00world binary\n")
+
+		result, err := ct.Execute(context.Background(), "grep", mustJSON(t, map[string]any{
+			"pattern": "hello",
+		}))
+		assertNoError(t, err)
+		assertNotContains(t, result, ".git")
+		assertNotContains(t, result, "binary.bin")
+		assertContains(t, result, "a.go") // text matches still found
 	})
 
 	t.Run("invalid regex", func(t *testing.T) {

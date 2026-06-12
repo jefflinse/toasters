@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -184,13 +185,13 @@ func runServe(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Resolve default provider/model for agent sessions.
+	// Resolve default provider/model for worker sessions.
 	// Fall back to the operator's provider/model when agents.defaults is empty.
-	defaultProvider := cfg.Agents.Defaults.Provider
+	defaultProvider := cfg.Workers.Defaults.Provider
 	if defaultProvider == "" {
 		defaultProvider = cfg.Operator.Provider
 	}
-	defaultModel := cfg.Agents.Defaults.Model
+	defaultModel := cfg.Workers.Defaults.Model
 	if defaultModel == "" {
 		defaultModel = cfg.Operator.Model
 	}
@@ -199,7 +200,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 	registry := provider.NewRegistry()
 	registerProviders(registry, ldr)
 
-	// Create the runtime for agent session management.
+	// Create the runtime for worker session management.
 	rt := runtime.New(store, registry)
 	rt.SetPromptEngine(promptEngine)
 	defer rt.Shutdown()
@@ -213,11 +214,16 @@ func runServe(cmd *cobra.Command, args []string) error {
 	}
 	defer func() { _ = mcpManager.Close() }()
 
-	// Wire MCP tools into agent runtime with result truncation.
-	if len(mcpManager.Tools()) > 0 {
-		truncatingCaller := mcp.NewTruncatingCaller(mcpManager, mcp.DefaultMaxResultLen)
-		rt.SetMCPCaller(truncatingCaller, mcp.ToRuntimeToolDefs(mcpManager.Tools()))
+	// Wire MCP tools into the worker runtime with result truncation. Also
+	// re-wired by the reconnect loop below whenever a failed server comes
+	// back, so its tools become available without a restart.
+	wireMCPTools := func() {
+		if len(mcpManager.Tools()) > 0 {
+			truncatingCaller := mcp.NewTruncatingCaller(mcpManager, mcp.DefaultMaxResultLen)
+			rt.SetMCPCaller(truncatingCaller, mcp.ToRuntimeToolDefs(mcpManager.Tools()))
+		}
 	}
+	wireMCPTools()
 
 	client, err := resolveOperatorProvider(cfg, registry)
 	if err != nil {
@@ -237,7 +243,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Compose the operator agent's system prompt via the prompt engine.
+	// Compose the operator's system prompt via the prompt engine.
 	var operatorPrompt string
 	if composed, err := promptEngine.Compose("operator", nil, nil); err != nil {
 		slog.Warn("failed to compose operator prompt", "error", err)
@@ -270,8 +276,14 @@ func runServe(cmd *cobra.Command, args []string) error {
 	})
 	defer svc.Shutdown()
 
+	// Retry failed MCP servers in the background for the life of the service;
+	// each recovery re-wires the runtime's MCP tool surface.
+	if len(cfg.MCP.Servers) > 0 {
+		mcpManager.StartReconnectLoop(svc.Ctx(), wireMCPTools)
+	}
+
 	// Wire the runtime's session-started callback to broadcast session events
-	// through the service event stream. This is the only path by which agent
+	// through the service event stream. This is the only path by which worker
 	// session activity reaches subscribers (TUI, SSE clients).
 	rt.OnSessionStarted = svc.BroadcastSessionStarted
 
@@ -470,14 +482,32 @@ func runServe(cmd *cobra.Command, args []string) error {
 // provider is wrapped with a per-provider Scheduler so in-flight chat calls
 // against the same backend are bounded — capacity comes from pc.Concurrency
 // (defaulting to 1, which is safe for a local LLM).
+// providerFingerprints tracks the last-registered config per provider key so
+// hot reloads only swap schedulers whose config actually changed. Replacing
+// an in-use scheduler transiently doubles the provider's effective
+// concurrency cap (in-flight calls still hold the old scheduler's slots
+// while the new one hands out a fresh set) — a real problem for
+// resource-constrained local endpoints.
+var (
+	providerFingerprintsMu sync.Mutex
+	providerFingerprints   = map[string]string{}
+)
+
 func registerProviders(registry *provider.Registry, ldr *loader.Loader) {
 	if ldr == nil {
 		return
 	}
+	providerFingerprintsMu.Lock()
+	defer providerFingerprintsMu.Unlock()
 	for _, pc := range ldr.Providers() {
 		// Expand ${ENV_VAR} references in API key and endpoint.
 		pc.APIKey = os.Expand(pc.APIKey, os.Getenv)
 		pc.Endpoint = os.Expand(pc.Endpoint, os.Getenv)
+
+		fp := fmt.Sprintf("%+v", pc)
+		if providerFingerprints[pc.Key()] == fp {
+			continue // unchanged — keep the existing scheduler and its held slots
+		}
 
 		p, err := provider.NewFromConfig(pc)
 		if err != nil {
@@ -488,5 +518,6 @@ func registerProviders(registry *provider.Registry, ldr *loader.Loader) {
 		slog.Info("registered provider", "id", pc.ID, "name", pc.Name,
 			"concurrency", scheduler.Capacity())
 		registry.Register(pc.Key(), scheduler)
+		providerFingerprints[pc.Key()] = fp
 	}
 }

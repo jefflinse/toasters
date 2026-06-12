@@ -219,7 +219,7 @@ func mergeGraphs(system, user []*graphexec.Definition) []*graphexec.Definition {
 	return out
 }
 
-// maxDefinitionFileSize is the maximum size (in bytes) for agent/skill/team
+// maxDefinitionFileSize is the maximum size (in bytes) for role/skill/team
 // definition files. Files larger than this are skipped to prevent excessive
 // memory allocation from malicious or accidentally large files.
 const maxDefinitionFileSize = 1 << 20 // 1 MiB
@@ -303,7 +303,7 @@ var (
 // Examples: "Go Development" → "go-development", "Senior Go Dev" → "senior-go-dev".
 //
 // Slugify is exported because TUI CRUD operations in internal/tui use it to generate
-// consistent filenames when creating skills, agents, and teams on disk.
+// consistent filenames when creating skills, roles, and teams on disk.
 func Slugify(name string) string {
 	s := strings.ToLower(name)
 	s = strings.ReplaceAll(s, " ", "-")

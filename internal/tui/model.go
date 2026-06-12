@@ -44,7 +44,7 @@ type streamingState struct {
 	operatorByline   string // formatted byline for the in-progress operator stream; cleared when done
 }
 
-// gridState holds all state for the dynamic NxM agent grid screen.
+// gridState holds all state for the dynamic NxM worker grid screen.
 type gridState struct {
 	showGrid      bool
 	gridFocusCell int // 0-(cols*rows-1) within current page
@@ -244,8 +244,8 @@ type Model struct {
 	// resolve a task's graph_id to a dagmap topology.
 	graphDefs map[string]service.GraphDefinition
 
-	// Agent pane state.
-	selectedAgentSlot int // which slot is highlighted in the agents pane
+	// Worker pane state.
+	selectedWorkerSlot int // which slot is highlighted in the workers pane
 
 	loading          bool // true while waiting for AppReadyMsg before initializing the conversation
 	loadingFrame     int  // current animation frame index (0..numLoadingFrames-1)
@@ -295,22 +295,22 @@ type Model struct {
 	logView logViewState
 }
 
-// activityItem represents a single tool-call activity for display in a runtime agent card.
+// activityItem represents a single tool-call activity for display in a runtime worker card.
 type activityItem struct {
 	label    string // formatted display label, e.g. "write: main.go"
 	toolName string // raw tool name
 }
 
-// runtimeSlot tracks a runtime agent session for TUI display.
+// runtimeSlot tracks a runtime worker session for TUI display.
 type runtimeSlot struct {
-	sessionID string
-	agentName string
-	teamName  string // team this agent belongs to (may be empty)
-	task      string // short human-readable description of what this agent is doing
-	jobID     string
-	taskID    string
-	status    string // "active", "completed", "failed", "cancelled"
-	system    bool   // internal decomposition step; hidden from chat/workers unless --debug
+	sessionID  string
+	workerName string
+	teamName   string // team this worker belongs to (may be empty)
+	task       string // short human-readable description of what this worker is doing
+	jobID      string
+	taskID     string
+	status     string // "active", "completed", "failed", "cancelled"
+	system     bool   // internal decomposition step; hidden from chat/workers unless --debug
 
 	// items holds typed output blocks (text + tool calls) so the graph
 	// pane can render styled, scrollable output. Replaces the previous
@@ -407,7 +407,7 @@ func NewModel(cfg ModelConfig) Model {
 
 	m.loading = true
 
-	m.selectedAgentSlot = 0
+	m.selectedWorkerSlot = 0
 	m.grid.gridFocusCell = 0
 	m.grid.gridCols = 1
 	m.grid.gridRows = 1
@@ -538,7 +538,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 
 		case "tab":
-			// Cycle focus: chat → jobs → blockers → agents → chat.
+			// Cycle focus: chat → jobs → blockers → workers → chat.
 			// Skip hidden panels.
 			// (Tab inside the slash command popup is handled above and returns early.)
 			next := m.focused
@@ -549,14 +549,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				case focusJobs:
 					next = focusBlockers
 				case focusBlockers:
-					next = focusAgents
-				case focusAgents:
+					next = focusWorkers
+				case focusWorkers:
 					next = focusChat
 				default:
 					next = focusChat
 				}
 				// Skip left-panel targets when left panel is hidden or empty.
-				if !m.shouldShowLeftPanel() && (next == focusJobs || next == focusBlockers || next == focusAgents) {
+				if !m.shouldShowLeftPanel() && (next == focusJobs || next == focusBlockers || next == focusWorkers) {
 					continue
 				}
 				break
@@ -569,13 +569,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, focusCmd
 
 		case "shift+tab":
-			// Reverse cycle: chat → agents → blockers → jobs → chat.
+			// Reverse cycle: chat → workers → blockers → jobs → chat.
 			next := m.focused
 			for {
 				switch next {
 				case focusChat:
-					next = focusAgents
-				case focusAgents:
+					next = focusWorkers
+				case focusWorkers:
 					next = focusBlockers
 				case focusBlockers:
 					next = focusJobs
@@ -585,7 +585,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					next = focusChat
 				}
 				// Skip left-panel targets when left panel is hidden or empty.
-				if !m.shouldShowLeftPanel() && (next == focusJobs || next == focusBlockers || next == focusAgents) {
+				if !m.shouldShowLeftPanel() && (next == focusJobs || next == focusBlockers || next == focusWorkers) {
 					continue
 				}
 				break
@@ -672,10 +672,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, nil
 			}
-			// Navigate agent slots when agents pane is focused.
-			if m.focused == focusAgents {
-				if m.selectedAgentSlot > 0 {
-					m.selectedAgentSlot--
+			// Navigate worker slots when workers pane is focused.
+			if m.focused == focusWorkers {
+				if m.selectedWorkerSlot > 0 {
+					m.selectedWorkerSlot--
 				}
 				return m, nil
 			}
@@ -707,10 +707,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, nil
 			}
-			// Navigate agent slots when agents pane is focused.
-			if m.focused == focusAgents {
-				if m.selectedAgentSlot < maxGridSlots-1 {
-					m.selectedAgentSlot++
+			// Navigate worker slots when workers pane is focused.
+			if m.focused == focusWorkers {
+				if m.selectedWorkerSlot < maxGridSlots-1 {
+					m.selectedWorkerSlot++
 				}
 				return m, nil
 			}
@@ -819,7 +819,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// right now", which may be the auto-hidden empty state.
 			next := !m.shouldShowLeftPanel()
 			m.leftPanelOverride = &next
-			if !next && (m.focused == focusJobs || m.focused == focusAgents) {
+			if !next && (m.focused == focusJobs || m.focused == focusWorkers) {
 				cmds = append(cmds, m.setFocus(focusChat))
 				cmds = append(cmds, m.input.Focus())
 			}
@@ -946,8 +946,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.blockersModal = blockersModalState{show: true, sel: sel}
 				return m, nil
 			}
-			// Open grid view when agents pane is focused.
-			if m.focused == focusAgents {
+			// Open grid view when workers pane is focused.
+			if m.focused == focusWorkers {
 				m.grid.showGrid = true
 				return m, nil
 			}
@@ -1320,7 +1320,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case SessionStartedMsg:
 		m.runtimeSessions[msg.SessionID] = &runtimeSlot{
 			sessionID:      msg.SessionID,
-			agentName:      msg.WorkerName,
+			workerName:     msg.WorkerName,
 			task:           msg.Task,
 			jobID:          msg.JobID,
 			taskID:         msg.TaskID,
@@ -1435,7 +1435,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		default:
 			cmds = append(cmds, m.addToast("🍞 "+msg.WorkerName+" finished", toastSuccess))
 		}
-		// Note: agent completion is no longer reported back to the operator from
+		// Note: worker completion is no longer reported back to the operator from
 		// the TUI. The server is responsible for routing task completion into the
 		// operator's event channel. The TUI is a viewer, not a router.
 		return m, tea.Batch(cmds...)
@@ -1446,13 +1446,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Workers panel. Graph nodes are stateless transformers, not
 		// runtime.Sessions, but the panel's rendering is agnostic to that.
 		m.runtimeSessions[msg.SessionID] = &runtimeSlot{
-			sessionID: msg.SessionID,
-			agentName: "graph:" + msg.Node,
-			jobID:     msg.JobID,
-			taskID:    msg.TaskID,
-			status:    "active",
-			startTime: time.Now(),
-			system:    isSystemNode(msg.Node),
+			sessionID:  msg.SessionID,
+			workerName: "graph:" + msg.Node,
+			jobID:      msg.JobID,
+			taskID:     msg.TaskID,
+			status:     "active",
+			startTime:  time.Now(),
+			system:     isSystemNode(msg.Node),
 		}
 		m.recordGraphNodeStarted(msg.JobID, msg.TaskID, msg.Node)
 		return m, nil
@@ -1500,15 +1500,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			!m.promptModal.show && !m.outputModal.show && !m.loading {
 			if m.shouldShowLeftPanel() && msg.X < m.lpWidth {
 				// Clicked left panel — determine which of the three panes was
-				// clicked. Pane order (top to bottom): Jobs, Blockers, Agents.
-				agentsPaneH := m.leftPanelAgentsPaneHeight()
+				// clicked. Pane order (top to bottom): Jobs, Blockers, Workers.
+				workersPaneH := m.leftPanelWorkersPaneHeight()
 				blockersPaneH := m.leftPanelBlockersPaneHeight()
-				agentsPaneY := m.height - agentsPaneH
-				blockersPaneY := agentsPaneY - blockersPaneH
+				workersPaneY := m.height - workersPaneH
+				blockersPaneY := workersPaneY - blockersPaneH
 				switch {
-				case msg.Y >= agentsPaneY:
-					if m.focused != focusAgents {
-						cmds = append(cmds, m.setFocus(focusAgents))
+				case msg.Y >= workersPaneY:
+					if m.focused != focusWorkers {
+						cmds = append(cmds, m.setFocus(focusWorkers))
 						m.input.Blur()
 					}
 				case msg.Y >= blockersPaneY:
@@ -1587,7 +1587,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		}
-		if !needTick && (m.focused == focusJobs || m.focused == focusAgents) {
+		if !needTick && (m.focused == focusJobs || m.focused == focusWorkers) {
 			needTick = true
 		}
 		// Jobs modal's focused panel also rainbow-cycles its title.
@@ -1613,6 +1613,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		return m, nil
+
+	case asyncToastMsg:
+		return m, m.addToast(msg.message, msg.level)
 
 	case MCPStatusMsg:
 		var toastCmds []tea.Cmd
@@ -1918,13 +1921,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				continue
 			}
 			m.runtimeSessions[gn.SessionID] = &runtimeSlot{
-				sessionID: gn.SessionID,
-				agentName: "graph:" + gn.Node,
-				jobID:     gn.JobID,
-				taskID:    gn.TaskID,
-				status:    "active",
-				startTime: gn.StartedAt,
-				system:    isSystemNode(gn.Node),
+				sessionID:  gn.SessionID,
+				workerName: "graph:" + gn.Node,
+				jobID:      gn.JobID,
+				taskID:     gn.TaskID,
+				status:     "active",
+				startTime:  gn.StartedAt,
+				system:     isSystemNode(gn.Node),
 			}
 			m.recordGraphNodeStarted(gn.JobID, gn.TaskID, gn.Node)
 		}
@@ -1937,16 +1940,16 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				status = "active"
 			}
 			m.runtimeSessions[snap.ID] = &runtimeSlot{
-				sessionID: snap.ID,
-				agentName: snap.WorkerID,
-				jobID:     snap.JobID,
-				taskID:    snap.TaskID,
-				status:    status,
-				startTime: snap.StartTime,
-				model:     snap.Model,
-				provider:  snap.Provider,
-				tokensIn:  snap.TokensIn,
-				tokensOut: snap.TokensOut,
+				sessionID:  snap.ID,
+				workerName: snap.WorkerID,
+				jobID:      snap.JobID,
+				taskID:     snap.TaskID,
+				status:     status,
+				startTime:  snap.StartTime,
+				model:      snap.Model,
+				provider:   snap.Provider,
+				tokensIn:   snap.TokensIn,
+				tokensOut:  snap.TokensOut,
 			}
 		}
 		// Enrich live slots with model/provider/cost the snapshot carries but

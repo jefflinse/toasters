@@ -235,7 +235,7 @@ const (
 	FeedEntryTypeOperatorMessage FeedEntryType = "operator_message"
 	// FeedEntryTypeSystemEvent is an internal system event.
 	FeedEntryTypeSystemEvent FeedEntryType = "system_event"
-	// FeedEntryTypeConsultationTrace is a trace from a system agent consultation.
+	// FeedEntryTypeConsultationTrace is a trace from a system worker consultation.
 	FeedEntryTypeConsultationTrace FeedEntryType = "consultation_trace"
 	// FeedEntryTypeTaskStarted is emitted when a task begins execution.
 	FeedEntryTypeTaskStarted FeedEntryType = "task_started"

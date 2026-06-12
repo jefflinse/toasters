@@ -1,6 +1,6 @@
 // Graph-pane rendering for the Jobs modal. When the selected task has
 // graph state, the right pane renders the node list (with focus navigation)
-// on top and the focused node's output below. Legacy agent cards still
+// on top and the focused node's output below. Legacy worker cards still
 // render for tasks that aren't graph-based.
 package tui
 
@@ -276,7 +276,7 @@ func (m *Model) pickGraphPaneDisplay(gts *graphTaskState, focusedName string) (s
 	slot := slots[0] // active first, then by start time — see runtimeSessionsForTask
 	name := graphNodeFromSessionID(slot.sessionID)
 	if name == "" {
-		name = slot.agentName
+		name = slot.workerName
 	}
 	return name, slot
 }

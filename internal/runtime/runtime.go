@@ -78,7 +78,7 @@ func (r *Runtime) SpawnWorker(ctx context.Context, opts SpawnOpts) (*Session, er
 	}
 	id := uuidVal.String()
 
-	// Determine spawn depth for child agents.
+	// Determine spawn depth for child workers.
 	depth := opts.Depth
 	maxDepth := opts.MaxDepth
 	if maxDepth <= 0 {
@@ -93,7 +93,7 @@ func (r *Runtime) SpawnWorker(ctx context.Context, opts SpawnOpts) (*Session, er
 	r.mu.Unlock()
 
 	// Create tool executor. If the caller provided a custom ToolExecutor, use
-	// it directly (e.g. SystemTools for system agents). Otherwise build the
+	// it directly (e.g. SystemTools for system workers). Otherwise build the
 	// default CoreTools stack with optional MCP dispatch.
 	var tools ToolExecutor
 	if opts.ToolExecutor != nil {

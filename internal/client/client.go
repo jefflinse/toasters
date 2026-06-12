@@ -120,13 +120,13 @@ func (c *RemoteClient) Close() {
 // the operator LLM conversation.
 func (c *RemoteClient) Operator() service.OperatorService { return c.operator }
 
-// Definitions returns the sub-interface for managing skills, agents, and teams.
+// Definitions returns the sub-interface for managing skills, roles, and teams.
 func (c *RemoteClient) Definitions() service.DefinitionService { return c.definitions }
 
 // Jobs returns the sub-interface for listing, inspecting, and cancelling jobs.
 func (c *RemoteClient) Jobs() service.JobService { return c.jobs }
 
-// Sessions returns the sub-interface for listing and inspecting agent sessions.
+// Sessions returns the sub-interface for listing and inspecting worker sessions.
 func (c *RemoteClient) Sessions() service.SessionService { return c.sessions }
 
 // Events returns the sub-interface for subscribing to the unified event stream.

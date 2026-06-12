@@ -131,7 +131,7 @@ var askUserSchema = json.RawMessage(`{
 }`)
 
 // AskUserTool returns the mid-loop ask_user tool. When the model calls it,
-// the handler blocks the agent loop via rhizome.Interrupt; the executor's
+// the handler blocks the mycelium agent loop via rhizome.Interrupt; the executor's
 // interrupt handler surfaces the question through the HITL broker and
 // returns the user's response as the tool result. The model then continues
 // its loop with the answer in hand.

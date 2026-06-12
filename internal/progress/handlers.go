@@ -63,7 +63,7 @@ func ReportTaskProgress(ctx context.Context, store db.Store, params ReportTaskPr
 		return "", fmt.Errorf("job_id is required")
 	}
 	if !validProgressStatuses[params.Status] {
-		return "", fmt.Errorf("invalid status %q: must be one of in_progress, completed, failed, blocked", params.Status)
+		return "", fmt.Errorf("invalid status %q: must be one of in_progress, completed, failed, blocked, review_requested", params.Status)
 	}
 	report := &db.ProgressReport{
 		JobID:    params.JobID,
@@ -90,6 +90,9 @@ var validTaskStatuses = map[string]bool{
 
 // UpdateTaskStatus updates the status of a task in the job tracker.
 func UpdateTaskStatus(ctx context.Context, store db.Store, params UpdateTaskStatusParams) (string, error) {
+	if params.TaskID == "" {
+		return "", fmt.Errorf("task_id is required")
+	}
 	if !validTaskStatuses[params.Status] {
 		return "", fmt.Errorf("invalid status %q: must be one of pending, in_progress, completed, failed, blocked, cancelled", params.Status)
 	}
