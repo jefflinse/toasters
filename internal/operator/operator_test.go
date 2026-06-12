@@ -1952,3 +1952,95 @@ func TestNormalizeToolCallArgs(t *testing.T) {
 		t.Errorf("valid args should be preserved, got %q", tcs[2].Arguments)
 	}
 }
+
+func TestPromptUser_TimesOutWithNoResponse(t *testing.T) {
+	broker := hitl.New()
+	mp := &mockProvider{name: "test"}
+
+	var mu sync.Mutex
+	var resolved []string
+
+	op, err := New(Config{
+		Runtime:        runtime.New(nil, newTestRegistry(mp)),
+		Provider:       mp,
+		Model:          "test-model",
+		WorkDir:        t.TempDir(),
+		SystemPrompt:   "You are the operator.",
+		Broker:         broker,
+		AskUserTimeout: 50 * time.Millisecond,
+		OnResolve: func(id string) {
+			mu.Lock()
+			resolved = append(resolved, id)
+			mu.Unlock()
+		},
+	})
+	if err != nil {
+		t.Fatalf("creating operator: %v", err)
+	}
+
+	// Nobody answers. promptUser must return a no-response message (not an
+	// error) so the LLM turn — and the event loop blocked behind it — can
+	// continue.
+	ans, err := op.promptUser(context.Background(), "req-timeout", []PromptQuestion{{Question: "Q?"}})
+	if err != nil {
+		t.Fatalf("promptUser after timeout should return a message, not an error: %v", err)
+	}
+	if !strings.Contains(ans, "did not answer") {
+		t.Errorf("answer = %q, want a no-response message", ans)
+	}
+
+	// The blocker must still resolve so the Blockers queue stays consistent.
+	mu.Lock()
+	defer mu.Unlock()
+	if len(resolved) != 1 || resolved[0] != "req-timeout" {
+		t.Errorf("OnResolve calls = %v, want [req-timeout]", resolved)
+	}
+}
+
+func TestPromptUser_CancellationStillPropagates(t *testing.T) {
+	broker := hitl.New()
+	mp := &mockProvider{name: "test"}
+
+	op, err := New(Config{
+		Runtime:        runtime.New(nil, newTestRegistry(mp)),
+		Provider:       mp,
+		Model:          "test-model",
+		WorkDir:        t.TempDir(),
+		SystemPrompt:   "You are the operator.",
+		Broker:         broker,
+		AskUserTimeout: time.Hour, // not the path under test
+	})
+	if err != nil {
+		t.Fatalf("creating operator: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		cancel()
+	}()
+
+	// Real cancellation (shutdown, operator replacement) must surface as an
+	// error, not be swallowed into a synthetic answer.
+	if _, err := op.promptUser(ctx, "req-cancel", []PromptQuestion{{Question: "Q?"}}); err == nil {
+		t.Fatal("cancelled promptUser should return an error, not a synthetic answer")
+	}
+}
+
+func TestNew_DefaultsAskUserTimeout(t *testing.T) {
+	mp := &mockProvider{name: "test"}
+	op, err := New(Config{
+		Runtime:      runtime.New(nil, newTestRegistry(mp)),
+		Provider:     mp,
+		Model:        "test-model",
+		WorkDir:      t.TempDir(),
+		SystemPrompt: "You are the operator.",
+		Broker:       hitl.New(),
+	})
+	if err != nil {
+		t.Fatalf("creating operator: %v", err)
+	}
+	if op.askUserTimeout != defaultAskUserTimeout {
+		t.Errorf("askUserTimeout = %v, want default %v", op.askUserTimeout, defaultAskUserTimeout)
+	}
+}

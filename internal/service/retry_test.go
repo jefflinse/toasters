@@ -31,8 +31,10 @@ func newRetryTestService(t *testing.T) (*LocalService, *db.SQLiteStore) {
 	t.Cleanup(func() { _ = store.Close() })
 	svc := newTestService(t)
 	svc.cfg.Store = store
-	svc.cfg.DefaultProvider = "lmstudio"
-	svc.cfg.DefaultModel = "qwen3"
+	svc.opMu.Lock()
+	svc.defaultProvider = "lmstudio"
+	svc.defaultModel = "qwen3"
+	svc.opMu.Unlock()
 	return svc, store
 }
 
@@ -50,7 +52,7 @@ func seedFailedTask(t *testing.T, store *db.SQLiteStore) {
 func TestRetryTask_DispatchesBoundGraph(t *testing.T) {
 	svc, store := newRetryTestService(t)
 	exec := &captureExecutor{got: make(chan graphexec.TaskRequest, 1)}
-	svc.cfg.GraphExecutor = exec
+	svc.SetGraphExecutor(exec)
 	seedFailedTask(t, store)
 
 	if err := svc.Jobs().RetryTask(context.Background(), "task-1"); err != nil {
@@ -82,7 +84,7 @@ func TestRetryTask_DispatchesBoundGraph(t *testing.T) {
 
 func TestRetryTask_Errors(t *testing.T) {
 	svc, store := newRetryTestService(t)
-	svc.cfg.GraphExecutor = &captureExecutor{got: make(chan graphexec.TaskRequest, 1)}
+	svc.SetGraphExecutor(&captureExecutor{got: make(chan graphexec.TaskRequest, 1)})
 	ctx := context.Background()
 
 	// Missing task -> ErrNotFound.

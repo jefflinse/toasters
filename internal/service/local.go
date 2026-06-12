@@ -81,6 +81,11 @@ const maxConcurrentOps = 5
 const maxHistoryEntries = 1000
 
 // LocalConfig holds the dependencies for LocalService.
+//
+// Operator, Provider, OperatorModel, OperatorEndpoint, GraphExecutor,
+// DefaultProvider, and DefaultModel are initial values only: live operator
+// activation (startOperator) replaces them at runtime, so they are copied
+// into opMu-guarded fields at construction and never read from cfg again.
 type LocalConfig struct {
 	// AppConfig is the loaded application config, used for serving and
 	// mutating user-editable settings (see GetSettings/UpdateSettings).
@@ -133,9 +138,21 @@ type LocalService struct {
 	// asyncSem bounds concurrent async operations (generate, promote, detect).
 	asyncSem chan struct{}
 
-	// Operator lifecycle — for live activation.
-	opMu     sync.Mutex
-	opCancel context.CancelFunc // cancels the running operator; nil if no operator
+	// Operator lifecycle — for live activation. startOperator (PUT
+	// /api/v1/operator/provider) replaces all of this state while other
+	// HTTP requests read it, so every access goes through opMu. The
+	// corresponding LocalConfig fields are initial values only — runtime
+	// reads must use the accessors (currentOperator, currentProvider,
+	// operatorInfo, currentGraphExecutor, currentDefaults).
+	opMu            sync.Mutex
+	opCancel        context.CancelFunc // cancels the running operator; nil if no operator
+	op              *operator.Operator
+	opProvider      provider.Provider
+	opModel         string
+	opEndpoint      string
+	graphExec       operator.GraphTaskExecutor
+	defaultProvider string
+	defaultModel    string
 
 	// broker coordinates HITL prompt/response for both the operator's
 	// ask_user tool and any graph node that calls rhizome.Interrupt.
@@ -204,6 +221,13 @@ func NewLocal(cfg LocalConfig) *LocalService {
 		broker:           hitl.New(),
 		blockers:         make(map[string]Blocker),
 		activeGraphNodes: make(map[string]GraphNodeSnapshot),
+		op:               cfg.Operator,
+		opProvider:       cfg.Provider,
+		opModel:          cfg.OperatorModel,
+		opEndpoint:       cfg.OperatorEndpoint,
+		graphExec:        cfg.GraphExecutor,
+		defaultProvider:  cfg.DefaultProvider,
+		defaultModel:     cfg.DefaultModel,
 	}
 }
 
@@ -218,7 +242,7 @@ func (s *LocalService) Broker() *hitl.Broker { return s.broker }
 // and tasks are stranded in_progress.
 func (s *LocalService) Shutdown() {
 	s.cancel()
-	if d, ok := s.cfg.GraphExecutor.(interface{ Drain(time.Duration) bool }); ok {
+	if d, ok := s.currentGraphExecutor().(interface{ Drain(time.Duration) bool }); ok {
 		if !d.Drain(15 * time.Second) {
 			slog.Warn("graph executor drain timed out; in-flight tasks may be left in_progress")
 		}
@@ -279,14 +303,50 @@ func (s *LocalService) safeGo(operationID, kind string, fn func()) {
 // provider configured yet) and the operator is instead created live via
 // startOperator after the user selects a provider in the TUI.
 func (s *LocalService) SetGraphExecutor(g operator.GraphTaskExecutor) {
-	s.cfg.GraphExecutor = g
+	s.opMu.Lock()
+	defer s.opMu.Unlock()
+	s.graphExec = g
 }
 
 // SetOperator sets the operator on the service after construction. This is
 // needed because the operator's callbacks reference the service, creating a
 // circular dependency that prevents passing the operator at construction time.
 func (s *LocalService) SetOperator(op *operator.Operator) {
-	s.cfg.Operator = op
+	s.opMu.Lock()
+	defer s.opMu.Unlock()
+	s.op = op
+}
+
+// currentProvider returns the active LLM provider client, honoring live
+// operator activation under opMu.
+func (s *LocalService) currentProvider() provider.Provider {
+	s.opMu.Lock()
+	defer s.opMu.Unlock()
+	return s.opProvider
+}
+
+// operatorInfo returns the active operator's model name and endpoint for
+// status display.
+func (s *LocalService) operatorInfo() (model, endpoint string) {
+	s.opMu.Lock()
+	defer s.opMu.Unlock()
+	return s.opModel, s.opEndpoint
+}
+
+// currentGraphExecutor returns the graph executor, honoring post-construction
+// wiring via SetGraphExecutor.
+func (s *LocalService) currentGraphExecutor() operator.GraphTaskExecutor {
+	s.opMu.Lock()
+	defer s.opMu.Unlock()
+	return s.graphExec
+}
+
+// currentDefaults returns the default provider id and model for dispatching
+// graph tasks. These follow the operator's provider on live activation.
+func (s *LocalService) currentDefaults() (providerID, model string) {
+	s.opMu.Lock()
+	defer s.opMu.Unlock()
+	return s.defaultProvider, s.defaultModel
 }
 
 // ---------------------------------------------------------------------------
@@ -1259,7 +1319,7 @@ func (s *LocalService) BroadcastTaskFailed(jobID, taskID, graphID, errMsg string
 func (s *LocalService) currentOperator() *operator.Operator {
 	s.opMu.Lock()
 	defer s.opMu.Unlock()
-	return s.cfg.Operator
+	return s.op
 }
 
 // handleDecompositionCompleted consumes task-completion events for the
@@ -1432,7 +1492,8 @@ func (s *LocalService) BroadcastSessionStarted(sess *runtime.Session) {
 // SendMessage sends a user message to the operator event loop and returns a
 // turnID for correlating subsequent operator.text and operator.done events.
 func (s *LocalService) SendMessage(ctx context.Context, message string) (string, error) {
-	if s.cfg.Operator == nil {
+	op := s.currentOperator()
+	if op == nil {
 		return "", fmt.Errorf("operator not configured")
 	}
 	if len(message) > maxMessageLen {
@@ -1453,7 +1514,7 @@ func (s *LocalService) SendMessage(ctx context.Context, message string) (string,
 	s.currentTurnID = turnID
 	s.turnMu.Unlock()
 
-	if err := s.cfg.Operator.Send(ctx, operator.Event{
+	if err := op.Send(ctx, operator.Event{
 		Type:    operator.EventUserMessage,
 		Payload: operator.UserMessagePayload{Text: message},
 	}); err != nil {
@@ -1484,7 +1545,7 @@ func (s *LocalService) RespondToPrompt(_ context.Context, requestID string, resp
 
 // Status returns the current state of the operator.
 func (s *LocalService) Status(_ context.Context) (OperatorStatus, error) {
-	if s.cfg.Operator == nil {
+	if s.currentOperator() == nil {
 		return OperatorStatus{
 			State: OperatorStateDisabled,
 		}, nil
@@ -1499,11 +1560,12 @@ func (s *LocalService) Status(_ context.Context) (OperatorStatus, error) {
 		state = OperatorStateStreaming
 	}
 
+	model, endpoint := s.operatorInfo()
 	return OperatorStatus{
 		State:         state,
 		CurrentTurnID: turnID,
-		ModelName:     s.cfg.OperatorModel,
-		Endpoint:      s.cfg.OperatorEndpoint,
+		ModelName:     model,
+		Endpoint:      endpoint,
 	}, nil
 }
 
@@ -1680,7 +1742,7 @@ func (s *LocalService) DeleteSkill(ctx context.Context, id string) error {
 // GenerateSkill asks the LLM to generate a skill definition. Returns an
 // operationID immediately; pushes operation.completed or operation.failed when done.
 func (s *LocalService) GenerateSkill(ctx context.Context, prompt string) (string, error) {
-	if s.cfg.Provider == nil {
+	if s.currentProvider() == nil {
 		return "", fmt.Errorf("LLM provider not configured")
 	}
 	if len(prompt) > maxPromptLen {
@@ -1787,7 +1849,7 @@ Detailed instructions for the agent using this skill. This is the system prompt 
 		{Role: "user", Content: userMsg},
 	}
 
-	content, err := provider.ChatCompletion(ctx, s.cfg.Provider, msgs)
+	content, err := provider.ChatCompletion(ctx, s.currentProvider(), msgs)
 	if err != nil {
 		return "", fmt.Errorf("LLM call failed: %w", err)
 	}
@@ -2006,7 +2068,7 @@ func (s *localJobService) RetryTask(ctx context.Context, taskID string) error {
 	if s.svc.cfg.Store == nil {
 		return fmt.Errorf("store not configured")
 	}
-	if s.svc.cfg.GraphExecutor == nil {
+	if s.svc.currentGraphExecutor() == nil {
 		return fmt.Errorf("no graph executor configured")
 	}
 	task, err := s.svc.cfg.Store.GetTask(ctx, taskID)
@@ -2104,10 +2166,11 @@ func (s *LocalService) Health(_ context.Context) (HealthStatus, error) {
 
 // ListModels returns all models available from the configured LLM provider.
 func (s *LocalService) ListModels(ctx context.Context) ([]ModelInfo, error) {
-	if s.cfg.Provider == nil {
+	prov := s.currentProvider()
+	if prov == nil {
 		return nil, fmt.Errorf("LLM provider not configured")
 	}
-	provModels, err := s.cfg.Provider.Models(ctx)
+	provModels, err := prov.Models(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("listing models: %w", err)
 	}
@@ -2266,10 +2329,12 @@ func (s *LocalService) SetOperatorProvider(_ context.Context, providerID string,
 		return err
 	}
 
-	// Update default provider/model so team leads spawned after this change
+	// Update default provider/model so workers spawned after this change
 	// inherit the operator's provider.
-	s.cfg.DefaultProvider = providerID
-	s.cfg.DefaultModel = model
+	s.opMu.Lock()
+	s.defaultProvider = providerID
+	s.defaultModel = model
+	s.opMu.Unlock()
 
 	// Attempt live activation.
 	if s.cfg.Registry == nil {
@@ -2391,7 +2456,7 @@ func (s *LocalService) UpdateSettings(_ context.Context, next Settings) error {
 	}
 	s.cfg.AppConfig.WorkerThinkingEnabled = next.WorkerThinkingEnabled
 	s.cfg.AppConfig.WorkerTemperature = next.WorkerTemperature
-	if applier, ok := s.cfg.GraphExecutor.(workerDefaultsApplier); ok {
+	if applier, ok := s.currentGraphExecutor().(workerDefaultsApplier); ok {
 		applier.SetWorkerDefaults(next.WorkerThinkingEnabled, next.WorkerTemperature)
 	}
 
@@ -2459,13 +2524,15 @@ func (s *LocalService) startOperator(p provider.Provider, providerID, model stri
 		SystemPrompt:           systemPrompt,
 		SessionFile:            filepath.Join(s.cfg.ConfigDir, "sessions", "operator.json"),
 		SystemEventBroadcaster: s,
-		GraphExecutor:          s.cfg.GraphExecutor,
-		GraphCatalog:           s.cfg.GraphCatalog,
-		Broker:                 s.broker,
-		PromptEngine:           s.cfg.PromptEngine,
-		DefaultProvider:        s.cfg.DefaultProvider,
-		DefaultModel:           s.cfg.DefaultModel,
-		LifetimeCtx:            s.ctx,
+		// opMu is held for the whole of startOperator, so these are direct
+		// field reads — the accessors would deadlock.
+		GraphExecutor:   s.graphExec,
+		GraphCatalog:    s.cfg.GraphCatalog,
+		Broker:          s.broker,
+		PromptEngine:    s.cfg.PromptEngine,
+		DefaultProvider: s.defaultProvider,
+		DefaultModel:    s.defaultModel,
+		LifetimeCtx:     s.ctx,
 		OnText: func(text string) {
 			batcher.Add(text)
 		},
@@ -2488,16 +2555,16 @@ func (s *LocalService) startOperator(p provider.Provider, providerID, model stri
 		return fmt.Errorf("creating operator: %w", err)
 	}
 
-	// Update service state.
-	s.cfg.Operator = op
-	s.cfg.OperatorModel = model
-	s.cfg.Provider = p
+	// Update service state (still under opMu).
+	s.op = op
+	s.opModel = model
+	s.opProvider = p
 
 	// Look up endpoint for sidebar display.
 	if s.cfg.Loader != nil {
 		for _, pc := range s.cfg.Loader.Providers() {
 			if pc.Key() == providerID {
-				s.cfg.OperatorEndpoint = pc.Endpoint
+				s.opEndpoint = pc.Endpoint
 				break
 			}
 		}
