@@ -85,8 +85,8 @@ func (m *mockStore) UpdateTaskStatus(ctx context.Context, id string, status db.T
 	return nil
 }
 
-func (m *mockStore) CompleteTask(_ context.Context, _ string, _ db.TaskStatus, _, _ string) error {
-	return nil
+func (m *mockStore) ListTaskDependents(_ context.Context, _ string) ([]*db.Task, error) {
+	return nil, nil
 }
 
 func (m *mockStore) GetJob(ctx context.Context, id string) (*db.Job, error) {

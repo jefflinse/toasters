@@ -230,6 +230,25 @@ func TestJobs_CRUD(t *testing.T) {
 		t.Fatalf("ListJobs(limit=1) returned %d jobs, want 1", len(jobs))
 	}
 
+	// Offset without limit — SQLite requires a LIMIT clause before OFFSET,
+	// so this was invalid SQL until the LIMIT -1 fallback (C19).
+	jobs, err = store.ListJobs(ctx, JobFilter{Offset: 1})
+	if err != nil {
+		t.Fatalf("ListJobs with offset only: %v", err)
+	}
+	if len(jobs) != 1 {
+		t.Fatalf("ListJobs(offset=1) returned %d jobs, want 1", len(jobs))
+	}
+
+	// Limit and offset together.
+	jobs, err = store.ListJobs(ctx, JobFilter{Limit: 5, Offset: 1})
+	if err != nil {
+		t.Fatalf("ListJobs with limit+offset: %v", err)
+	}
+	if len(jobs) != 1 {
+		t.Fatalf("ListJobs(limit=5, offset=1) returned %d jobs, want 1", len(jobs))
+	}
+
 	// Update status
 	if err := store.UpdateJobStatus(ctx, "job-1", JobStatusCompleted); err != nil {
 		t.Fatalf("UpdateJobStatus: %v", err)
@@ -487,6 +506,50 @@ func TestTaskDependencies(t *testing.T) {
 	}
 	if ready[0].ID != "dep-c" {
 		t.Errorf("ready task ID = %q, want %q", ready[0].ID, "dep-c")
+	}
+}
+
+func TestListTaskDependents(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+
+	job := &Job{ID: "job-dep", Title: "Dep test", Type: "test", Status: JobStatusActive}
+	if err := store.CreateJob(ctx, job); err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	for _, task := range []*Task{
+		{ID: "dep-a", JobID: "job-dep", Title: "Task A", Status: TaskStatusPending, SortOrder: 1},
+		{ID: "dep-b", JobID: "job-dep", Title: "Task B", Status: TaskStatusPending, SortOrder: 2},
+		{ID: "dep-c", JobID: "job-dep", Title: "Task C", Status: TaskStatusPending, SortOrder: 3},
+	} {
+		if err := store.CreateTask(ctx, task); err != nil {
+			t.Fatalf("CreateTask(%s): %v", task.ID, err)
+		}
+	}
+	// B and C depend on A; C also depends on B.
+	for _, dep := range [][2]string{{"dep-b", "dep-a"}, {"dep-c", "dep-a"}, {"dep-c", "dep-b"}} {
+		if err := store.AddTaskDependency(ctx, dep[0], dep[1]); err != nil {
+			t.Fatalf("AddTaskDependency(%s->%s): %v", dep[0], dep[1], err)
+		}
+	}
+
+	dependents, err := store.ListTaskDependents(ctx, "dep-a")
+	if err != nil {
+		t.Fatalf("ListTaskDependents: %v", err)
+	}
+	if len(dependents) != 2 {
+		t.Fatalf("ListTaskDependents(dep-a) returned %d tasks, want 2", len(dependents))
+	}
+	if dependents[0].ID != "dep-b" || dependents[1].ID != "dep-c" {
+		t.Errorf("dependents = [%s, %s], want [dep-b, dep-c]", dependents[0].ID, dependents[1].ID)
+	}
+
+	dependents, err = store.ListTaskDependents(ctx, "dep-c")
+	if err != nil {
+		t.Fatalf("ListTaskDependents(dep-c): %v", err)
+	}
+	if len(dependents) != 0 {
+		t.Errorf("ListTaskDependents(dep-c) returned %d tasks, want 0", len(dependents))
 	}
 }
 
@@ -1347,6 +1410,44 @@ func TestGetSkill_NotFound(t *testing.T) {
 	}
 }
 
+// --- Session Transcripts ---
+
+func TestSessionMessages_RoundTrip(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+
+	if err := store.CreateSession(ctx, &WorkerSession{
+		ID: "sess-1", WorkerID: "w1", Status: SessionStatusActive, StartedAt: time.Now(),
+	}); err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	for i, role := range []string{"user", "assistant"} {
+		if err := store.AppendSessionMessage(ctx, &SessionMessage{
+			SessionID: "sess-1", Seq: i, Role: role, Content: fmt.Sprintf("msg-%d", i),
+		}); err != nil {
+			t.Fatalf("AppendSessionMessage(%d): %v", i, err)
+		}
+	}
+
+	msgs, err := store.ListSessionMessages(ctx, "sess-1")
+	if err != nil {
+		t.Fatalf("ListSessionMessages: %v", err)
+	}
+	if len(msgs) != 2 {
+		t.Fatalf("got %d messages, want 2", len(msgs))
+	}
+	for _, m := range msgs {
+		// The created_at column default is SQLite's 'YYYY-MM-DD HH:MM:SS'
+		// format; parsing it as RFC3339 silently produced zero times (C19).
+		if m.CreatedAt.IsZero() {
+			t.Errorf("message seq=%d has zero CreatedAt", m.Seq)
+		}
+	}
+	if msgs[0].Role != "user" || msgs[1].Role != "assistant" {
+		t.Errorf("roles = [%s, %s], want [user, assistant]", msgs[0].Role, msgs[1].Role)
+	}
+}
+
 // --- Feed Entries ---
 
 func TestFeedEntries_CRUD(t *testing.T) {
@@ -1386,35 +1487,25 @@ func TestFeedEntries_CRUD(t *testing.T) {
 		}
 	}
 
-	// List for job with limit.
-	entries, err := store.ListFeedEntries(ctx, "job-1", 2)
+	// List recent with limit — most recent first.
+	entries, err := store.ListRecentFeedEntries(ctx, 2)
 	if err != nil {
-		t.Fatalf("ListFeedEntries: %v", err)
+		t.Fatalf("ListRecentFeedEntries: %v", err)
 	}
 	if len(entries) != 2 {
-		t.Fatalf("ListFeedEntries returned %d entries, want 2", len(entries))
+		t.Fatalf("ListRecentFeedEntries returned %d entries, want 2", len(entries))
 	}
-	// Most recent first.
 	if entries[0].EntryType != FeedEntryTaskCompleted {
 		t.Errorf("first entry type = %q, want %q", entries[0].EntryType, FeedEntryTaskCompleted)
 	}
 
-	// List all for job (default limit).
-	all, err := store.ListFeedEntries(ctx, "job-1", 0)
+	// Default limit covers all entries.
+	all, err := store.ListRecentFeedEntries(ctx, 0)
 	if err != nil {
-		t.Fatalf("ListFeedEntries(0): %v", err)
+		t.Fatalf("ListRecentFeedEntries(0): %v", err)
 	}
 	if len(all) != 4 {
-		t.Errorf("ListFeedEntries(0) returned %d entries, want 4", len(all))
-	}
-
-	// List for different job should be empty.
-	empty, err := store.ListFeedEntries(ctx, "nonexistent", 0)
-	if err != nil {
-		t.Fatalf("ListFeedEntries(nonexistent): %v", err)
-	}
-	if len(empty) != 0 {
-		t.Errorf("ListFeedEntries(nonexistent) returned %d, want 0", len(empty))
+		t.Errorf("ListRecentFeedEntries(0) returned %d entries, want 4", len(all))
 	}
 }
 

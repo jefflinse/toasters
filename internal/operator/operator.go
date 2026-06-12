@@ -351,9 +351,17 @@ func (o *Operator) handleEvent(ctx context.Context, ev Event) {
 			slog.Error("invalid payload for task_failed event", "payload", ev.Payload)
 			return
 		}
+		// Tasks that depend on this one can never become ready while it sits
+		// failed (GetReadyTasks requires completed dependencies) — without
+		// surfacing them, the failure silently stalls the rest of the job.
+		blocked := o.blockedDependents(ctx, payload.TaskID)
+
 		content := fmt.Sprintf("❌ %s failed task: %s", payload.GraphID, payload.Error)
+		if len(blocked) > 0 {
+			content += fmt.Sprintf(" (blocks %d queued task(s): %s)", len(blocked), strings.Join(blocked, "; "))
+		}
 		o.postFeedEntry(ctx, db.FeedEntryTaskFailed, content, payload.JobID)
-		slog.Warn("task failed", "task_id", payload.TaskID, "job_id", payload.JobID, "graph_id", payload.GraphID, "error", payload.Error)
+		slog.Warn("task failed", "task_id", payload.TaskID, "job_id", payload.JobID, "graph_id", payload.GraphID, "error", payload.Error, "blocked_dependents", len(blocked))
 
 		msg := fmt.Sprintf("Task %q (graph %s) failed with error: %s\n\n"+
 			"Decide how to proceed. If this looks transient or fixable — an environment, "+
@@ -363,6 +371,11 @@ func (o *Operator) handleEvent(ctx context.Context, ev Event) {
 			"ask_user or surface_to_user. Only create a new job when the work genuinely needs "+
 			"to be re-scoped from scratch.",
 			payload.TaskID, payload.GraphID, payload.Error)
+		if len(blocked) > 0 {
+			msg += fmt.Sprintf("\n\nIMPORTANT: %d queued task(s) depend on this task and cannot "+
+				"start until it succeeds: %s. Leaving it failed stalls them indefinitely.",
+				len(blocked), strings.Join(blocked, "; "))
+		}
 		o.sendToLLM(ctx, msg)
 
 	case EventProgressUpdate:
@@ -452,6 +465,27 @@ func (o *Operator) postFeedEntry(ctx context.Context, entryType db.FeedEntryType
 // it injects system-generated context into the conversation.
 func (o *Operator) sendToLLM(ctx context.Context, message string) {
 	o.handleUserMessage(ctx, UserMessagePayload{Text: message})
+}
+
+// blockedDependents returns the titles of pending tasks that declare a
+// dependency on taskID. While the dependency sits failed they can never
+// become ready, so callers surface them alongside the failure.
+func (o *Operator) blockedDependents(ctx context.Context, taskID string) []string {
+	if o.store == nil {
+		return nil
+	}
+	deps, err := o.store.ListTaskDependents(ctx, taskID)
+	if err != nil {
+		slog.Warn("failed to list task dependents", "task_id", taskID, "error", err)
+		return nil
+	}
+	var titles []string
+	for _, t := range deps {
+		if t.Status == db.TaskStatusPending {
+			titles = append(titles, t.Title)
+		}
+	}
+	return titles
 }
 
 // reportAdvanceFailure surfaces a failure in the mechanical task-advance

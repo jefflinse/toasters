@@ -121,22 +121,26 @@ func firstRun(configDir string, systemFS embed.FS, defaultConfig []byte) error {
 }
 
 // migrateDatabase moves the SQLite database from the old config-dir location
-// (~/.config/toasters/toasters.db) to the workspace root (~/toasters/toasters.db)
-// if the old file exists and the new one does not. This is a one-time migration
-// so that operational state (jobs, tasks, sessions) lives alongside the workspace
-// rather than in the config directory.
+// (~/.config/toasters/toasters.db) to the workspace root (workspace_dir from
+// config.yaml, default ~/toasters) if the old file exists and the new one
+// does not. This is a one-time migration so that operational state (jobs,
+// tasks, sessions) lives alongside the workspace rather than in the config
+// directory.
 //
-// The migration only runs when database_path is not explicitly set in config.yaml
-// (i.e. the user is relying on the default location). If the user has set a custom
-// database_path, we leave everything alone.
+// The migration only runs when database_path is not explicitly set in
+// config.yaml (i.e. the user is relying on the default location). If the user
+// has set a custom database_path, we leave everything alone.
 func migrateDatabase(configDir string) error {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return nil // can't determine paths — skip silently
 	}
 
-	// Check if the user has explicitly set database_path in config.yaml.
-	// If so, they're managing the location themselves — don't migrate.
+	// Honor config.yaml: skip when the user manages database_path themselves,
+	// and migrate into their workspace_dir rather than assuming ~/toasters —
+	// otherwise a custom-workspace install gets its state moved somewhere the
+	// server never looks (silent total state loss).
+	workspaceDir := filepath.Join(home, "toasters")
 	configPath := filepath.Join(configDir, "config.yaml")
 	if fileExists(configPath) {
 		data, err := os.ReadFile(configPath)
@@ -146,12 +150,18 @@ func migrateDatabase(configDir string) error {
 				if _, ok := raw["database_path"]; ok {
 					return nil // user has explicit database_path — skip migration
 				}
+				if wd, ok := raw["workspace_dir"].(string); ok && wd != "" {
+					if strings.HasPrefix(wd, "~/") {
+						wd = filepath.Join(home, wd[2:])
+					}
+					workspaceDir = wd
+				}
 			}
 		}
 	}
 
-	oldDB := filepath.Join(home, ".config", "toasters", "toasters.db")
-	newDB := filepath.Join(home, "toasters", "toasters.db")
+	oldDB := filepath.Join(configDir, "toasters.db")
+	newDB := filepath.Join(workspaceDir, "toasters.db")
 
 	if !fileExists(oldDB) {
 		return nil // nothing to migrate
@@ -161,7 +171,7 @@ func migrateDatabase(configDir string) error {
 	}
 
 	// Ensure the workspace directory exists.
-	if err := os.MkdirAll(filepath.Join(home, "toasters"), 0o755); err != nil {
+	if err := os.MkdirAll(workspaceDir, 0o755); err != nil {
 		return fmt.Errorf("creating workspace dir: %w", err)
 	}
 
@@ -440,10 +450,14 @@ func userDirs(configDir string) []string {
 	}
 }
 
-// syncEmbeddedFS ensures all files from an embedded filesystem subtree exist
-// on disk. Directories are always created; files are only written when they
-// don't already exist. This lets binary upgrades deploy new definitions (e.g.
-// system/roles/) without overwriting files the user may have customized.
+// syncEmbeddedFS mirrors an embedded filesystem subtree onto disk so binary
+// upgrades actually deploy updated definitions (system role prompts,
+// instructions). Files are written when missing OR when their content
+// differs from the embedded version — system/ is managed by toasters, not
+// the user; user customizations belong in user/, which shadows system/ in
+// the prompt engine. Unchanged files are left alone so their mtimes don't
+// churn (the loader's fsnotify watcher would otherwise reload on every
+// startup). Files no longer present in the embed are NOT pruned.
 func syncEmbeddedFS(fsys embed.FS, root, destDir string) error {
 	return fs.WalkDir(fsys, root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -460,14 +474,12 @@ func syncEmbeddedFS(fsys embed.FS, root, destDir string) error {
 			return os.MkdirAll(target, 0o755)
 		}
 
-		// Skip files that already exist — don't overwrite user customizations.
-		if fileExists(target) {
-			return nil
-		}
-
 		data, err := fs.ReadFile(fsys, path)
 		if err != nil {
 			return fmt.Errorf("reading embedded %s: %w", path, err)
+		}
+		if existing, readErr := os.ReadFile(target); readErr == nil && string(existing) == string(data) {
+			return nil // up to date — don't churn the mtime
 		}
 		return os.WriteFile(target, data, 0o644)
 	})

@@ -17,8 +17,11 @@ func failTask(t *testing.T, ctx context.Context, store db.Store, taskID, graphID
 	if err := store.AssignTaskToGraph(ctx, taskID, graphID); err != nil {
 		t.Fatalf("AssignTaskToGraph: %v", err)
 	}
-	if err := store.CompleteTask(ctx, taskID, db.TaskStatusFailed, "build broke", "use modernc sqlite"); err != nil {
-		t.Fatalf("CompleteTask(failed): %v", err)
+	if err := store.UpdateTaskStatus(ctx, taskID, db.TaskStatusFailed, "build broke"); err != nil {
+		t.Fatalf("UpdateTaskStatus(failed): %v", err)
+	}
+	if err := store.UpdateTaskResult(ctx, taskID, "build broke", "use modernc sqlite"); err != nil {
+		t.Fatalf("UpdateTaskResult: %v", err)
 	}
 }
 

@@ -795,6 +795,71 @@ func TestEventLoop_TaskCompleted_SkipsGraphlessTask(t *testing.T) {
 	}
 }
 
+// A failed task with queued dependents must surface the blast radius — those
+// tasks can never become ready while the dependency sits failed, and nothing
+// else reports that (C19).
+func TestEventLoop_TaskFailedSurfacesBlockedDependents(t *testing.T) {
+	store := newOperatorTestStore(t)
+	ctx := context.Background()
+
+	assertNoError(t, store.CreateJob(ctx, &db.Job{
+		ID: "job-1", Title: "Test Job", Status: db.JobStatusActive,
+	}))
+	assertNoError(t, store.CreateTask(ctx, &db.Task{
+		ID: "task-1", JobID: "job-1", Title: "Build core", Status: db.TaskStatusFailed, GraphID: "bug-fix",
+	}))
+	assertNoError(t, store.CreateTask(ctx, &db.Task{
+		ID: "task-2", JobID: "job-1", Title: "Ship it", Status: db.TaskStatusPending, SortOrder: 1,
+	}))
+	assertNoError(t, store.AddTaskDependency(ctx, "task-2", "task-1"))
+
+	mp := &mockProvider{
+		name: "test-provider",
+		responses: []mockResponse{
+			{events: []provider.StreamEvent{
+				{Type: provider.EventText, Text: "acknowledged"},
+				{Type: provider.EventDone},
+			}},
+		},
+	}
+	reg := newTestRegistry(mp)
+	rt := runtime.New(store, reg)
+
+	engine := testPromptEngine(t, map[string]string{"lead-agent": "You are a test lead."})
+	eventCh := make(chan Event, eventChSize)
+	systemTools := NewSystemTools(SystemToolsConfig{
+		Store: store, PromptEngine: engine,
+		DefaultProvider: "test-provider", DefaultModel: "test-model",
+		EventCh: eventCh, WorkDir: t.TempDir(),
+	})
+	tools := newOperatorTools(rt, engine, "test-provider", "test-model", store, systemTools, t.TempDir())
+	provTools := operatorToolsToProviderTools(tools.Definitions())
+
+	op := &Operator{
+		rt: rt, prov: mp, model: "test-model", tools: tools, store: store,
+		eventCh: eventCh, workDir: t.TempDir(), systemPrompt: "You are the operator.", provTools: provTools,
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	op.Start(ctx)
+
+	_ = op.Send(ctx, Event{
+		Type: EventTaskFailed,
+		Payload: TaskFailedPayload{
+			TaskID: "task-1", JobID: "job-1", GraphID: "bug-fix", Error: "build broke",
+		},
+	})
+
+	waitFor(t, func() bool { return len(mp.getRequests()) > 0 }, 3*time.Second)
+
+	reqs := mp.getRequests()
+	last := reqs[len(reqs)-1].Messages
+	prompt := last[len(last)-1].Content
+	if !strings.Contains(prompt, "cannot start until it succeeds") || !strings.Contains(prompt, "Ship it") {
+		t.Errorf("LLM prompt missing blocked-dependents context: %q", prompt)
+	}
+}
+
 // A failure in the mechanical advance path (assign_task errors) must reach
 // the LLM and the feed instead of dying in a log line — assignNextTask is the
 // only thing that moves a job forward, so a silent failure stalls the

@@ -264,17 +264,5 @@ type SystemService interface {
 	UpdateSettings(ctx context.Context, s Settings) error
 }
 
-// ---------------------------------------------------------------------------
-// Sentinel errors
-// ---------------------------------------------------------------------------
-
-// ErrNotFound is returned by Get methods when the requested entity does not
-// exist. Callers can check with errors.Is(err, service.ErrNotFound).
-//
-// Note: this is defined as a variable (not a type) so it can be used with
-// errors.Is across package boundaries, including when wrapped with fmt.Errorf.
-var ErrNotFound = errNotFound("not found")
-
-type errNotFound string
-
-func (e errNotFound) Error() string { return string(e) }
+// Sentinel errors (ErrNotFound, ErrConflict, ErrUnavailable, ErrInvalid,
+// ErrBusy) live in errors.go.

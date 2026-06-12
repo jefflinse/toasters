@@ -81,8 +81,8 @@ func (m *mockStore) UpdateTaskStatus(_ context.Context, _ string, _ db.TaskStatu
 func (m *mockStore) UpdateTaskResult(_ context.Context, _ string, _, _ string) error {
 	return fmt.Errorf("not implemented")
 }
-func (m *mockStore) CompleteTask(_ context.Context, _ string, _ db.TaskStatus, _, _ string) error {
-	return fmt.Errorf("not implemented")
+func (m *mockStore) ListTaskDependents(_ context.Context, _ string) ([]*db.Task, error) {
+	return nil, fmt.Errorf("not implemented")
 }
 func (m *mockStore) AssignTaskToGraph(_ context.Context, _ string, _ string) error {
 	return fmt.Errorf("not implemented")
@@ -113,9 +113,6 @@ func (m *mockStore) DeleteAllSkills(_ context.Context) error {
 }
 func (m *mockStore) CreateFeedEntry(_ context.Context, _ *db.FeedEntry) error {
 	return fmt.Errorf("not implemented")
-}
-func (m *mockStore) ListFeedEntries(_ context.Context, _ string, _ int) ([]*db.FeedEntry, error) {
-	return nil, fmt.Errorf("not implemented")
 }
 func (m *mockStore) ListRecentFeedEntries(_ context.Context, _ int) ([]*db.FeedEntry, error) {
 	return nil, fmt.Errorf("not implemented")

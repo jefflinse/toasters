@@ -18,7 +18,6 @@ type Store interface {
 	ListTasksForJob(ctx context.Context, jobID string) ([]*Task, error)
 	UpdateTaskStatus(ctx context.Context, id string, status TaskStatus, summary string) error
 	UpdateTaskResult(ctx context.Context, id string, resultSummary, recommendations string) error
-	CompleteTask(ctx context.Context, id string, status TaskStatus, summary, recommendations string) error
 	AssignTaskToGraph(ctx context.Context, id string, graphID string) error
 	PreAssignTaskGraph(ctx context.Context, id string, graphID string) error
 	// RetryTask re-dispatches a failed task: it transitions the task from
@@ -27,6 +26,10 @@ type Store interface {
 	RetryTask(ctx context.Context, id string, graphID string) error
 	AddTaskDependency(ctx context.Context, taskID, dependsOn string) error
 	GetReadyTasks(ctx context.Context, jobID string) ([]*Task, error)
+	// ListTaskDependents returns the tasks that declare a dependency on the
+	// given task. Used to surface work that can never become ready while its
+	// dependency sits in a failed state.
+	ListTaskDependents(ctx context.Context, taskID string) ([]*Task, error)
 
 	// Progress
 	ReportProgress(ctx context.Context, report *ProgressReport) error
@@ -40,7 +43,6 @@ type Store interface {
 
 	// Feed
 	CreateFeedEntry(ctx context.Context, entry *FeedEntry) error
-	ListFeedEntries(ctx context.Context, jobID string, limit int) ([]*FeedEntry, error)
 	ListRecentFeedEntries(ctx context.Context, limit int) ([]*FeedEntry, error)
 
 	// Rebuild — wraps delete-all + insert-all in a transaction
