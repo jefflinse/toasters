@@ -128,6 +128,32 @@ func (st *SystemTools) Definitions() []runtime.ToolDef {
 			}`),
 		},
 		{
+			Name:        "create_task",
+			Description: "Add a new task to an existing job. The task enters the job's queue as pending. If graph_id is omitted, the framework automatically selects a graph for the task; tasks run serially, so it starts when no sibling task is in progress. Use this when a graph requests follow-up work or completed work recommends a next step worth doing.",
+			Parameters: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"job_id": {
+						"type": "string",
+						"description": "ID of the job the task belongs to"
+					},
+					"title": {
+						"type": "string",
+						"description": "Short title for the task"
+					},
+					"description": {
+						"type": "string",
+						"description": "What the task entails; passed to the worker as context"
+					},
+					"graph_id": {
+						"type": "string",
+						"description": "Optional graph to run the task on. Omit to let the framework choose one."
+					}
+				},
+				"required": ["job_id", "title"]
+			}`),
+		},
+		{
 			Name:        "retry_task",
 			Description: "Re-run a single failed task in place, on the same job, instead of creating a new job to redo the work. Use this when a task fails for a transient or fixable reason (an environment, dependency, or build issue, or something a clearer instruction would resolve). Optionally pass a different graph_id to retry on; by default it retries on the graph it failed on.",
 			Parameters: json.RawMessage(`{
@@ -203,6 +229,8 @@ func (st *SystemTools) Execute(ctx context.Context, name string, args json.RawMe
 	switch name {
 	case "create_job":
 		return st.createJob(ctx, args)
+	case "create_task":
+		return st.createTask(ctx, args)
 	case "assign_task":
 		// Retained for internal use by the operator event loop's
 		// assignNextTask, which dispatches the next ready task via the
@@ -319,6 +347,90 @@ func (st *SystemTools) createJob(ctx context.Context, args json.RawMessage) (str
 	}
 
 	result, err := json.Marshal(map[string]string{"job_id": job.ID})
+	if err != nil {
+		return "", fmt.Errorf("marshaling result: %w", err)
+	}
+	return string(result), nil
+}
+
+// createTask adds a pending task to an existing job. With a graph_id it
+// dispatches immediately through the same path as assign_task (respecting
+// serial execution); without one it broadcasts task-created with an empty
+// graph so the service auto-runs fine-decompose to pick a graph and start
+// the task when it becomes ready.
+func (st *SystemTools) createTask(ctx context.Context, args json.RawMessage) (string, error) {
+	var params struct {
+		JobID       string `json:"job_id"`
+		Title       string `json:"title"`
+		Description string `json:"description"`
+		GraphID     string `json:"graph_id"`
+	}
+	if err := json.Unmarshal(args, &params); err != nil {
+		return "", fmt.Errorf("parsing create_task args: %w", err)
+	}
+	if params.JobID == "" {
+		return "", fmt.Errorf("job_id is required")
+	}
+	if params.Title == "" {
+		return "", fmt.Errorf("title is required")
+	}
+
+	job, err := st.store.GetJob(ctx, params.JobID)
+	if err != nil {
+		return "", fmt.Errorf("getting job: %w", err)
+	}
+	if params.GraphID != "" && st.graphCatalog != nil {
+		known := false
+		for _, g := range st.graphCatalog.Graphs() {
+			if g.ID == params.GraphID {
+				known = true
+				break
+			}
+		}
+		if !known {
+			return "", fmt.Errorf("graph %q is not loaded (use query_graphs to list available graphs)", params.GraphID)
+		}
+	}
+
+	siblings, err := st.store.ListTasksForJob(ctx, params.JobID)
+	if err != nil {
+		return "", fmt.Errorf("listing job tasks: %w", err)
+	}
+
+	taskID, err := uuid.NewV4()
+	if err != nil {
+		return "", fmt.Errorf("generating task ID: %w", err)
+	}
+	task := &db.Task{
+		ID:        taskID.String(),
+		JobID:     params.JobID,
+		Title:     params.Title,
+		Status:    db.TaskStatusPending,
+		Summary:   params.Description,
+		SortOrder: len(siblings),
+	}
+	if err := st.store.CreateTask(ctx, task); err != nil {
+		return "", fmt.Errorf("creating task: %w", err)
+	}
+
+	// With an explicit graph, dispatch now (or queue behind an in-progress
+	// sibling). Without one, the task-created broadcast triggers automatic
+	// graph selection via fine-decompose.
+	if params.GraphID != "" {
+		if st.broadcaster != nil {
+			st.broadcaster.BroadcastTaskCreated(task.ID, task.JobID, task.Title, params.GraphID)
+		}
+		return st.dispatchGraphTask(ctx, task, job, params.GraphID)
+	}
+	if st.broadcaster != nil {
+		st.broadcaster.BroadcastTaskCreated(task.ID, task.JobID, task.Title, "")
+	}
+
+	result, err := json.Marshal(map[string]string{
+		"task_id": task.ID,
+		"job_id":  task.JobID,
+		"status":  string(db.TaskStatusPending),
+	})
 	if err != nil {
 		return "", fmt.Errorf("marshaling result: %w", err)
 	}

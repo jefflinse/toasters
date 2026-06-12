@@ -655,7 +655,7 @@ func TestBroadcastOperatorText_EventPayload(t *testing.T) {
 
 	ch := svc.subscribe(ctx)
 
-	svc.BroadcastOperatorText("hello world", "some reasoning")
+	svc.BroadcastOperatorText("", "hello world", "some reasoning")
 
 	select {
 	case ev := <-ch:
@@ -681,15 +681,12 @@ func TestBroadcastOperatorText_CarriesTurnID(t *testing.T) {
 	t.Parallel()
 
 	svc := newTestService(t)
-	svc.turnMu.Lock()
-	svc.currentTurnID = "turn-abc"
-	svc.turnMu.Unlock()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	ch := svc.subscribe(ctx)
 
-	svc.BroadcastOperatorText("text", "")
+	svc.BroadcastOperatorText("turn-abc", "text", "")
 
 	select {
 	case ev := <-ch:
@@ -713,7 +710,7 @@ func TestBroadcastOperatorDone_ClearsTurnID(t *testing.T) {
 	defer cancel()
 	ch := svc.subscribe(ctx)
 
-	svc.BroadcastOperatorDone("claude-3", 100, 200, 0)
+	svc.BroadcastOperatorDone("turn-xyz", "claude-3", 100, 200, 0)
 
 	select {
 	case ev := <-ch:
@@ -746,6 +743,48 @@ func TestBroadcastOperatorDone_ClearsTurnID(t *testing.T) {
 	svc.turnMu.Unlock()
 	if turnID != "" {
 		t.Errorf("currentTurnID = %q, want empty after BroadcastOperatorDone", turnID)
+	}
+}
+
+// A system-initiated turn finishes with an empty turn ID while a user turn is
+// still queued. Its done event must not release the SendMessage gate — that
+// would let the queued user turn stream with no gate and a second SendMessage
+// race in behind it (C13a).
+func TestBroadcastOperatorDone_SystemTurnLeavesUserGateAlone(t *testing.T) {
+	t.Parallel()
+
+	svc := newTestService(t)
+	svc.turnMu.Lock()
+	svc.currentTurnID = "turn-user"
+	svc.turnMu.Unlock()
+
+	svc.BroadcastOperatorDone("", "claude-3", 1, 2, 0)
+
+	svc.turnMu.Lock()
+	turnID := svc.currentTurnID
+	svc.turnMu.Unlock()
+	if turnID != "turn-user" {
+		t.Errorf("currentTurnID = %q, want %q (system turn must not clear the gate)", turnID, "turn-user")
+	}
+}
+
+// A done event for a stale turn (e.g. delivered after the operator was
+// swapped and a new turn started) must not release the new turn's gate.
+func TestBroadcastOperatorDone_MismatchedTurnLeavesGateAlone(t *testing.T) {
+	t.Parallel()
+
+	svc := newTestService(t)
+	svc.turnMu.Lock()
+	svc.currentTurnID = "turn-new"
+	svc.turnMu.Unlock()
+
+	svc.BroadcastOperatorDone("turn-old", "claude-3", 1, 2, 0)
+
+	svc.turnMu.Lock()
+	turnID := svc.currentTurnID
+	svc.turnMu.Unlock()
+	if turnID != "turn-new" {
+		t.Errorf("currentTurnID = %q, want %q (stale done must not clear the gate)", turnID, "turn-new")
 	}
 }
 

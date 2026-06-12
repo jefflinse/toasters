@@ -404,6 +404,7 @@ func TestSystemToolDefinitions(t *testing.T) {
 
 	expectedTools := []string{
 		"create_job",
+		"create_task",
 		"retry_task",
 		"query_graphs",
 		"query_job",
@@ -442,6 +443,110 @@ func TestSystemToolDefinitions(t *testing.T) {
 //
 // Regression: if store.UpdateJobStatus is removed or called with the wrong
 // status, this test will fail.
+// create_task without a graph_id leaves the task pending so the framework's
+// automatic graph selection (fine-decompose) picks it up (C15).
+func TestCreateTask_PendingWithoutGraph(t *testing.T) {
+	st, store, gExec, _, _ := newTestSystemTools(t)
+	ctx := context.Background()
+
+	jobResult, err := st.Execute(ctx, "create_job", json.RawMessage(`{
+		"title": "Job", "description": "desc"
+	}`))
+	assertNoError(t, err)
+	var jobRes map[string]string
+	if err := json.Unmarshal([]byte(jobResult), &jobRes); err != nil {
+		t.Fatalf("parsing job result: %v", err)
+	}
+
+	result, err := st.Execute(ctx, "create_task", json.RawMessage(`{
+		"job_id": "`+jobRes["job_id"]+`",
+		"title": "Follow-up work",
+		"description": "Requested by a running graph"
+	}`))
+	assertNoError(t, err)
+
+	var res map[string]string
+	if err := json.Unmarshal([]byte(result), &res); err != nil {
+		t.Fatalf("parsing create_task result: %v", err)
+	}
+	task, err := store.GetTask(ctx, res["task_id"])
+	assertNoError(t, err)
+	assertEqual(t, "Follow-up work", task.Title)
+	assertEqual(t, string(db.TaskStatusPending), string(task.Status))
+	if task.Summary != "Requested by a running graph" {
+		t.Errorf("Summary = %q, want description", task.Summary)
+	}
+	if n := len(gExec.getCalls()); n != 0 {
+		t.Errorf("graph executor dispatched %d times, want 0 (no graph chosen yet)", n)
+	}
+}
+
+// create_task with an explicit graph_id dispatches immediately, same as
+// assign_task.
+func TestCreateTask_ExplicitGraphDispatches(t *testing.T) {
+	st, store, gExec, _, _ := newTestSystemTools(t)
+	ctx := context.Background()
+
+	jobResult, err := st.Execute(ctx, "create_job", json.RawMessage(`{
+		"title": "Job", "description": "desc"
+	}`))
+	assertNoError(t, err)
+	var jobRes map[string]string
+	if err := json.Unmarshal([]byte(jobResult), &jobRes); err != nil {
+		t.Fatalf("parsing job result: %v", err)
+	}
+
+	result, err := st.Execute(ctx, "create_task", json.RawMessage(`{
+		"job_id": "`+jobRes["job_id"]+`",
+		"title": "Targeted work",
+		"graph_id": "bug-fix"
+	}`))
+	assertNoError(t, err)
+
+	var res map[string]string
+	if err := json.Unmarshal([]byte(result), &res); err != nil {
+		t.Fatalf("parsing create_task result: %v", err)
+	}
+	assertEqual(t, "in_progress", res["status"])
+	task, err := store.GetTask(ctx, res["task_id"])
+	assertNoError(t, err)
+	assertEqual(t, string(db.TaskStatusInProgress), string(task.Status))
+
+	gExec.waitForGraphCall(t)
+}
+
+// create_task must reject unknown graphs and missing jobs with clear errors.
+func TestCreateTask_Validation(t *testing.T) {
+	st, _, _, _, _ := newTestSystemTools(t)
+	ctx := context.Background()
+
+	if _, err := st.Execute(ctx, "create_task", json.RawMessage(`{"title": "x"}`)); err == nil {
+		t.Error("missing job_id accepted")
+	}
+	if _, err := st.Execute(ctx, "create_task", json.RawMessage(`{"job_id": "j"}`)); err == nil {
+		t.Error("missing title accepted")
+	}
+	if _, err := st.Execute(ctx, "create_task", json.RawMessage(`{
+		"job_id": "no-such-job", "title": "x"
+	}`)); err == nil {
+		t.Error("nonexistent job accepted")
+	}
+
+	jobResult, err := st.Execute(ctx, "create_job", json.RawMessage(`{
+		"title": "Job", "description": "desc"
+	}`))
+	assertNoError(t, err)
+	var jobRes map[string]string
+	if err := json.Unmarshal([]byte(jobResult), &jobRes); err != nil {
+		t.Fatalf("parsing job result: %v", err)
+	}
+	if _, err := st.Execute(ctx, "create_task", json.RawMessage(`{
+		"job_id": "`+jobRes["job_id"]+`", "title": "x", "graph_id": "no-such-graph"
+	}`)); err == nil {
+		t.Error("unknown graph accepted")
+	}
+}
+
 func TestAssignTask_PromotesJobToActive(t *testing.T) {
 	st, store, _, _, _ := newTestSystemTools(t)
 	ctx := context.Background()

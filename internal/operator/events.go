@@ -48,6 +48,11 @@ type Event struct {
 // UserMessagePayload carries a user's text message.
 type UserMessagePayload struct {
 	Text string
+	// TurnID correlates this message with the operator.text/operator.done
+	// events the turn produces. Set by the service for user-initiated turns;
+	// empty for system-initiated (internal) turns so they can't be mistaken
+	// for — or clear the gate of — a pending user turn.
+	TurnID string
 }
 
 // TaskStartedPayload carries info about a task that just started.

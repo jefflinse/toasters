@@ -52,6 +52,11 @@ type Operator struct {
 	systemPrompt string
 	messages     []provider.Message
 	provTools    []provider.Tool
+	// turnID is the service-assigned ID of the user turn currently being
+	// processed; empty between turns and for system-initiated turns. Threaded
+	// into the OnText/OnReasoning/OnTurnDone callbacks so the service can
+	// distinguish user turns from internal ones.
+	turnID string
 
 	// broker coordinates ask_user prompts. Shared with graph nodes —
 	// responses come back via service.LocalService.RespondToPrompt, which
@@ -66,10 +71,10 @@ type Operator struct {
 	askUserTimeout time.Duration
 
 	// Callbacks — set at construction time via Config, immutable after New().
-	onText      func(text string)                                                    // called with streamed text from the operator LLM
-	onReasoning func(text string)                                                    // called with streamed reasoning chunks; optional
+	onText      func(turnID, text string)                                            // called with streamed text from the operator LLM
+	onReasoning func(turnID, text string)                                            // called with streamed reasoning chunks; optional
 	onEvent     func(event Event)                                                    // called when the event loop processes an event
-	onTurnDone  func(tokensIn, tokensOut, reasoningTokens int)                       // called when the operator finishes processing a user message turn
+	onTurnDone  func(turnID string, tokensIn, tokensOut, reasoningTokens int)        // called when the operator finishes processing a turn
 	onPrompt    func(requestID string, questions []PromptQuestion)                   // called when the operator calls ask_user
 	onResolve   func(requestID string)                                               // called when an ask_user request finishes (answered or cancelled)
 	onToolCall  func(name string, args json.RawMessage, result string, isError bool) // called after each operator tool executes
@@ -98,15 +103,19 @@ type Config struct {
 	PromptEngine           *prompt.Engine         // prompt engine for role-based prompt composition
 	DefaultProvider        string                 // default provider for system agents
 	DefaultModel           string                 // default model for system agents
-	OnText                 func(text string)      // called with streamed text from the operator LLM
-	OnReasoning            func(text string)      // called with streamed reasoning (chain-of-thought) chunks; optional
-	OnEvent                func(event Event)      // called when the event loop processes an event
-	// OnTurnDone is called when the operator finishes processing a user
-	// message turn. tokensIn / tokensOut / reasoningTokens are the totals
-	// across all LLM round-trips that occurred during the turn (the operator
-	// may make several when tool calls are involved). reasoningTokens is 0
-	// for providers that don't surface them.
-	OnTurnDone  func(tokensIn, tokensOut, reasoningTokens int)
+	// OnText / OnReasoning are called with streamed text and reasoning
+	// chunks from the operator LLM. turnID is the user turn the text belongs
+	// to (from UserMessagePayload.TurnID); empty for system-initiated turns.
+	OnText      func(turnID, text string)
+	OnReasoning func(turnID, text string)
+	OnEvent     func(event Event) // called when the event loop processes an event
+	// OnTurnDone is called when the operator finishes processing a turn.
+	// turnID matches the OnText/OnReasoning calls of the same turn (empty
+	// for system-initiated turns). tokensIn / tokensOut / reasoningTokens
+	// are the totals across all LLM round-trips that occurred during the
+	// turn (the operator may make several when tool calls are involved).
+	// reasoningTokens is 0 for providers that don't surface them.
+	OnTurnDone  func(turnID string, tokensIn, tokensOut, reasoningTokens int)
 	OnPrompt    func(requestID string, questions []PromptQuestion)                   // called when the operator calls ask_user
 	OnResolve   func(requestID string)                                               // called when an ask_user request finishes (answered or cancelled)
 	OnToolCall  func(name string, args json.RawMessage, result string, isError bool) // called after each operator tool executes
@@ -324,7 +333,10 @@ func (o *Operator) handleEvent(ctx context.Context, ev Event) {
 			o.assignNextTask(ctx, payload.JobID)
 		} else if payload.Recommendations != "" {
 			// LLM: consult scheduler about recommendations.
-			msg := fmt.Sprintf("Task %q completed by team %s. Summary: %s\n\nThe team recommends: %s\n\nPlease decide how to proceed with these recommendations.",
+			msg := fmt.Sprintf("Task %q completed by team %s. Summary: %s\n\nThe team recommends: %s\n\n"+
+				"Decide how to proceed. If a recommendation is worth acting on, call create_task "+
+				"with this job's ID to queue it as follow-up work; if it needs a human decision, "+
+				"use ask_user; otherwise summarize via surface_to_user.",
 				payload.TaskID, payload.GraphID, payload.Summary, payload.Recommendations)
 			o.sendToLLM(ctx, msg)
 		} else {
@@ -390,7 +402,11 @@ func (o *Operator) handleEvent(ctx context.Context, ev Event) {
 		o.postFeedEntry(ctx, db.FeedEntrySystemEvent, content, payload.JobID)
 		slog.Info("new task request", "job_id", payload.JobID, "graph_id", payload.GraphID, "description", payload.Description, "reason", payload.Reason)
 
-		msg := fmt.Sprintf("Graph %s recommends creating a new task for job %s: %s\n\nReason: %s\n\nPlease decide whether to create this task and assign it.",
+		msg := fmt.Sprintf("Graph %s recommends creating a new task for job %s: %s\n\nReason: %s\n\n"+
+			"Decide whether this work is worth doing. If yes, call create_task with this job_id — "+
+			"the framework picks a graph and starts the task when it becomes ready. Do NOT create "+
+			"a new job for follow-up work on an existing job. If the decision belongs to a human, "+
+			"use ask_user; otherwise surface_to_user to explain why you declined.",
 			payload.GraphID, payload.JobID, payload.Description, payload.Reason)
 		o.sendToLLM(ctx, msg)
 
@@ -438,6 +454,22 @@ func (o *Operator) sendToLLM(ctx context.Context, message string) {
 	o.handleUserMessage(ctx, UserMessagePayload{Text: message})
 }
 
+// reportAdvanceFailure surfaces a failure in the mechanical task-advance
+// path. assignNextTask is the only thing that moves a job forward after a
+// completion, so a silent failure here stalls the whole pipeline: post a
+// feed entry for visibility and consult the LLM so the problem reaches the
+// user instead of dying in a log line.
+func (o *Operator) reportAdvanceFailure(ctx context.Context, jobID, detail string) {
+	o.postFeedEntry(ctx, db.FeedEntrySystemEvent, fmt.Sprintf("⚠️ %s", detail), jobID)
+	msg := fmt.Sprintf("The framework failed to advance job %s to its next task: %s\n\n"+
+		"Nothing retries this automatically — the job is stalled until someone acts. "+
+		"Inspect the job with query_job, then surface the problem to the user with "+
+		"surface_to_user (or ask_user if a decision is needed), explaining what failed "+
+		"and what could fix it.",
+		jobID, detail)
+	o.sendToLLM(ctx, msg)
+}
+
 // assignNextTask finds the next ready task for a job and assigns it using
 // the SystemTools. If no ready tasks exist or the store is unavailable,
 // it logs and returns.
@@ -450,6 +482,7 @@ func (o *Operator) assignNextTask(ctx context.Context, jobID string) {
 	readyTasks, err := o.store.GetReadyTasks(ctx, jobID)
 	if err != nil {
 		slog.Error("failed to get ready tasks", "job_id", jobID, "error", err)
+		o.reportAdvanceFailure(ctx, jobID, fmt.Sprintf("could not determine the next ready task: %s", err))
 		return
 	}
 	if len(readyTasks) == 0 {
@@ -493,6 +526,8 @@ func (o *Operator) assignNextTask(ctx context.Context, jobID string) {
 
 	if _, err := o.tools.systemTools.Execute(ctx, "assign_task", args); err != nil {
 		slog.Error("failed to assign next task", "task_id", task.ID, "graph_id", task.GraphID, "error", err)
+		o.reportAdvanceFailure(ctx, jobID, fmt.Sprintf(
+			"could not start task %q on graph %q: %s", task.Title, task.GraphID, err))
 	}
 }
 
@@ -548,10 +583,21 @@ func (o *Operator) checkJobComplete(ctx context.Context, jobID string) {
 // the response, including any tool calls. This drives the operator's
 // conversation turn by turn.
 func (o *Operator) handleUserMessage(ctx context.Context, payload UserMessagePayload) {
+	// Record which turn is streaming so emitText/emitReasoning stamp their
+	// callbacks with it. The event loop is serial, so turns never overlap.
+	o.mu.Lock()
+	o.turnID = payload.TurnID
+	o.mu.Unlock()
+
 	// Aggregate token usage across all LLM round-trips in this turn so the
 	// emitted OnTurnDone reflects the full cost of handling the user message.
 	var totalIn, totalOut int
-	defer func() { o.emitTurnDone(totalIn, totalOut, 0) }()
+	defer func() {
+		o.mu.Lock()
+		o.turnID = ""
+		o.mu.Unlock()
+		o.emitTurnDone(payload.TurnID, totalIn, totalOut, 0)
+	}()
 
 	// Append user message to the long-lived conversation.
 	o.appendMessage(provider.Message{
@@ -822,19 +868,31 @@ func truncateMessages(messages []provider.Message, maxMessages int) []provider.M
 	// - An assistant message with no tool calls
 	// Skip orphaned tool results (role=tool) and assistant messages with
 	// tool calls whose results might be before the window.
-	startIdx := 0
 	for i, msg := range tail {
 		if msg.Role == "user" {
-			startIdx = i
-			break
+			return tail[i:]
 		}
 		if msg.Role == "assistant" && len(msg.ToolCalls) == 0 {
-			startIdx = i
-			break
+			return tail[i:]
 		}
 	}
 
-	return tail[startIdx:]
+	// No safe boundary anywhere in the window — plausible during tool-heavy
+	// autonomous stretches where every assistant message carries tool calls.
+	// Without a fallback the window would start with orphaned tool results,
+	// the provider would reject every request, and (because this runs on
+	// every append) the conversation would never self-heal. Drop leading
+	// orphaned tool results so the window starts at an
+	// assistant-with-tool-calls message whose results immediately follow —
+	// the pairing stays intact even though the window opens mid-turn.
+	for i, msg := range tail {
+		if msg.Role != "tool" {
+			return tail[i:]
+		}
+	}
+
+	// Degenerate: the entire window is tool results. Nothing salvageable.
+	return nil
 }
 
 // collectResponse reads from the event channel, accumulates text and tool
@@ -893,24 +951,32 @@ func (o *Operator) collectResponse(ctx context.Context, eventCh <-chan provider.
 	}
 }
 
+// currentTurn returns the ID of the turn currently being processed, or ""
+// between turns and during system-initiated turns.
+func (o *Operator) currentTurn() string {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.turnID
+}
+
 // emitText calls the OnText callback if set.
 func (o *Operator) emitText(text string) {
 	if o.onText != nil {
-		o.onText(text)
+		o.onText(o.currentTurn(), text)
 	}
 }
 
 // emitReasoning calls the OnReasoning callback if set.
 func (o *Operator) emitReasoning(text string) {
 	if o.onReasoning != nil {
-		o.onReasoning(text)
+		o.onReasoning(o.currentTurn(), text)
 	}
 }
 
 // emitTurnDone calls the OnTurnDone callback if set.
-func (o *Operator) emitTurnDone(tokensIn, tokensOut, reasoningTokens int) {
+func (o *Operator) emitTurnDone(turnID string, tokensIn, tokensOut, reasoningTokens int) {
 	if o.onTurnDone != nil {
-		o.onTurnDone(tokensIn, tokensOut, reasoningTokens)
+		o.onTurnDone(turnID, tokensIn, tokensOut, reasoningTokens)
 	}
 }
 

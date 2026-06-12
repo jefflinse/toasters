@@ -82,7 +82,7 @@ func (m *mockOperatorService) Blockers(_ context.Context) ([]service.Blocker, er
 type mockDefinitionService struct{}
 type mockJobService struct{}
 type mockSessionService struct{}
-type mockEventService struct{}
+type mockEventService struct{ ch chan service.Event }
 type mockSystemService struct{}
 
 func (m *mockDefinitionService) ListSkills(_ context.Context) ([]service.Skill, error) {
@@ -126,7 +126,7 @@ func (m *mockSessionService) Get(_ context.Context, _ string) (service.SessionDe
 func (m *mockSessionService) Cancel(_ context.Context, _ string) error { return nil }
 
 func (m *mockEventService) Subscribe(_ context.Context) <-chan service.Event {
-	return nil
+	return m.ch
 }
 
 func (m *mockSystemService) Health(_ context.Context) (service.HealthStatus, error) {

@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gofrs/uuid/v5"
@@ -571,10 +572,12 @@ func (s *LocalService) buildProgressState() ProgressState {
 // ---------------------------------------------------------------------------
 
 // BroadcastOperatorText broadcasts an operator.text event. Called from the
-// operator's OnText callback.
-func (s *LocalService) BroadcastOperatorText(text, reasoning string) {
+// operator's OnText callback. turnID is the user turn the text belongs to —
+// threaded from the operator rather than read from currentTurnID so a
+// system-initiated turn streaming while a user message is still queued can't
+// be mislabeled with the pending user turn's ID.
+func (s *LocalService) BroadcastOperatorText(turnID, text, reasoning string) {
 	s.turnMu.Lock()
-	turnID := s.currentTurnID
 	s.pendingResponse.WriteString(text)
 	s.turnMu.Unlock()
 
@@ -835,11 +838,15 @@ func infoBirthFallback(info os.FileInfo) time.Time {
 }
 
 // BroadcastOperatorDone broadcasts an operator.done event. Called from the
-// operator's OnTurnDone callback.
-func (s *LocalService) BroadcastOperatorDone(modelName string, tokensIn, tokensOut, reasoningTokens int) {
+// operator's OnTurnDone callback. The SendMessage gate (currentTurnID) is
+// released only when the finishing turn is the gated one — a system-initiated
+// turn (empty turnID) completing must not open the gate for a user turn that
+// is still queued behind it.
+func (s *LocalService) BroadcastOperatorDone(turnID, modelName string, tokensIn, tokensOut, reasoningTokens int) {
 	s.turnMu.Lock()
-	turnID := s.currentTurnID
-	s.currentTurnID = ""
+	if turnID != "" && s.currentTurnID == turnID {
+		s.currentTurnID = ""
+	}
 	responseText := s.pendingResponse.String()
 	s.pendingResponse.Reset()
 	s.turnMu.Unlock()
@@ -1516,7 +1523,7 @@ func (s *LocalService) SendMessage(ctx context.Context, message string) (string,
 
 	if err := op.Send(ctx, operator.Event{
 		Type:    operator.EventUserMessage,
-		Payload: operator.UserMessagePayload{Text: message},
+		Payload: operator.UserMessagePayload{Text: message, TurnID: turnID},
 	}); err != nil {
 		s.turnMu.Lock()
 		s.currentTurnID = ""
@@ -2526,6 +2533,15 @@ func (s *LocalService) startOperator(p provider.Provider, providerID, model stri
 		s.opCancel = nil
 	}
 
+	// A user turn queued on the old operator's event channel will never
+	// produce an OnTurnDone, so release the SendMessage gate here — otherwise
+	// every future SendMessage returns "turn already in progress" until the
+	// server restarts.
+	s.turnMu.Lock()
+	s.currentTurnID = ""
+	s.pendingResponse.Reset()
+	s.turnMu.Unlock()
+
 	// Compose the operator system prompt via the prompt engine.
 	var systemPrompt string
 	if s.cfg.PromptEngine != nil {
@@ -2540,11 +2556,19 @@ func (s *LocalService) startOperator(p provider.Provider, providerID, model stri
 		systemPrompt = "You are the Toasters operator."
 	}
 
+	// activeTurn tracks the turn ID the operator is currently streaming so
+	// timer-driven batch flushes stamp text with the right turn. Turns are
+	// serial and OnTurnDone flushes both batchers before clearing it, so a
+	// batch never straddles a turn boundary.
+	var activeTurn atomic.Value
+	activeTurn.Store("")
 	textFlush := func(text string) {
-		s.BroadcastOperatorText(text, "")
+		turnID, _ := activeTurn.Load().(string)
+		s.BroadcastOperatorText(turnID, text, "")
 	}
 	reasoningFlush := func(text string) {
-		s.BroadcastOperatorText("", text)
+		turnID, _ := activeTurn.Load().(string)
+		s.BroadcastOperatorText(turnID, "", text)
 	}
 	batcher := newTextBatcher(16*time.Millisecond, textFlush)
 	reasoningBatcher := newTextBatcher(16*time.Millisecond, reasoningFlush)
@@ -2567,19 +2591,22 @@ func (s *LocalService) startOperator(p provider.Provider, providerID, model stri
 		DefaultProvider: s.defaultProvider,
 		DefaultModel:    s.defaultModel,
 		LifetimeCtx:     s.ctx,
-		OnText: func(text string) {
+		OnText: func(turnID, text string) {
+			activeTurn.Store(turnID)
 			batcher.Add(text)
 		},
-		OnReasoning: func(text string) {
+		OnReasoning: func(turnID, text string) {
+			activeTurn.Store(turnID)
 			reasoningBatcher.Add(text)
 		},
 		OnEvent: func(event operator.Event) {
 			s.BroadcastOperatorEvent(event)
 		},
-		OnTurnDone: func(tokensIn, tokensOut, reasoningTokens int) {
+		OnTurnDone: func(turnID string, tokensIn, tokensOut, reasoningTokens int) {
 			reasoningBatcher.Flush()
 			batcher.Flush()
-			s.BroadcastOperatorDone(model, tokensIn, tokensOut, reasoningTokens)
+			activeTurn.Store("")
+			s.BroadcastOperatorDone(turnID, model, tokensIn, tokensOut, reasoningTokens)
 		},
 		OnPrompt:   s.BroadcastOperatorPrompt,
 		OnResolve:  s.ResolveBlocker,

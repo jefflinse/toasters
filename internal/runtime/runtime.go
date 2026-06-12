@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -14,10 +15,14 @@ import (
 	"github.com/jefflinse/toasters/internal/provider"
 )
 
+// ErrShutdown is returned by SpawnWorker once Shutdown has begun.
+var ErrShutdown = errors.New("runtime is shut down")
+
 // Runtime manages worker sessions.
 type Runtime struct {
 	mu               sync.Mutex
 	wg               sync.WaitGroup
+	closed           bool // set by Shutdown; SpawnWorker refuses new sessions after
 	sessions         map[string]*Session
 	store            db.Store // may be nil
 	providers        *provider.Registry
@@ -132,9 +137,18 @@ func (r *Runtime) SpawnWorker(ctx context.Context, opts SpawnOpts) (*Session, er
 	sess := newSession(id, p, opts, tools)
 	sess.store = r.store // may be nil; enables message persistence in Run()
 
-	// Register in sessions map.
+	// Register in sessions map. The wg.Add happens under the same lock as
+	// the closed check: Shutdown sets closed before wg.Wait, so a spawn
+	// racing shutdown either errors here or is counted before the Wait —
+	// never an Add after Wait (WaitGroup misuse) or an uncancelled session
+	// running against a closing store.
 	r.mu.Lock()
+	if r.closed {
+		r.mu.Unlock()
+		return nil, ErrShutdown
+	}
 	r.sessions[id] = sess
+	r.wg.Add(1)
 	r.mu.Unlock()
 
 	// Persist to SQLite if store is available.
@@ -175,7 +189,7 @@ func (r *Runtime) SpawnWorker(ctx context.Context, opts SpawnOpts) (*Session, er
 	// Start session in goroutine. Use context.Background() because the session
 	// has its own internal context for lifecycle management. The caller's context
 	// should not control the session's lifetime for fire-and-forget spawns.
-	r.wg.Add(1)
+	// (wg.Add already happened under the lock above.)
 	go func() {
 		defer r.wg.Done()
 		err := sess.Run(context.Background())
@@ -198,7 +212,7 @@ func (r *Runtime) SpawnWorker(ctx context.Context, opts SpawnOpts) (*Session, er
 			}
 		}
 
-		if err != nil && err != context.Canceled {
+		if err != nil && !errors.Is(err, context.Canceled) {
 			slog.Error("session ended with error", "session", id, "error", err)
 		}
 
@@ -312,6 +326,7 @@ func (r *Runtime) CancelSession(id string) error {
 // A 10-second timeout prevents indefinite hang if a session is stuck.
 func (r *Runtime) Shutdown() {
 	r.mu.Lock()
+	r.closed = true
 	for _, s := range r.sessions {
 		s.Cancel()
 	}

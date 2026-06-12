@@ -53,6 +53,35 @@ func TestRuntimeSpawnWorker(t *testing.T) {
 	assertEqual(t, "worker-1", snap.WorkerID)
 }
 
+// SpawnWorker after Shutdown must refuse cleanly rather than wg.Add after
+// wg.Wait (WaitGroup misuse, can panic) and leave an uncancelled session
+// running against a closing store (C14).
+func TestRuntimeSpawnWorkerAfterShutdown(t *testing.T) {
+	mp := &mockProvider{
+		name: "test",
+		responses: []mockResponse{
+			{events: []provider.StreamEvent{
+				{Type: provider.EventText, Text: "hi"},
+				{Type: provider.EventDone},
+			}},
+		},
+	}
+
+	rt := New(nil, newTestRegistry(mp))
+	rt.Shutdown()
+
+	_, err := rt.SpawnWorker(context.Background(), SpawnOpts{
+		WorkerID:       "worker-1",
+		ProviderName:   "test",
+		Model:          "test-model",
+		InitialMessage: "Hello",
+		WorkDir:        t.TempDir(),
+	})
+	if !errors.Is(err, ErrShutdown) {
+		t.Fatalf("SpawnWorker after Shutdown: err = %v, want ErrShutdown", err)
+	}
+}
+
 func TestRuntimeSpawnWorkerProviderNotFound(t *testing.T) {
 	rt := New(nil, provider.NewRegistry())
 
