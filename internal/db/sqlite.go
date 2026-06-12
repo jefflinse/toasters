@@ -252,13 +252,13 @@ func (s *SQLiteStore) CreateTask(ctx context.Context, task *Task) error {
 
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO tasks (id, job_id, title, status, worker_id, graph_id, parent_id, sort_order,
-		                     decompose_depth, created_at, updated_at, summary, metadata)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		                     decompose_depth, created_at, updated_at, description, summary, metadata)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		task.ID, task.JobID, task.Title, string(task.Status),
 		task.WorkerID, task.GraphID, task.ParentID, task.SortOrder,
 		task.DecomposeDepth,
 		task.CreatedAt.Format(time.RFC3339), task.UpdatedAt.Format(time.RFC3339),
-		task.Summary, nullableJSON(task.Metadata),
+		task.Description, task.Summary, nullableJSON(task.Metadata),
 	)
 	if err != nil {
 		return fmt.Errorf("inserting task: %w", err)
@@ -269,7 +269,7 @@ func (s *SQLiteStore) CreateTask(ctx context.Context, task *Task) error {
 func (s *SQLiteStore) GetTask(ctx context.Context, id string) (*Task, error) {
 	row := s.db.QueryRowContext(ctx,
 		`SELECT id, job_id, title, status, worker_id, graph_id, parent_id, sort_order,
-		        decompose_depth, created_at, updated_at, summary, metadata, result_summary, recommendations
+		        decompose_depth, created_at, updated_at, description, summary, metadata, result_summary, recommendations
 		 FROM tasks WHERE id = ?`, id)
 
 	return scanTask(row)
@@ -278,7 +278,7 @@ func (s *SQLiteStore) GetTask(ctx context.Context, id string) (*Task, error) {
 func (s *SQLiteStore) ListTasksForJob(ctx context.Context, jobID string) ([]*Task, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, job_id, title, status, worker_id, graph_id, parent_id, sort_order,
-		        decompose_depth, created_at, updated_at, summary, metadata, result_summary, recommendations
+		        decompose_depth, created_at, updated_at, description, summary, metadata, result_summary, recommendations
 		 FROM tasks WHERE job_id = ? ORDER BY sort_order, created_at`, jobID)
 	if err != nil {
 		return nil, fmt.Errorf("listing tasks: %w", err)
@@ -375,7 +375,7 @@ func (s *SQLiteStore) AddTaskDependency(ctx context.Context, taskID, dependsOn s
 func (s *SQLiteStore) GetReadyTasks(ctx context.Context, jobID string) ([]*Task, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT t.id, t.job_id, t.title, t.status, t.worker_id, t.graph_id, t.parent_id, t.sort_order,
-		        t.decompose_depth, t.created_at, t.updated_at, t.summary, t.metadata, t.result_summary, t.recommendations
+		        t.decompose_depth, t.created_at, t.updated_at, t.description, t.summary, t.metadata, t.result_summary, t.recommendations
 		 FROM tasks t
 		 WHERE t.job_id = ?
 		   AND t.status = 'pending'
@@ -405,7 +405,7 @@ func (s *SQLiteStore) GetReadyTasks(ctx context.Context, jobID string) ([]*Task,
 func (s *SQLiteStore) ListTaskDependents(ctx context.Context, taskID string) ([]*Task, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT t.id, t.job_id, t.title, t.status, t.worker_id, t.graph_id, t.parent_id, t.sort_order,
-		        t.decompose_depth, t.created_at, t.updated_at, t.summary, t.metadata, t.result_summary, t.recommendations
+		        t.decompose_depth, t.created_at, t.updated_at, t.description, t.summary, t.metadata, t.result_summary, t.recommendations
 		 FROM tasks t
 		 JOIN task_dependencies td ON td.task_id = t.id
 		 WHERE td.depends_on = ?
@@ -989,7 +989,7 @@ func scanTask(s scanner) (*Task, error) {
 
 	if err := s.Scan(&t.ID, &t.JobID, &t.Title, &status,
 		&t.WorkerID, &t.GraphID, &t.ParentID, &t.SortOrder,
-		&t.DecomposeDepth, &createdAt, &updatedAt, &t.Summary, &metadata,
+		&t.DecomposeDepth, &createdAt, &updatedAt, &t.Description, &t.Summary, &metadata,
 		&t.ResultSummary, &t.Recommendations); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrNotFound

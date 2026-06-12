@@ -85,7 +85,7 @@ func (s *LocalService) dispatchCoarseDecompose(jobID, jobTitle, jobDescription s
 		return
 	}
 
-	s.dispatchBootstrap(bootstrap, job, jobDescription, "")
+	s.dispatchBootstrap(bootstrap, job, jobTitle, jobDescription, "")
 }
 
 // dispatchFineDecompose creates a bootstrap task to run fine-decompose
@@ -118,7 +118,7 @@ func (s *LocalService) dispatchFineDecompose(parent *db.Task, job *db.Job) {
 		return
 	}
 
-	s.dispatchBootstrap(bootstrap, job, parent.Title, parent.ID)
+	s.dispatchBootstrap(bootstrap, job, parent.Title, parent.Description, parent.ID)
 }
 
 // dispatchBootstrap kicks off the graph executor for a decomposition
@@ -126,10 +126,12 @@ func (s *LocalService) dispatchFineDecompose(parent *db.Task, job *db.Job) {
 // inside dispatchGraphTask, but we're already inside a broadcaster
 // callback that must not block.
 //
-// subjectTaskID is the real task whose siblings should be exposed to
-// the bootstrap graph (parent.ID for fine-decompose). Pass empty for
-// coarse-decompose, which operates on the job and has no siblings.
-func (s *LocalService) dispatchBootstrap(bootstrap *db.Task, job *db.Job, description, subjectTaskID string) {
+// subjectTitle/subjectDescription identify the work being decomposed: the
+// job's title and description for coarse-decompose, the parent task's for
+// fine-decompose. subjectTaskID is the real task whose siblings should be
+// exposed to the bootstrap graph (parent.ID for fine-decompose); pass empty
+// for coarse-decompose, which operates on the job and has no siblings.
+func (s *LocalService) dispatchBootstrap(bootstrap *db.Task, job *db.Job, subjectTitle, subjectDescription, subjectTaskID string) {
 	siblings := ""
 	if subjectTaskID != "" {
 		if jobTasks, err := s.cfg.Store.ListTasksForJob(s.ctx, bootstrap.JobID); err == nil {
@@ -139,16 +141,17 @@ func (s *LocalService) dispatchBootstrap(bootstrap *db.Task, job *db.Job, descri
 	providerID, model := s.currentDefaults()
 	exec := s.currentGraphExecutor()
 	req := graphexec.TaskRequest{
-		JobID:          bootstrap.JobID,
-		JobTitle:       job.Title,
-		JobDescription: job.Description,
-		TaskID:         bootstrap.ID,
-		TaskTitle:      description,
-		GraphID:        bootstrap.GraphID,
-		Siblings:       siblings,
-		WorkspaceDir:   job.WorkspaceDir,
-		ProviderName:   providerID,
-		Model:          model,
+		JobID:           bootstrap.JobID,
+		JobTitle:        job.Title,
+		JobDescription:  job.Description,
+		TaskID:          bootstrap.ID,
+		TaskTitle:       subjectTitle,
+		TaskDescription: subjectDescription,
+		GraphID:         bootstrap.GraphID,
+		Siblings:        siblings,
+		WorkspaceDir:    job.WorkspaceDir,
+		ProviderName:    providerID,
+		Model:           model,
 	}
 	go func() {
 		if err := exec.ExecuteTask(s.ctx, req); err != nil {
@@ -224,12 +227,15 @@ func (s *LocalService) applyCoarseResult(ctx context.Context, jobID string, resu
 	ids := make([]string, len(result.Tasks))
 	for i, t := range result.Tasks {
 		task := &db.Task{
-			ID:        newTaskID(),
-			JobID:     jobID,
-			Title:     t.Title,
-			Status:    db.TaskStatusPending,
-			Summary:   t.Description,
-			SortOrder: i,
+			ID:    newTaskID(),
+			JobID: jobID,
+			Title: t.Title,
+			// Description is the task's immutable contract; Summary starts
+			// as a display copy of it but is overwritten by status updates.
+			Description: t.Description,
+			Status:      db.TaskStatusPending,
+			Summary:     t.Description,
+			SortOrder:   i,
 		}
 		if err := s.cfg.Store.CreateTask(ctx, task); err != nil {
 			slog.Error("failed to create task from coarse-decompose output",
@@ -331,17 +337,18 @@ func (s *LocalService) assignGraphToParent(ctx context.Context, parent *db.Task,
 	providerID, model := s.currentDefaults()
 	exec := s.currentGraphExecutor()
 	req := graphexec.TaskRequest{
-		JobID:          parent.JobID,
-		JobTitle:       job.Title,
-		JobDescription: job.Description,
-		TaskID:         parent.ID,
-		TaskTitle:      parent.Title,
-		GraphID:        graphID,
-		Toolchain:      toolchain,
-		Siblings:       graphexec.FormatSiblingTitles(graphexec.SiblingTitles(jobTasks, parent.ID)),
-		WorkspaceDir:   job.WorkspaceDir,
-		ProviderName:   providerID,
-		Model:          model,
+		JobID:           parent.JobID,
+		JobTitle:        job.Title,
+		JobDescription:  job.Description,
+		TaskID:          parent.ID,
+		TaskTitle:       parent.Title,
+		TaskDescription: parent.Description,
+		GraphID:         graphID,
+		Toolchain:       toolchain,
+		Siblings:        graphexec.FormatSiblingTitles(graphexec.SiblingTitles(jobTasks, parent.ID)),
+		WorkspaceDir:    job.WorkspaceDir,
+		ProviderName:    providerID,
+		Model:           model,
 	}
 	go func() {
 		if err := exec.ExecuteTask(s.ctx, req); err != nil {
@@ -370,16 +377,17 @@ func (s *LocalService) redispatchTaskGraph(ctx context.Context, task *db.Task, j
 	providerID, model := s.currentDefaults()
 	exec := s.currentGraphExecutor()
 	req := graphexec.TaskRequest{
-		JobID:          task.JobID,
-		JobTitle:       job.Title,
-		JobDescription: job.Description,
-		TaskID:         task.ID,
-		TaskTitle:      task.Title,
-		GraphID:        graphID,
-		Siblings:       graphexec.FormatSiblingTitles(graphexec.SiblingTitles(jobTasks, task.ID)),
-		WorkspaceDir:   job.WorkspaceDir,
-		ProviderName:   providerID,
-		Model:          model,
+		JobID:           task.JobID,
+		JobTitle:        job.Title,
+		JobDescription:  job.Description,
+		TaskID:          task.ID,
+		TaskTitle:       task.Title,
+		TaskDescription: task.Description,
+		GraphID:         graphID,
+		Siblings:        graphexec.FormatSiblingTitles(graphexec.SiblingTitles(jobTasks, task.ID)),
+		WorkspaceDir:    job.WorkspaceDir,
+		ProviderName:    providerID,
+		Model:           model,
 	}
 	go func() {
 		if err := exec.ExecuteTask(s.ctx, req); err != nil {
@@ -407,6 +415,7 @@ func (s *LocalService) replaceParentWithSubtasks(ctx context.Context, parent *db
 			ID:             newTaskID(),
 			JobID:          parent.JobID,
 			Title:          t.Title,
+			Description:    t.Description,
 			Status:         db.TaskStatusPending,
 			Summary:        t.Description,
 			ParentID:       parent.ID,

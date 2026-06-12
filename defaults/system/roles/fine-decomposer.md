@@ -19,7 +19,9 @@ decide the next step:
 
 ## Task
 
-**Title:** {{ task.description }}
+**Title:** {{ task.title }}
+
+**Description:** {{ task.description }}
 
 ## Job context
 

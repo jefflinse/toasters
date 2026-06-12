@@ -391,12 +391,15 @@ func (st *SystemTools) createTask(ctx context.Context, args json.RawMessage) (st
 		return "", fmt.Errorf("generating task ID: %w", err)
 	}
 	task := &db.Task{
-		ID:        taskID.String(),
-		JobID:     params.JobID,
-		Title:     params.Title,
-		Status:    db.TaskStatusPending,
-		Summary:   params.Description,
-		SortOrder: len(siblings),
+		ID:    taskID.String(),
+		JobID: params.JobID,
+		Title: params.Title,
+		// Description is the task's immutable contract; Summary starts as a
+		// display copy of it but is overwritten by status updates.
+		Description: params.Description,
+		Status:      db.TaskStatusPending,
+		Summary:     params.Description,
+		SortOrder:   len(siblings),
 	}
 	if err := st.store.CreateTask(ctx, task); err != nil {
 		return "", fmt.Errorf("creating task: %w", err)
@@ -512,16 +515,17 @@ func (st *SystemTools) dispatchGraphTask(ctx context.Context, task *db.Task, job
 	}
 
 	req := graphexec.TaskRequest{
-		JobID:          task.JobID,
-		JobTitle:       job.Title,
-		JobDescription: job.Description,
-		TaskID:         task.ID,
-		TaskTitle:      task.Title,
-		GraphID:        graphID,
-		Siblings:       graphexec.FormatSiblingTitles(graphexec.SiblingTitles(allTasks, task.ID)),
-		WorkspaceDir:   job.WorkspaceDir,
-		ProviderName:   st.defaultProvider,
-		Model:          st.defaultModel,
+		JobID:           task.JobID,
+		JobTitle:        job.Title,
+		JobDescription:  job.Description,
+		TaskID:          task.ID,
+		TaskTitle:       task.Title,
+		TaskDescription: task.Description,
+		GraphID:         graphID,
+		Siblings:        graphexec.FormatSiblingTitles(graphexec.SiblingTitles(allTasks, task.ID)),
+		WorkspaceDir:    job.WorkspaceDir,
+		ProviderName:    st.defaultProvider,
+		Model:           st.defaultModel,
 	}
 	go func() {
 		// Detach from the per-turn operator ctx, but stay scoped to the
@@ -650,16 +654,17 @@ func (st *SystemTools) retryTask(ctx context.Context, args json.RawMessage) (str
 		return "", fmt.Errorf("resetting task for retry: %w", err)
 	}
 	req := graphexec.TaskRequest{
-		JobID:          task.JobID,
-		JobTitle:       job.Title,
-		JobDescription: job.Description,
-		TaskID:         task.ID,
-		TaskTitle:      task.Title,
-		GraphID:        graphID,
-		Siblings:       graphexec.FormatSiblingTitles(graphexec.SiblingTitles(allTasks, task.ID)),
-		WorkspaceDir:   job.WorkspaceDir,
-		ProviderName:   st.defaultProvider,
-		Model:          st.defaultModel,
+		JobID:           task.JobID,
+		JobTitle:        job.Title,
+		JobDescription:  job.Description,
+		TaskID:          task.ID,
+		TaskTitle:       task.Title,
+		TaskDescription: task.Description,
+		GraphID:         graphID,
+		Siblings:        graphexec.FormatSiblingTitles(graphexec.SiblingTitles(allTasks, task.ID)),
+		WorkspaceDir:    job.WorkspaceDir,
+		ProviderName:    st.defaultProvider,
+		Model:           st.defaultModel,
 	}
 	go func() {
 		if err := st.graphExecutor.ExecuteTask(st.lifetimeCtx, req); err != nil {
@@ -753,8 +758,13 @@ func (st *SystemTools) queryJob(ctx context.Context, args json.RawMessage) (stri
 			if task.GraphID != "" {
 				fmt.Fprintf(&b, " → graph %s", task.GraphID)
 			}
-			if task.Summary != "" {
-				fmt.Fprintf(&b, " — %s", task.Summary)
+			if task.Description != "" {
+				fmt.Fprintf(&b, "\n    Description: %s", task.Description)
+			}
+			// Summary is the latest status/result text; skip it while it
+			// still just mirrors the description.
+			if task.Summary != "" && task.Summary != task.Description {
+				fmt.Fprintf(&b, "\n    Status: %s", task.Summary)
 			}
 			b.WriteString("\n")
 		}
