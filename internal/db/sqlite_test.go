@@ -325,12 +325,13 @@ func TestTasks_CRUD(t *testing.T) {
 	}
 
 	task := &Task{
-		ID:        "task-1",
-		JobID:     "job-t",
-		Title:     "Write tests",
-		Status:    TaskStatusPending,
-		WorkerID:  "worker-1",
-		SortOrder: 1,
+		ID:          "task-1",
+		JobID:       "job-t",
+		Title:       "Write tests",
+		Description: "Cover the parser package with table-driven tests",
+		Status:      TaskStatusPending,
+		WorkerID:    "worker-1",
+		SortOrder:   1,
 	}
 
 	// Create
@@ -363,6 +364,32 @@ func TestTasks_CRUD(t *testing.T) {
 	}
 	if got.SortOrder != 1 {
 		t.Errorf("SortOrder = %d, want 1", got.SortOrder)
+	}
+	if got.Description != "Cover the parser package with table-driven tests" {
+		t.Errorf("Description = %q, want round-tripped description", got.Description)
+	}
+
+	// Description is the task's contract: status updates and retries must
+	// not touch it (Summary, by contrast, is overwritten/cleared).
+	if err := store.UpdateTaskStatus(ctx, "task-1", TaskStatusFailed, "it broke"); err != nil {
+		t.Fatalf("UpdateTaskStatus: %v", err)
+	}
+	if err := store.RetryTask(ctx, "task-1", "bug-fix"); err != nil {
+		t.Fatalf("RetryTask: %v", err)
+	}
+	got, err = store.GetTask(ctx, "task-1")
+	if err != nil {
+		t.Fatalf("GetTask after retry: %v", err)
+	}
+	if got.Description != "Cover the parser package with table-driven tests" {
+		t.Errorf("Description after fail+retry = %q, want unchanged", got.Description)
+	}
+	if got.Summary != "" {
+		t.Errorf("Summary after retry = %q, want cleared", got.Summary)
+	}
+	// Reset for the rest of the CRUD flow.
+	if err := store.UpdateTaskStatus(ctx, "task-1", TaskStatusPending, ""); err != nil {
+		t.Fatalf("UpdateTaskStatus reset: %v", err)
 	}
 
 	// Create a second task

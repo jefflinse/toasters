@@ -472,8 +472,11 @@ func TestCreateTask_PendingWithoutGraph(t *testing.T) {
 	assertNoError(t, err)
 	assertEqual(t, "Follow-up work", task.Title)
 	assertEqual(t, string(db.TaskStatusPending), string(task.Status))
+	if task.Description != "Requested by a running graph" {
+		t.Errorf("Description = %q, want the task description", task.Description)
+	}
 	if task.Summary != "Requested by a running graph" {
-		t.Errorf("Summary = %q, want description", task.Summary)
+		t.Errorf("Summary = %q, want description copy", task.Summary)
 	}
 	if n := len(gExec.getCalls()); n != 0 {
 		t.Errorf("graph executor dispatched %d times, want 0 (no graph chosen yet)", n)
@@ -498,6 +501,7 @@ func TestCreateTask_ExplicitGraphDispatches(t *testing.T) {
 	result, err := st.Execute(ctx, "create_task", json.RawMessage(`{
 		"job_id": "`+jobRes["job_id"]+`",
 		"title": "Targeted work",
+		"description": "Wire the targeted thing into module X on port 8080",
 		"graph_id": "bug-fix"
 	}`))
 	assertNoError(t, err)
@@ -512,6 +516,16 @@ func TestCreateTask_ExplicitGraphDispatches(t *testing.T) {
 	assertEqual(t, string(db.TaskStatusInProgress), string(task.Status))
 
 	gExec.waitForGraphCall(t)
+
+	// The dispatched TaskRequest must carry the description — this is the
+	// contract the graph nodes compose their prompts from.
+	calls := gExec.getCalls()
+	if len(calls) != 1 {
+		t.Fatalf("want 1 dispatch, got %d", len(calls))
+	}
+	if calls[0].TaskDescription != "Wire the targeted thing into module X on port 8080" {
+		t.Errorf("dispatched TaskDescription = %q, want the task description", calls[0].TaskDescription)
+	}
 }
 
 // create_task must reject unknown graphs and missing jobs with clear errors.

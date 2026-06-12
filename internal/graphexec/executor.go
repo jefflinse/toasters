@@ -451,6 +451,14 @@ type TaskRequest struct {
 	TaskID    string
 	TaskTitle string
 
+	// TaskDescription is the task's contract — what the work entails, as
+	// produced by coarse-decompose (or create_task). Surfaced to graph
+	// nodes via the `task.description` artifact; when empty, the executor
+	// falls back to TaskTitle so prompts never render blank. Without this,
+	// workers see only the title and end up asking the user for details
+	// the system already has.
+	TaskDescription string
+
 	// GraphID selects a declarative graph Definition by id from the
 	// executor's GraphSource. Required.
 	GraphID string
@@ -547,7 +555,12 @@ func (e *Executor) prepareTask(req TaskRequest) (*rhizome.CompiledGraph[*TaskSta
 	}
 
 	state := NewTaskState(req.JobID, req.TaskID, req.WorkspaceDir, req.ProviderName, model)
-	state.SetArtifact("task.description", req.TaskTitle)
+	state.SetArtifact("task.title", req.TaskTitle)
+	desc := req.TaskDescription
+	if desc == "" {
+		desc = req.TaskTitle
+	}
+	state.SetArtifact("task.description", desc)
 	if req.Toolchain != "" {
 		state.SetArtifact("task.toolchain", req.Toolchain)
 	}

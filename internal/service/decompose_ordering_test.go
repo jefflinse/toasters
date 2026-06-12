@@ -116,6 +116,12 @@ func TestApplyCoarseResult_PersistsDependsOnEdges(t *testing.T) {
 	if len(store.tasks) != 3 {
 		t.Fatalf("created %d tasks, want 3", len(store.tasks))
 	}
+	// The decomposer's per-task description must land in the dedicated
+	// Description field (the task's contract — Summary gets overwritten by
+	// status updates and never reached dispatch at all).
+	if store.tasks[0].Description != "build the backend" {
+		t.Errorf("task Description = %q, want %q", store.tasks[0].Description, "build the backend")
+	}
 	if len(store.depEdges) != 2 {
 		t.Fatalf("persisted %d dep edges, want 2: %v", len(store.depEdges), store.depEdges)
 	}

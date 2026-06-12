@@ -155,3 +155,48 @@ func TestExecuteTask_RequiresGraphID(t *testing.T) {
 		t.Errorf("err = %v, want graph_id-required error", err)
 	}
 }
+
+// The task description must reach graph nodes as the task.description
+// artifact — pre-fix it was seeded from the TITLE, so workers saw none of
+// the detail coarse-decompose produced and asked the user for it instead.
+func TestPrepareTask_SeedsDescriptionArtifacts(t *testing.T) {
+	def := bugFixDef()
+	executor, _, _ := buildDispatchExecutor(t, nil, mapGraphSource{"bug-fix": def})
+
+	req := TaskRequest{
+		JobID:           "j1",
+		JobTitle:        "jt",
+		TaskID:          "t1",
+		TaskTitle:       "Create Docker multi-stage build and docker-compose",
+		TaskDescription: "Multi-stage Dockerfile for module github.com/x/todo, binary name todod, exposing port 8080.",
+		GraphID:         "bug-fix",
+		WorkspaceDir:    t.TempDir(),
+		ProviderName:    "mock",
+		Model:           "test-model",
+	}
+	_, state, err := executor.prepareTask(req)
+	if err != nil {
+		t.Fatalf("prepareTask: %v", err)
+	}
+	if got := state.GetArtifactString("task.description"); got != req.TaskDescription {
+		t.Errorf("task.description = %q, want the description (not the title)", got)
+	}
+	if got := state.GetArtifactString("task.title"); got != req.TaskTitle {
+		t.Errorf("task.title = %q, want %q", got, req.TaskTitle)
+	}
+	// The node's initial message is built from these artifacts — the
+	// description must reach the worker's prompt.
+	if msg := buildInitialMessage(state); !strings.Contains(msg, "binary name todod") {
+		t.Errorf("initial message missing task description: %q", msg)
+	}
+
+	// Without a description, fall back to the title so prompts never go blank.
+	req.TaskDescription = ""
+	_, state, err = executor.prepareTask(req)
+	if err != nil {
+		t.Fatalf("prepareTask (no description): %v", err)
+	}
+	if got := state.GetArtifactString("task.description"); got != req.TaskTitle {
+		t.Errorf("task.description fallback = %q, want title", got)
+	}
+}

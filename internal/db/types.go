@@ -85,7 +85,8 @@ type Task struct {
 	DecomposeDepth  int // times this task (or its ancestors) has been split by fine-decompose
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
-	Summary         string          // completion summary or failure reason
+	Description     string          // what the task entails — the task's contract; immutable for the task's lifetime
+	Summary         string          // completion summary or failure reason; overwritten by status updates
 	Metadata        json.RawMessage // extensible JSON blob
 	ResultSummary   string          // structured result summary
 	Recommendations string          // structured recommendations
