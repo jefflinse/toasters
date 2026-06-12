@@ -8,8 +8,12 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/jefflinse/toasters/internal/provider"
 )
@@ -1188,4 +1192,85 @@ func TestPathAlias_RemapsCanonicalWorkspace(t *testing.T) {
 	})); err == nil {
 		t.Error("write to unrelated absolute path accepted; want escape rejection")
 	}
+}
+
+// A timed-out command must take its WHOLE process tree with it and return
+// promptly. Pre-fix, the context killed only /bin/sh: a backgrounded
+// grandchild survived holding the output pipe, CombinedOutput blocked
+// forever (past the timeout, past session cancel), and the worker session
+// wedged — found live when a worker started the server it had just built.
+func TestShell_TimeoutKillsProcessTree(t *testing.T) {
+	ct := NewCoreTools(t.TempDir(), WithShell(true))
+
+	start := time.Now()
+	// The background sleep simulates a server; $! is its pid. The foreground
+	// sleep keeps sh alive so the 1s timeout fires while both run.
+	out, err := ct.Execute(context.Background(), "shell", mustJSON(t, map[string]any{
+		"command": "sleep 300 & echo PID=$!; sleep 300",
+		"timeout": 1,
+	}))
+	elapsed := time.Since(start)
+
+	if err == nil || !strings.Contains(err.Error(), "timed out") {
+		t.Fatalf("err = %v, want timeout error", err)
+	}
+	// Bounded: timeout (1s) + WaitDelay (5s) + slack. Pre-fix this blocked
+	// for the full 300s sleep.
+	if elapsed > 8*time.Second {
+		t.Fatalf("shell returned after %v; tool call is not bounded", elapsed)
+	}
+
+	// The backgrounded grandchild must be dead — pre-fix it survived,
+	// holding the pipe and squatting on its port.
+	m := regexp.MustCompile(`PID=(\d+)`).FindStringSubmatch(out)
+	if m == nil {
+		t.Fatalf("no PID in output: %q", out)
+	}
+	pid, _ := strconv.Atoi(m[1])
+	deadline := time.Now().Add(3 * time.Second)
+	for syscall.Kill(pid, 0) == nil { // ESRCH once the group kill lands
+		if time.Now().After(deadline) {
+			t.Fatalf("backgrounded child %d still alive after timeout kill", pid)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// A command that exits successfully but leaves a child holding the output
+// pipe must return within WaitDelay instead of blocking until the child
+// exits on its own.
+func TestShell_OrphanedPipeHolderDoesNotWedgeReturn(t *testing.T) {
+	ct := NewCoreTools(t.TempDir(), WithShell(true))
+
+	start := time.Now()
+	// sh exits immediately; the disowned sleep inherits stdout. On unix the
+	// group kill doesn't fire (no cancellation), so this exercises WaitDelay.
+	_, err := ct.Execute(context.Background(), "shell", mustJSON(t, map[string]any{
+		"command": "sleep 300 & echo started",
+		"timeout": 60,
+	}))
+	elapsed := time.Since(start)
+
+	if elapsed > shellWaitDelay+3*time.Second {
+		t.Fatalf("shell returned after %v; want ~WaitDelay (%v)", elapsed, shellWaitDelay)
+	}
+	if err == nil || !strings.Contains(err.Error(), "background child") {
+		t.Fatalf("err = %v, want background-child guidance", err)
+	}
+}
+
+// The documented one-command smoke-test pattern works: start, exercise,
+// kill — everything within one call, no errors, output intact.
+func TestShell_OneCommandServerPattern(t *testing.T) {
+	ct := NewCoreTools(t.TempDir(), WithShell(true))
+
+	out, err := ct.Execute(context.Background(), "shell", mustJSON(t, map[string]any{
+		"command": "sleep 60 & SRV=$!; echo exercising; kill $SRV; wait; echo done",
+		"timeout": 10,
+	}))
+	if err != nil {
+		t.Fatalf("one-command pattern errored: %v", err)
+	}
+	assertContains(t, out, "exercising")
+	assertContains(t, out, "done")
 }
