@@ -178,7 +178,74 @@ func New(cfg Config) (*Operator, error) {
 	// Wire the ask_user prompt function into the tool executor.
 	tools.promptUser = op.promptUser
 
+	// Restore the persisted conversation so a server restart (or live
+	// provider activation) doesn't wipe the operator's working memory of
+	// jobs that still exist in the database.
+	op.loadSession()
+
 	return op, nil
+}
+
+// loadSession restores the conversation from the session file written by
+// persistSession, if one exists. The system prompt is NOT restored — the
+// freshly composed one from Config wins, so prompt updates take effect on
+// restart. Corrupt or unreadable files log a warning and start fresh.
+func (o *Operator) loadSession() {
+	if o.sessionFile == "" {
+		return
+	}
+	data, err := os.ReadFile(o.sessionFile)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			slog.Warn("failed to read operator session file; starting fresh",
+				"path", o.sessionFile, "error", err)
+		}
+		return
+	}
+
+	var sess operatorSession
+	if err := json.Unmarshal(data, &sess); err != nil {
+		slog.Warn("operator session file corrupt; starting fresh",
+			"path", o.sessionFile, "error", err)
+		return
+	}
+
+	msgs := make([]provider.Message, 0, len(sess.Messages))
+	for _, m := range sess.Messages {
+		msgs = append(msgs, provider.Message{
+			Role:       m.Role,
+			Content:    m.Content,
+			ToolCalls:  m.ToolCalls,
+			ToolCallID: m.ToolCallID,
+		})
+	}
+	msgs = truncateMessages(msgs, maxMessages)
+	msgs = trimIncompleteTail(msgs)
+	if len(msgs) == 0 {
+		return
+	}
+
+	o.mu.Lock()
+	o.messages = msgs
+	o.mu.Unlock()
+	slog.Info("restored operator conversation",
+		"messages", len(msgs), "persisted_at", sess.UpdatedAt)
+}
+
+// trimIncompleteTail drops trailing messages left by a crash mid-turn so the
+// restored history ends at a provider-valid boundary: a user message or an
+// assistant message without tool calls. A trailing assistant message whose
+// tool results were never recorded (or a partially recorded tool round)
+// would get the first post-restart request rejected with a 400.
+func trimIncompleteTail(msgs []provider.Message) []provider.Message {
+	for len(msgs) > 0 {
+		last := msgs[len(msgs)-1]
+		if last.Role == "user" || (last.Role == "assistant" && len(last.ToolCalls) == 0) {
+			break
+		}
+		msgs = msgs[:len(msgs)-1]
+	}
+	return msgs
 }
 
 // Send pushes an event into the operator's event channel. It blocks until the
