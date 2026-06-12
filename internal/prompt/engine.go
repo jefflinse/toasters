@@ -39,9 +39,10 @@ import (
 
 // Engine loads and composes worker prompts from roles, toolchains, and instructions.
 //
-// Most state is populated at startup via LoadDir and read-only from then on,
-// but globals and instructions can be updated at runtime (e.g. from the
-// settings surface), so the maps touched by those paths are guarded by mu.
+// Concurrency: all maps are guarded by mu. The definition maps (roles,
+// toolchains, instructions, schemas) are mutated during LoadDir and swapped
+// wholesale by Reload — never mutated in place after that — so readers may
+// snapshot a map reference under the lock and keep using it lock-free.
 type Engine struct {
 	mu           sync.RWMutex
 	roles        map[string]*Role
@@ -49,6 +50,20 @@ type Engine struct {
 	instructions map[string]string // name → body (plain text)
 	schemas      map[string]*Schema
 	globals      map[string]string // caller-set globals (e.g. config values)
+
+	// dirs records every LoadDir call so Reload can re-read the same
+	// directories in the same precedence order.
+	dirs []loadedDir
+	// synthetic holds instructions registered at runtime via SetInstruction
+	// (e.g. the selected granularity level). Overlaid on top of disk
+	// instructions after a Reload so they survive file-watcher refreshes.
+	synthetic map[string]string
+}
+
+// loadedDir is one recorded LoadDir invocation.
+type loadedDir struct {
+	dir    string
+	source string
 }
 
 // Role is a worker definition with template references.
@@ -114,6 +129,7 @@ func NewEngine() *Engine {
 		instructions: make(map[string]string),
 		schemas:      make(map[string]*Schema),
 		globals:      make(map[string]string),
+		synthetic:    make(map[string]string),
 	}
 }
 
@@ -134,7 +150,9 @@ func (e *Engine) SetGlobal(key, value string) {
 func (e *Engine) SetInstruction(name, body string) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	e.instructions[name] = strings.TrimSpace(body)
+	trimmed := strings.TrimSpace(body)
+	e.instructions[name] = trimmed
+	e.synthetic[name] = trimmed
 }
 
 // Instruction returns the body of the instruction registered under name, if
@@ -149,6 +167,7 @@ func (e *Engine) Instruction(name string) (string, bool) {
 // LoadDir loads all definitions from a directory containing roles/, toolchains/,
 // and instructions/ subdirectories. Missing subdirectories are silently skipped.
 // The source tag ("system" or "user") is set on all loaded roles for access control.
+// The directory is recorded so Reload can re-read it later.
 func (e *Engine) LoadDir(dir, source string) error {
 	if err := e.loadRoles(filepath.Join(dir, "roles"), source); err != nil {
 		return fmt.Errorf("loading roles: %w", err)
@@ -162,6 +181,47 @@ func (e *Engine) LoadDir(dir, source string) error {
 	if err := e.loadSchemas(filepath.Join(dir, "schemas")); err != nil {
 		return fmt.Errorf("loading schemas: %w", err)
 	}
+	e.mu.Lock()
+	e.dirs = append(e.dirs, loadedDir{dir: dir, source: source})
+	e.mu.Unlock()
+	return nil
+}
+
+// Reload re-reads every directory previously registered via LoadDir into
+// fresh definition maps and swaps them in atomically. Synthetic instructions
+// registered via SetInstruction are re-overlaid so runtime-injected content
+// (granularity levels) survives. Globals are untouched. On error the
+// previous definitions remain in effect.
+//
+// This is what makes the file watcher's "definitions reloaded" true for
+// roles, toolchains, instructions, and schemas — without it the prompt
+// engine loaded once at boot and edits silently did nothing until restart.
+func (e *Engine) Reload() error {
+	e.mu.RLock()
+	dirs := make([]loadedDir, len(e.dirs))
+	copy(dirs, e.dirs)
+	synthetic := make(map[string]string, len(e.synthetic))
+	for k, v := range e.synthetic {
+		synthetic[k] = v
+	}
+	e.mu.RUnlock()
+
+	fresh := NewEngine()
+	for _, d := range dirs {
+		if err := fresh.LoadDir(d.dir, d.source); err != nil {
+			return fmt.Errorf("reloading %s definitions from %s: %w", d.source, d.dir, err)
+		}
+	}
+	for k, v := range synthetic {
+		fresh.instructions[k] = v
+	}
+
+	e.mu.Lock()
+	e.roles = fresh.roles
+	e.toolchains = fresh.toolchains
+	e.instructions = fresh.instructions
+	e.schemas = fresh.schemas
+	e.mu.Unlock()
 	return nil
 }
 
@@ -182,7 +242,8 @@ func (e *Engine) Compose(roleName string, overrides map[string]string, slots map
 	}
 
 	// Snapshot the runtime-mutable maps under the lock; compose against the
-	// snapshot so the lock isn't held during regex work.
+	// snapshot so the lock isn't held during regex work. toolchains is a map
+	// reference — safe because Reload swaps the map instead of mutating it.
 	now := time.Now()
 	globals := make(map[string]string, len(e.globals)+3)
 	for k, v := range e.globals {
@@ -192,6 +253,7 @@ func (e *Engine) Compose(roleName string, overrides map[string]string, slots map
 	for k, v := range e.instructions {
 		instructions[k] = v
 	}
+	toolchains := e.toolchains
 	e.mu.RUnlock()
 
 	globals["now.month"] = now.Format("January")
@@ -203,8 +265,8 @@ func (e *Engine) Compose(roleName string, overrides map[string]string, slots map
 	}
 
 	// Pre-resolve all toolchain bodies with their vars.
-	resolvedToolchains := make(map[string]string, len(e.toolchains))
-	for id, tc := range e.toolchains {
+	resolvedToolchains := make(map[string]string, len(toolchains))
+	for id, tc := range toolchains {
 		resolved, err := e.resolveToolchain(tc, overrides)
 		if err != nil {
 			return "", fmt.Errorf("resolving toolchain %q: %w", id, err)
@@ -284,13 +346,18 @@ func (e *Engine) Compose(roleName string, overrides map[string]string, slots map
 	return strings.TrimSpace(result), nil
 }
 
-// Role returns a role by name, or nil if not found.
+// Role returns a role by name, or nil if not found. The returned Role is an
+// immutable snapshot — Reload swaps the map rather than mutating entries.
 func (e *Engine) Role(name string) *Role {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
 	return e.roles[name]
 }
 
 // Roles returns all loaded role names.
 func (e *Engine) Roles() []string {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
 	names := make([]string, 0, len(e.roles))
 	for name := range e.roles {
 		names = append(names, name)

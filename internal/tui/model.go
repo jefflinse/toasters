@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -1688,7 +1689,30 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case ConnectionRestoredMsg:
 		m.stats.Connected = true
-		return m, m.addToast("Server connection restored", toastSuccess)
+		// Refetch the authoritative blocker set: blocker events that fired
+		// during the outage were never delivered, so a HITL prompt raised
+		// while disconnected would otherwise stay invisible (and resolved
+		// ones would linger). Progress state is already resynced by the
+		// client's synthetic progress.update.
+		svc := m.svc
+		resyncBlockers := func() tea.Msg {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			blockers, err := svc.Operator().Blockers(ctx)
+			if err != nil {
+				slog.Warn("failed to refetch blockers after reconnect", "error", err)
+				return nil
+			}
+			return BlockersResyncMsg{Blockers: blockers}
+		}
+		return m, tea.Batch(m.addToast("Server connection restored", toastSuccess), resyncBlockers)
+
+	case BlockersResyncMsg:
+		m.blockers = msg.Blockers
+		if m.blockersSel >= len(m.blockers) {
+			m.blockersSel = 0
+		}
+		return m, nil
 
 	case OperatorTextMsg:
 		slog.Debug("operator text", "len", len(msg.Text))
@@ -1938,6 +1962,30 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			slot.tokensOut = sess.TokensOut
 			if sess.CostUSD != nil {
 				slot.costUSD = *sess.CostUSD
+			}
+		}
+		// Reconcile slots whose terminal events were lost during an SSE
+		// outage: a slot still marked active but absent from every active
+		// set in the snapshot is dead — without this it spins "streaming"
+		// forever and the kill flow offers to kill a finished session.
+		alive := make(map[string]bool, len(msg.GraphNodes)+len(msg.LiveSnapshots)+len(msg.Sessions))
+		for _, gn := range msg.GraphNodes {
+			alive[gn.SessionID] = true
+		}
+		for _, snap := range msg.LiveSnapshots {
+			alive[snap.ID] = true
+		}
+		for _, sess := range msg.Sessions {
+			alive[sess.ID] = true
+		}
+		// The age guard avoids falsely completing a session that started
+		// after this snapshot was taken but before the poll was handled.
+		for id, slot := range m.runtimeSessions {
+			if slot.status == "active" && !alive[id] && time.Since(slot.startTime) > 5*time.Second {
+				slot.status = "completed"
+				if slot.endTime.IsZero() {
+					slot.endTime = time.Now()
+				}
 			}
 		}
 		// Keep m.jobs in sync so the Jobs panel (which reads m.jobs via

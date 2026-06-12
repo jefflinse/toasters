@@ -263,7 +263,7 @@ func convertMessagesToAnthropic(msgs []Message) []anthropicMsg {
 func (p *AnthropicProvider) streamResponse(ctx context.Context, req *http.Request, ch chan<- StreamEvent) {
 	resp, err := p.httpClient.Do(req)
 	if err != nil {
-		ch <- StreamEvent{Type: EventError, Error: fmt.Errorf("sending request: %w", err)}
+		sendEvent(ctx, ch, StreamEvent{Type: EventError, Error: fmt.Errorf("sending request: %w", err)})
 		return
 	}
 	defer func() { _ = resp.Body.Close() }()
@@ -271,7 +271,7 @@ func (p *AnthropicProvider) streamResponse(ctx context.Context, req *http.Reques
 	if resp.StatusCode != http.StatusOK {
 		var buf bytes.Buffer
 		_, _ = buf.ReadFrom(io.LimitReader(resp.Body, 1<<20))
-		ch <- StreamEvent{Type: EventError, Error: fmt.Errorf("anthropic API error (%d): %s", resp.StatusCode, buf.String())}
+		sendEvent(ctx, ch, StreamEvent{Type: EventError, Error: fmt.Errorf("anthropic API error (%d): %s", resp.StatusCode, buf.String())})
 		return
 	}
 
@@ -281,6 +281,7 @@ func (p *AnthropicProvider) streamResponse(ctx context.Context, req *http.Reques
 	)
 
 	reader := sse.NewReader(resp.Body)
+	defer reader.Close()
 	for {
 		ev, ok := reader.Next(ctx)
 		if !ok {
@@ -291,7 +292,7 @@ func (p *AnthropicProvider) streamResponse(ctx context.Context, req *http.Reques
 		case sse.AnthropicMessageStart:
 			var parsed sse.AnthropicMessageStartEvent
 			if err := json.Unmarshal([]byte(ev.Data), &parsed); err != nil {
-				ch <- StreamEvent{Type: EventError, Error: fmt.Errorf("parsing message_start: %w", err)}
+				sendEvent(ctx, ch, StreamEvent{Type: EventError, Error: fmt.Errorf("parsing message_start: %w", err)})
 				return
 			}
 			inputUsage = parsed.Message.Usage.InputTokens
@@ -299,7 +300,7 @@ func (p *AnthropicProvider) streamResponse(ctx context.Context, req *http.Reques
 		case sse.AnthropicContentBlockStart:
 			var parsed sse.AnthropicContentBlockStartEvent
 			if err := json.Unmarshal([]byte(ev.Data), &parsed); err != nil {
-				ch <- StreamEvent{Type: EventError, Error: fmt.Errorf("parsing content_block_start: %w", err)}
+				sendEvent(ctx, ch, StreamEvent{Type: EventError, Error: fmt.Errorf("parsing content_block_start: %w", err)})
 				return
 			}
 			if parsed.ContentBlock.Type == "tool_use" {
@@ -315,17 +316,21 @@ func (p *AnthropicProvider) streamResponse(ctx context.Context, req *http.Reques
 		case sse.AnthropicContentBlockDelta:
 			var parsed sse.AnthropicContentBlockDeltaEvent
 			if err := json.Unmarshal([]byte(ev.Data), &parsed); err != nil {
-				ch <- StreamEvent{Type: EventError, Error: fmt.Errorf("parsing content_block_delta: %w", err)}
+				sendEvent(ctx, ch, StreamEvent{Type: EventError, Error: fmt.Errorf("parsing content_block_delta: %w", err)})
 				return
 			}
 			switch parsed.Delta.Type {
 			case "text_delta":
 				if parsed.Delta.Text != "" {
-					ch <- StreamEvent{Type: EventText, Text: parsed.Delta.Text}
+					if !sendEvent(ctx, ch, StreamEvent{Type: EventText, Text: parsed.Delta.Text}) {
+						return
+					}
 				}
 			case "thinking_delta":
 				if parsed.Delta.Thinking != "" {
-					ch <- StreamEvent{Type: EventReasoning, Text: parsed.Delta.Thinking}
+					if !sendEvent(ctx, ch, StreamEvent{Type: EventReasoning, Text: parsed.Delta.Thinking}) {
+						return
+					}
 				}
 			case "signature_delta":
 				// Ignored — the cryptographic signature Anthropic
@@ -343,7 +348,7 @@ func (p *AnthropicProvider) streamResponse(ctx context.Context, req *http.Reques
 		case sse.AnthropicMessageDelta:
 			var parsed sse.AnthropicMessageDeltaEvent
 			if err := json.Unmarshal([]byte(ev.Data), &parsed); err != nil {
-				ch <- StreamEvent{Type: EventError, Error: fmt.Errorf("parsing message_delta: %w", err)}
+				sendEvent(ctx, ch, StreamEvent{Type: EventError, Error: fmt.Errorf("parsing message_delta: %w", err)})
 				return
 			}
 
@@ -362,7 +367,7 @@ func (p *AnthropicProvider) streamResponse(ctx context.Context, req *http.Reques
 
 				for _, idx := range indices {
 					acc := toolBlocks[idx]
-					ch <- StreamEvent{
+					ev := StreamEvent{
 						Type: EventToolCall,
 						ToolCall: &ToolCall{
 							ID:        acc.ID,
@@ -370,25 +375,30 @@ func (p *AnthropicProvider) streamResponse(ctx context.Context, req *http.Reques
 							Arguments: json.RawMessage(acc.InputBuf.String()),
 						},
 					}
+					if !sendEvent(ctx, ch, ev) {
+						return
+					}
 				}
-				ch <- StreamEvent{Type: EventUsage, Usage: usage}
-				ch <- StreamEvent{Type: EventDone}
+				sendEvent(ctx, ch, StreamEvent{Type: EventUsage, Usage: usage})
+				sendEvent(ctx, ch, StreamEvent{Type: EventDone})
 				return
 			}
 
-			ch <- StreamEvent{Type: EventUsage, Usage: usage}
+			if !sendEvent(ctx, ch, StreamEvent{Type: EventUsage, Usage: usage}) {
+				return
+			}
 
 		case sse.AnthropicMessageStop:
-			ch <- StreamEvent{Type: EventDone}
+			sendEvent(ctx, ch, StreamEvent{Type: EventDone})
 			return
 
 		case sse.AnthropicError:
 			var parsed sse.AnthropicErrorEvent
 			if err := json.Unmarshal([]byte(ev.Data), &parsed); err != nil {
-				ch <- StreamEvent{Type: EventError, Error: fmt.Errorf("parsing error event: %w", err)}
+				sendEvent(ctx, ch, StreamEvent{Type: EventError, Error: fmt.Errorf("parsing error event: %w", err)})
 				return
 			}
-			ch <- StreamEvent{Type: EventError, Error: fmt.Errorf("anthropic API error: %s: %s", parsed.Error.Type, parsed.Error.Message)}
+			sendEvent(ctx, ch, StreamEvent{Type: EventError, Error: fmt.Errorf("anthropic API error: %s: %s", parsed.Error.Type, parsed.Error.Message)})
 			return
 
 		case sse.AnthropicPing:
@@ -398,17 +408,17 @@ func (p *AnthropicProvider) streamResponse(ctx context.Context, req *http.Reques
 
 	// Check context cancellation first — it may have caused Next() to return false.
 	if ctx.Err() != nil {
-		ch <- StreamEvent{Type: EventError, Error: ctx.Err()}
+		sendEvent(ctx, ch, StreamEvent{Type: EventError, Error: ctx.Err()})
 		return
 	}
 
 	if err := reader.Err(); err != nil {
-		ch <- StreamEvent{Type: EventError, Error: fmt.Errorf("reading stream: %w", err)}
+		sendEvent(ctx, ch, StreamEvent{Type: EventError, Error: fmt.Errorf("reading stream: %w", err)})
 		return
 	}
 
 	// Stream ended without message_stop.
-	ch <- StreamEvent{Type: EventDone}
+	sendEvent(ctx, ch, StreamEvent{Type: EventDone})
 }
 
 // Models returns a static list of known Claude models.

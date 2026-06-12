@@ -525,14 +525,28 @@ func (st *SystemTools) retryTask(ctx context.Context, args json.RawMessage) (str
 		return "", fmt.Errorf("job workspace validation failed: %w", err)
 	}
 
-	// Clear the failure and reset to in_progress on the (possibly new) graph.
-	if err := st.store.RetryTask(ctx, task.ID, graphID); err != nil {
-		return "", fmt.Errorf("resetting task for retry: %w", err)
-	}
-
 	allTasks, err := st.store.ListTasksForJob(ctx, task.JobID)
 	if err != nil {
 		return "", fmt.Errorf("listing job tasks: %w", err)
+	}
+
+	// Enforce serial execution, same as assign_task: retrying while a
+	// sibling runs would put two graph executions in the same job workspace
+	// concurrently. Returned as a message (not an error) so the model reads
+	// it and retries after the in-progress task completes.
+	for _, t := range allTasks {
+		if t.ID != task.ID && t.Status == db.TaskStatusInProgress {
+			return fmt.Sprintf(
+				"Cannot retry task %q yet — task %q is currently in progress and tasks in a job run serially. "+
+					"Retry after the current task completes.",
+				task.Title, t.Title,
+			), nil
+		}
+	}
+
+	// Clear the failure and reset to in_progress on the (possibly new) graph.
+	if err := st.store.RetryTask(ctx, task.ID, graphID); err != nil {
+		return "", fmt.Errorf("resetting task for retry: %w", err)
 	}
 	req := graphexec.TaskRequest{
 		JobID:          task.JobID,

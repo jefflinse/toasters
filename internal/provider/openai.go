@@ -238,13 +238,13 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, req ChatRequest) (<-cha
 func (p *OpenAIProvider) streamResponse(ctx context.Context, req *http.Request, hasTools bool, ch chan<- StreamEvent) {
 	resp, err := p.httpClient.Do(req)
 	if err != nil {
-		ch <- StreamEvent{Type: EventError, Error: fmt.Errorf("sending request: %w", err)}
+		sendEvent(ctx, ch, StreamEvent{Type: EventError, Error: fmt.Errorf("sending request: %w", err)})
 		return
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		ch <- StreamEvent{Type: EventError, Error: fmt.Errorf("unexpected status %d: %s", resp.StatusCode, resp.Status)}
+		sendEvent(ctx, ch, StreamEvent{Type: EventError, Error: fmt.Errorf("unexpected status %d: %s", resp.StatusCode, resp.Status)})
 		return
 	}
 
@@ -256,6 +256,7 @@ func (p *OpenAIProvider) streamResponse(ctx context.Context, req *http.Request, 
 	var lastUsage *Usage
 
 	reader := sse.NewReader(resp.Body)
+	defer reader.Close()
 	for {
 		ev, ok := reader.Next(ctx)
 		if !ok {
@@ -265,18 +266,22 @@ func (p *OpenAIProvider) streamResponse(ctx context.Context, req *http.Request, 
 		if ev.Data == "[DONE]" {
 			// Emit any accumulated tool calls.
 			if hasTools && len(accumulated) > 0 {
-				p.emitToolCalls(accumulated, ch)
+				if !p.emitToolCalls(ctx, accumulated, ch) {
+					return
+				}
 			}
 			if lastUsage != nil {
-				ch <- StreamEvent{Type: EventUsage, Usage: lastUsage}
+				if !sendEvent(ctx, ch, StreamEvent{Type: EventUsage, Usage: lastUsage}) {
+					return
+				}
 			}
-			ch <- StreamEvent{Type: EventDone}
+			sendEvent(ctx, ch, StreamEvent{Type: EventDone})
 			return
 		}
 
 		var chunk openAIChunk
 		if err := json.Unmarshal([]byte(ev.Data), &chunk); err != nil {
-			ch <- StreamEvent{Type: EventError, Error: fmt.Errorf("parsing chunk: %w", err)}
+			sendEvent(ctx, ch, StreamEvent{Type: EventError, Error: fmt.Errorf("parsing chunk: %w", err)})
 			return
 		}
 
@@ -324,36 +329,44 @@ func (p *OpenAIProvider) streamResponse(ctx context.Context, req *http.Request, 
 			}
 
 			if choice.Delta.Reasoning != "" {
-				ch <- StreamEvent{Type: EventReasoning, Text: choice.Delta.Reasoning}
+				if !sendEvent(ctx, ch, StreamEvent{Type: EventReasoning, Text: choice.Delta.Reasoning}) {
+					return
+				}
 			}
 			if choice.Delta.Content != "" {
-				ch <- StreamEvent{Type: EventText, Text: choice.Delta.Content}
+				if !sendEvent(ctx, ch, StreamEvent{Type: EventText, Text: choice.Delta.Content}) {
+					return
+				}
 			}
 		}
 	}
 
 	// Check context cancellation first.
 	if ctx.Err() != nil {
-		ch <- StreamEvent{Type: EventError, Error: ctx.Err()}
+		sendEvent(ctx, ch, StreamEvent{Type: EventError, Error: ctx.Err()})
 		return
 	}
 
 	if err := reader.Err(); err != nil {
-		ch <- StreamEvent{Type: EventError, Error: fmt.Errorf("reading stream: %w", err)}
+		sendEvent(ctx, ch, StreamEvent{Type: EventError, Error: fmt.Errorf("reading stream: %w", err)})
 		return
 	}
 
 	// Stream ended without [DONE].
 	if hasTools && len(accumulated) > 0 {
-		p.emitToolCalls(accumulated, ch)
+		if !p.emitToolCalls(ctx, accumulated, ch) {
+			return
+		}
 	}
 	if lastUsage != nil {
-		ch <- StreamEvent{Type: EventUsage, Usage: lastUsage}
+		if !sendEvent(ctx, ch, StreamEvent{Type: EventUsage, Usage: lastUsage}) {
+			return
+		}
 	}
-	ch <- StreamEvent{Type: EventDone}
+	sendEvent(ctx, ch, StreamEvent{Type: EventDone})
 }
 
-func (p *OpenAIProvider) emitToolCalls(accumulated map[int]*sse.OpenAIToolAccumulator, ch chan<- StreamEvent) {
+func (p *OpenAIProvider) emitToolCalls(ctx context.Context, accumulated map[int]*sse.OpenAIToolAccumulator, ch chan<- StreamEvent) bool {
 	indices := make([]int, 0, len(accumulated))
 	for idx := range accumulated {
 		indices = append(indices, idx)
@@ -362,7 +375,7 @@ func (p *OpenAIProvider) emitToolCalls(accumulated map[int]*sse.OpenAIToolAccumu
 
 	for _, idx := range indices {
 		acc := accumulated[idx]
-		ch <- StreamEvent{
+		ev := StreamEvent{
 			Type: EventToolCall,
 			ToolCall: &ToolCall{
 				ID:        acc.ID,
@@ -370,10 +383,14 @@ func (p *OpenAIProvider) emitToolCalls(accumulated map[int]*sse.OpenAIToolAccumu
 				Arguments: json.RawMessage(acc.Args.String()),
 			},
 		}
+		if !sendEvent(ctx, ch, ev) {
+			return false
+		}
 	}
 
 	// Clear accumulated so we don't emit again.
 	clear(accumulated)
+	return true
 }
 
 // Models returns available models. Tries the LM Studio endpoint first, then

@@ -391,6 +391,19 @@ func runServe(cmd *cobra.Command, args []string) error {
 	if ldr != nil {
 		defWatcher, defWatchErr := loader.NewWatcher(ldr, func() {
 			registerProviders(registry, ldr)
+			// Loader.Load just reloaded the prompt engine from disk —
+			// recompute engine-derived state that depends on config or other
+			// definitions: the toolchain catalog global and the synthetic
+			// granularity instructions (their source files may have changed).
+			// cfg is the live config — UpdateSettings mutates it in place, so
+			// runtime granularity changes are honored here.
+			promptEngine.SetGlobal("available.toolchains", strings.Join(promptEngine.Toolchains(), ", "))
+			if err := prompt.ApplyGranularity(promptEngine, "coarse", config.ValidGranularity("coarse", cfg.CoarseGranularity)); err != nil {
+				slog.Warn("failed to reapply coarse_granularity after reload", "error", err)
+			}
+			if err := prompt.ApplyGranularity(promptEngine, "fine", config.ValidGranularity("fine", cfg.FineGranularity)); err != nil {
+				slog.Warn("failed to reapply fine_granularity after reload", "error", err)
+			}
 			svc.BroadcastDefinitionsReloaded()
 		})
 		if defWatchErr != nil {

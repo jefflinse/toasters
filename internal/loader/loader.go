@@ -118,7 +118,16 @@ func (l *Loader) Load(ctx context.Context) error {
 	l.graphs = merged
 	l.graphsMu.Unlock()
 
-	// 5. Rebuild database with the loaded skills.
+	// 5. Reload the prompt engine so role/instruction/toolchain/schema edits
+	// take effect live. Without this, the engine loaded once at boot and the
+	// "definitions reloaded" notification silently excluded roles.
+	if l.promptEngine != nil {
+		if err := l.promptEngine.Reload(); err != nil {
+			slog.Warn("prompt engine reload failed; keeping previous definitions", "error", err)
+		}
+	}
+
+	// 6. Rebuild database with the loaded skills.
 	if err := l.store.RebuildDefinitions(ctx, skills); err != nil {
 		return fmt.Errorf("rebuilding definitions: %w", err)
 	}

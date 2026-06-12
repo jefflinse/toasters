@@ -457,3 +457,78 @@ func TestFilteredToolExecutor(t *testing.T) {
 		}
 	})
 }
+
+func TestSpawnAndWaitCancelledChildIsError(t *testing.T) {
+	mp := &mockProvider{
+		name: "test",
+		responses: []mockResponse{{
+			events: []provider.StreamEvent{{Type: provider.EventText, Text: "partial answer"}},
+			block:  true,
+		}},
+	}
+	rt := New(nil, newTestRegistry(mp))
+
+	// Kill the child once it's running, simulating a TUI kill / job cancel.
+	go func() {
+		for range 100 {
+			time.Sleep(20 * time.Millisecond)
+			for _, snap := range rt.ActiveSessions() {
+				_ = rt.CancelSession(snap.ID)
+				return
+			}
+		}
+	}()
+
+	_, err := rt.SpawnAndWait(context.Background(), SpawnOpts{
+		ProviderName:   "test",
+		InitialMessage: "Block",
+		WorkDir:        t.TempDir(),
+	})
+	if err == nil {
+		t.Fatal("cancelled child returned nil error — parent would treat partial output as success")
+	}
+	assertContains(t, err.Error(), "cancelled")
+}
+
+func TestCancelJobSessions(t *testing.T) {
+	mp := &mockProvider{
+		name: "test",
+		responses: []mockResponse{
+			{events: []provider.StreamEvent{{Type: provider.EventText, Text: "1"}}, block: true},
+			{events: []provider.StreamEvent{{Type: provider.EventText, Text: "2"}}, block: true},
+			{events: []provider.StreamEvent{{Type: provider.EventText, Text: "3"}}, block: true},
+		},
+	}
+	rt := New(nil, newTestRegistry(mp))
+
+	spawn := func(jobID string) *Session {
+		t.Helper()
+		sess, err := rt.SpawnWorker(context.Background(), SpawnOpts{
+			ProviderName:   "test",
+			InitialMessage: "Block",
+			JobID:          jobID,
+			WorkDir:        t.TempDir(),
+		})
+		assertNoError(t, err)
+		return sess
+	}
+	a, b, other := spawn("job-1"), spawn("job-1"), spawn("job-2")
+	time.Sleep(50 * time.Millisecond)
+
+	if n := rt.CancelJobSessions("job-1"); n != 2 {
+		t.Errorf("cancelled %d sessions, want 2", n)
+	}
+	for _, sess := range []*Session{a, b} {
+		select {
+		case <-sess.Done():
+		case <-time.After(2 * time.Second):
+			t.Fatal("job-1 session did not exit after CancelJobSessions")
+		}
+	}
+	select {
+	case <-other.Done():
+		t.Error("job-2 session was cancelled by job-1's cancellation")
+	default:
+	}
+	other.Cancel()
+}

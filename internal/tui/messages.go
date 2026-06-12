@@ -323,6 +323,14 @@ type ConnectionLostMsg struct {
 // ConnectionRestoredMsg is sent when the SSE connection is re-established.
 type ConnectionRestoredMsg struct{}
 
+// BlockersResyncMsg carries the authoritative pending-blocker set fetched
+// after an SSE reconnect. blocker.added/blocker.resolved events that fired
+// during the outage were never delivered, so the panel is replaced wholesale
+// rather than patched.
+type BlockersResyncMsg struct {
+	Blockers []service.Blocker
+}
+
 // OperatorTextMsg carries streamed text from the operator LLM.
 type OperatorTextMsg struct {
 	Text string
