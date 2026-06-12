@@ -93,7 +93,7 @@ func firstRun(configDir string, systemFS embed.FS, defaultConfig []byte) error {
 	}
 
 	// Always sync system files — these are managed by toasters, not the user.
-	// New binary versions may add roles/, instructions/, or update agent prompts.
+	// New binary versions may add roles/, instructions/, or update worker prompts.
 	if err := syncEmbeddedFS(systemFS, "system", systemDir); err != nil {
 		return fmt.Errorf("syncing system files: %w", err)
 	}

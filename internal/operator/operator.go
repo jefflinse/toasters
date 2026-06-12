@@ -1,5 +1,5 @@
 // Package operator implements the operator event loop for coordinating
-// LLM-powered agent work. The operator maintains a long-lived conversation
+// LLM-powered worker work. The operator maintains a long-lived conversation
 // with an LLM, receives typed events on a buffered channel, and dispatches
 // them — forwarding user messages to the LLM and handling routine events
 // mechanically.
@@ -101,8 +101,8 @@ type Config struct {
 	GraphCatalog           GraphCatalog           // optional; backs the query_graphs system tool
 	Broker                 *hitl.Broker           // required for ask_user; shared with the graph executor so responses route to whichever path is waiting
 	PromptEngine           *prompt.Engine         // prompt engine for role-based prompt composition
-	DefaultProvider        string                 // default provider for system agents
-	DefaultModel           string                 // default model for system agents
+	DefaultProvider        string                 // default provider for system workers
+	DefaultModel           string                 // default model for system workers
 	// OnText / OnReasoning are called with streamed text and reasoning
 	// chunks from the operator LLM. turnID is the user turn the text belongs
 	// to (from UserMessagePayload.TurnID); empty for system-initiated turns.
@@ -136,8 +136,8 @@ func New(cfg Config) (*Operator, error) {
 		return nil, fmt.Errorf("operator: SystemPrompt is required")
 	}
 
-	// Create SystemTools for system agents to use. The event channel is the
-	// operator's own channel so system agent actions (e.g. assign_task) flow
+	// Create SystemTools for system workers to use. The event channel is the
+	// operator's own channel so system worker actions (e.g. assign_task) flow
 	// back through the operator event loop.
 	eventCh := make(chan Event, eventChSize)
 	var systemTools *SystemTools

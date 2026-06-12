@@ -98,8 +98,8 @@ type LocalConfig struct {
 	Operator         *operator.Operator
 	MCPManager       *mcp.Manager
 	Provider         provider.Provider // operator's LLM provider (for ListModels, generation)
-	DefaultProvider  string            // default provider for system agents and team leads
-	DefaultModel     string            // default model for system agents and team leads
+	DefaultProvider  string            // default provider for system workers and team leads
+	DefaultModel     string            // default model for system workers and team leads
 	Loader           *loader.Loader
 	ConfigDir        string
 	WorkspaceDir     string
@@ -815,9 +815,13 @@ func walkFilesTouched(dir string, startedAt, endedAt time.Time) ([]FileTouch, in
 			return nil
 		}
 		out = append(out, FileTouch{
-			Path:  rel,
-			Size:  info.Size(),
-			IsNew: !mtime.Before(startedAt) && info.ModTime().Equal(infoBirthFallback(info)),
+			Path: rel,
+			Size: info.Size(),
+			// New = created during the job window. fileBirthTime returns the
+			// real creation timestamp where the platform exposes one (btime
+			// on darwin); elsewhere it falls back to mtime, which degrades
+			// IsNew to "touched during the window" — an acceptable hint.
+			IsNew: !fileBirthTime(info).Before(startedAt),
 		})
 		return nil
 	})
@@ -828,13 +832,6 @@ func walkFilesTouched(dir string, startedAt, endedAt time.Time) ([]FileTouch, in
 	// list doesn't reshuffle every render.
 	sort.Slice(out, func(i, j int) bool { return out[i].Path < out[j].Path })
 	return out, extra
-}
-
-// infoBirthFallback returns the file's modification time as a stand-in for
-// a creation timestamp on platforms that don't expose btime. The TUI uses
-// IsNew only as a hint, so the heuristic doesn't need to be precise.
-func infoBirthFallback(info os.FileInfo) time.Time {
-	return info.ModTime()
 }
 
 // BroadcastOperatorDone broadcasts an operator.done event. Called from the
@@ -1358,7 +1355,7 @@ func (s *LocalService) BroadcastSessionStarted(sess *runtime.Session) {
 	sessionID := snap.ID
 
 	// Subscribe BEFORE emitting session.started so that any events the session
-	// produces between SpawnAgent's OnSessionStarted invocation and the start
+	// produces between SpawnWorker's OnSessionStarted invocation and the start
 	// of Run() are captured. Subscribe is safe to call before Run() begins.
 	events := sess.Subscribe()
 
@@ -1685,7 +1682,7 @@ description: A brief description of what this skill does
 tools: []
 ---
 
-Your skill prompt goes here. This text will be injected into agents that use this skill.
+Your skill prompt goes here. This text will be injected into workers that use this skill.
 `, name)
 
 	if err := os.WriteFile(path, []byte(template), 0o644); err != nil {
@@ -1844,7 +1841,7 @@ tools:
 
 # Skill Name
 
-Detailed instructions for the agent using this skill. This is the system prompt content that will be injected when this skill is active.
+Detailed instructions for the worker using this skill. This is the system prompt content that will be injected when this skill is active.
 
 ## Guidelines
 - ...`

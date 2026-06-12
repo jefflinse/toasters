@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sync"
 	"testing"
 
@@ -1496,4 +1497,91 @@ func containsStr(s, substr string) bool {
 			}
 			return false
 		}())
+}
+
+// --- Reconnect (Q2) ---
+
+// A server that fails at startup must be recoverable by the retry path once
+// its binary/process becomes available — previously a failed server was dead
+// for the life of the process.
+func TestManager_RetryFailed_RecoversServer(t *testing.T) {
+	if testMCPServerBin == "" {
+		t.Skip("test MCP server binary not available")
+	}
+
+	// Point the config at a path that doesn't exist yet.
+	lateBin := filepath.Join(t.TempDir(), "late-server")
+	m := NewManager()
+	err := m.Connect(context.Background(), []config.MCPServerConfig{
+		{Name: "lateserver", Transport: "stdio", Command: lateBin},
+	})
+	if err != nil {
+		t.Fatalf("Connect returned error: %v", err)
+	}
+	defer func() { _ = m.Close() }()
+
+	statuses := m.Servers()
+	if len(statuses) != 1 || statuses[0].State != ServerFailed {
+		t.Fatalf("expected 1 failed server, got %+v", statuses)
+	}
+
+	// Retry while the binary is still missing — stays failed.
+	recovered, remaining := m.retryFailed(context.Background())
+	if recovered || remaining != 1 {
+		t.Fatalf("retryFailed before binary exists: recovered=%v remaining=%d, want false/1", recovered, remaining)
+	}
+
+	// The server "comes up": copy the real test binary into place.
+	data, err := os.ReadFile(testMCPServerBin)
+	if err != nil {
+		t.Fatalf("reading test server binary: %v", err)
+	}
+	if err := os.WriteFile(lateBin, data, 0o755); err != nil {
+		t.Fatalf("installing late binary: %v", err)
+	}
+
+	recovered, remaining = m.retryFailed(context.Background())
+	if !recovered || remaining != 0 {
+		t.Fatalf("retryFailed after binary exists: recovered=%v remaining=%d, want true/0", recovered, remaining)
+	}
+
+	statuses = m.Servers()
+	if len(statuses) != 1 || statuses[0].State != ServerConnected {
+		t.Fatalf("expected connected status after recovery, got %+v", statuses)
+	}
+	if len(m.Tools()) == 0 {
+		t.Fatal("expected tools after recovery, got none")
+	}
+
+	// The recovered server must be callable through the tool index.
+	tools := m.Tools()
+	if _, err := m.Call(context.Background(), tools[0].NamespacedName, nil); err != nil {
+		t.Fatalf("Call through recovered server: %v", err)
+	}
+}
+
+// retryFailed after Close must not resurrect state.
+func TestManager_RetryFailed_AfterCloseDiscards(t *testing.T) {
+	if testMCPServerBin == "" {
+		t.Skip("test MCP server binary not available")
+	}
+
+	m := NewManager()
+	err := m.Connect(context.Background(), []config.MCPServerConfig{
+		{Name: "deadserver", Transport: "stdio", Command: filepath.Join(t.TempDir(), "missing")},
+	})
+	if err != nil {
+		t.Fatalf("Connect returned error: %v", err)
+	}
+	_ = m.Close()
+
+	// Close zeroes statuses, so there is nothing to retry — and adopt would
+	// discard a connection anyway.
+	recovered, remaining := m.retryFailed(context.Background())
+	if recovered || remaining != 0 {
+		t.Fatalf("retryFailed after Close: recovered=%v remaining=%d, want false/0", recovered, remaining)
+	}
+	if len(m.Tools()) != 0 || len(m.Servers()) != 0 {
+		t.Fatal("manager state resurrected after Close")
+	}
 }

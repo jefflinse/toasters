@@ -54,7 +54,20 @@ func (b *Broker) Ask(ctx context.Context, requestID string, broadcast func()) (s
 	b.mu.Unlock()
 
 	if broadcast != nil {
-		broadcast()
+		// If broadcast panics, remove the pending entry before re-panicking —
+		// otherwise the requestID is permanently occupied and any retry with
+		// the same ID fails as a duplicate.
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					b.mu.Lock()
+					delete(b.pending, requestID)
+					b.mu.Unlock()
+					panic(r)
+				}
+			}()
+			broadcast()
+		}()
 	}
 
 	select {

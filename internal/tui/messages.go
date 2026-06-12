@@ -30,6 +30,14 @@ type toast struct {
 // dismissToastMsg is sent after a delay to remove a specific toast.
 type dismissToastMsg struct{ id int }
 
+// asyncToastMsg carries a toast produced by a background command (e.g. a
+// network call that must not run on the update loop). The update handler
+// turns it into a regular toast via addToast.
+type asyncToastMsg struct {
+	message string
+	level   toastLevel
+}
+
 // dismissToast returns a tea.Cmd that fires dismissToastMsg after 3 seconds.
 func dismissToast(id int) tea.Cmd {
 	return tea.Tick(3*time.Second, func(time.Time) tea.Msg {
@@ -56,7 +64,7 @@ const (
 	focusChat     focusedPanel = iota
 	focusJobs     focusedPanel = iota
 	focusBlockers focusedPanel = iota
-	focusAgents   focusedPanel = iota
+	focusWorkers  focusedPanel = iota
 )
 
 // SessionStats tracks session-level statistics displayed in the sidebar.
@@ -136,7 +144,7 @@ type SessionStartedMsg struct {
 	InitialMessage string
 }
 
-// SessionTextMsg carries a chunk of streamed text from an agent session.
+// SessionTextMsg carries a chunk of streamed text from a worker session.
 // Produced by the event consumer in response to a session.text event.
 type SessionTextMsg struct {
 	SessionID string
@@ -167,14 +175,14 @@ type SessionMetaMsg struct {
 }
 
 // SessionReasoningMsg carries a chunk of streamed reasoning (chain-of-
-// thought) from an agent session. Produced by the event consumer in
+// thought) from a worker session. Produced by the event consumer in
 // response to a session.reasoning event.
 type SessionReasoningMsg struct {
 	SessionID string
 	Text      string
 }
 
-// SessionToolCallMsg is sent when an agent session invokes a tool.
+// SessionToolCallMsg is sent when a worker session invokes a tool.
 // Produced by the event consumer in response to a session.tool_call event.
 type SessionToolCallMsg struct {
 	SessionID string
@@ -183,7 +191,7 @@ type SessionToolCallMsg struct {
 	ToolInput string // raw JSON arguments
 }
 
-// SessionToolResultMsg is sent when a tool result returns to an agent session.
+// SessionToolResultMsg is sent when a tool result returns to a worker session.
 // Produced by the event consumer in response to a session.tool_result event.
 type SessionToolResultMsg struct {
 	SessionID  string
@@ -263,7 +271,7 @@ func loadingTick() tea.Cmd {
 	})
 }
 
-// spinnerTickMsg drives the animated braille spinners (streaming cursor + agent heartbeat).
+// spinnerTickMsg drives the animated braille spinners (streaming cursor + worker heartbeat).
 type spinnerTickMsg struct{}
 
 // spinnerChars are the braille frames used for animated spinners.

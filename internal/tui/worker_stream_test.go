@@ -189,8 +189,8 @@ func workerStreamCards(m *Model) []*service.WorkerStreamSnapshot {
 // them — each session keeps one card that updates in place.
 func TestWorkerStreamCardsAreStablePerSession(t *testing.T) {
 	m := newMinimalModel(t)
-	a := &runtimeSlot{sessionID: "graph:t:impl#0", agentName: "graph:impl#0", jobID: "j1"}
-	b := &runtimeSlot{sessionID: "graph:t:impl#1", agentName: "graph:impl#1", jobID: "j1"}
+	a := &runtimeSlot{sessionID: "graph:t:impl#0", workerName: "graph:impl#0", jobID: "j1"}
+	b := &runtimeSlot{sessionID: "graph:t:impl#1", workerName: "graph:impl#1", jobID: "j1"}
 
 	// Interleave: A, B, A — the classic fan-out pattern that used to reorder.
 	m.appendWorkerStreamText(a, "a1 ")
@@ -217,8 +217,8 @@ func TestWorkerStreamCardsAreStablePerSession(t *testing.T) {
 // activity interleaves — the bug that caused tool calls to render twice.
 func TestWorkerStreamToolCallResultMergePerSession(t *testing.T) {
 	m := newMinimalModel(t)
-	a := &runtimeSlot{sessionID: "sA", agentName: "A", jobID: "j"}
-	b := &runtimeSlot{sessionID: "sB", agentName: "B", jobID: "j"}
+	a := &runtimeSlot{sessionID: "sA", workerName: "A", jobID: "j"}
+	b := &runtimeSlot{sessionID: "sB", workerName: "B", jobID: "j"}
 
 	m.appendWorkerStreamToolCall(a, "call1", "write_file", nil)
 	m.appendWorkerStreamToolCall(b, "call2", "shell", nil) // interleave a different session
@@ -248,7 +248,7 @@ func TestWorkerStreamToolCallResultMergePerSession(t *testing.T) {
 // rather than synthesizing a duplicate item.
 func TestWorkerStreamToolResultEmptyCallIDFallback(t *testing.T) {
 	m := newMinimalModel(t)
-	s := &runtimeSlot{sessionID: "s", agentName: "graph:implement#0", jobID: "j"}
+	s := &runtimeSlot{sessionID: "s", workerName: "graph:implement#0", jobID: "j"}
 
 	m.appendWorkerStreamToolCall(s, "call-real-id", "write_file", nil)
 	// Result arrives with an empty CallID (mycelium doesn't surface it).

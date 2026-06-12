@@ -250,7 +250,7 @@ func (m *Model) ensureWorkerStream(slot *runtimeSlot) *service.WorkerStreamSnaps
 // open block matches.
 func (m *Model) newWorkerStreamEntry(slot *runtimeSlot) *service.WorkerStreamSnapshot {
 	snap := &service.WorkerStreamSnapshot{
-		WorkerName:   slot.agentName,
+		WorkerName:   slot.workerName,
 		JobID:        slot.jobID,
 		TaskID:       slot.taskID,
 		SessionID:    slot.sessionID,

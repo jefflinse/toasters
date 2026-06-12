@@ -74,9 +74,10 @@ func toolHandlers() map[string]toolHandler {
 	}
 }
 
-// NewMCPServer creates an MCP server that exposes the 6 progress tools.
-// The server uses the provided store for all database operations.
-// Tool schemas are sourced from ProgressToolDefs() to avoid duplication.
+// NewMCPServer creates an MCP server that exposes the progress tools
+// (everything in ProgressToolDefs). The server uses the provided store for
+// all database operations. Tool schemas are sourced from ProgressToolDefs()
+// to avoid duplication.
 func NewMCPServer(store db.Store) *mcpserver.MCPServer {
 	s := mcpserver.NewMCPServer(
 		"toasters",

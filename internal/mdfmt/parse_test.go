@@ -169,3 +169,28 @@ func TestParseBytes(t *testing.T) {
 		}
 	})
 }
+
+// The opening frontmatter delimiter must be the first non-blank line — text
+// before a stray "---" was previously dropped silently, and a horizontal
+// rule in a frontmatter-less file misparsed as a frontmatter opener (C23).
+func TestSplitFrontmatter_DelimiterMustLeadFile(t *testing.T) {
+	// Leading blank lines are fine.
+	fm, body, err := mdfmt.SplitFrontmatter("\n\n---\nname: X\n---\nbody")
+	if err != nil {
+		t.Fatalf("leading blanks should be accepted: %v", err)
+	}
+	if fm != "name: X" || body != "body" {
+		t.Errorf("fm=%q body=%q", fm, body)
+	}
+
+	// Content before the delimiter is an error, not silently dropped.
+	if _, _, err := mdfmt.SplitFrontmatter("# Title\n\n---\nname: X\n---\nbody"); err == nil {
+		t.Error("text before frontmatter delimiter should be rejected")
+	}
+
+	// A horizontal rule in a frontmatter-less file must not parse as
+	// frontmatter (the body would have been swallowed as YAML).
+	if _, _, err := mdfmt.SplitFrontmatter("Intro paragraph\n\n---\n\nMore text"); err == nil {
+		t.Error("hr in frontmatter-less file should not parse as frontmatter")
+	}
+}

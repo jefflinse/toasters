@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 )
 
-// ToolDef defines a tool available to an agent.
+// ToolDef defines a tool available to a worker.
 type ToolDef struct {
 	Name        string
 	Description string

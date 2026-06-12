@@ -15,7 +15,7 @@ import (
 // Schema is a declarative output contract referenced by roles. Authors write
 // these as YAML files under schemas/; roles reference one by name via their
 // `output:` frontmatter field. The engine converts a Schema into JSON Schema
-// at agent-run time so the provider's structured-output path enforces the
+// at run time so the provider's structured-output path enforces the
 // shape of a node's terminal output.
 type Schema struct {
 	Name        string              `yaml:"name"`

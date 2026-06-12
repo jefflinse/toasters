@@ -274,9 +274,10 @@ func (e *Engine) Compose(roleName string, overrides map[string]string, slots map
 		resolvedToolchains[id] = resolved
 	}
 
-	// Strict validation: every slot the role declares must have a binding,
-	// and every binding must point to a loaded toolchain. We catch this up
-	// front so jobs fail before spending tokens.
+	// Strict validation: every slot the role declares must have a binding.
+	// (A binding that names a loaded toolchain inlines it; any other value
+	// is literal text — see the Compose doc comment.) We catch missing
+	// bindings up front so jobs fail before spending tokens.
 	declared := make(map[string]struct{}, len(role.Slots))
 	for _, name := range role.Slots {
 		declared[name] = struct{}{}
@@ -307,14 +308,18 @@ func (e *Engine) Compose(roleName string, overrides map[string]string, slots map
 			if body, ok := resolvedToolchains[name]; ok {
 				return strings.TrimSpace(body)
 			}
-			slog.Warn("unresolved toolchain reference; substituting empty", "role", roleName, "ref", name)
-			return ""
+			// Reserved-root references are structural: a missing toolchain or
+			// instruction means a broken definition, and silently composing a
+			// degraded prompt sends a worker off with half its guidance. Fail
+			// the compose so the job errors before spending tokens.
+			resolveErr = fmt.Errorf("role %q references unknown toolchain %q", roleName, name)
+			return match
 		case "instructions":
 			if body, ok := instructions[name]; ok {
 				return strings.TrimSpace(body)
 			}
-			slog.Warn("unresolved instruction reference; substituting empty", "role", roleName, "ref", name)
-			return ""
+			resolveErr = fmt.Errorf("role %q references unknown instruction %q", roleName, name)
+			return match
 		case "slots":
 			if _, ok := declared[name]; !ok {
 				resolveErr = fmt.Errorf("role %q references slot %q not declared in frontmatter", roleName, name)

@@ -176,7 +176,7 @@ var loadingMessages = []string{
 	"heating elements...",
 	"calibrating crispiness...",
 	"warming up the slots...",
-	"toasting your agents...",
+	"toasting your workers...",
 	"achieving optimal browning...",
 	"do not put metal in the toaster...",
 	"this is fine 🔥",
@@ -192,11 +192,11 @@ var loadingMessages = []string{
 	"establishing crust integrity...",
 	"syncing with the toaster cloud...",
 	"reticulating bread splines...",
-	"defrosting the frozen agents...",
+	"defrosting the frozen workers...",
 	"please do not unplug the toaster...",
 	"warming up the second slot...",
 	"the toast is a metaphor...",
-	"agents are lightly golden...",
+	"workers are lightly golden...",
 	"spreading the jam layer...",
 	"calculating optimal ejection velocity...",
 	"this will only take a moment (it won't)...",
@@ -206,7 +206,7 @@ var loadingMessages = []string{
 	"have you tried turning it off and on again...",
 	"the crumbs are non-deterministic...",
 	"invoking the sandwich protocol...",
-	"agents are medium-rare...",
+	"workers are medium-rare...",
 	"almost there (we think)...",
 }
 
@@ -804,7 +804,7 @@ func (m *Model) outputModalDims() (modalH, visibleH int) {
 	return
 }
 
-// renderOutputModal renders a fullscreen scrollable modal for agent output.
+// renderOutputModal renders a fullscreen scrollable modal for worker output.
 // Unlike renderScrollableModal, it uses nearly the full terminal dimensions,
 // renders markdown when detected, and applies distinct styling to tool event lines.
 func (m *Model) renderOutputModal(title, content string, scroll int) (string, int) {

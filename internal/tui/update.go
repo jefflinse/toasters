@@ -1,4 +1,4 @@
-// Update sub-handlers: extracted key handling and message processing for grid, modals, command popup, and agent output.
+// Update sub-handlers: extracted key handling and message processing for grid, modals, command popup, and worker output.
 package tui
 
 import (
@@ -227,21 +227,26 @@ func (m *Model) updateGridFilter(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// killWorkerSession cancels a running worker session through the service and
-// returns a toast command reporting the outcome. Cancellation is cooperative —
-// the worker stops at its next tool-call boundary — so the toast says so. The
-// resulting session.done(cancelled) event repaints the cell on its own.
+// killWorkerSession returns a command that cancels a running worker session
+// through the service and reports the outcome as a toast. The network call
+// runs inside the command (off the update loop) — in remote-client mode it's
+// an HTTP round-trip that would otherwise freeze the UI for up to 2s.
+// Cancellation is cooperative — the worker stops at its next tool-call
+// boundary — so the toast says so. The resulting session.done(cancelled)
+// event repaints the cell on its own.
 func (m *Model) killWorkerSession(sessionID string) tea.Cmd {
 	if sessionID == "" {
 		return nil
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	err := m.svc.Sessions().Cancel(ctx, sessionID)
-	cancel()
-	if err != nil {
-		return m.addToast("⚠ Kill failed: "+err.Error(), toastWarning)
+	svc := m.svc
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		if err := svc.Sessions().Cancel(ctx, sessionID); err != nil {
+			return asyncToastMsg{message: "⚠ Kill failed: " + err.Error(), level: toastWarning}
+		}
+		return asyncToastMsg{message: "🔪 Worker killed (stops at next tool boundary)", level: toastInfo}
 	}
-	return m.addToast("🔪 Worker killed (stops at next tool boundary)", toastInfo)
 }
 
 // updateCmdPopup handles key events when the slash command popup is visible.

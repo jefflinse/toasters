@@ -57,11 +57,11 @@ func (m Model) renderLeftPanel(panelWidth, panelHeight int) string {
 	// 3 panes (Jobs, Blockers, Workers) × 2 rows border = 6 rows of overhead.
 	borderOverhead := 3 * paneFrameV
 
-	// Bottom pane (Agents): content-driven height.
+	// Bottom pane (Workers): content-driven height.
 	// Use the filtered view (active + most-recent completed) so the pane's
 	// height math matches what we actually render.
 	sortedRT := m.displayRuntimeSessions()
-	agentCount := len(sortedRT)
+	workerCount := len(sortedRT)
 	// Each active worker with activity gets one extra "↳ <last-activity>" line
 	// below it so users can see what it's doing without opening the grid.
 	activityLineCount := 0
@@ -70,11 +70,11 @@ func (m Model) renderLeftPanel(panelWidth, panelHeight int) string {
 			activityLineCount++
 		}
 	}
-	bottomContentH := 1 + agentCount + activityLineCount // "Workers" header + one line per agent (+ activity line for active workers)
-	if agentCount == 0 {
+	bottomContentH := 1 + workerCount + activityLineCount // "Workers" header + one line per worker (+ activity line for active workers)
+	if workerCount == 0 {
 		bottomContentH = 2 // header + "No workers running"
 	}
-	if m.focused == focusAgents {
+	if m.focused == focusWorkers {
 		bottomContentH++ // hint line
 	}
 
@@ -185,13 +185,13 @@ func (m Model) renderLeftPanel(panelWidth, panelHeight int) string {
 	}
 	blockersPane := blockersPaneStyle.Width(panelWidth).Render(blockersContent)
 
-	// --- Bottom pane: Agents ---
-	var agentLines []string
-	agentsTitle := gradientText("Workers", [3]uint8{50, 130, 255}, [3]uint8{0, 200, 200})
-	if m.focused == focusAgents {
-		agentsTitle = rainbowText("Workers", m.spinnerFrame)
+	// --- Bottom pane: Workers ---
+	var workerLines []string
+	workersTitle := gradientText("Workers", [3]uint8{50, 130, 255}, [3]uint8{0, 200, 200})
+	if m.focused == focusWorkers {
+		workersTitle = rainbowText("Workers", m.spinnerFrame)
 	}
-	agentLines = append(agentLines, agentsTitle)
+	workerLines = append(workerLines, workersTitle)
 
 	// Runtime sessions.
 	runtimeStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("39"))
@@ -199,7 +199,7 @@ func (m Model) renderLeftPanel(panelWidth, panelHeight int) string {
 	if hasAnyRuntime {
 		for _, rs := range sortedRT {
 			// "<short-job-id>:<role>" — e.g. graph:plan for job 67cddf28-… → "67cddf28:plan".
-			role := strings.TrimPrefix(rs.agentName, "graph:")
+			role := strings.TrimPrefix(rs.workerName, "graph:")
 			shortJobID := rs.jobID
 			if len(shortJobID) > 8 {
 				shortJobID = shortJobID[:8]
@@ -214,9 +214,9 @@ func (m Model) renderLeftPanel(panelWidth, panelHeight int) string {
 			prefix := runtimeStyle.Render("⚡")
 			line := prefix + statusIcon + truncateStr(label, contentWidth-4)
 			if rs.status != "active" {
-				agentLines = append(agentLines, DimStyle.Render("⚡"+statusIcon+truncateStr(label, contentWidth-4)))
+				workerLines = append(workerLines, DimStyle.Render("⚡"+statusIcon+truncateStr(label, contentWidth-4)))
 			} else {
-				agentLines = append(agentLines, line)
+				workerLines = append(workerLines, line)
 				// Show last activity for active workers so users can see what
 				// they're doing without opening the grid. bottomContentH is
 				// sized above to reserve a row per active worker; do not skip
@@ -231,23 +231,23 @@ func (m Model) renderLeftPanel(panelWidth, panelHeight int) string {
 				if maxActivityW < 1 {
 					maxActivityW = 1
 				}
-				agentLines = append(agentLines, DimStyle.Render(indent+truncateStr(activityText, maxActivityW)))
+				workerLines = append(workerLines, DimStyle.Render(indent+truncateStr(activityText, maxActivityW)))
 			}
 		}
 	}
 
 	if !hasAnyRuntime {
-		agentLines = append(agentLines, DimStyle.Italic(true).Render("No workers running"))
+		workerLines = append(workerLines, DimStyle.Italic(true).Render("No workers running"))
 	}
-	if m.focused == focusAgents {
-		agentLines = append(agentLines, DimStyle.Render("Enter → grid view"))
+	if m.focused == focusWorkers {
+		workerLines = append(workerLines, DimStyle.Render("Enter → grid view"))
 	}
 
 	bottomContent := lipgloss.NewStyle().Height(bottomContentH).Render(
-		lipgloss.JoinVertical(lipgloss.Left, agentLines...),
+		lipgloss.JoinVertical(lipgloss.Left, workerLines...),
 	)
 	bottomPaneStyle := UnfocusedPaneStyle
-	if m.focused == focusAgents {
+	if m.focused == focusWorkers {
 		bottomPaneStyle = FocusedPaneStyle
 	}
 	bottomPane := bottomPaneStyle.Width(panelWidth).Render(bottomContent)
@@ -256,24 +256,24 @@ func (m Model) renderLeftPanel(panelWidth, panelHeight int) string {
 	return LeftPanelStyle.Width(panelWidth).Height(panelHeight).Render(inner)
 }
 
-// leftPanelAgentsPaneHeight returns the rendered height of the Agents bottom pane
+// leftPanelWorkersPaneHeight returns the rendered height of the Workers bottom pane
 // in the left panel, for use in mouse hit-testing. Must stay in sync with the
 // height math inside renderLeftPanel.
-func (m *Model) leftPanelAgentsPaneHeight() int {
+func (m *Model) leftPanelWorkersPaneHeight() int {
 	paneFrameV := FocusedPaneStyle.GetVerticalBorderSize()
 	sortedRT := m.displayRuntimeSessions()
-	agentCount := len(sortedRT)
+	workerCount := len(sortedRT)
 	activityLineCount := 0
 	for _, rs := range sortedRT {
 		if rs.status == "active" {
 			activityLineCount++
 		}
 	}
-	bottomContentH := 1 + agentCount + activityLineCount
-	if agentCount == 0 {
+	bottomContentH := 1 + workerCount + activityLineCount
+	if workerCount == 0 {
 		bottomContentH = 2
 	}
-	if m.focused == focusAgents {
+	if m.focused == focusWorkers {
 		bottomContentH++
 	}
 	return bottomContentH + paneFrameV

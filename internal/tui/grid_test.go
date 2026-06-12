@@ -507,16 +507,16 @@ func TestActivityLabel(t *testing.T) {
 			want: "shell: go test -v -race -count=1 ./…",
 		},
 
-		// --- spawn_agent ---
+		// --- spawn_worker ---
 		{
-			name:     "spawn_agent with agent_name uses it",
-			toolName: "spawn_agent",
-			args:     json.RawMessage(`{"agent_name": "builder"}`),
+			name:     "spawn_worker with role uses it",
+			toolName: "spawn_worker",
+			args:     json.RawMessage(`{"role": "builder"}`),
 			want:     "spawn: builder",
 		},
 		{
-			name:     "spawn_agent without agent_name falls back to worker",
-			toolName: "spawn_agent",
+			name:     "spawn_worker without role falls back to worker",
+			toolName: "spawn_worker",
 			args:     json.RawMessage(`{}`),
 			want:     "spawn: worker",
 		},
@@ -711,7 +711,7 @@ func TestActivityLabel(t *testing.T) {
 // --------------------------------------------------------------------------
 
 // --------------------------------------------------------------------------
-// TestRenderAgentCard
+// TestRenderWorkerCard
 // --------------------------------------------------------------------------
 
 // stripANSI removes ANSI escape sequences so we can do plain-text assertions.
@@ -735,7 +735,7 @@ func stripANSI(s string) string {
 	return out.String()
 }
 
-func TestRenderAgentCard(t *testing.T) {
+func TestRenderWorkerCard(t *testing.T) {
 	t.Parallel()
 
 	base := time.Date(2024, 6, 1, 12, 0, 0, 0, time.UTC)
@@ -743,16 +743,16 @@ func TestRenderAgentCard(t *testing.T) {
 	t.Run("returns non-empty string for active session", func(t *testing.T) {
 		t.Parallel()
 		rs := &runtimeSlot{
-			sessionID: "sess-1",
-			agentName: "builder",
-			teamName:  "backend",
-			task:      "implement feature X",
-			jobID:     "job-abc123",
-			status:    "active",
-			startTime: base,
+			sessionID:  "sess-1",
+			workerName: "builder",
+			teamName:   "backend",
+			task:       "implement feature X",
+			jobID:      "job-abc123",
+			status:     "active",
+			startTime:  base,
 		}
 
-		result := renderAgentCard(rs, 40, 8, false, 0)
+		result := renderWorkerCard(rs, 40, 8, false, 0)
 
 		if result == "" {
 			t.Error("expected non-empty result for active session")
@@ -762,17 +762,17 @@ func TestRenderAgentCard(t *testing.T) {
 	t.Run("returns non-empty string for completed session", func(t *testing.T) {
 		t.Parallel()
 		rs := &runtimeSlot{
-			sessionID: "sess-2",
-			agentName: "tester",
-			teamName:  "qa",
-			task:      "run test suite",
-			jobID:     "job-xyz789",
-			status:    "completed",
-			startTime: base,
-			endTime:   base.Add(5 * time.Minute),
+			sessionID:  "sess-2",
+			workerName: "tester",
+			teamName:   "qa",
+			task:       "run test suite",
+			jobID:      "job-xyz789",
+			status:     "completed",
+			startTime:  base,
+			endTime:    base.Add(5 * time.Minute),
 		}
 
-		result := renderAgentCard(rs, 40, 8, false, 0)
+		result := renderWorkerCard(rs, 40, 8, false, 0)
 
 		if result == "" {
 			t.Error("expected non-empty result for completed session")
@@ -782,17 +782,17 @@ func TestRenderAgentCard(t *testing.T) {
 	t.Run("graceful degrade when innerH less than 4", func(t *testing.T) {
 		t.Parallel()
 		rs := &runtimeSlot{
-			sessionID: "sess-3",
-			agentName: "worker",
-			jobID:     "job-short12345678",
-			status:    "active",
-			startTime: base,
+			sessionID:  "sess-3",
+			workerName: "worker",
+			jobID:      "job-short12345678",
+			status:     "active",
+			startTime:  base,
 		}
 
 		// Should not panic for any innerH < 4.
 		for _, h := range []int{0, 1, 2, 3} {
 			t.Run(fmt.Sprintf("innerH=%d", h), func(t *testing.T) {
-				result := renderAgentCard(rs, 40, h, false, 0)
+				result := renderWorkerCard(rs, 40, h, false, 0)
 				// Result may be empty for h=0 but must not panic.
 				lines := strings.Split(result, "\n")
 				if len(lines) > h && h > 0 {
@@ -805,46 +805,46 @@ func TestRenderAgentCard(t *testing.T) {
 	t.Run("handles zero innerW gracefully without panic", func(t *testing.T) {
 		t.Parallel()
 		rs := &runtimeSlot{
-			sessionID: "sess-4",
-			agentName: "agent",
-			jobID:     "job-1",
-			status:    "active",
-			startTime: base,
+			sessionID:  "sess-4",
+			workerName: "worker",
+			jobID:      "job-1",
+			status:     "active",
+			startTime:  base,
 		}
 
 		// Must not panic.
-		_ = renderAgentCard(rs, 0, 8, false, 0)
+		_ = renderWorkerCard(rs, 0, 8, false, 0)
 	})
 
-	t.Run("includes agent name in output", func(t *testing.T) {
+	t.Run("includes worker name in output", func(t *testing.T) {
 		t.Parallel()
 		rs := &runtimeSlot{
-			sessionID: "sess-5",
-			agentName: "my-special-agent",
-			jobID:     "job-1",
-			status:    "active",
-			startTime: base,
+			sessionID:  "sess-5",
+			workerName: "my-special-worker",
+			jobID:      "job-1",
+			status:     "active",
+			startTime:  base,
 		}
 
-		result := stripANSI(renderAgentCard(rs, 60, 10, false, 0))
+		result := stripANSI(renderWorkerCard(rs, 60, 10, false, 0))
 
-		if !strings.Contains(result, "my-special-agent") {
-			t.Errorf("expected agent name 'my-special-agent' in output, got:\n%s", result)
+		if !strings.Contains(result, "my-special-worker") {
+			t.Errorf("expected worker name 'my-special-worker' in output, got:\n%s", result)
 		}
 	})
 
-	t.Run("includes team-scoped agent name when teamName is set", func(t *testing.T) {
+	t.Run("includes team-scoped worker name when teamName is set", func(t *testing.T) {
 		t.Parallel()
 		rs := &runtimeSlot{
-			sessionID: "sess-6",
-			agentName: "builder",
-			teamName:  "backend",
-			jobID:     "job-1",
-			status:    "active",
-			startTime: base,
+			sessionID:  "sess-6",
+			workerName: "builder",
+			teamName:   "backend",
+			jobID:      "job-1",
+			status:     "active",
+			startTime:  base,
 		}
 
-		result := stripANSI(renderAgentCard(rs, 60, 10, false, 0))
+		result := stripANSI(renderWorkerCard(rs, 60, 10, false, 0))
 
 		// Should contain "backend/builder" (team-scoped label).
 		if !strings.Contains(result, "backend/builder") {
@@ -852,22 +852,22 @@ func TestRenderAgentCard(t *testing.T) {
 		}
 	})
 
-	t.Run("does not double-prefix when agentName already has teamName prefix", func(t *testing.T) {
+	t.Run("does not double-prefix when workerName already has teamName prefix", func(t *testing.T) {
 		t.Parallel()
 		rs := &runtimeSlot{
-			sessionID: "sess-7",
-			agentName: "myteam/orchestrator",
-			teamName:  "myteam",
-			jobID:     "job-1",
-			status:    "active",
-			startTime: base,
+			sessionID:  "sess-7",
+			workerName: "myteam/orchestrator",
+			teamName:   "myteam",
+			jobID:      "job-1",
+			status:     "active",
+			startTime:  base,
 		}
 
-		result := stripANSI(renderAgentCard(rs, 60, 10, false, 0))
+		result := stripANSI(renderWorkerCard(rs, 60, 10, false, 0))
 
 		// Should contain "myteam/orchestrator" exactly once, not "myteam/myteam/orchestrator".
 		if strings.Contains(result, "myteam/myteam/orchestrator") {
-			t.Errorf("agent name was double-prefixed: %s", result)
+			t.Errorf("worker name was double-prefixed: %s", result)
 		}
 		if !strings.Contains(result, "myteam/orchestrator") {
 			t.Errorf("expected 'myteam/orchestrator' in output, got:\n%s", result)
@@ -877,15 +877,15 @@ func TestRenderAgentCard(t *testing.T) {
 	t.Run("includes task description when present", func(t *testing.T) {
 		t.Parallel()
 		rs := &runtimeSlot{
-			sessionID: "sess-8",
-			agentName: "worker",
-			jobID:     "job-1",
-			task:      "implement the authentication module",
-			status:    "active",
-			startTime: base,
+			sessionID:  "sess-8",
+			workerName: "worker",
+			jobID:      "job-1",
+			task:       "implement the authentication module",
+			status:     "active",
+			startTime:  base,
 		}
 
-		result := stripANSI(renderAgentCard(rs, 60, 10, false, 0))
+		result := stripANSI(renderWorkerCard(rs, 60, 10, false, 0))
 
 		if !strings.Contains(result, "implement the authentication module") {
 			t.Errorf("expected task description in output, got:\n%s", result)
@@ -896,14 +896,14 @@ func TestRenderAgentCard(t *testing.T) {
 		t.Parallel()
 		rs := &runtimeSlot{
 			sessionID:  "sess-9",
-			agentName:  "worker",
+			workerName: "worker",
 			jobID:      "job-1",
 			status:     "active",
 			activities: nil,
 			startTime:  base,
 		}
 
-		result := stripANSI(renderAgentCard(rs, 60, 10, false, 0))
+		result := stripANSI(renderWorkerCard(rs, 60, 10, false, 0))
 
 		// Active session with no activities should show "waiting for activity…".
 		if !strings.Contains(result, "waiting for activity") {
@@ -915,7 +915,7 @@ func TestRenderAgentCard(t *testing.T) {
 		t.Parallel()
 		rs := &runtimeSlot{
 			sessionID:  "sess-10",
-			agentName:  "worker",
+			workerName: "worker",
 			jobID:      "job-1",
 			status:     "completed",
 			activities: nil,
@@ -924,7 +924,7 @@ func TestRenderAgentCard(t *testing.T) {
 		}
 
 		// Must not panic; completed session with no activities should not show waiting placeholder.
-		result := stripANSI(renderAgentCard(rs, 60, 10, false, 0))
+		result := stripANSI(renderWorkerCard(rs, 60, 10, false, 0))
 
 		if strings.Contains(result, "waiting for activity") {
 			t.Errorf("completed session should not show 'waiting for activity', got:\n%s", result)
@@ -934,11 +934,11 @@ func TestRenderAgentCard(t *testing.T) {
 	t.Run("handles session with activities (shows activity labels)", func(t *testing.T) {
 		t.Parallel()
 		rs := &runtimeSlot{
-			sessionID: "sess-11",
-			agentName: "coder",
-			jobID:     "job-1",
-			status:    "active",
-			startTime: base,
+			sessionID:  "sess-11",
+			workerName: "coder",
+			jobID:      "job-1",
+			status:     "active",
+			startTime:  base,
 			activities: []activityItem{
 				{label: "write: main.go", toolName: "write_file"},
 				{label: "shell: go build ./...", toolName: "shell"},
@@ -946,7 +946,7 @@ func TestRenderAgentCard(t *testing.T) {
 			},
 		}
 
-		result := stripANSI(renderAgentCard(rs, 60, 12, false, 0))
+		result := stripANSI(renderWorkerCard(rs, 60, 12, false, 0))
 
 		// Activities are shown newest-first; "read: config.yaml" is the newest.
 		if !strings.Contains(result, "read: config.yaml") {
@@ -957,11 +957,11 @@ func TestRenderAgentCard(t *testing.T) {
 	t.Run("activity list is capped to available height", func(t *testing.T) {
 		t.Parallel()
 		rs := &runtimeSlot{
-			sessionID: "sess-12",
-			agentName: "coder",
-			jobID:     "job-1",
-			status:    "active",
-			startTime: base,
+			sessionID:  "sess-12",
+			workerName: "coder",
+			jobID:      "job-1",
+			status:     "active",
+			startTime:  base,
 			activities: []activityItem{
 				{label: "act-1", toolName: "shell"},
 				{label: "act-2", toolName: "shell"},
@@ -973,7 +973,7 @@ func TestRenderAgentCard(t *testing.T) {
 		}
 
 		// innerH=6: 1 header + 1 separator = 2 fixed; 4 lines for activities.
-		result := renderAgentCard(rs, 60, 6, false, 0)
+		result := renderWorkerCard(rs, 60, 6, false, 0)
 		lines := strings.Split(result, "\n")
 
 		if len(lines) > 6 {
@@ -984,14 +984,14 @@ func TestRenderAgentCard(t *testing.T) {
 	t.Run("short jobID is shown in header", func(t *testing.T) {
 		t.Parallel()
 		rs := &runtimeSlot{
-			sessionID: "sess-13",
-			agentName: "worker",
-			jobID:     "abcdef1234567890", // 16 chars — only first 8 shown
-			status:    "active",
-			startTime: base,
+			sessionID:  "sess-13",
+			workerName: "worker",
+			jobID:      "abcdef1234567890", // 16 chars — only first 8 shown
+			status:     "active",
+			startTime:  base,
 		}
 
-		result := stripANSI(renderAgentCard(rs, 60, 8, false, 0))
+		result := stripANSI(renderWorkerCard(rs, 60, 8, false, 0))
 
 		// Only the first 8 chars of the job ID should appear.
 		if !strings.Contains(result, "abcdef12") {
@@ -1005,14 +1005,14 @@ func TestRenderAgentCard(t *testing.T) {
 	t.Run("active session shows lightning bolt status mark", func(t *testing.T) {
 		t.Parallel()
 		rs := &runtimeSlot{
-			sessionID: "sess-14",
-			agentName: "worker",
-			jobID:     "job-1",
-			status:    "active",
-			startTime: base,
+			sessionID:  "sess-14",
+			workerName: "worker",
+			jobID:      "job-1",
+			status:     "active",
+			startTime:  base,
 		}
 
-		result := stripANSI(renderAgentCard(rs, 60, 8, false, 0))
+		result := stripANSI(renderWorkerCard(rs, 60, 8, false, 0))
 
 		if !strings.Contains(result, "⚡") {
 			t.Errorf("expected '⚡' status mark for active session, got:\n%s", result)
@@ -1022,15 +1022,15 @@ func TestRenderAgentCard(t *testing.T) {
 	t.Run("completed session shows checkmark status mark", func(t *testing.T) {
 		t.Parallel()
 		rs := &runtimeSlot{
-			sessionID: "sess-15",
-			agentName: "worker",
-			jobID:     "job-1",
-			status:    "completed",
-			startTime: base,
-			endTime:   base.Add(time.Minute),
+			sessionID:  "sess-15",
+			workerName: "worker",
+			jobID:      "job-1",
+			status:     "completed",
+			startTime:  base,
+			endTime:    base.Add(time.Minute),
 		}
 
-		result := stripANSI(renderAgentCard(rs, 60, 8, false, 0))
+		result := stripANSI(renderWorkerCard(rs, 60, 8, false, 0))
 
 		if !strings.Contains(result, "✓") {
 			t.Errorf("expected '✓' status mark for completed session, got:\n%s", result)
@@ -1041,15 +1041,15 @@ func TestRenderAgentCard(t *testing.T) {
 		t.Parallel()
 		// endTime is exactly 2 minutes after startTime.
 		rs := &runtimeSlot{
-			sessionID: "sess-16",
-			agentName: "worker",
-			jobID:     "job-1",
-			status:    "completed",
-			startTime: base,
-			endTime:   base.Add(2 * time.Minute),
+			sessionID:  "sess-16",
+			workerName: "worker",
+			jobID:      "job-1",
+			status:     "completed",
+			startTime:  base,
+			endTime:    base.Add(2 * time.Minute),
 		}
 
-		result := stripANSI(renderAgentCard(rs, 60, 8, false, 0))
+		result := stripANSI(renderWorkerCard(rs, 60, 8, false, 0))
 
 		// Duration should be "2m0s".
 		if !strings.Contains(result, "2m0s") {
@@ -1057,20 +1057,20 @@ func TestRenderAgentCard(t *testing.T) {
 		}
 	})
 
-	t.Run("falls back to 'runtime' when agentName is empty", func(t *testing.T) {
+	t.Run("falls back to 'runtime' when workerName is empty", func(t *testing.T) {
 		t.Parallel()
 		rs := &runtimeSlot{
-			sessionID: "sess-17",
-			agentName: "", // empty — should fall back to "runtime"
-			jobID:     "job-1",
-			status:    "active",
-			startTime: base,
+			sessionID:  "sess-17",
+			workerName: "", // empty — should fall back to "runtime"
+			jobID:      "job-1",
+			status:     "active",
+			startTime:  base,
 		}
 
-		result := stripANSI(renderAgentCard(rs, 60, 8, false, 0))
+		result := stripANSI(renderWorkerCard(rs, 60, 8, false, 0))
 
 		if !strings.Contains(result, "runtime") {
-			t.Errorf("expected 'runtime' fallback label when agentName is empty, got:\n%s", result)
+			t.Errorf("expected 'runtime' fallback label when workerName is empty, got:\n%s", result)
 		}
 	})
 }
@@ -1171,7 +1171,7 @@ func TestRuntimeSessionForGridCell(t *testing.T) {
 	}
 }
 
-func TestAgentCardMeta(t *testing.T) {
+func TestWorkerCardMeta(t *testing.T) {
 	t.Parallel()
 
 	cost := 0.0123
@@ -1218,7 +1218,7 @@ func TestAgentCardMeta(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
-			got := agentCardMeta(c.rs)
+			got := workerCardMeta(c.rs)
 			if c.empty && got != "" {
 				t.Fatalf("expected empty, got %q", got)
 			}

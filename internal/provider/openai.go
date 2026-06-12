@@ -322,7 +322,7 @@ func (p *OpenAIProvider) streamResponse(ctx context.Context, req *http.Request, 
 				// early here would drop that usage chunk, which is exactly
 				// the bug that left worker_sessions.tokens_in/out at zero
 				// for every tool-using turn (i.e. essentially every turn,
-				// since the agent loop's terminal tool calls always finish
+				// since the mycelium agent loop's terminal tool calls always finish
 				// this way). Keep draining until [DONE] (or the stream
 				// naturally closes); the [DONE] branch above already emits
 				// the accumulated tool calls + usage + done together.

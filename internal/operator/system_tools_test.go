@@ -408,7 +408,6 @@ func TestSystemToolDefinitions(t *testing.T) {
 		"retry_task",
 		"query_graphs",
 		"query_job",
-		"query_job_context",
 		"surface_to_user",
 	}
 
@@ -660,58 +659,23 @@ func TestAssignTask_UpdateJobStatusFailureIsNonFatal(t *testing.T) {
 	assertEqual(t, taskID, calls[0].TaskID)
 }
 
-// --- Regression tests for Bug 2: query_job_context missing from SystemTools ---
+// --- query_job_context retired alias (Q6) ---
 
-// TestQueryJobContext_InDefinitions is a regression test for the bug where
-// query_job_context was declared in agent .md files but not implemented in
-// SystemTools.Definitions(). Without the fix, this test fails because
-// query_job_context is absent from the returned slice.
-func TestQueryJobContext_InDefinitions(t *testing.T) {
+// query_job_context was merged into query_job; the name must NOT reappear in
+// Definitions() (near-duplicate tools confuse small models), but Execute
+// keeps dispatching it so a persisted conversation replaying an old tool
+// call doesn't hard-error.
+func TestQueryJobContext_RetiredFromDefinitions(t *testing.T) {
 	st, _, _, _, _ := newTestSystemTools(t)
-	defs := st.Definitions()
-
-	var found *runtime.ToolDef
-	for i := range defs {
-		if defs[i].Name == "query_job_context" {
-			found = &defs[i]
-			break
+	for _, d := range st.Definitions() {
+		if d.Name == "query_job_context" {
+			t.Fatal("query_job_context should be retired from Definitions() (merged into query_job)")
 		}
-	}
-	if found == nil {
-		t.Fatal("query_job_context not found in SystemTools.Definitions() — regression: scheduler/blocker-handler workers would never see this tool")
-	}
-
-	// Verify the definition has a non-empty description.
-	if found.Description == "" {
-		t.Error("query_job_context definition has empty description")
-	}
-
-	// Verify the schema is valid JSON and requires job_id.
-	var schema map[string]any
-	if err := json.Unmarshal(found.Parameters, &schema); err != nil {
-		t.Fatalf("query_job_context has invalid parameter schema: %v", err)
-	}
-
-	required, ok := schema["required"].([]any)
-	if !ok {
-		t.Fatal("query_job_context schema missing 'required' field")
-	}
-	var hasJobID bool
-	for _, r := range required {
-		if r == "job_id" {
-			hasJobID = true
-			break
-		}
-	}
-	if !hasJobID {
-		t.Error("query_job_context schema does not require 'job_id'")
 	}
 }
 
-// TestQueryJobContext_Execute_ValidJobID is a regression test for the bug where
-// SystemTools.Execute("query_job_context", ...) returned ErrUnknownTool because
-// the case was missing from the switch statement. Without the fix, this test
-// fails with an ErrUnknownTool error.
+// TestQueryJobContext_Execute_ValidJobID verifies the retired alias still
+// executes (routing to query_job).
 func TestQueryJobContext_Execute_ValidJobID(t *testing.T) {
 	st, store, _, _, _ := newTestSystemTools(t)
 	ctx := context.Background()
@@ -737,7 +701,7 @@ func TestQueryJobContext_Execute_ValidJobID(t *testing.T) {
 	result, err := st.Execute(ctx, "query_job_context", json.RawMessage(`{"job_id": "`+jobID+`"}`))
 	assertNoError(t, err)
 
-	// formatJobContext returns human-readable text; verify the key fields are present.
+	// queryJob returns human-readable text; verify the key fields are present.
 	assertContains(t, result, "Regression job")
 	assertContains(t, result, string(db.JobStatusPending))
 	assertContains(t, result, "First task")

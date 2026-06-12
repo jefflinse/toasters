@@ -9,6 +9,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/jefflinse/toasters/internal/db"
 	"github.com/jefflinse/toasters/internal/provider"
@@ -214,7 +215,7 @@ func (s *Session) Run(ctx context.Context) (retErr error) {
 			})
 
 			// Cap tool results before storing in message history to prevent
-			// context window overflow when agents read large files or directory
+			// context window overflow when workers read large files or directory
 			// listings. 8KB per result keeps the conversation manageable while
 			// still providing meaningful content to the LLM.
 			//
@@ -224,7 +225,13 @@ func (s *Session) Run(ctx context.Context) (retErr error) {
 			// to misinterpret the child's work as incomplete and retry in a loop.
 			const maxToolResultBytes = 8 * 1024
 			if tc.Name != "spawn_worker" && len(result) > maxToolResultBytes {
-				result = result[:maxToolResultBytes] + "\n[... truncated: result exceeded 8KB ...]"
+				// Walk backward off any multi-byte UTF-8 character so the cut
+				// doesn't leave an invalid sequence the provider rejects.
+				cut := maxToolResultBytes
+				for cut > 0 && !utf8.RuneStart(result[cut]) {
+					cut--
+				}
+				result = result[:cut] + "\n[... truncated: result exceeded 8KB ...]"
 			}
 
 			toolMsg := provider.Message{

@@ -39,7 +39,7 @@ type Config struct {
 	// reveals it via Ctrl+O.
 	ShowOperatorPanelByDefault bool           `mapstructure:"show_operator_panel_by_default"`
 	Operator                   OperatorConfig `mapstructure:"operator"`
-	Agents                     AgentsConfig   `mapstructure:"agents"`
+	Workers                    WorkersConfig  `mapstructure:"agents"` // config key "agents" kept for backward compatibility
 	MCP                        MCPConfig      `mapstructure:"mcp"`
 }
 
@@ -60,13 +60,14 @@ type MCPConfig struct {
 	Servers []MCPServerConfig `mapstructure:"servers"`
 }
 
-// AgentsConfig holds default provider/model settings for agents.
-type AgentsConfig struct {
-	Defaults AgentDefaultsConfig `mapstructure:"defaults"`
+// WorkersConfig holds default provider/model settings for workers.
+// It is stored under the legacy "agents" key in config.yaml.
+type WorkersConfig struct {
+	Defaults WorkerDefaultsConfig `mapstructure:"defaults"`
 }
 
-// AgentDefaultsConfig holds the default provider and model for agents.
-type AgentDefaultsConfig struct {
+// WorkerDefaultsConfig holds the default provider and model for workers.
+type WorkerDefaultsConfig struct {
 	Provider string `mapstructure:"provider"`
 	Model    string `mapstructure:"model"`
 }
