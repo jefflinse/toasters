@@ -2055,8 +2055,42 @@ func (s *localJobService) Cancel(ctx context.Context, id string) error {
 		return fmt.Errorf("job %s cannot be cancelled (status: %s)", id, dbJob.Status)
 	}
 
+	// Flip the status first so anything reacting to in-flight work seeing
+	// its context cancelled observes a cancelled job.
 	if err := s.svc.cfg.Store.UpdateJobStatus(ctx, id, db.JobStatusCancelled); err != nil {
 		return fmt.Errorf("cancelling job %s: %w", id, err)
+	}
+
+	// Actually stop the work: cancel in-flight graph executions (each
+	// persists its task as cancelled on the way out) and any worker
+	// sessions still running for this job.
+	if c, ok := s.svc.currentGraphExecutor().(interface{ CancelJob(string) int }); ok {
+		if n := c.CancelJob(id); n > 0 {
+			slog.Info("cancelled in-flight graph executions", "job_id", id, "count", n)
+		}
+	}
+	if s.svc.cfg.Runtime != nil {
+		if n := s.svc.cfg.Runtime.CancelJobSessions(id); n > 0 {
+			slog.Info("cancelled worker sessions", "job_id", id, "count", n)
+		}
+	}
+
+	// Sweep every non-terminal task so nothing re-dispatches them later
+	// (GetReadyTasks only returns pending tasks; RetryTask requires failed).
+	// in_progress tasks are included: a live run writes the same cancelled
+	// status when its context unwinds, and an orphaned row (no live run)
+	// would otherwise wedge the job's serial gate forever.
+	tasks, err := s.svc.cfg.Store.ListTasksForJob(ctx, id)
+	if err != nil {
+		return fmt.Errorf("listing tasks for cancelled job %s: %w", id, err)
+	}
+	for _, t := range tasks {
+		switch t.Status {
+		case db.TaskStatusPending, db.TaskStatusBlocked, db.TaskStatusInProgress:
+			if err := s.svc.cfg.Store.UpdateTaskStatus(ctx, t.ID, db.TaskStatusCancelled, "Cancelled with job"); err != nil {
+				slog.Warn("failed to cancel task", "task_id", t.ID, "error", err)
+			}
+		}
 	}
 	return nil
 }

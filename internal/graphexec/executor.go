@@ -54,10 +54,12 @@ type Executor struct {
 
 	// In-flight task tracking. Callers run ExecuteTask in detached
 	// goroutines; Drain lets shutdown wait for them to persist terminal
-	// task status before the database closes underneath them.
+	// task status before the database closes underneath them, and the
+	// running map lets CancelJob stop a job's executions mid-flight.
 	drainMu  sync.Mutex
 	draining bool
 	taskWG   sync.WaitGroup
+	running  map[string]taskHandle // taskID → in-flight handle
 }
 
 // ExecutorConfig holds configuration for creating an Executor.
@@ -164,17 +166,56 @@ func (e *Executor) workerDefaults() (bool, float64) {
 	return e.workerThinkingEnabled, e.workerTemperature
 }
 
-// beginTask registers an in-flight task, or fails if the executor is
-// draining. The flag check and WaitGroup add happen under one lock so a
-// dispatch can't slip in between Drain setting the flag and waiting.
-func (e *Executor) beginTask() error {
+// taskHandle tracks one in-flight task so CancelJob can stop it.
+type taskHandle struct {
+	jobID  string
+	cancel context.CancelFunc
+}
+
+// beginTask registers an in-flight task and derives a per-task cancellable
+// context, or fails if the executor is draining. The flag check and
+// WaitGroup add happen under one lock so a dispatch can't slip in between
+// Drain setting the flag and waiting.
+func (e *Executor) beginTask(ctx context.Context, req TaskRequest) (context.Context, error) {
 	e.drainMu.Lock()
 	defer e.drainMu.Unlock()
 	if e.draining {
-		return fmt.Errorf("executor is shutting down")
+		return nil, fmt.Errorf("executor is shutting down")
 	}
+	runCtx, cancel := context.WithCancel(ctx)
+	if e.running == nil {
+		e.running = make(map[string]taskHandle)
+	}
+	e.running[req.TaskID] = taskHandle{jobID: req.JobID, cancel: cancel}
 	e.taskWG.Add(1)
-	return nil
+	return runCtx, nil
+}
+
+// endTask releases a task registered by beginTask.
+func (e *Executor) endTask(taskID string) {
+	e.drainMu.Lock()
+	if h, ok := e.running[taskID]; ok {
+		h.cancel()
+		delete(e.running, taskID)
+	}
+	e.drainMu.Unlock()
+	e.taskWG.Done()
+}
+
+// CancelJob cancels every in-flight graph execution belonging to jobID and
+// returns how many were cancelled. Each cancelled run persists its task as
+// cancelled through Execute's terminal-status path.
+func (e *Executor) CancelJob(jobID string) int {
+	e.drainMu.Lock()
+	defer e.drainMu.Unlock()
+	n := 0
+	for _, h := range e.running {
+		if h.jobID == jobID {
+			h.cancel()
+			n++
+		}
+	}
+	return n
 }
 
 // Drain stops accepting new task dispatches and waits up to timeout for
@@ -324,21 +365,34 @@ func (e *Executor) Execute(ctx context.Context, graph *rhizome.CompiledGraph[*Ta
 
 	// Update task status based on outcome.
 	if err != nil {
-		slog.Error("graph execution failed",
-			"job_id", state.JobID, "task_id", state.TaskID, "error", err)
+		// A run that died because its context was cancelled (job cancel,
+		// shutdown) is a deliberate stop, not a failure: persist the task as
+		// cancelled and don't ask the operator to react — a task_failed
+		// event would prompt it to retry work the user just cancelled.
+		cancelled := ctx.Err() != nil
+
+		slog.Error("graph execution ended with error",
+			"job_id", state.JobID, "task_id", state.TaskID, "cancelled", cancelled, "error", err)
 
 		if e.store != nil {
-			failSummary := fmt.Sprintf("Graph execution failed: %s", err.Error())
-			if dbErr := e.store.UpdateTaskStatus(persistCtx, state.TaskID, db.TaskStatusFailed, failSummary); dbErr != nil {
-				slog.Warn("failed to mark task as failed", "task_id", state.TaskID, "error", dbErr)
+			status := db.TaskStatusFailed
+			summary := fmt.Sprintf("Graph execution failed: %s", err.Error())
+			if cancelled {
+				status = db.TaskStatusCancelled
+				summary = "Cancelled while running"
+			}
+			if dbErr := e.store.UpdateTaskStatus(persistCtx, state.TaskID, status, summary); dbErr != nil {
+				slog.Warn("failed to persist terminal task status", "task_id", state.TaskID, "error", dbErr)
 			}
 		}
 
 		if e.eventSink != nil {
 			e.eventSink.BroadcastGraphFailed(state.JobID, state.TaskID, err.Error())
-			// Advance the operator. Operator-level task_failed event is distinct
-			// from the service-level graph.failed broadcast above.
-			e.eventSink.BroadcastTaskFailed(state.JobID, state.TaskID, graphID, err.Error())
+			if !cancelled {
+				// Advance the operator. Operator-level task_failed event is
+				// distinct from the service-level graph.failed broadcast above.
+				e.eventSink.BroadcastTaskFailed(state.JobID, state.TaskID, graphID, err.Error())
+			}
 		}
 
 		return fmt.Errorf("graph execution: %w", err)
@@ -440,16 +494,17 @@ type TaskExecutor interface {
 // the task was already transitioned to in_progress — without this, an early
 // error strands the task there forever and wedges the job's serial gate.
 func (e *Executor) ExecuteTask(ctx context.Context, req TaskRequest) error {
-	if err := e.beginTask(); err != nil {
+	runCtx, err := e.beginTask(ctx, req)
+	if err != nil {
 		return e.failDispatch(req, err)
 	}
-	defer e.taskWG.Done()
+	defer e.endTask(req.TaskID)
 
 	graph, state, err := e.prepareTask(req)
 	if err != nil {
 		return e.failDispatch(req, err)
 	}
-	return e.Execute(ctx, graph, state, req.GraphID)
+	return e.Execute(runCtx, graph, state, req.GraphID)
 }
 
 // prepareTask validates the request, resolves the provider, and compiles the

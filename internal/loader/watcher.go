@@ -56,14 +56,25 @@ func (w *Watcher) Start(ctx context.Context) error {
 			if !ok {
 				return nil
 			}
-			// React to .md file changes (definitions) and .yaml file changes
-			// in providers/ or {system,user}/graphs/.
-			isProviderYAML := strings.HasSuffix(event.Name, ".yaml") &&
-				strings.HasPrefix(event.Name, filepath.Join(w.loader.configDir, "providers"))
-			isGraphYAML := strings.HasSuffix(event.Name, ".yaml") &&
-				(strings.HasPrefix(event.Name, filepath.Join(w.loader.configDir, "system", "graphs")) ||
-					strings.HasPrefix(event.Name, filepath.Join(w.loader.configDir, "user", "graphs")))
-			if strings.HasSuffix(event.Name, ".md") || isProviderYAML || isGraphYAML {
+			// React to .md file changes (definitions) and .yaml/.yml changes
+			// in providers/, {system,user}/graphs/, and {system,user}/schemas/.
+			isYAML := strings.HasSuffix(event.Name, ".yaml") || strings.HasSuffix(event.Name, ".yml")
+			inYAMLDir := false
+			if isYAML {
+				for _, d := range []string{
+					filepath.Join(w.loader.configDir, "providers"),
+					filepath.Join(w.loader.configDir, "system", "graphs"),
+					filepath.Join(w.loader.configDir, "user", "graphs"),
+					filepath.Join(w.loader.configDir, "system", "schemas"),
+					filepath.Join(w.loader.configDir, "user", "schemas"),
+				} {
+					if strings.HasPrefix(event.Name, d) {
+						inYAMLDir = true
+						break
+					}
+				}
+			}
+			if strings.HasSuffix(event.Name, ".md") || inYAMLDir {
 				if !debounceTimer.Stop() {
 					select {
 					case <-debounceTimer.C:
@@ -105,10 +116,14 @@ func (w *Watcher) addWatchDirs() {
 		filepath.Join(configDir, "system", "graphs"),
 		filepath.Join(configDir, "system", "roles"),
 		filepath.Join(configDir, "system", "instructions"),
+		filepath.Join(configDir, "system", "toolchains"),
+		filepath.Join(configDir, "system", "schemas"),
 		filepath.Join(configDir, "user", "skills"),
 		filepath.Join(configDir, "user", "graphs"),
 		filepath.Join(configDir, "user", "roles"),
 		filepath.Join(configDir, "user", "instructions"),
+		filepath.Join(configDir, "user", "toolchains"),
+		filepath.Join(configDir, "user", "schemas"),
 		filepath.Join(configDir, "providers"),
 	}
 

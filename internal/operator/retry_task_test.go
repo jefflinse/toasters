@@ -3,6 +3,7 @@ package operator
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/jefflinse/toasters/internal/db"
@@ -85,5 +86,43 @@ func TestRetryTask_ExposedToOperator(t *testing.T) {
 	}
 	if !found {
 		t.Error("retry_task missing from operator tool definitions")
+	}
+}
+
+// retry_task must respect the same serial-execution gate as assign_task —
+// retrying while a sibling runs would put two graph executions in the same
+// job workspace concurrently.
+func TestRetryTask_DefersWhileSiblingInProgress(t *testing.T) {
+	ctx := context.Background()
+	st, store, gExec, workDir := newTestSystemToolsWithCatalog(t, []*graphexec.Definition{
+		{ID: "bug-fix", Name: "Bug Fix"},
+	})
+	jobID, taskID := seedGraphJob(t, ctx, store, workDir)
+	failTask(t, ctx, store, taskID, "bug-fix")
+
+	if err := store.CreateTask(ctx, &db.Task{
+		ID: "t-sibling", JobID: jobID, Title: "active sibling", Status: db.TaskStatusInProgress,
+	}); err != nil {
+		t.Fatalf("CreateTask(sibling): %v", err)
+	}
+
+	args, _ := json.Marshal(map[string]string{"task_id": taskID})
+	out, err := st.Execute(ctx, "retry_task", args)
+	if err != nil {
+		t.Fatalf("retry_task should defer with a message, not error: %v", err)
+	}
+	if !strings.Contains(out, "Cannot retry") {
+		t.Errorf("output = %q, want a serial-execution deferral message", out)
+	}
+
+	if calls := gExec.getCalls(); len(calls) != 0 {
+		t.Errorf("ExecuteTask dispatched %d times during deferral, want 0", len(calls))
+	}
+	task, err := store.GetTask(ctx, taskID)
+	if err != nil {
+		t.Fatalf("GetTask: %v", err)
+	}
+	if task.Status != db.TaskStatusFailed {
+		t.Errorf("task status = %s, want still failed (retryable later)", task.Status)
 	}
 }

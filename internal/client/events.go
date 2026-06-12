@@ -174,6 +174,7 @@ func (s *remoteEventService) readSSE(ctx context.Context, ch chan<- service.Even
 	slog.Info("SSE connection established")
 
 	reader := sse.NewReader(resp.Body)
+	defer reader.Close()
 	for {
 		ev, ok := reader.Next(ctx)
 		if !ok {

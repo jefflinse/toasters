@@ -231,11 +231,14 @@ func (r *Runtime) SpawnAndWait(ctx context.Context, opts SpawnOpts) (string, err
 	}
 
 	snap := sess.Snapshot()
-	if snap.Status == "failed" {
+	// A cancelled child (TUI kill, job cancel) is not success: returning its
+	// partial FinalText with a nil error would let the parent proceed as if
+	// the child finished its work.
+	if snap.Status == "failed" || snap.Status == "cancelled" {
 		if termErr := sess.TermErr(); termErr != nil {
-			return "", fmt.Errorf("child session failed: %w", termErr)
+			return "", fmt.Errorf("child session %s: %w", snap.Status, termErr)
 		}
-		return "", fmt.Errorf("child session failed")
+		return "", fmt.Errorf("child session %s", snap.Status)
 	}
 
 	return sess.FinalText(), nil
@@ -269,6 +272,25 @@ func (r *Runtime) GetSession(id string) (*Session, bool) {
 	defer r.mu.Unlock()
 	s, ok := r.sessions[id]
 	return s, ok
+}
+
+// CancelJobSessions cancels every session belonging to jobID and returns
+// how many were cancelled. Used by job cancellation so in-flight workers
+// stop burning tokens on work the user no longer wants.
+func (r *Runtime) CancelJobSessions(jobID string) int {
+	r.mu.Lock()
+	var toCancel []*Session
+	for _, s := range r.sessions {
+		if s.jobID == jobID {
+			toCancel = append(toCancel, s)
+		}
+	}
+	r.mu.Unlock()
+
+	for _, s := range toCancel {
+		s.Cancel()
+	}
+	return len(toCancel)
 }
 
 // CancelSession cancels a session by ID.

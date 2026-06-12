@@ -40,13 +40,19 @@ type FieldDef struct {
 // basic graphs still run.
 const DefaultSchemaName = "summary"
 
-// Schema returns the named schema, or nil if it is not loaded.
+// Schema returns the named schema, or nil if it is not loaded. The returned
+// Schema is an immutable snapshot — Reload swaps the map rather than
+// mutating entries.
 func (e *Engine) Schema(name string) *Schema {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
 	return e.schemas[name]
 }
 
 // Schemas returns all loaded schema names, sorted.
 func (e *Engine) Schemas() []string {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
 	names := make([]string, 0, len(e.schemas))
 	for name := range e.schemas {
 		names = append(names, name)
@@ -59,7 +65,7 @@ func (e *Engine) Schemas() []string {
 // hand to mycelium agent.Config.OutputSchema. Returns an error when the
 // schema is not loaded.
 func (e *Engine) SchemaJSON(name string) (json.RawMessage, error) {
-	s := e.schemas[name]
+	s := e.Schema(name)
 	if s == nil {
 		return nil, fmt.Errorf("schema %q not found", name)
 	}

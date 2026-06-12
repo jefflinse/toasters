@@ -596,3 +596,25 @@ func TestReader_LargeEventLine(t *testing.T) {
 		t.Errorf("scanner error: %v", err)
 	}
 }
+
+func TestReader_CloseUnblocksPump(t *testing.T) {
+	t.Parallel()
+
+	// More events than the channel buffer with no consumer: the pump fills
+	// the buffer and parks on the send. Close must unblock it — closing the
+	// underlying reader can't (the goroutine isn't in Scan).
+	var sb strings.Builder
+	for i := range 64 {
+		fmt.Fprintf(&sb, "data: ev%d\n\n", i)
+	}
+	r := NewReader(strings.NewReader(sb.String()))
+
+	time.Sleep(50 * time.Millisecond)
+	r.Close()
+
+	select {
+	case <-r.done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("pump goroutine did not exit after Close")
+	}
+}

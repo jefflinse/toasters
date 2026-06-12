@@ -39,12 +39,17 @@ type Event struct {
 //
 // Reader runs a single background goroutine that pumps events into a channel;
 // callers read via Next, and the background goroutine exits cleanly when the
-// underlying reader closes or returns an error. To unblock a stuck Scan call
-// (for example, after the caller's ctx is cancelled), close the underlying
-// io.Reader — typically via http.Response.Body.Close() in the caller.
+// underlying reader closes or returns an error. Shutdown needs both halves:
+// close the underlying io.Reader (http.Response.Body.Close) to unblock a
+// stuck Scan, and call Close to unblock a pump parked on the channel send —
+// closing the body alone cannot wake a goroutine blocked delivering an event
+// nobody will read.
 type Reader struct {
 	events chan Event
 	done   chan struct{}
+	quit   chan struct{}
+
+	closeOnce sync.Once
 
 	mu  sync.Mutex
 	err error
@@ -58,9 +63,18 @@ func NewReader(r io.Reader) *Reader {
 	rdr := &Reader{
 		events: make(chan Event, 16),
 		done:   make(chan struct{}),
+		quit:   make(chan struct{}),
 	}
 	go rdr.pump(r)
 	return rdr
+}
+
+// Close signals the pump goroutine to stop. Safe to call multiple times and
+// concurrently with Next. Callers that stop consuming before the stream is
+// exhausted MUST call Close (typically deferred), or the pump leaks once the
+// 16-event buffer fills.
+func (r *Reader) Close() {
+	r.closeOnce.Do(func() { close(r.quit) })
 }
 
 func (r *Reader) pump(src io.Reader) {
@@ -94,7 +108,11 @@ func (r *Reader) pump(src io.Reader) {
 		data := strings.TrimPrefix(line, "data:")
 		data = strings.TrimSpace(data)
 
-		r.events <- Event{Type: eventType, Data: data}
+		select {
+		case r.events <- Event{Type: eventType, Data: data}:
+		case <-r.quit:
+			return
+		}
 	}
 
 	if err := scanner.Err(); err != nil {

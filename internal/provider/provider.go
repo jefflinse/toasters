@@ -48,6 +48,20 @@ const (
 	EventError     = mcp.EventError
 )
 
+// sendEvent delivers ev to ch unless ctx is cancelled first. Returns false
+// when the consumer is gone — the producer must stop. Stream goroutines must
+// never send unconditionally: a consumer that returned early (ctx cancel,
+// error) stops draining, and an unconditional send would park the goroutine
+// and its HTTP connection forever (and leak the Scheduler slot it holds).
+func sendEvent(ctx context.Context, ch chan<- StreamEvent, ev StreamEvent) bool {
+	select {
+	case ch <- ev:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
 // NormalizeToolCallArgs repairs tool-call arguments that aren't valid JSON
 // (empty or truncated output from a small model) to an empty object. Invalid
 // JSON in an assistant message fails session persistence and gets every
