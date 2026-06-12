@@ -45,16 +45,12 @@ type TaskState struct {
 	// boundary without locking every node into a single Go struct.
 	NodeOutputs map[string]json.RawMessage
 
-	// Status is set by nodes to guide conditional routing. Routers
-	// inspect this field to decide the next node. Common values:
-	// "ok", "tests_failed", "review_rejected", "blocked".
+	// Status is an optional routing-outcome label on a node that completed
+	// normally (surfaced in progress reports and node-completed events).
+	// Current production nodes don't set it — routing decisions flow
+	// through NodeOutputs and edge expressions instead. Node failure is
+	// signaled by returning an error, never by this field.
 	Status string
-
-	// Err captures error information from node execution. A non-nil
-	// Err after a node completes indicates the node's work was
-	// unsuccessful (distinct from the node function returning an error,
-	// which halts graph execution entirely).
-	Err error
 
 	// FinalText holds the last assistant message text from the most
 	// recently executed node. Useful for extracting the node's

@@ -12,6 +12,14 @@ import (
 	"sync"
 )
 
+// maxLineSize is the largest single SSE line the reader accepts. The
+// bufio.Scanner default of 64KB kills the whole stream (bufio.ErrTooLong)
+// on one large event — a full progress snapshot or a session.started
+// carrying a big system prompt exceeds it easily, and the event is
+// permanently lost across the reconnect. Matches the 10 MiB per-event
+// ceiling the client enforces (client/events.go maxSSEEventSize).
+const maxLineSize = 10 * 1024 * 1024
+
 // Event represents a single SSE event parsed from the stream.
 // EventType is the value from the "event:" line (empty if none was sent).
 // Data is the value from the "data:" line.
@@ -60,6 +68,7 @@ func (r *Reader) pump(src io.Reader) {
 	defer close(r.done)
 
 	scanner := bufio.NewScanner(src)
+	scanner.Buffer(make([]byte, 0, 64*1024), maxLineSize)
 	var eventType string
 	for scanner.Scan() {
 		line := scanner.Text()

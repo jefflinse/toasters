@@ -513,6 +513,11 @@ func (ct *CoreTools) resolvePath(path string) (string, error) {
 
 // --- Tool implementations ---
 
+// maxScanLineBytes is the longest single line read_file and grep accept.
+// bufio.Scanner's 64KB default fails with ErrTooLong on lockfiles, minified
+// JS, and generated code, making those files unreadable for workers.
+const maxScanLineBytes = 4 * 1024 * 1024
+
 func (ct *CoreTools) readFile(_ context.Context, args json.RawMessage) (string, error) {
 	var params struct {
 		Path   string `json:"path"`
@@ -545,6 +550,10 @@ func (ct *CoreTools) readFile(_ context.Context, args json.RawMessage) (string, 
 
 	var b strings.Builder
 	scanner := bufio.NewScanner(f)
+	// Raise the 64KB default line limit: lockfiles, minified JS, and
+	// generated code routinely exceed it, and ErrTooLong makes the whole
+	// file unreadable for the worker.
+	scanner.Buffer(make([]byte, 0, 64*1024), maxScanLineBytes)
 	lineNum := 0
 	linesWritten := 0
 	for scanner.Scan() {
@@ -815,6 +824,7 @@ func (ct *CoreTools) grepFiles(_ context.Context, args json.RawMessage) (string,
 		relPath, _ := filepath.Rel(absSearchDir, path)
 
 		scanner := bufio.NewScanner(f)
+		scanner.Buffer(make([]byte, 0, 64*1024), maxScanLineBytes)
 		lineNum := 0
 		for scanner.Scan() {
 			lineNum++

@@ -115,8 +115,15 @@ func EventMiddleware(sink EventSink) rhizome.Middleware[*TaskState] {
 		result, err := next(ctx, state)
 
 		if sink != nil {
-			status := ""
-			if result != nil {
+			// Mirror emitNodeCompleted (fanout_node.go): a node error must
+			// broadcast "failed" so the TUI can mark the node ✗ and
+			// failedGraphNode can name it. result.Status, when a node sets
+			// one, is a routing outcome on a successful node.
+			status := "completed"
+			switch {
+			case err != nil:
+				status = "failed"
+			case result != nil && result.Status != "":
 				status = result.Status
 			}
 			sink.BroadcastGraphNodeCompleted(state.JobID, state.TaskID, node, status)

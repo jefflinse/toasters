@@ -565,3 +565,34 @@ func TestReader_MultipleDataLinesWithoutBlankLine(t *testing.T) {
 		t.Errorf("event[1].Data = %q, want second", ev.Data)
 	}
 }
+
+func TestReader_LargeEventLine(t *testing.T) {
+	t.Parallel()
+
+	// A single data line well past bufio.Scanner's 64KB default. Before the
+	// buffer was raised, this killed the stream with bufio.ErrTooLong and
+	// the event was permanently lost.
+	big := strings.Repeat("x", 256*1024)
+	input := "event: progress.update\ndata: " + big + "\n\n"
+
+	r := NewReader(strings.NewReader(input))
+	ctx := context.Background()
+
+	ev, ok := r.Next(ctx)
+	if !ok {
+		t.Fatalf("expected event, stream ended (scanner err: %v)", r.Err())
+	}
+	if ev.Type != "progress.update" {
+		t.Errorf("event type = %q, want progress.update", ev.Type)
+	}
+	if len(ev.Data) != len(big) {
+		t.Errorf("data length = %d, want %d", len(ev.Data), len(big))
+	}
+
+	if _, ok := r.Next(ctx); ok {
+		t.Error("expected stream end after single event")
+	}
+	if err := r.Err(); err != nil {
+		t.Errorf("scanner error: %v", err)
+	}
+}

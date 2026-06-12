@@ -510,9 +510,14 @@ func TestEventLoop_TaskStarted_CreatesFeedEntry(t *testing.T) {
 		return len(events) >= 1
 	}, 2*time.Second)
 
-	// Verify feed entry was created.
-	entries, err := store.ListRecentFeedEntries(context.Background(), 10)
-	assertNoError(t, err)
+	// Verify feed entry was created. OnEvent can fire before the handler's
+	// feed write lands, so poll the store rather than asserting immediately.
+	var entries []*db.FeedEntry
+	waitFor(t, func() bool {
+		var err error
+		entries, err = store.ListRecentFeedEntries(context.Background(), 10)
+		return err == nil && len(entries) == 1
+	}, 2*time.Second)
 	if len(entries) != 1 {
 		t.Fatalf("want 1 feed entry, got %d", len(entries))
 	}
@@ -1938,7 +1943,7 @@ func TestNormalizeToolCallArgs(t *testing.T) {
 		{ID: "c", Name: "ask_user", Arguments: json.RawMessage(`{"q":"hi"}`)}, // valid → preserved
 		{ID: "d", Name: "ask_user", Arguments: nil},                           // nil → repaired
 	}
-	normalizeToolCallArgs(tcs)
+	provider.NormalizeToolCallArgs(tcs)
 
 	for _, tc := range tcs {
 		if !json.Valid(tc.Arguments) {

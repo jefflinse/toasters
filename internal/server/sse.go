@@ -100,7 +100,7 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 
 // writeSSEEvent writes a single SSE event to the response writer and flushes.
 func writeSSEEvent(w http.ResponseWriter, rc *http.ResponseController, seq uint64, ev service.Event) error {
-	wirePayload := eventPayloadToWire(ev)
+	wirePayload := EventPayloadToWire(ev)
 
 	envelope := SSEEvent{
 		Seq:         seq,

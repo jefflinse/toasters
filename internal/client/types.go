@@ -462,6 +462,14 @@ type wireSessionPromptPayload struct {
 	InitialMessage string `json:"initial_message,omitempty"`
 }
 
+type wireSessionMetaPayload struct {
+	SessionID   string  `json:"session_id"`
+	Model       string  `json:"model,omitempty"`
+	Provider    string  `json:"provider,omitempty"`
+	Temperature float64 `json:"temperature,omitempty"`
+	Thinking    bool    `json:"thinking,omitempty"`
+}
+
 type wireOperationCompletedPayload struct {
 	Kind   string              `json:"kind"`
 	Result wireOperationResult `json:"result"`
@@ -831,16 +839,16 @@ func wireProgressStateToService(w wireProgressState) service.ProgressState {
 }
 
 // ---------------------------------------------------------------------------
-// parseSSEPayload — inverse of server's eventPayloadToWire
+// ParseSSEPayload — inverse of server's eventPayloadToWire
 // ---------------------------------------------------------------------------
 
-// parseSSEPayload deserializes a raw JSON payload into the corresponding
+// ParseSSEPayload deserializes a raw JSON payload into the corresponding
 // service-level payload type based on the event type. This is the inverse of
 // the server's eventPayloadToWire function.
 //
 // For definitions.reloaded events (which carry no payload), it returns nil, nil.
 // For unknown event types, it returns nil, nil (forward-compatible).
-func parseSSEPayload(eventType string, raw json.RawMessage) (any, error) {
+func ParseSSEPayload(eventType string, raw json.RawMessage) (any, error) {
 	// No payload for definitions.reloaded.
 	if service.EventType(eventType) == service.EventTypeDefinitionsReloaded {
 		return nil, nil
@@ -1092,6 +1100,19 @@ func parseSSEPayload(eventType string, raw json.RawMessage) (any, error) {
 			SessionID:      w.SessionID,
 			SystemPrompt:   w.SystemPrompt,
 			InitialMessage: w.InitialMessage,
+		}, nil
+
+	case service.EventTypeSessionMeta:
+		var w wireSessionMetaPayload
+		if err := json.Unmarshal(raw, &w); err != nil {
+			return nil, fmt.Errorf("decoding session.meta payload: %w", err)
+		}
+		return service.SessionMetaPayload{
+			SessionID:   w.SessionID,
+			Model:       w.Model,
+			Provider:    w.Provider,
+			Temperature: w.Temperature,
+			Thinking:    w.Thinking,
 		}, nil
 
 	case service.EventTypeOperationCompleted:

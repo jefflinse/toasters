@@ -175,6 +175,12 @@ func (s *Session) Run(ctx context.Context) (retErr error) {
 			s.emit(SessionEvent{SessionID: s.id, Type: SessionEventError, Error: err})
 			return fmt.Errorf("collecting response: %w", err)
 		}
+		// Repair malformed tool-call args (empty/truncated JSON from small
+		// local models) before they enter the history — one bad call would
+		// otherwise 400 every subsequent request and the session never
+		// recovers. Same fix the operator applies to its own turn loop.
+		provider.NormalizeToolCallArgs(assistantMsg.ToolCalls)
+		provider.NormalizeToolCallArgs(toolCalls)
 		s.appendMessage(assistantMsg)
 		s.persistMessage(assistantMsg)
 
