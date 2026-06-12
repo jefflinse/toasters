@@ -943,8 +943,8 @@ func TestExecutor_BuildToolExecutor_ScopedPerTask(t *testing.T) {
 
 	executor := NewExecutor(ExecutorConfig{})
 
-	execA := executor.buildToolExecutor(dirA)
-	execB := executor.buildToolExecutor(dirB)
+	execA := executor.buildToolExecutor(dirA, dirA)
+	execB := executor.buildToolExecutor(dirB, dirB)
 
 	readArgs := json.RawMessage(`{"path":"marker.txt"}`)
 	resultA, err := execA.Execute(context.Background(), "read_file", readArgs)
@@ -1158,3 +1158,49 @@ var (
 	_ EventSink  = (*mockEventSink)(nil)
 	_ agent.Tool = AskUserTool()
 )
+
+// A fan-out branch executor must alias the canonical workspace into the
+// branch's isolated dir — instructions and upstream artifacts leak the
+// canonical absolute path, and without the alias workers hit "escapes
+// working directory" and bypass the file tools with shell.
+func TestBuildToolExecutor_AliasesCanonicalWorkspaceIntoBranch(t *testing.T) {
+	base := t.TempDir() // canonical task workspace
+	iso := t.TempDir()  // isolated branch copy
+
+	executor := NewExecutor(ExecutorConfig{})
+	exec := executor.buildToolExecutor(iso, base)
+
+	args, _ := json.Marshal(map[string]any{
+		"path":    filepath.Join(base, "backend", "main.go"),
+		"content": "package main",
+	})
+	if _, err := exec.Execute(context.Background(), "write_file", json.RawMessage(args)); err != nil {
+		t.Fatalf("write_file via canonical path: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(iso, "backend", "main.go")); err != nil {
+		t.Errorf("file not written into isolated branch dir: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(base, "backend")); !os.IsNotExist(err) {
+		t.Errorf("canonical workspace was touched; isolation defeated")
+	}
+}
+
+// A fan-out fork keeps WorkspaceBase pointing at the canonical workspace
+// while WorkspaceDir moves to the isolated branch copy — that pair is what
+// drives the tool-executor path alias.
+func TestTaskStateClone_PreservesWorkspaceBaseAcrossFork(t *testing.T) {
+	state := NewTaskState("j1", "t1", "/real/workspace", "mock", "m")
+	if state.WorkspaceBase != "/real/workspace" {
+		t.Fatalf("WorkspaceBase = %q, want the workspace", state.WorkspaceBase)
+	}
+
+	fork := state.clone()
+	fork.WorkspaceDir = "/tmp/toasters-fanout-x/0" // what fanout split does
+
+	if fork.WorkspaceBase != "/real/workspace" {
+		t.Errorf("fork WorkspaceBase = %q, want canonical workspace preserved", fork.WorkspaceBase)
+	}
+	if state.WorkspaceDir != "/real/workspace" {
+		t.Errorf("original state mutated by fork: %q", state.WorkspaceDir)
+	}
+}

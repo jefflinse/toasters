@@ -42,7 +42,7 @@ func RoleNode(cfg TemplateConfig, role *prompt.Role, nodeID string, slots map[st
 
 		exec := cfg.ToolExecutor
 		if cfg.ToolExecutorFor != nil {
-			exec = cfg.ToolExecutorFor(state.WorkspaceDir)
+			exec = cfg.ToolExecutorFor(state.WorkspaceDir, state.WorkspaceBase)
 		}
 		tools := toolsForRole(exec, role)
 		thinkingEnabled, temperature := effectiveWorkerDefaults(cfg, role)
@@ -351,7 +351,12 @@ func buildInitialMessage(state *TaskState) string {
 		parts = append(parts, fmt.Sprintf("Task: %s", desc))
 	}
 	if state.WorkspaceDir != "" {
-		parts = append(parts, fmt.Sprintf("Workspace: %s", state.WorkspaceDir))
+		// Prefer-relative nudge: absolute paths embedded in outputs (plans,
+		// task lists) break when downstream nodes run in isolated fan-out
+		// copies of the workspace; relative paths are location-independent.
+		parts = append(parts, fmt.Sprintf(
+			"Workspace: %s (file tools resolve relative paths against this directory; prefer relative paths in your work and outputs)",
+			state.WorkspaceDir))
 	}
 	// Deterministic order: map iteration would shuffle sections between
 	// composes, hurting prompt-cache hits and making transcripts hard to diff.

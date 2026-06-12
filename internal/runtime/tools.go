@@ -42,6 +42,7 @@ type WorkerSpawner interface {
 // CoreTools implements the standard worker tool set.
 type CoreTools struct {
 	workDir      string
+	aliasFrom    string // absolute prefix remapped onto workDir (fan-out isolation); empty = no alias
 	allowShell   bool
 	spawner      WorkerSpawner  // for spawn_worker; may be nil
 	depth        int            // current spawn depth
@@ -97,6 +98,17 @@ func WithSpawner(s WorkerSpawner, depth, maxDepth int) CoreToolsOption {
 // WithStore enables progress tools by providing a database store.
 func WithStore(store db.Store) CoreToolsOption {
 	return func(ct *CoreTools) { ct.store = store }
+}
+
+// WithPathAlias remaps absolute paths under `from` onto the working
+// directory. Used by fan-out isolation: a branch's tools run in an isolated
+// copy of the task workspace, but the worker's instructions and upstream
+// artifacts reference the canonical workspace by absolute path. Without the
+// alias those valid-looking paths fail the escape check and models route
+// around the file tools with shell, writing into the shared workspace and
+// defeating isolation.
+func WithPathAlias(from string) CoreToolsOption {
+	return func(ct *CoreTools) { ct.aliasFrom = filepath.Clean(from) }
 }
 
 // WithSessionContext sets the session context for progress tool calls.
@@ -464,6 +476,15 @@ func (ct *CoreTools) resolvePath(path string) (string, error) {
 	var resolved string
 	if filepath.IsAbs(path) {
 		resolved = filepath.Clean(path)
+		// Alias: an absolute path under the canonical workspace maps into
+		// this executor's working directory (fan-out branch isolation).
+		if ct.aliasFrom != "" && ct.aliasFrom != ct.workDir {
+			if resolved == ct.aliasFrom {
+				resolved = filepath.Clean(ct.workDir)
+			} else if strings.HasPrefix(resolved, ct.aliasFrom+string(filepath.Separator)) {
+				resolved = filepath.Join(ct.workDir, resolved[len(ct.aliasFrom)+1:])
+			}
+		}
 	} else {
 		resolved = filepath.Clean(filepath.Join(ct.workDir, path))
 	}

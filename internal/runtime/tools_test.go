@@ -1136,3 +1136,56 @@ func TestQueryGraphs_OnlySystemGraphsReturnsEmpty(t *testing.T) {
 		t.Errorf("expected empty-catalog sentinel when only system graphs remain; got:\n%s", out)
 	}
 }
+
+// WithPathAlias remaps absolute paths under the canonical workspace into the
+// executor's working directory — fan-out branch isolation. Pre-fix, workers
+// whose instructions leaked the canonical absolute path got "escapes working
+// directory" from the file tools and routed around them with shell, writing
+// into the shared workspace and defeating isolation.
+func TestPathAlias_RemapsCanonicalWorkspace(t *testing.T) {
+	base := t.TempDir() // canonical task workspace (leaked into prompts)
+	iso := t.TempDir()  // this branch's isolated copy
+	ct := NewCoreTools(iso, WithPathAlias(base))
+	ctx := context.Background()
+
+	// Writing to a canonical-workspace absolute path lands in the branch dir.
+	args := mustJSON(t, map[string]any{
+		"path":    filepath.Join(base, "backend", "main.go"),
+		"content": "package main",
+	})
+	if _, err := ct.Execute(ctx, "write_file", args); err != nil {
+		t.Fatalf("write_file via canonical path: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(iso, "backend", "main.go")); err != nil {
+		t.Errorf("file not written into isolated branch dir: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(base, "backend")); !os.IsNotExist(err) {
+		t.Errorf("canonical workspace was touched; isolation defeated")
+	}
+
+	// Reading back through the canonical path works too.
+	out, err := ct.Execute(ctx, "read_file", mustJSON(t, map[string]any{
+		"path": filepath.Join(base, "backend", "main.go"),
+	}))
+	if err != nil {
+		t.Fatalf("read_file via canonical path: %v", err)
+	}
+	assertContains(t, out, "package main")
+
+	// Traversal through the alias is still rejected: base/../evil cleans to
+	// a path outside the alias and outside the workdir.
+	if _, err := ct.Execute(ctx, "write_file", mustJSON(t, map[string]any{
+		"path":    filepath.Join(base, "..", "evil.txt"),
+		"content": "nope",
+	})); err == nil {
+		t.Error("write outside alias+workdir accepted; want escape rejection")
+	}
+
+	// Unrelated absolute paths are still rejected.
+	if _, err := ct.Execute(ctx, "write_file", mustJSON(t, map[string]any{
+		"path":    "/tmp/elsewhere.txt",
+		"content": "nope",
+	})); err == nil {
+		t.Error("write to unrelated absolute path accepted; want escape rejection")
+	}
+}
