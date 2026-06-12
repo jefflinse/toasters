@@ -86,11 +86,23 @@ func TestRun_Idempotent(t *testing.T) {
 		t.Fatalf("first Run() error: %v", err)
 	}
 
-	// Modify a system file to verify it's not overwritten.
+	// system/ is managed by toasters: a drifted file (stale prompt from an
+	// older binary, local edit) must be restored to the embedded content on
+	// the next run — pre-fix, upgrades never refreshed system prompts (C22).
 	operatorMD := filepath.Join(configDir, "system", "roles", "operator.md")
-	sentinel := []byte("# customized by user\n")
-	if err := os.WriteFile(operatorMD, sentinel, 0o644); err != nil {
+	embedded, err := os.ReadFile(operatorMD)
+	if err != nil {
+		t.Fatalf("reading operator.md after first run: %v", err)
+	}
+	if err := os.WriteFile(operatorMD, []byte("# stale content from old binary\n"), 0o644); err != nil {
 		t.Fatalf("writing sentinel: %v", err)
+	}
+
+	// config.yaml is user-owned and must survive re-runs.
+	configPath := filepath.Join(configDir, "config.yaml")
+	userConfig := []byte("workspace_dir: ~/custom\n")
+	if err := os.WriteFile(configPath, userConfig, 0o600); err != nil {
+		t.Fatalf("writing user config: %v", err)
 	}
 
 	// Second run.
@@ -98,13 +110,20 @@ func TestRun_Idempotent(t *testing.T) {
 		t.Fatalf("second Run() error: %v", err)
 	}
 
-	// Verify the customized file was NOT overwritten.
 	data, err := os.ReadFile(operatorMD)
 	if err != nil {
 		t.Fatalf("reading operator.md: %v", err)
 	}
-	if string(data) != string(sentinel) {
-		t.Errorf("system/roles/operator.md was overwritten: got %q, want %q", string(data), string(sentinel))
+	if string(data) != string(embedded) {
+		t.Errorf("system/roles/operator.md not restored to embedded content: got %q", string(data))
+	}
+
+	data, err = os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("reading config.yaml: %v", err)
+	}
+	if string(data) != string(userConfig) {
+		t.Errorf("config.yaml was overwritten: got %q, want %q", string(data), string(userConfig))
 	}
 
 	// Verify directories still exist.
@@ -227,6 +246,39 @@ func TestMigrateDatabase_MovesDBToWorkspace(t *testing.T) {
 	newWAL := newDB + "-wal"
 	if !fileExists(newWAL) {
 		t.Fatal("new WAL does not exist after migration")
+	}
+}
+
+// A custom workspace_dir in config.yaml must receive the migrated DB —
+// pre-fix the migration hardcoded ~/toasters, moving state somewhere the
+// server never looks (C22).
+func TestMigrateDatabase_HonorsCustomWorkspaceDir(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+
+	configDir := filepath.Join(tmpHome, ".config", "toasters")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("creating config dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, "config.yaml"),
+		[]byte("workspace_dir: ~/my-workspace\n"), 0o600); err != nil {
+		t.Fatalf("writing config: %v", err)
+	}
+	oldDB := filepath.Join(configDir, "toasters.db")
+	if err := os.WriteFile(oldDB, []byte("test-db-content"), 0o644); err != nil {
+		t.Fatalf("writing old DB: %v", err)
+	}
+
+	if err := migrateDatabase(configDir); err != nil {
+		t.Fatalf("migrateDatabase() error: %v", err)
+	}
+
+	newDB := filepath.Join(tmpHome, "my-workspace", "toasters.db")
+	if !fileExists(newDB) {
+		t.Fatal("DB was not migrated into the configured workspace_dir")
+	}
+	if fileExists(filepath.Join(tmpHome, "toasters", "toasters.db")) {
+		t.Error("DB migrated to hardcoded ~/toasters instead of workspace_dir")
 	}
 }
 

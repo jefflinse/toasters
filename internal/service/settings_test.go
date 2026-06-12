@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -165,6 +166,51 @@ func TestUpdateSettings_RejectsInvalidValue(t *testing.T) {
 	}
 	if appCfg.FineGranularity != "medium" {
 		t.Errorf("AppConfig fine should be unchanged after validation failure, got %q", appCfg.FineGranularity)
+	}
+}
+
+// An invalid worker temperature must reject the whole update BEFORE any
+// field is written — pre-fix, the granularity levers persisted first and a
+// bad temperature left config.yaml half-updated (C21).
+func TestUpdateSettings_InvalidTemperatureWritesNothing(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.yaml")
+	original := "coarse_granularity: medium\nfine_granularity: medium\n"
+	if err := os.WriteFile(configPath, []byte(original), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	appCfg := &config.Config{
+		CoarseGranularity: "medium",
+		FineGranularity:   "medium",
+		WorkerTemperature: 0.1,
+	}
+	svc := NewLocal(LocalConfig{ConfigDir: dir, AppConfig: appCfg})
+
+	err := svc.UpdateSettings(context.Background(), Settings{
+		CoarseGranularity: "xcoarse",
+		FineGranularity:   "xfine",
+		WorkerTemperature: 5.0, // out of [0, 2]
+	})
+	if err == nil {
+		t.Fatal("expected an error for out-of-range temperature")
+	}
+	if !errors.Is(err, ErrInvalid) {
+		t.Errorf("err = %v, want errors.Is(_, ErrInvalid)", err)
+	}
+
+	data, readErr := os.ReadFile(configPath)
+	if readErr != nil {
+		t.Fatalf("re-read config: %v", readErr)
+	}
+	if string(data) != original {
+		t.Errorf("config.yaml was modified despite validation failure:\n%s", data)
+	}
+	if appCfg.CoarseGranularity != "medium" || appCfg.FineGranularity != "medium" {
+		t.Errorf("AppConfig granularity mutated despite validation failure: %q/%q",
+			appCfg.CoarseGranularity, appCfg.FineGranularity)
 	}
 }
 

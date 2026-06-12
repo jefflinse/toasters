@@ -528,9 +528,8 @@ func (s *remoteSystemService) AddProvider(ctx context.Context, req service.AddPr
 	if err != nil {
 		return fmt.Errorf("add provider: %w", err)
 	}
-	resp.Body.Close()
-	if resp.StatusCode != 201 {
-		return fmt.Errorf("add provider: unexpected status %d", resp.StatusCode)
+	if err := decodeNoContent(resp); err != nil {
+		return fmt.Errorf("add provider: %w", err)
 	}
 	return nil
 }
@@ -546,9 +545,8 @@ func (s *remoteSystemService) UpdateProvider(ctx context.Context, req service.Ad
 	if err != nil {
 		return fmt.Errorf("update provider: %w", err)
 	}
-	resp.Body.Close()
-	if resp.StatusCode != 200 {
-		return fmt.Errorf("update provider: unexpected status %d", resp.StatusCode)
+	if err := decodeNoContent(resp); err != nil {
+		return fmt.Errorf("update provider: %w", err)
 	}
 	return nil
 }
@@ -573,9 +571,8 @@ func (s *remoteSystemService) SetOperatorProvider(ctx context.Context, providerI
 	if err != nil {
 		return fmt.Errorf("set operator provider: %w", err)
 	}
-	resp.Body.Close()
-	if resp.StatusCode != 200 {
-		return fmt.Errorf("set operator provider: unexpected status %d", resp.StatusCode)
+	if err := decodeNoContent(resp); err != nil {
+		return fmt.Errorf("set operator provider: %w", err)
 	}
 	return nil
 }
@@ -597,15 +594,14 @@ func (s *remoteSystemService) UpdateSettings(ctx context.Context, settings servi
 	if err != nil {
 		return fmt.Errorf("update settings: %w", err)
 	}
-	resp.Body.Close()
-	if resp.StatusCode != 200 && resp.StatusCode != 204 {
-		return fmt.Errorf("update settings: unexpected status %d", resp.StatusCode)
+	if err := decodeNoContent(resp); err != nil {
+		return fmt.Errorf("update settings: %w", err)
 	}
 	return nil
 }
 
 func (s *remoteSystemService) ListProviderModels(ctx context.Context, providerID string) ([]service.ModelInfo, error) {
-	resp, err := s.c.http.get(ctx, "/api/v1/providers/"+providerID+"/models")
+	resp, err := s.c.http.get(ctx, fmt.Sprintf("/api/v1/providers/%s/models", url.PathEscape(providerID)))
 	if err != nil {
 		return nil, fmt.Errorf("list provider models: %w", err)
 	}

@@ -122,71 +122,27 @@ func paginate[T any](items []T, p PaginationParams) ([]T, int) {
 	return items[p.Offset:end], total
 }
 
-// mapServiceError maps a service-layer error to an HTTP status code and error code.
+// mapServiceError maps a service-layer error to an HTTP status code and
+// error code via the service sentinel errors (errors.Is, not string
+// matching). The "invalid provider ID" substring is the one legacy case
+// kept: it originates in internal/config, which can't import service, and
+// reaches here unwrapped on the config.AddProvider/UpdateProvider write path.
 func mapServiceError(err error) (status int, code string) {
-	if err == nil {
-		return http.StatusOK, ""
-	}
-
-	msg := err.Error()
-
-	// Check for ErrNotFound in the error chain.
-	if errors.Is(err, service.ErrNotFound) {
-		return http.StatusNotFound, "not_found"
-	}
-
-	// Check for specific error patterns from the service layer.
 	switch {
-	case strings.Contains(msg, "too many concurrent operations"):
+	case err == nil:
+		return http.StatusOK, ""
+	case errors.Is(err, service.ErrNotFound):
+		return http.StatusNotFound, "not_found"
+	case errors.Is(err, service.ErrConflict):
+		return http.StatusConflict, "conflict"
+	case errors.Is(err, service.ErrInvalid):
+		return http.StatusUnprocessableEntity, "unprocessable_entity"
+	case errors.Is(err, service.ErrBusy):
 		return http.StatusTooManyRequests, "too_many_requests"
-	case strings.Contains(msg, "already exists"):
-		return http.StatusConflict, "conflict"
-	case strings.Contains(msg, "turn already in progress"):
-		return http.StatusConflict, "conflict"
-	case strings.Contains(msg, "cannot be cancelled"):
-		return http.StatusConflict, "conflict"
-	case strings.Contains(msg, "is already complete"):
-		return http.StatusConflict, "conflict"
-	case strings.Contains(msg, "invalid provider ID"):
-		return http.StatusUnprocessableEntity, "unprocessable_entity"
-	case strings.Contains(msg, "cannot delete system"):
-		return http.StatusUnprocessableEntity, "unprocessable_entity"
-	case strings.Contains(msg, "cannot delete read-only"):
-		return http.StatusUnprocessableEntity, "unprocessable_entity"
-	case strings.Contains(msg, "cannot delete agent"):
-		return http.StatusUnprocessableEntity, "unprocessable_entity"
-	case strings.Contains(msg, "cannot add skill to system"):
-		return http.StatusUnprocessableEntity, "unprocessable_entity"
-	case strings.Contains(msg, "cannot add agent to read-only"):
-		return http.StatusUnprocessableEntity, "unprocessable_entity"
-	case strings.Contains(msg, "cannot set coordinator on read-only"):
-		return http.StatusUnprocessableEntity, "unprocessable_entity"
-	case strings.Contains(msg, "is not an auto-team"):
-		return http.StatusUnprocessableEntity, "unprocessable_entity"
-	case strings.Contains(msg, "cannot promote system"):
-		return http.StatusUnprocessableEntity, "unprocessable_entity"
-	case strings.Contains(msg, "cannot detect coordinator for read-only"):
-		return http.StatusUnprocessableEntity, "unprocessable_entity"
-	case strings.Contains(msg, "source file unknown"):
-		return http.StatusUnprocessableEntity, "unprocessable_entity"
-	case strings.Contains(msg, "has no source path"):
-		return http.StatusUnprocessableEntity, "unprocessable_entity"
-	case strings.Contains(msg, "outside user directory"):
-		return http.StatusUnprocessableEntity, "unprocessable_entity"
-	case strings.Contains(msg, "outside config directory"):
-		return http.StatusUnprocessableEntity, "unprocessable_entity"
-	case strings.Contains(msg, "outside the teams directory"):
-		return http.StatusUnprocessableEntity, "unprocessable_entity"
-	case strings.Contains(msg, "operator not configured"):
+	case errors.Is(err, service.ErrUnavailable):
 		return http.StatusServiceUnavailable, "service_unavailable"
-	case strings.Contains(msg, "LLM provider not configured"):
-		return http.StatusServiceUnavailable, "service_unavailable"
-	case strings.Contains(msg, "store not configured"):
-		return http.StatusServiceUnavailable, "service_unavailable"
-	case strings.Contains(msg, "runtime not configured"):
-		return http.StatusServiceUnavailable, "service_unavailable"
-	case strings.Contains(msg, "provider unreachable"):
-		return http.StatusServiceUnavailable, "service_unavailable"
+	case strings.Contains(err.Error(), "invalid provider ID"):
+		return http.StatusUnprocessableEntity, "unprocessable_entity"
 	default:
 		return http.StatusInternalServerError, "internal_error"
 	}

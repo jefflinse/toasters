@@ -78,7 +78,7 @@ The codebase is a layered hub-and-spoke around `internal/service`. Read this sec
 - **Concurrency.** Sessions use atomic counters for token counts (lock-free reads); event subscriptions are buffered channels (size 256 service-wide, 64 per-worker session); per-session state is mutex-protected. Detached goroutines that outlive a single operator turn (graph dispatch) take the service-lifetime ctx so Shutdown can cancel them.
 - **Tests are co-located** (`*_test.go` next to source). Integration tests live in `cmd/integration_test.go`. The race detector is expected to stay clean across all packages.
 - **Definitions** (skills, roles, graphs) are markdown files with YAML front matter, parsed by `internal/mdfmt` and `internal/tooldef`. The `mdfmt` package is skill-only; roles and graphs are parsed elsewhere.
-- **Errors**: package-level sentinels in `internal/service/errors.go` (`ErrNotFound`, `ErrConflict`, …); HTTP status mapping lives in `internal/server/server.go`.
+- **Errors**: package-level sentinels in `internal/service/errors.go` (`ErrNotFound`, `ErrConflict`, `ErrUnavailable`, `ErrInvalid`, `ErrBusy`) with `Conflictf`/`Unavailablef`/`Invalidf`/`Busyf` constructors; HTTP status mapping is `mapServiceError` in `internal/server/helpers.go` (errors.Is on the sentinels, no string matching).
 
 ## Debugging with session transcripts
 

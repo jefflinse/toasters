@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -141,6 +142,9 @@ func (s *SQLiteStore) ListJobs(ctx context.Context, filter JobFilter) ([]*Job, e
 	if filter.Limit > 0 {
 		query += " LIMIT ?"
 		args = append(args, filter.Limit)
+	} else if filter.Offset > 0 {
+		// SQLite requires a LIMIT clause before OFFSET; -1 means unlimited.
+		query += " LIMIT -1"
 	}
 	if filter.Offset > 0 {
 		query += " OFFSET ?"
@@ -314,17 +318,6 @@ func (s *SQLiteStore) UpdateTaskResult(ctx context.Context, id string, resultSum
 	return checkRowsAffected(result, "task", id)
 }
 
-func (s *SQLiteStore) CompleteTask(ctx context.Context, id string, status TaskStatus, summary, recommendations string) error {
-	now := time.Now().UTC().Format(time.RFC3339)
-	result, err := s.db.ExecContext(ctx,
-		"UPDATE tasks SET status = ?, summary = ?, result_summary = ?, recommendations = ?, updated_at = ? WHERE id = ?",
-		string(status), summary, summary, recommendations, now, id)
-	if err != nil {
-		return fmt.Errorf("completing task: %w", err)
-	}
-	return checkRowsAffected(result, "task", id)
-}
-
 // AssignTaskToGraph sets the graph_id and transitions the task to in_progress.
 // This is the task-dispatch entry point used by the graph executor.
 func (s *SQLiteStore) AssignTaskToGraph(ctx context.Context, id string, graphID string) error {
@@ -394,6 +387,31 @@ func (s *SQLiteStore) GetReadyTasks(ctx context.Context, jobID string) ([]*Task,
 		 ORDER BY t.sort_order, t.created_at`, jobID)
 	if err != nil {
 		return nil, fmt.Errorf("getting ready tasks: %w", err)
+	}
+	defer rows.Close() //nolint:errcheck
+
+	var tasks []*Task
+	for rows.Next() {
+		t, err := scanTask(rows)
+		if err != nil {
+			return nil, err
+		}
+		tasks = append(tasks, t)
+	}
+	return tasks, rows.Err()
+}
+
+// ListTaskDependents returns the tasks that declare a dependency on taskID.
+func (s *SQLiteStore) ListTaskDependents(ctx context.Context, taskID string) ([]*Task, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT t.id, t.job_id, t.title, t.status, t.worker_id, t.graph_id, t.parent_id, t.sort_order,
+		        t.decompose_depth, t.created_at, t.updated_at, t.summary, t.metadata, t.result_summary, t.recommendations
+		 FROM tasks t
+		 JOIN task_dependencies td ON td.task_id = t.id
+		 WHERE td.depends_on = ?
+		 ORDER BY t.sort_order, t.created_at`, taskID)
+	if err != nil {
+		return nil, fmt.Errorf("listing task dependents: %w", err)
 	}
 	defer rows.Close() //nolint:errcheck
 
@@ -561,25 +579,6 @@ func (s *SQLiteStore) CreateFeedEntry(ctx context.Context, entry *FeedEntry) err
 	}
 	entry.ID = id
 	return nil
-}
-
-func (s *SQLiteStore) ListFeedEntries(ctx context.Context, jobID string, limit int) ([]*FeedEntry, error) {
-	if limit <= 0 {
-		limit = 50
-	}
-
-	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, job_id, entry_type, content, metadata, created_at
-		 FROM feed_entries
-		 WHERE job_id = ?
-		 ORDER BY created_at DESC
-		 LIMIT ?`, jobID, limit)
-	if err != nil {
-		return nil, fmt.Errorf("listing feed entries: %w", err)
-	}
-	defer rows.Close() //nolint:errcheck
-
-	return scanFeedEntries(rows)
 }
 
 func (s *SQLiteStore) ListRecentFeedEntries(ctx context.Context, limit int) ([]*FeedEntry, error) {
@@ -917,7 +916,7 @@ func (s *SQLiteStore) ListSessionMessages(ctx context.Context, sessionID string)
 			&m.ToolCalls, &m.ToolCallID, &createdAt); err != nil {
 			return nil, fmt.Errorf("scanning session message: %w", err)
 		}
-		m.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
+		m.CreatedAt = parseTime(createdAt)
 		msgs = append(msgs, &m)
 	}
 	return msgs, rows.Err()
@@ -1084,6 +1083,12 @@ func parseTime(s string) time.Time {
 	}
 	if t, err := time.Parse("2006-01-02 15:04:05", s); err == nil {
 		return t
+	}
+	// A zero time from a non-empty value means a format this function doesn't
+	// know about — log it so the corruption is visible instead of silently
+	// rendering as year 1.
+	if s != "" {
+		slog.Warn("unparseable timestamp in database", "value", s)
 	}
 	return time.Time{}
 }

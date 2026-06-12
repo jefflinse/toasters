@@ -1501,7 +1501,7 @@ func (s *LocalService) BroadcastSessionStarted(sess *runtime.Session) {
 func (s *LocalService) SendMessage(ctx context.Context, message string) (string, error) {
 	op := s.currentOperator()
 	if op == nil {
-		return "", fmt.Errorf("operator not configured")
+		return "", Unavailablef("operator not configured")
 	}
 	if len(message) > maxMessageLen {
 		return "", fmt.Errorf("message too large: %d bytes exceeds maximum %d", len(message), maxMessageLen)
@@ -1516,7 +1516,7 @@ func (s *LocalService) SendMessage(ctx context.Context, message string) (string,
 	s.turnMu.Lock()
 	if s.currentTurnID != "" {
 		s.turnMu.Unlock()
-		return "", fmt.Errorf("operator turn already in progress")
+		return "", Conflictf("operator turn already in progress")
 	}
 	s.currentTurnID = turnID
 	s.turnMu.Unlock()
@@ -1632,7 +1632,7 @@ func (s *LocalService) History(ctx context.Context) ([]ChatEntry, error) {
 // ListSkills returns all skills from the store, ordered by source then name.
 func (s *LocalService) ListSkills(ctx context.Context) ([]Skill, error) {
 	if s.cfg.Store == nil {
-		return nil, fmt.Errorf("store not configured")
+		return nil, Unavailablef("store not configured")
 	}
 	dbSkills, err := s.cfg.Store.ListSkills(ctx)
 	if err != nil {
@@ -1648,7 +1648,7 @@ func (s *LocalService) ListSkills(ctx context.Context) ([]Skill, error) {
 // GetSkill returns a single skill by ID.
 func (s *LocalService) GetSkill(ctx context.Context, id string) (Skill, error) {
 	if s.cfg.Store == nil {
-		return Skill{}, fmt.Errorf("store not configured")
+		return Skill{}, Unavailablef("store not configured")
 	}
 	sk, err := s.cfg.Store.GetSkill(ctx, id)
 	if err != nil {
@@ -1676,7 +1676,7 @@ func (s *LocalService) CreateSkill(ctx context.Context, name string) (Skill, err
 	path := filepath.Join(skillsDir, filename)
 
 	if _, err := os.Stat(path); err == nil {
-		return Skill{}, fmt.Errorf("skill file %q already exists", filename)
+		return Skill{}, Conflictf("skill file %q already exists", filename)
 	}
 
 	template := fmt.Sprintf(`---
@@ -1718,10 +1718,10 @@ func (s *LocalService) DeleteSkill(ctx context.Context, id string) error {
 		return err
 	}
 	if sk.Source == "system" {
-		return fmt.Errorf("cannot delete system skill %q", sk.Name)
+		return Invalidf("cannot delete system skill %q", sk.Name)
 	}
 	if sk.SourcePath == "" {
-		return fmt.Errorf("skill %q has no source path", sk.Name)
+		return Invalidf("skill %q has no source path", sk.Name)
 	}
 	allowedDir := filepath.Join(s.cfg.ConfigDir, "user")
 	realSkillPath, err := filepath.EvalSymlinks(sk.SourcePath)
@@ -1733,7 +1733,7 @@ func (s *LocalService) DeleteSkill(ctx context.Context, id string) error {
 		return sanitizeError(fmt.Errorf("resolving allowed dir: %w", err))
 	}
 	if !strings.HasPrefix(realSkillPath+string(filepath.Separator), realAllowedDir+string(filepath.Separator)) {
-		return sanitizeError(fmt.Errorf("skill source path is outside user directory"))
+		return sanitizeError(Invalidf("skill source path is outside user directory"))
 	}
 	if err := os.Remove(realSkillPath); err != nil {
 		return sanitizeError(fmt.Errorf("removing skill file: %w", err))
@@ -1750,7 +1750,7 @@ func (s *LocalService) DeleteSkill(ctx context.Context, id string) error {
 // operationID immediately; pushes operation.completed or operation.failed when done.
 func (s *LocalService) GenerateSkill(ctx context.Context, prompt string) (string, error) {
 	if s.currentProvider() == nil {
-		return "", fmt.Errorf("LLM provider not configured")
+		return "", Unavailablef("LLM provider not configured")
 	}
 	if len(prompt) > maxPromptLen {
 		return "", fmt.Errorf("prompt too large: %d bytes exceeds maximum %d", len(prompt), maxPromptLen)
@@ -1763,7 +1763,7 @@ func (s *LocalService) GenerateSkill(ctx context.Context, prompt string) (string
 	operationID := uuidVal.String()
 
 	if !s.tryAcquireAsync() {
-		return "", fmt.Errorf("too many concurrent operations (max %d)", maxConcurrentOps)
+		return "", Busyf("too many concurrent operations (max %d)", maxConcurrentOps)
 	}
 
 	s.safeGo(operationID, "generate_skill", func() {
@@ -1961,7 +1961,7 @@ func mapEndSentinel(to string) string {
 // List returns jobs matching the given filter.
 func (s *localJobService) List(ctx context.Context, filter *JobListFilter) ([]Job, error) {
 	if s.svc.cfg.Store == nil {
-		return nil, fmt.Errorf("store not configured")
+		return nil, Unavailablef("store not configured")
 	}
 	dbFilter := db.JobFilter{}
 	if filter != nil {
@@ -1989,7 +1989,7 @@ func (s *localJobService) List(ctx context.Context, filter *JobListFilter) ([]Jo
 // ListAll returns all jobs regardless of status.
 func (s *localJobService) ListAll(ctx context.Context) ([]Job, error) {
 	if s.svc.cfg.Store == nil {
-		return nil, fmt.Errorf("store not configured")
+		return nil, Unavailablef("store not configured")
 	}
 	dbJobs, err := s.svc.cfg.Store.ListAllJobs(ctx)
 	if err != nil {
@@ -2005,7 +2005,7 @@ func (s *localJobService) ListAll(ctx context.Context) ([]Job, error) {
 // Get returns a JobDetail for the given job ID.
 func (s *localJobService) Get(ctx context.Context, id string) (JobDetail, error) {
 	if s.svc.cfg.Store == nil {
-		return JobDetail{}, fmt.Errorf("store not configured")
+		return JobDetail{}, Unavailablef("store not configured")
 	}
 	dbJob, err := s.svc.cfg.Store.GetJob(ctx, id)
 	if err != nil {
@@ -2045,7 +2045,7 @@ func (s *localJobService) Get(ctx context.Context, id string) (JobDetail, error)
 // Cancel cancels the job with the given ID.
 func (s *localJobService) Cancel(ctx context.Context, id string) error {
 	if s.svc.cfg.Store == nil {
-		return fmt.Errorf("store not configured")
+		return Unavailablef("store not configured")
 	}
 	dbJob, err := s.svc.cfg.Store.GetJob(ctx, id)
 	if err != nil {
@@ -2059,7 +2059,7 @@ func (s *localJobService) Cancel(ctx context.Context, id string) error {
 	case db.JobStatusActive, db.JobStatusPending, db.JobStatusSettingUp:
 		// cancellable
 	default:
-		return fmt.Errorf("job %s cannot be cancelled (status: %s)", id, dbJob.Status)
+		return Conflictf("job %s cannot be cancelled (status: %s)", id, dbJob.Status)
 	}
 
 	// Flip the status first so anything reacting to in-flight work seeing
@@ -2107,7 +2107,7 @@ func (s *localJobService) Cancel(ctx context.Context, id string) error {
 // executor, deterministically and without involving the operator LLM.
 func (s *localJobService) RetryTask(ctx context.Context, taskID string) error {
 	if s.svc.cfg.Store == nil {
-		return fmt.Errorf("store not configured")
+		return Unavailablef("store not configured")
 	}
 	if s.svc.currentGraphExecutor() == nil {
 		return fmt.Errorf("no graph executor configured")
@@ -2156,7 +2156,7 @@ func (s *localSessionService) List(_ context.Context) ([]SessionSnapshot, error)
 // Get returns a full SessionDetail for the given session ID.
 func (s *localSessionService) Get(_ context.Context, id string) (SessionDetail, error) {
 	if s.svc.cfg.Runtime == nil {
-		return SessionDetail{}, fmt.Errorf("runtime not configured")
+		return SessionDetail{}, Unavailablef("runtime not configured")
 	}
 	sess, ok := s.svc.cfg.Runtime.GetSession(id)
 	if !ok {
@@ -2178,7 +2178,7 @@ func (s *localSessionService) Get(_ context.Context, id string) (SessionDetail, 
 // Cancel cancels the session with the given ID.
 func (s *localSessionService) Cancel(_ context.Context, id string) error {
 	if s.svc.cfg.Runtime == nil {
-		return fmt.Errorf("runtime not configured")
+		return Unavailablef("runtime not configured")
 	}
 	return s.svc.cfg.Runtime.CancelSession(id)
 }
@@ -2209,7 +2209,7 @@ func (s *LocalService) Health(_ context.Context) (HealthStatus, error) {
 func (s *LocalService) ListModels(ctx context.Context) ([]ModelInfo, error) {
 	prov := s.currentProvider()
 	if prov == nil {
-		return nil, fmt.Errorf("LLM provider not configured")
+		return nil, Unavailablef("LLM provider not configured")
 	}
 	provModels, err := prov.Models(ctx)
 	if err != nil {
@@ -2327,6 +2327,9 @@ func (s *LocalService) AddProvider(_ context.Context, req AddProviderRequest) er
 		return fmt.Errorf("invalid provider type %q (must be openai, local, or anthropic)", req.Type)
 	}
 
+	if err := config.ValidateProviderID(req.ID); err != nil {
+		return Invalidf("%s", err)
+	}
 	return config.AddProvider(s.cfg.ConfigDir, config.ProviderEntry{
 		ID:       req.ID,
 		Name:     req.Name,
@@ -2340,6 +2343,9 @@ func (s *LocalService) AddProvider(_ context.Context, req AddProviderRequest) er
 func (s *LocalService) UpdateProvider(_ context.Context, req AddProviderRequest) error {
 	if req.ID == "" {
 		return fmt.Errorf("provider ID is required")
+	}
+	if err := config.ValidateProviderID(req.ID); err != nil {
+		return Invalidf("%s", err)
 	}
 	return config.UpdateProvider(s.cfg.ConfigDir, config.ProviderEntry{
 		ID:       req.ID,
@@ -2464,12 +2470,16 @@ func (s *LocalService) UpdateSettings(_ context.Context, next Settings) error {
 		},
 	}
 
-	// Validate first, write second — so an invalid field doesn't leave
-	// config.yaml half-updated.
+	// Validate EVERY field first, write second — so an invalid value on any
+	// field (not just the granularity levers) leaves config.yaml untouched
+	// rather than half-updated.
 	for _, l := range levers {
 		if normalized := config.ValidGranularity(l.kind, l.incoming); normalized != l.incoming {
-			return fmt.Errorf("invalid %s %q", l.yamlKey, l.incoming)
+			return Invalidf("invalid %s %q", l.yamlKey, l.incoming)
 		}
+	}
+	if next.WorkerTemperature < 0 || next.WorkerTemperature > 2 {
+		return Invalidf("invalid worker_temperature %v (must be in [0, 2])", next.WorkerTemperature)
 	}
 
 	for _, l := range levers {
@@ -2484,11 +2494,8 @@ func (s *LocalService) UpdateSettings(_ context.Context, next Settings) error {
 		}
 	}
 
-	// Worker defaults: validate and persist as their native YAML types so
-	// viper round-trips them as bool/float on next load.
-	if next.WorkerTemperature < 0 || next.WorkerTemperature > 2 {
-		return fmt.Errorf("invalid worker_temperature %v (must be in [0, 2])", next.WorkerTemperature)
-	}
+	// Worker defaults: persist as their native YAML types so viper
+	// round-trips them as bool/float on next load. (Validated above.)
 	if err := config.SetTopLevelValue(s.cfg.ConfigDir, "worker_thinking_enabled", next.WorkerThinkingEnabled); err != nil {
 		return fmt.Errorf("persisting worker_thinking_enabled: %w", err)
 	}
