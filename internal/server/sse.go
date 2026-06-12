@@ -27,27 +27,30 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 	}
 	defer s.sseConns.Add(-1)
 
-	// Use ResponseController to access Flush through middleware wrappers.
-	// This traverses Unwrap() chains to find the underlying http.Flusher.
-	rc := http.NewResponseController(w)
-	if err := rc.Flush(); err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error",
-			"streaming not supported")
-		return
-	}
-
-	// Set SSE headers.
+	// Set SSE headers BEFORE the first Flush — flushing commits the response,
+	// so headers set afterwards are silently dropped and spec-compliant
+	// consumers (e.g. browser EventSource) reject the stream for missing
+	// Content-Type: text/event-stream.
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no") // disable nginx buffering
-	w.WriteHeader(http.StatusOK)
-	_ = rc.Flush()
 
-	// Disable write deadline for this long-lived SSE connection.
-	// The server's WriteTimeout applies to regular endpoints; SSE connections
-	// are kept alive by heartbeats and cleaned up on client disconnect.
-	_ = rc.SetWriteDeadline(time.Time{})
+	// Use ResponseController to access Flush through middleware wrappers.
+	// This traverses Unwrap() chains to find the underlying http.Flusher.
+	// When no flusher exists, Flush returns ErrNotSupported without writing
+	// anything, so the error response below is still deliverable. When it
+	// succeeds, it commits the 200 + SSE headers — that IS the stream start.
+	rc := http.NewResponseController(w)
+	if err := rc.Flush(); err != nil {
+		w.Header().Del("Content-Type")
+		w.Header().Del("Cache-Control")
+		w.Header().Del("Connection")
+		w.Header().Del("X-Accel-Buffering")
+		writeError(w, http.StatusInternalServerError, "internal_error",
+			"streaming not supported")
+		return
+	}
 
 	// Create a cancellable context for this SSE connection.
 	ctx, cancel := context.WithCancel(r.Context())
@@ -98,8 +101,18 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// sseWriteTimeout bounds each individual SSE event write. A stalled client
+// (full TCP send buffer, half-dead connection) would otherwise park the
+// handler in a kernel write indefinitely, defeating graceful shutdown.
+// Rolling per-write deadlines keep idle-but-healthy connections alive
+// regardless of event spacing.
+const sseWriteTimeout = 30 * time.Second
+
 // writeSSEEvent writes a single SSE event to the response writer and flushes.
 func writeSSEEvent(w http.ResponseWriter, rc *http.ResponseController, seq uint64, ev service.Event) error {
+	// Fresh deadline per write — events may be arbitrarily far apart, so an
+	// absolute deadline set once at connect would expire on healthy streams.
+	_ = rc.SetWriteDeadline(time.Now().Add(sseWriteTimeout))
 	wirePayload := EventPayloadToWire(ev)
 
 	envelope := SSEEvent{

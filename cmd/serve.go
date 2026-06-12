@@ -306,11 +306,19 @@ func runServe(cmd *cobra.Command, args []string) error {
 	// operator is left nil and the TUI will show the disabled state.
 	var op *operator.Operator
 	if store != nil && client != nil {
+		// activeTurn tracks the turn ID the operator is currently streaming
+		// so timer-driven batch flushes stamp text with the right turn.
+		// Turns are serial and OnTurnDone flushes both batchers before
+		// clearing it, so a batch never straddles a turn boundary.
+		var activeTurn atomic.Value
+		activeTurn.Store("")
 		textFlush := func(text string) {
-			svc.BroadcastOperatorText(text, "")
+			turnID, _ := activeTurn.Load().(string)
+			svc.BroadcastOperatorText(turnID, text, "")
 		}
 		reasoningFlush := func(text string) {
-			svc.BroadcastOperatorText("", text)
+			turnID, _ := activeTurn.Load().(string)
+			svc.BroadcastOperatorText(turnID, "", text)
 		}
 		batcher := newTextBatcher(16*time.Millisecond, textFlush)
 		reasoningBatcher := newTextBatcher(16*time.Millisecond, reasoningFlush)
@@ -332,19 +340,22 @@ func runServe(cmd *cobra.Command, args []string) error {
 			DefaultProvider:        defaultProvider,
 			DefaultModel:           defaultModel,
 			LifetimeCtx:            svc.Ctx(),
-			OnText: func(text string) {
+			OnText: func(turnID, text string) {
+				activeTurn.Store(turnID)
 				batcher.Add(text)
 			},
-			OnReasoning: func(text string) {
+			OnReasoning: func(turnID, text string) {
+				activeTurn.Store(turnID)
 				reasoningBatcher.Add(text)
 			},
 			OnEvent: func(event operator.Event) {
 				svc.BroadcastOperatorEvent(event)
 			},
-			OnTurnDone: func(tokensIn, tokensOut, reasoningTokens int) {
+			OnTurnDone: func(turnID string, tokensIn, tokensOut, reasoningTokens int) {
 				reasoningBatcher.Flush()
 				batcher.Flush()
-				svc.BroadcastOperatorDone(cfg.Operator.Model, tokensIn, tokensOut, reasoningTokens)
+				activeTurn.Store("")
+				svc.BroadcastOperatorDone(turnID, cfg.Operator.Model, tokensIn, tokensOut, reasoningTokens)
 			},
 			// Without this, an operator started at boot (the case now that a
 			// provider/model ship as config defaults) calls ask_user but the

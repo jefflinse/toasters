@@ -196,7 +196,7 @@ func TestOperatorProcessesUserMessage(t *testing.T) {
 		Model:        "test-model",
 		WorkDir:      t.TempDir(),
 		SystemPrompt: "You are the operator.",
-		OnText: func(text string) {
+		OnText: func(_, text string) {
 			mu.Lock()
 			textBuf.WriteString(text)
 			mu.Unlock()
@@ -230,6 +230,82 @@ func TestOperatorProcessesUserMessage(t *testing.T) {
 	assertEqual(t, "Hello from operator", got)
 }
 
+// TestOperatorThreadsTurnID verifies that the TurnID from a user message
+// payload reaches the OnText and OnTurnDone callbacks, and that a
+// system-initiated turn (no TurnID) reports an empty one — the service relies
+// on this to keep system turns from clearing a pending user turn's gate (C13).
+func TestOperatorThreadsTurnID(t *testing.T) {
+	mp := &mockProvider{
+		name: "test",
+		responses: []mockResponse{
+			{events: []provider.StreamEvent{
+				{Type: provider.EventText, Text: "user turn reply"},
+				{Type: provider.EventDone},
+			}},
+			{events: []provider.StreamEvent{
+				{Type: provider.EventText, Text: "system turn reply"},
+				{Type: provider.EventDone},
+			}},
+		},
+	}
+
+	rt := runtime.New(nil, newTestRegistry(mp))
+
+	var mu sync.Mutex
+	var textTurns, doneTurns []string
+
+	op, err := New(Config{
+		Runtime:      rt,
+		Provider:     mp,
+		Model:        "test-model",
+		WorkDir:      t.TempDir(),
+		SystemPrompt: "You are the operator.",
+		OnText: func(turnID, _ string) {
+			mu.Lock()
+			textTurns = append(textTurns, turnID)
+			mu.Unlock()
+		},
+		OnTurnDone: func(turnID string, _, _, _ int) {
+			mu.Lock()
+			doneTurns = append(doneTurns, turnID)
+			mu.Unlock()
+		},
+	})
+	if err != nil {
+		t.Fatalf("creating operator: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	op.Start(ctx)
+
+	// A user-initiated turn with a turn ID, then a system-initiated one
+	// (sendToLLM constructs its payload without a TurnID).
+	_ = op.Send(ctx, Event{
+		Type:    EventUserMessage,
+		Payload: UserMessagePayload{Text: "hello", TurnID: "turn-1"},
+	})
+	_ = op.Send(ctx, Event{
+		Type:    EventUserMessage,
+		Payload: UserMessagePayload{Text: "internal notification"},
+	})
+
+	waitFor(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(doneTurns) == 2
+	}, 2*time.Second)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(textTurns) != 2 || textTurns[0] != "turn-1" || textTurns[1] != "" {
+		t.Errorf("OnText turn IDs = %q, want [\"turn-1\" \"\"]", textTurns)
+	}
+	if doneTurns[0] != "turn-1" || doneTurns[1] != "" {
+		t.Errorf("OnTurnDone turn IDs = %q, want [\"turn-1\" \"\"]", doneTurns)
+	}
+}
+
 func TestOperatorLongLivedSession(t *testing.T) {
 	// The operator should maintain conversation context across multiple user
 	// messages. We verify by checking that the second ChatStream call receives
@@ -261,7 +337,7 @@ func TestOperatorLongLivedSession(t *testing.T) {
 		Model:        "test-model",
 		WorkDir:      t.TempDir(),
 		SystemPrompt: "You are the operator.",
-		OnText: func(text string) {
+		OnText: func(_, text string) {
 			mu.Lock()
 			textBuf.WriteString(text)
 			mu.Unlock()
@@ -719,6 +795,88 @@ func TestEventLoop_TaskCompleted_SkipsGraphlessTask(t *testing.T) {
 	}
 }
 
+// A failure in the mechanical advance path (assign_task errors) must reach
+// the LLM and the feed instead of dying in a log line — assignNextTask is the
+// only thing that moves a job forward, so a silent failure stalls the
+// pipeline (C16).
+func TestEventLoop_AdvanceFailureConsultsLLM(t *testing.T) {
+	store := newOperatorTestStore(t)
+	ctx := context.Background()
+
+	assertNoError(t, store.CreateJob(ctx, &db.Job{
+		ID: "job-1", Title: "Test Job", Status: db.JobStatusActive,
+	}))
+	assertNoError(t, store.CreateTask(ctx, &db.Task{
+		ID: "task-1", JobID: "job-1", Title: "Done", Status: db.TaskStatusCompleted, GraphID: "bug-fix",
+	}))
+	assertNoError(t, store.CreateTask(ctx, &db.Task{
+		ID: "task-2", JobID: "job-1", Title: "Next up", Status: db.TaskStatusPending, GraphID: "bug-fix", SortOrder: 1,
+	}))
+
+	mp := &mockProvider{
+		name: "test-provider",
+		responses: []mockResponse{
+			{events: []provider.StreamEvent{
+				{Type: provider.EventText, Text: "acknowledged"},
+				{Type: provider.EventDone},
+			}},
+		},
+	}
+	reg := newTestRegistry(mp)
+	rt := runtime.New(store, reg)
+
+	engine := testPromptEngine(t, map[string]string{"lead-agent": "You are a test lead."})
+	eventCh := make(chan Event, eventChSize)
+	// No GraphExecutor: assign_task fails at dispatch, simulating an advance
+	// failure.
+	systemTools := NewSystemTools(SystemToolsConfig{
+		Store: store, PromptEngine: engine,
+		DefaultProvider: "test-provider", DefaultModel: "test-model",
+		EventCh: eventCh, WorkDir: t.TempDir(),
+	})
+	tools := newOperatorTools(rt, engine, "test-provider", "test-model", store, systemTools, t.TempDir())
+	provTools := operatorToolsToProviderTools(tools.Definitions())
+
+	op := &Operator{
+		rt: rt, prov: mp, model: "test-model", tools: tools, store: store,
+		eventCh: eventCh, workDir: t.TempDir(), systemPrompt: "You are the operator.", provTools: provTools,
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	op.Start(ctx)
+
+	_ = op.Send(ctx, Event{
+		Type: EventTaskCompleted,
+		Payload: TaskCompletedPayload{
+			TaskID: "task-1", JobID: "job-1", GraphID: "bug-fix",
+			Summary: "done", HasNextTask: true,
+		},
+	})
+
+	waitFor(t, func() bool { return len(mp.getRequests()) > 0 }, 3*time.Second)
+
+	reqs := mp.getRequests()
+	last := reqs[len(reqs)-1].Messages
+	prompt := last[len(last)-1].Content
+	if !strings.Contains(prompt, "failed to advance job job-1") {
+		t.Errorf("LLM prompt missing advance-failure context: %q", prompt)
+	}
+
+	// A feed entry must record the failure for the UI.
+	waitFor(t, func() bool {
+		entries, err := store.ListRecentFeedEntries(ctx, 10)
+		if err != nil {
+			return false
+		}
+		for _, e := range entries {
+			if strings.Contains(e.Content, "could not start task") {
+				return true
+			}
+		}
+		return false
+	}, 3*time.Second)
+}
+
 func TestEventLoop_TaskCompleted_ChecksJobComplete(t *testing.T) {
 	store := newOperatorTestStore(t)
 	ctx := context.Background()
@@ -756,7 +914,7 @@ func TestEventLoop_TaskCompleted_ChecksJobComplete(t *testing.T) {
 		WorkDir:      t.TempDir(),
 		Store:        store,
 		SystemPrompt: "You are the operator.",
-		OnText: func(text string) {
+		OnText: func(_, text string) {
 			mu.Lock()
 			textBuf.WriteString(text)
 			mu.Unlock()
@@ -861,7 +1019,7 @@ func TestEventLoop_TaskCompleted_WithRecommendations(t *testing.T) {
 		WorkDir:      t.TempDir(),
 		Store:        store,
 		SystemPrompt: "You are the operator.",
-		OnText: func(text string) {
+		OnText: func(_, text string) {
 			mu.Lock()
 			textBuf.WriteString(text)
 			mu.Unlock()
@@ -936,7 +1094,7 @@ func TestEventLoop_TaskFailed_RoutesToLLM(t *testing.T) {
 		WorkDir:      t.TempDir(),
 		Store:        store,
 		SystemPrompt: "You are the operator.",
-		OnText: func(text string) {
+		OnText: func(_, text string) {
 			mu.Lock()
 			textBuf.WriteString(text)
 			mu.Unlock()
@@ -1083,7 +1241,7 @@ func TestEventLoop_JobComplete_MarksDone(t *testing.T) {
 		WorkDir:      t.TempDir(),
 		Store:        store,
 		SystemPrompt: "You are the operator.",
-		OnText: func(text string) {
+		OnText: func(_, text string) {
 			mu.Lock()
 			textBuf.WriteString(text)
 			mu.Unlock()
@@ -1168,7 +1326,7 @@ func TestEventLoop_UserResponse_RoutesToLLM(t *testing.T) {
 		WorkDir:      t.TempDir(),
 		Store:        store,
 		SystemPrompt: "You are the operator.",
-		OnText: func(text string) {
+		OnText: func(_, text string) {
 			mu.Lock()
 			textBuf.WriteString(text)
 			mu.Unlock()
@@ -1280,7 +1438,7 @@ func TestOperatorChatStreamError(t *testing.T) {
 		Model:        "test-model",
 		WorkDir:      t.TempDir(),
 		SystemPrompt: "You are the operator.",
-		OnText: func(text string) {
+		OnText: func(_, text string) {
 			mu.Lock()
 			textBuf.WriteString(text)
 			mu.Unlock()
@@ -1336,7 +1494,7 @@ func TestOperatorStreamError(t *testing.T) {
 		Model:        "test-model",
 		WorkDir:      t.TempDir(),
 		SystemPrompt: "You are the operator.",
-		OnText: func(text string) {
+		OnText: func(_, text string) {
 			mu.Lock()
 			textBuf.WriteString(text)
 			mu.Unlock()
@@ -1404,7 +1562,7 @@ func TestOperatorSurfaceToUser(t *testing.T) {
 		Model:        "test-model",
 		WorkDir:      t.TempDir(),
 		SystemPrompt: "You are the operator.",
-		OnText: func(text string) {
+		OnText: func(_, text string) {
 			mu.Lock()
 			textBuf.WriteString(text)
 			mu.Unlock()
@@ -1491,13 +1649,14 @@ func TestOperatorToolDefinitions(t *testing.T) {
 	tools := newTestOperatorTools(t)
 	defs := tools.Definitions()
 
-	// consult_worker and all system-worker tools (create_task, assign_task,
-	// start_job) were retired when decomposition moved into auto-dispatched
-	// graphs and the blocker-handler was replaced by direct operator triage.
+	// consult_worker, assign_task, and start_job were retired when
+	// decomposition moved into auto-dispatched graphs and the blocker-handler
+	// was replaced by direct operator triage. create_task returned so the
+	// operator can act on new_task_request events and recommendations (C15).
 	expected := []string{
 		"surface_to_user", "list_jobs", "query_job",
 		"query_graphs", "setup_workspace", "create_job",
-		"retry_task", "ask_user",
+		"create_task", "retry_task", "ask_user",
 	}
 	if len(defs) != len(expected) {
 		t.Fatalf("want %d tool definitions, got %d", len(expected), len(defs))
@@ -1707,19 +1866,58 @@ func TestTruncateMessages_MultipleToolCallsBeforeWindow(t *testing.T) {
 }
 
 func TestTruncateMessages_AllToolResults(t *testing.T) {
-	// Edge case: the entire tail is tool results. The function should return
-	// an empty slice (or the tail from startIdx=0 if no safe boundary found).
-	// In practice this shouldn't happen, but the function should not panic.
+	// Degenerate edge case: the entire tail is tool results. Keeping any of
+	// them would leave orphans the provider rejects, so the window empties.
 	msgs := make([]provider.Message, 10)
 	for i := range msgs {
 		msgs[i] = provider.Message{Role: "tool", Content: "result", ToolCallID: "tc"}
 	}
 
 	got := truncateMessages(msgs, 5)
-	// No safe boundary found — startIdx stays at 0, returns the full tail.
-	// This is the best we can do; the conversation is already corrupted.
-	if len(got) != 5 {
-		t.Fatalf("want 5 messages (fallback), got %d", len(got))
+	if len(got) != 0 {
+		t.Fatalf("want 0 messages (all orphaned tool results dropped), got %d", len(got))
+	}
+}
+
+// A window with no safe boundary at all (every assistant message carries tool
+// calls — plausible in tool-heavy autonomous stretches) must not start with
+// orphaned tool results. Pre-fix, truncateMessages returned the tail
+// unchanged, the provider rejected every request, and because truncation runs
+// on every append the conversation never self-healed (C17).
+func TestTruncateMessages_NoSafeBoundaryFallsBackToPairedStart(t *testing.T) {
+	var msgs []provider.Message
+	for i := 0; i < 4; i++ {
+		id := fmt.Sprintf("tc-%d", i)
+		msgs = append(msgs,
+			provider.Message{Role: "assistant", ToolCalls: []provider.ToolCall{{ID: id, Name: "run"}}},
+			provider.Message{Role: "tool", Content: "result", ToolCallID: id},
+		)
+	}
+	// 8 messages, all assistant-with-tool-calls / tool pairs.
+
+	got := truncateMessages(msgs, 5)
+	// Tail is [tool(tc-1), assistant(tc-2), tool(tc-2), assistant(tc-3), tool(tc-3)].
+	// The leading orphaned tool result must be dropped; the window starts at
+	// an assistant whose tool results immediately follow.
+	if len(got) == 0 {
+		t.Fatal("window emptied; want paired-start fallback")
+	}
+	if got[0].Role == "tool" {
+		t.Fatalf("window starts with orphaned tool result: %+v", got[0])
+	}
+	assertEqual(t, "assistant", got[0].Role)
+	if len(got[0].ToolCalls) != 1 || got[0].ToolCalls[0].ID != "tc-2" {
+		t.Fatalf("window should start at assistant(tc-2), got %+v", got[0])
+	}
+	// Every tool result in the window must follow its call.
+	calls := map[string]bool{}
+	for _, m := range got {
+		for _, tc := range m.ToolCalls {
+			calls[tc.ID] = true
+		}
+		if m.Role == "tool" && !calls[m.ToolCallID] {
+			t.Fatalf("orphaned tool result %q in window", m.ToolCallID)
+		}
 	}
 }
 
@@ -1878,7 +2076,7 @@ func newLoopTestOperator(t *testing.T, mp *mockProvider, textBuf *strings.Builde
 		workDir:      t.TempDir(),
 		systemPrompt: "You are the operator.",
 		provTools:    provTools,
-		onText: func(s string) {
+		onText: func(_, s string) {
 			mu.Lock()
 			textBuf.WriteString(s)
 			mu.Unlock()
