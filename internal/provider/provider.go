@@ -15,6 +15,7 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 
 	mcp "github.com/jefflinse/mycelium/provider"
@@ -46,6 +47,20 @@ const (
 	EventDone      = mcp.EventDone
 	EventError     = mcp.EventError
 )
+
+// NormalizeToolCallArgs repairs tool-call arguments that aren't valid JSON
+// (empty or truncated output from a small model) to an empty object. Invalid
+// JSON in an assistant message fails session persistence and gets every
+// subsequent request rejected with a 400 by the LLM endpoint — the
+// conversation never recovers. Call this on streamed tool calls before they
+// enter a message history.
+func NormalizeToolCallArgs(tcs []ToolCall) {
+	for i := range tcs {
+		if len(tcs[i].Arguments) == 0 || !json.Valid(tcs[i].Arguments) {
+			tcs[i].Arguments = json.RawMessage("{}")
+		}
+	}
+}
 
 // ChatCompletion is a convenience function that sends a non-streaming request
 // by collecting the full stream into a string. It extracts system messages from

@@ -730,14 +730,14 @@ func TestWireFeedEntryToService(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// parseSSEPayload tests — all 19 event types
+// ParseSSEPayload tests — all 19 event types
 // ---------------------------------------------------------------------------
 
 func TestParseSSEPayload_OperatorText(t *testing.T) {
 	t.Parallel()
 
 	raw := json.RawMessage(`{"text":"Hello world","reasoning":"thinking..."}`)
-	payload, err := parseSSEPayload("operator.text", raw)
+	payload, err := ParseSSEPayload("operator.text", raw)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -758,7 +758,7 @@ func TestParseSSEPayload_OperatorDone(t *testing.T) {
 	t.Parallel()
 
 	raw := json.RawMessage(`{"model_name":"claude-sonnet-4-6","tokens_in":100,"tokens_out":200,"reasoning_tokens":50}`)
-	payload, err := parseSSEPayload("operator.done", raw)
+	payload, err := ParseSSEPayload("operator.done", raw)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -792,7 +792,7 @@ func TestParseSSEPayload_BlockerAdded(t *testing.T) {
 		"questions":[{"question":"What should I do?","options":["yes","no"]}],
 		"created_at":"2026-06-06T00:00:00Z"
 	}`)
-	payload, err := parseSSEPayload("blocker.added", raw)
+	payload, err := ParseSSEPayload("blocker.added", raw)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -822,7 +822,7 @@ func TestParseSSEPayload_BlockerResolved(t *testing.T) {
 	t.Parallel()
 
 	raw := json.RawMessage(`{"request_id":"req-1"}`)
-	payload, err := parseSSEPayload("blocker.resolved", raw)
+	payload, err := ParseSSEPayload("blocker.resolved", raw)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -839,7 +839,7 @@ func TestParseSSEPayload_TaskAssigned(t *testing.T) {
 	t.Parallel()
 
 	raw := json.RawMessage(`{"task_id":"task-1","job_id":"job-1","graph_id":"team-1","title":"Write tests"}`)
-	payload, err := parseSSEPayload("task.assigned", raw)
+	payload, err := ParseSSEPayload("task.assigned", raw)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -866,7 +866,7 @@ func TestParseSSEPayload_TaskStarted(t *testing.T) {
 	t.Parallel()
 
 	raw := json.RawMessage(`{"task_id":"task-1","job_id":"job-1","graph_id":"team-1","title":"Write tests"}`)
-	payload, err := parseSSEPayload("task.started", raw)
+	payload, err := ParseSSEPayload("task.started", raw)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -893,7 +893,7 @@ func TestParseSSEPayload_TaskCompleted(t *testing.T) {
 	t.Parallel()
 
 	raw := json.RawMessage(`{"task_id":"task-1","job_id":"job-1","graph_id":"team-1","summary":"All done","recommendations":"Ship it","has_next_task":true}`)
-	payload, err := parseSSEPayload("task.completed", raw)
+	payload, err := ParseSSEPayload("task.completed", raw)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -920,7 +920,7 @@ func TestParseSSEPayload_TaskFailed(t *testing.T) {
 	t.Parallel()
 
 	raw := json.RawMessage(`{"task_id":"task-1","job_id":"job-1","graph_id":"team-1","error":"compilation failed"}`)
-	payload, err := parseSSEPayload("task.failed", raw)
+	payload, err := ParseSSEPayload("task.failed", raw)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -941,7 +941,7 @@ func TestParseSSEPayload_JobCompleted(t *testing.T) {
 	t.Parallel()
 
 	raw := json.RawMessage(`{"job_id":"job-1","title":"Fix bug","summary":"Bug fixed and tests added"}`)
-	payload, err := parseSSEPayload("job.completed", raw)
+	payload, err := ParseSSEPayload("job.completed", raw)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -974,7 +974,7 @@ func TestParseSSEPayload_ProgressUpdate(t *testing.T) {
 			"feed_entries":[]
 		}
 	}`)
-	payload, err := parseSSEPayload("progress.update", raw)
+	payload, err := ParseSSEPayload("progress.update", raw)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1006,7 +1006,7 @@ func TestParseSSEPayload_SessionStarted(t *testing.T) {
 		"system_prompt":"You write tests.",
 		"initial_message":"Write tests for foo.go"
 	}`)
-	payload, err := parseSSEPayload("session.started", raw)
+	payload, err := ParseSSEPayload("session.started", raw)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1036,7 +1036,7 @@ func TestParseSSEPayload_SessionText(t *testing.T) {
 	t.Parallel()
 
 	raw := json.RawMessage(`{"text":"func TestFoo(t *testing.T) {"}`)
-	payload, err := parseSSEPayload("session.text", raw)
+	payload, err := ParseSSEPayload("session.text", raw)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1054,7 +1054,7 @@ func TestParseSSEPayload_SessionToolCall(t *testing.T) {
 	t.Parallel()
 
 	raw := json.RawMessage(`{"tool_call":{"id":"tc-1","name":"read_file","arguments":{"path":"main.go"}}}`)
-	payload, err := parseSSEPayload("session.tool_call", raw)
+	payload, err := ParseSSEPayload("session.tool_call", raw)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1075,7 +1075,7 @@ func TestParseSSEPayload_SessionToolResult(t *testing.T) {
 	t.Parallel()
 
 	raw := json.RawMessage(`{"result":{"call_id":"tc-1","name":"read_file","result":"file contents here","error":""}}`)
-	payload, err := parseSSEPayload("session.tool_result", raw)
+	payload, err := ParseSSEPayload("session.tool_result", raw)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1102,7 +1102,7 @@ func TestParseSSEPayload_SessionDone(t *testing.T) {
 	t.Parallel()
 
 	raw := json.RawMessage(`{"worker_name":"test-writer","job_id":"job-1","task_id":"task-1","status":"completed","final_text":"All tests pass."}`)
-	payload, err := parseSSEPayload("session.done", raw)
+	payload, err := ParseSSEPayload("session.done", raw)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1132,7 +1132,7 @@ func TestParseSSEPayload_DefinitionsReloaded(t *testing.T) {
 	t.Parallel()
 
 	// definitions.reloaded has no payload.
-	payload, err := parseSSEPayload("definitions.reloaded", nil)
+	payload, err := ParseSSEPayload("definitions.reloaded", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1141,7 +1141,7 @@ func TestParseSSEPayload_DefinitionsReloaded(t *testing.T) {
 	}
 
 	// Also test with explicit null.
-	payload2, err := parseSSEPayload("definitions.reloaded", json.RawMessage(`null`))
+	payload2, err := ParseSSEPayload("definitions.reloaded", json.RawMessage(`null`))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1161,7 +1161,7 @@ func TestParseSSEPayload_OperationCompleted(t *testing.T) {
 			"error":""
 		}
 	}`)
-	payload, err := parseSSEPayload("operation.completed", raw)
+	payload, err := ParseSSEPayload("operation.completed", raw)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1185,7 +1185,7 @@ func TestParseSSEPayload_OperationFailed(t *testing.T) {
 	t.Parallel()
 
 	raw := json.RawMessage(`{"kind":"generate_team","error":"LLM rate limited"}`)
-	payload, err := parseSSEPayload("operation.failed", raw)
+	payload, err := ParseSSEPayload("operation.failed", raw)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1206,7 +1206,7 @@ func TestParseSSEPayload_Heartbeat(t *testing.T) {
 	t.Parallel()
 
 	raw := json.RawMessage(`{"server_time":"2026-03-02T12:00:00Z"}`)
-	payload, err := parseSSEPayload("heartbeat", raw)
+	payload, err := ParseSSEPayload("heartbeat", raw)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1221,14 +1221,14 @@ func TestParseSSEPayload_Heartbeat(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// parseSSEPayload edge cases
+// ParseSSEPayload edge cases
 // ---------------------------------------------------------------------------
 
 func TestParseSSEPayload_UnknownEventType(t *testing.T) {
 	t.Parallel()
 
 	raw := json.RawMessage(`{"foo":"bar"}`)
-	payload, err := parseSSEPayload("unknown.event.type", raw)
+	payload, err := ParseSSEPayload("unknown.event.type", raw)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1240,7 +1240,7 @@ func TestParseSSEPayload_UnknownEventType(t *testing.T) {
 func TestParseSSEPayload_NullPayload(t *testing.T) {
 	t.Parallel()
 
-	payload, err := parseSSEPayload("operator.text", json.RawMessage(`null`))
+	payload, err := ParseSSEPayload("operator.text", json.RawMessage(`null`))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1252,7 +1252,7 @@ func TestParseSSEPayload_NullPayload(t *testing.T) {
 func TestParseSSEPayload_EmptyRaw(t *testing.T) {
 	t.Parallel()
 
-	payload, err := parseSSEPayload("operator.text", json.RawMessage{})
+	payload, err := ParseSSEPayload("operator.text", json.RawMessage{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1264,7 +1264,7 @@ func TestParseSSEPayload_EmptyRaw(t *testing.T) {
 func TestParseSSEPayload_NilRaw(t *testing.T) {
 	t.Parallel()
 
-	payload, err := parseSSEPayload("operator.text", nil)
+	payload, err := ParseSSEPayload("operator.text", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1277,14 +1277,14 @@ func TestParseSSEPayload_InvalidJSON(t *testing.T) {
 	t.Parallel()
 
 	raw := json.RawMessage(`{invalid json}`)
-	_, err := parseSSEPayload("operator.text", raw)
+	_, err := ParseSSEPayload("operator.text", raw)
 	if err == nil {
 		t.Fatal("expected error for invalid JSON, got nil")
 	}
 }
 
 // ---------------------------------------------------------------------------
-// Table-driven parseSSEPayload test covering all 19 types
+// Table-driven ParseSSEPayload test covering all 19 types
 // ---------------------------------------------------------------------------
 
 func TestParseSSEPayload_AllEventTypes(t *testing.T) {
@@ -1417,7 +1417,7 @@ func TestParseSSEPayload_AllEventTypes(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			payload, err := parseSSEPayload(tt.eventType, tt.raw)
+			payload, err := ParseSSEPayload(tt.eventType, tt.raw)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}

@@ -730,3 +730,38 @@ func TestSessionConcurrentReads(t *testing.T) {
 	assertEqual(t, "all done", sess.FinalText())
 	assertEqual(t, "go", sess.InitialMessage())
 }
+
+// TestSessionRepairsMalformedToolCallArgs verifies that truncated/empty
+// tool-call arguments from a small local model are repaired to "{}" before
+// entering the message history — otherwise the poisoned history 400s every
+// subsequent request and the session never recovers.
+func TestSessionRepairsMalformedToolCallArgs(t *testing.T) {
+	mp := &mockProvider{
+		name: "test",
+		responses: []mockResponse{
+			{events: []provider.StreamEvent{
+				{Type: provider.EventToolCall, ToolCall: &provider.ToolCall{ID: "c1", Name: "noop", Arguments: json.RawMessage(`{"x":1`)}}, // truncated
+				{Type: provider.EventToolCall, ToolCall: &provider.ToolCall{ID: "c2", Name: "noop", Arguments: nil}},                       // empty
+				{Type: provider.EventDone},
+			}},
+			{events: []provider.StreamEvent{
+				{Type: provider.EventText, Text: "done"},
+				{Type: provider.EventDone},
+			}},
+		},
+	}
+
+	sess := newSession("sess-repair", mp, SpawnOpts{InitialMessage: "go", MaxTurns: 5}, &mockToolExecutor{})
+	if err := sess.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	// Every persisted assistant tool call must carry valid JSON args.
+	for _, msg := range sess.messages {
+		for _, tc := range msg.ToolCalls {
+			if !json.Valid(tc.Arguments) {
+				t.Errorf("tool call %q has invalid args in history: %q", tc.ID, tc.Arguments)
+			}
+		}
+	}
+}

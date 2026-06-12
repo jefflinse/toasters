@@ -200,7 +200,7 @@ func (s *remoteEventService) readSSE(ctx context.Context, ch chan<- service.Even
 		}
 
 		// Parse the typed payload.
-		payload, err := parseSSEPayload(envelope.Type, envelope.Payload)
+		payload, err := ParseSSEPayload(envelope.Type, envelope.Payload)
 		if err != nil {
 			slog.Warn("failed to parse SSE payload", "error", err, "type", envelope.Type)
 			continue

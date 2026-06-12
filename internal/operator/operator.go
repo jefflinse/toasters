@@ -549,8 +549,8 @@ func (o *Operator) handleUserMessage(ctx context.Context, payload UserMessagePay
 		// history and the next request to the endpoint fails with a 400. Repair
 		// it to an empty object so the tool handler sees valid args (and reports
 		// its own "missing field" error) and the history stays serializable.
-		normalizeToolCallArgs(assistantMsg.ToolCalls)
-		normalizeToolCallArgs(toolCalls)
+		provider.NormalizeToolCallArgs(assistantMsg.ToolCalls)
+		provider.NormalizeToolCallArgs(toolCalls)
 		o.appendMessage(assistantMsg)
 
 		// No tool calls — the operator's turn is done.
@@ -603,18 +603,6 @@ func (o *Operator) handleUserMessage(ctx context.Context, payload UserMessagePay
 		}
 
 		// Loop — send tool results back to LLM for the next response.
-	}
-}
-
-// normalizeToolCallArgs repairs tool-call arguments that aren't valid JSON
-// (empty or truncated output from a small model) to an empty object. Invalid
-// JSON in the assistant message both fails session persistence and gets the
-// next request rejected with a 400 by the LLM endpoint.
-func normalizeToolCallArgs(tcs []provider.ToolCall) {
-	for i := range tcs {
-		if len(tcs[i].Arguments) == 0 || !json.Valid(tcs[i].Arguments) {
-			tcs[i].Arguments = json.RawMessage("{}")
-		}
 	}
 }
 

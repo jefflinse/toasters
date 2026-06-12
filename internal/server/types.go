@@ -834,6 +834,14 @@ type wireSessionPromptPayload struct {
 	InitialMessage string `json:"initial_message,omitempty"`
 }
 
+type wireSessionMetaPayload struct {
+	SessionID   string  `json:"session_id"`
+	Model       string  `json:"model,omitempty"`
+	Provider    string  `json:"provider,omitempty"`
+	Temperature float64 `json:"temperature,omitempty"`
+	Thinking    bool    `json:"thinking,omitempty"`
+}
+
 type wireOperationCompletedPayload struct {
 	Kind   string              `json:"kind"`
 	Result wireOperationResult `json:"result"`
@@ -885,8 +893,8 @@ type wireGraphFailedPayload struct {
 	Error  string `json:"error"`
 }
 
-// eventPayloadToWire converts a service event payload to its wire representation.
-func eventPayloadToWire(ev service.Event) any {
+// EventPayloadToWire converts a service event payload to its wire representation.
+func EventPayloadToWire(ev service.Event) any {
 	switch p := ev.Payload.(type) {
 	case service.OperatorTextPayload:
 		return wireOperatorTextPayload{Text: p.Text, Reasoning: p.Reasoning}
@@ -979,6 +987,11 @@ func eventPayloadToWire(ev service.Event) any {
 	case service.SessionPromptPayload:
 		return wireSessionPromptPayload{
 			SessionID: p.SessionID, SystemPrompt: p.SystemPrompt, InitialMessage: p.InitialMessage,
+		}
+	case service.SessionMetaPayload:
+		return wireSessionMetaPayload{
+			SessionID: p.SessionID, Model: p.Model, Provider: p.Provider,
+			Temperature: p.Temperature, Thinking: p.Thinking,
 		}
 	case service.OperationCompletedPayload:
 		return wireOperationCompletedPayload{
