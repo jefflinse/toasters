@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"math/rand/v2"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/jefflinse/toasters/internal/service"
@@ -48,6 +49,10 @@ func (s *remoteEventService) eventLoop(ctx context.Context, ch chan<- service.Ev
 	defer s.c.connected.Store(false)
 
 	delay := reconnectBaseDelay
+	// lastSeq is the global sequence number of the last event received on
+	// this stream; sent as Last-Event-ID on reconnect so the server replays
+	// what was missed during the blip. Only this goroutine touches it.
+	var lastSeq uint64
 	// lostEmitted tracks whether we emitted connection.lost for the current
 	// disconnect. connection.restored is only emitted when this is true, ensuring
 	// the two events always appear as a matched pair. It is reset after each
@@ -61,7 +66,7 @@ func (s *remoteEventService) eventLoop(ctx context.Context, ch chan<- service.Ev
 		}
 
 		// Connect and read from the SSE stream until it ends.
-		err := s.readSSE(ctx, ch)
+		err := s.readSSE(ctx, ch, &lastSeq)
 
 		// If context was cancelled, exit cleanly without emitting connection.lost —
 		// this is an intentional shutdown, not an unexpected drop.
@@ -147,8 +152,10 @@ func (s *remoteEventService) eventLoop(ctx context.Context, ch chan<- service.Ev
 
 // readSSE connects to the SSE endpoint and reads events until the stream ends
 // or ctx is cancelled. It sets connected=true on successful connection and
-// sends parsed events to ch with non-blocking sends.
-func (s *remoteEventService) readSSE(ctx context.Context, ch chan<- service.Event) error {
+// sends parsed events to ch with non-blocking sends. lastSeq tracks the
+// highest event sequence received; on reconnect it is sent as Last-Event-ID
+// so the server can replay missed events from its ring buffer.
+func (s *remoteEventService) readSSE(ctx context.Context, ch chan<- service.Event, lastSeq *uint64) error {
 	// Build SSE request manually — we need Accept: text/event-stream and
 	// don't want the httpTransport's JSON decoding.
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.c.baseURL+sseBasePath, nil)
@@ -156,6 +163,9 @@ func (s *remoteEventService) readSSE(ctx context.Context, ch chan<- service.Even
 		return fmt.Errorf("creating SSE request: %w", err)
 	}
 	req.Header.Set("Accept", "text/event-stream")
+	if *lastSeq > 0 {
+		req.Header.Set("Last-Event-ID", strconv.FormatUint(*lastSeq, 10))
+	}
 	if s.c.token != "" {
 		req.Header.Set("Authorization", "Bearer "+s.c.token)
 	}
@@ -216,6 +226,10 @@ func (s *remoteEventService) readSSE(ctx context.Context, ch chan<- service.Even
 			SessionID:   envelope.SessionID,
 			OperationID: envelope.OperationID,
 			Payload:     payload,
+		}
+
+		if envelope.Seq > *lastSeq {
+			*lastSeq = envelope.Seq
 		}
 
 		// Non-blocking send — drop if channel is full to prevent blocking

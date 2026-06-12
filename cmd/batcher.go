@@ -37,12 +37,18 @@ func (b *textBatcher) Add(text string) {
 
 // timerFired is called by the timer goroutine. It drains the buffer
 // and calls the flush callback.
+//
+// flush runs UNDER b.mu (here and in Flush): draining and emitting must be
+// one atomic step, or a timer flush racing a turn-done Flush could emit
+// batches out of order — drain old text, lose the lock, and deliver it
+// after newer text already went out. The callback must not call back into
+// the batcher (the wiring sends to a non-blocking broadcast, which is fine).
 func (b *textBatcher) timerFired() {
 	b.mu.Lock()
+	defer b.mu.Unlock()
 	text := b.buf.String()
 	b.buf.Reset()
 	b.timer = nil
-	b.mu.Unlock()
 	if text != "" {
 		b.flush(text)
 	}
@@ -52,13 +58,13 @@ func (b *textBatcher) timerFired() {
 // on turn done to ensure no tokens are lost.
 func (b *textBatcher) Flush() {
 	b.mu.Lock()
+	defer b.mu.Unlock()
 	if b.timer != nil {
 		b.timer.Stop()
 		b.timer = nil
 	}
 	text := b.buf.String()
 	b.buf.Reset()
-	b.mu.Unlock()
 	if text != "" {
 		b.flush(text)
 	}

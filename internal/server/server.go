@@ -37,6 +37,11 @@ type Server struct {
 		mu    sync.Mutex
 		conns map[*sseConn]struct{}
 	}
+
+	// eventRing buffers recent events for SSE Last-Event-ID resume; fed by
+	// the recorder goroutine started in Start.
+	eventRing      eventRing
+	recorderCancel context.CancelFunc
 }
 
 // Option configures a Server.
@@ -108,6 +113,12 @@ func (s *Server) Start(addr string) error {
 
 	s.logger.Info("server starting", "addr", ln.Addr().String())
 
+	// Record recent events so reconnecting SSE clients can replay what they
+	// missed via Last-Event-ID.
+	recCtx, recCancel := context.WithCancel(context.Background())
+	s.recorderCancel = recCancel
+	go s.recordEvents(recCtx)
+
 	go func() {
 		if err := s.httpSrv.Serve(ln); err != nil && err != http.ErrServerClosed {
 			s.logger.Error("server error", "error", err)
@@ -121,6 +132,10 @@ func (s *Server) Start(addr string) error {
 func (s *Server) Shutdown(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.recorderCancel != nil {
+		s.recorderCancel()
+		s.recorderCancel = nil
+	}
 	if s.httpSrv == nil {
 		return nil
 	}

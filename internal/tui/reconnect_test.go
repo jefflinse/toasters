@@ -66,3 +66,57 @@ func TestProgressPollMsg_SeedIsIdempotent(t *testing.T) {
 		t.Error("existing completed slot was reset by re-seed")
 	}
 }
+
+// A blocker resync after reconnect replaces the stale set wholesale and
+// clamps the selection — prompts raised (or resolved) during the outage were
+// never delivered as events.
+func TestBlockersResyncMsg_ReplacesBlockers(t *testing.T) {
+	m := newMinimalModel(t)
+	m.blockers = []service.Blocker{
+		{RequestID: "stale-1"}, {RequestID: "stale-2"}, {RequestID: "stale-3"},
+	}
+	m.blockersSel = 2
+
+	res, _ := m.Update(BlockersResyncMsg{Blockers: []service.Blocker{{RequestID: "fresh-1"}}})
+	got := res.(*Model)
+
+	if len(got.blockers) != 1 || got.blockers[0].RequestID != "fresh-1" {
+		t.Errorf("blockers = %+v, want single fresh-1", got.blockers)
+	}
+	if got.blockersSel != 0 {
+		t.Errorf("blockersSel = %d, want clamped to 0", got.blockersSel)
+	}
+}
+
+// A chat resync after reconnect adopts the server's persisted message history
+// (recovering messages streamed during the outage) while preserving
+// locally-derived blocks like job updates, re-interleaved by timestamp.
+func TestChatResyncMsg_MergesHistoryPreservingLocalBlocks(t *testing.T) {
+	m := newMinimalModel(t)
+	t0 := time.Unix(1000, 0)
+	m.chat.entries = []service.ChatEntry{
+		{Message: service.ChatMessage{Role: service.MessageRoleUser, Content: "hello"}, Timestamp: t0},
+		{Kind: service.ChatEntryKindJobUpdate, JobUpdate: &service.JobSnapshot{JobID: "j1"}, Timestamp: t0.Add(1 * time.Second)},
+	}
+
+	// Server history includes the original message plus one missed during
+	// the outage.
+	res, _ := m.Update(ChatResyncMsg{History: []service.ChatEntry{
+		{Message: service.ChatMessage{Role: service.MessageRoleUser, Content: "hello"}, Timestamp: t0},
+		{Message: service.ChatMessage{Role: service.MessageRoleAssistant, Content: "missed reply"}, Timestamp: t0.Add(2 * time.Second)},
+	}})
+	got := res.(*Model)
+
+	if len(got.chat.entries) != 3 {
+		t.Fatalf("entries = %d, want 3 (2 messages + 1 local block)", len(got.chat.entries))
+	}
+	if got.chat.entries[0].Message.Content != "hello" {
+		t.Errorf("entry 0 = %+v, want hello message", got.chat.entries[0])
+	}
+	if got.chat.entries[1].Kind != service.ChatEntryKindJobUpdate {
+		t.Errorf("entry 1 kind = %q, want job_update preserved", got.chat.entries[1].Kind)
+	}
+	if got.chat.entries[2].Message.Content != "missed reply" {
+		t.Errorf("entry 2 = %+v, want recovered missed reply", got.chat.entries[2])
+	}
+}

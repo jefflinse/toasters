@@ -38,6 +38,12 @@ type asyncToastMsg struct {
 	level   toastLevel
 }
 
+// ChatResyncMsg carries the server's persisted chat history, refetched after
+// a reconnect so messages streamed during the outage aren't lost.
+type ChatResyncMsg struct {
+	History []service.ChatEntry
+}
+
 // dismissToast returns a tea.Cmd that fires dismissToastMsg after 3 seconds.
 func dismissToast(id int) tea.Cmd {
 	return tea.Tick(3*time.Second, func(time.Time) tea.Msg {

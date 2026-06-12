@@ -132,9 +132,10 @@ type LocalService struct {
 	startOnce   sync.Once
 
 	// Operator turn correlation.
-	turnMu          sync.Mutex
-	currentTurnID   string
-	pendingResponse strings.Builder // accumulates text during a turn
+	turnMu           sync.Mutex
+	currentTurnID    string
+	pendingResponse  strings.Builder // accumulates text during a turn
+	pendingReasoning strings.Builder // accumulates reasoning during a turn (persisted with the chat entry)
 
 	// asyncSem bounds concurrent async operations (generate, promote, detect).
 	asyncSem chan struct{}
@@ -453,7 +454,16 @@ func (s *LocalService) progressPollLoop() {
 				continue
 			}
 
-			state := s.buildProgressState()
+			// A tick that ran out of budget produced a partial snapshot;
+			// broadcasting it would make panels "lose" jobs/tasks until the
+			// next healthy tick. Skip it — the next tick retries.
+			ctx, cancel := context.WithTimeout(context.Background(), 400*time.Millisecond)
+			state, complete := s.buildProgressState(ctx)
+			cancel()
+			if !complete {
+				slog.Debug("progress snapshot incomplete; skipping broadcast")
+				continue
+			}
 			s.broadcast(Event{
 				Type:    EventTypeProgressUpdate,
 				Payload: ProgressUpdatePayload{State: state},
@@ -479,21 +489,29 @@ func (s *LocalService) heartbeatLoop() {
 	}
 }
 
-// buildProgressState assembles the current ProgressState from SQLite and the runtime.
-func (s *LocalService) buildProgressState() ProgressState {
+// progressSnapshotJobLimit bounds how many jobs a progress snapshot covers.
+// The poll runs every 500ms; without a bound, months of accumulated jobs
+// (each with a tasks + progress query) would blow the tick budget on every
+// tick. Jobs are listed newest-first, so the bound drops only the oldest.
+const progressSnapshotJobLimit = 100
+
+// buildProgressState assembles the current ProgressState from SQLite and the
+// runtime. complete is false when the context expired (or the job listing
+// failed) before the snapshot was fully assembled — callers on the broadcast
+// path should drop incomplete snapshots rather than present them as
+// authoritative.
+func (s *LocalService) buildProgressState(ctx context.Context) (state ProgressState, complete bool) {
 	if s.cfg.Store == nil {
-		return ProgressState{}
+		return ProgressState{}, true
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 400*time.Millisecond)
-	defer cancel()
+	complete = true
 
-	var state ProgressState
-
-	// Jobs.
-	dbJobs, err := s.cfg.Store.ListJobs(ctx, db.JobFilter{})
+	// Jobs (newest first, bounded).
+	dbJobs, err := s.cfg.Store.ListJobs(ctx, db.JobFilter{Limit: progressSnapshotJobLimit})
 	if err != nil {
 		dbJobs = nil
+		complete = false
 	}
 	for _, j := range dbJobs {
 		state.Jobs = append(state.Jobs, dbJobToService(j))
@@ -564,7 +582,10 @@ func (s *LocalService) buildProgressState() ProgressState {
 		}
 	}
 
-	return state
+	if ctx.Err() != nil {
+		complete = false
+	}
+	return state, complete
 }
 
 // ---------------------------------------------------------------------------
@@ -579,6 +600,7 @@ func (s *LocalService) buildProgressState() ProgressState {
 func (s *LocalService) BroadcastOperatorText(turnID, text, reasoning string) {
 	s.turnMu.Lock()
 	s.pendingResponse.WriteString(text)
+	s.pendingReasoning.WriteString(reasoning)
 	s.turnMu.Unlock()
 
 	s.broadcast(Event{
@@ -846,11 +868,14 @@ func (s *LocalService) BroadcastOperatorDone(turnID, modelName string, tokensIn,
 	}
 	responseText := s.pendingResponse.String()
 	s.pendingResponse.Reset()
+	reasoningText := s.pendingReasoning.String()
+	s.pendingReasoning.Reset()
 	s.turnMu.Unlock()
 
-	if responseText != "" {
+	if responseText != "" || reasoningText != "" {
 		s.appendHistory(ChatEntry{
 			Message:    ChatMessage{Role: MessageRoleAssistant, Content: responseText},
+			Reasoning:  reasoningText,
 			Timestamp:  time.Now(),
 			ClaudeMeta: fmt.Sprintf("operator · %s", modelName),
 		})
@@ -2238,9 +2263,16 @@ func (s *LocalService) ConfigDir() string {
 	return s.cfg.ConfigDir
 }
 
-// GetProgressState returns the current full progress state snapshot.
+// GetProgressState returns the current full progress state snapshot. This is
+// the on-demand hydration path (client connect/reconnect), so it gets a more
+// generous budget than the 500ms poll and returns whatever it assembled even
+// if the budget expired — for an explicit request, a partial snapshot beats
+// an empty panel.
 func (s *LocalService) GetProgressState(_ context.Context) (ProgressState, error) {
-	return s.buildProgressState(), nil
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	state, _ := s.buildProgressState(ctx)
+	return state, nil
 }
 
 // maxLogResponseBytes caps how much of the log file GetLogs returns. The log
@@ -2544,6 +2576,7 @@ func (s *LocalService) startOperator(p provider.Provider, providerID, model stri
 	s.turnMu.Lock()
 	s.currentTurnID = ""
 	s.pendingResponse.Reset()
+	s.pendingReasoning.Reset()
 	s.turnMu.Unlock()
 
 	// Compose the operator system prompt via the prompt engine.
