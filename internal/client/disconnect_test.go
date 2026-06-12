@@ -36,31 +36,10 @@ func TestClientHandlesServerDisconnect(t *testing.T) {
 	t.Parallel()
 
 	// Create a mock service that provides SSE events.
-	eventCh := make(chan service.Event, 100)
+	hub := newTestEventHub()
 
 	mock := &mockService{
-		subscribeFn: func(ctx context.Context) <-chan service.Event {
-			out := make(chan service.Event, 10)
-			go func() {
-				defer close(out)
-				for {
-					select {
-					case <-ctx.Done():
-						return
-					case ev, ok := <-eventCh:
-						if !ok {
-							return
-						}
-						select {
-						case out <- ev:
-						case <-ctx.Done():
-							return
-						}
-					}
-				}
-			}()
-			return out
-		},
+		subscribeFn: hub.subscribe,
 		getProgressStateFn: func(ctx context.Context) (service.ProgressState, error) {
 			return service.ProgressState{}, nil
 		},
@@ -93,11 +72,18 @@ func TestClientHandlesServerDisconnect(t *testing.T) {
 	eventStream := rc.Events().Subscribe(ctx)
 
 	// Send one event to confirm the connection is working.
-	eventCh <- service.Event{
+	// Broadcast semantics: wait until the SSE handler's subscription is live
+	// (the server's internal recorder is the other subscriber) before sending,
+	// or the event is dropped on the floor.
+	if !hub.waitForSubscribers(2, 3*time.Second) {
+		t.Fatal("timed out waiting for SSE subscription")
+	}
+
+	hub.send(service.Event{
 		Type:      service.EventTypeHeartbeat,
 		Timestamp: time.Now(),
 		Payload:   service.HeartbeatPayload{ServerTime: time.Now()},
-	}
+	})
 
 	// Wait for the first event to confirm the stream is working.
 	select {
@@ -258,31 +244,10 @@ func TestClientReconnectionDetectsServerShutdown(t *testing.T) {
 	t.Parallel()
 
 	// Create a mock service that provides events.
-	eventCh := make(chan service.Event, 100)
+	hub := newTestEventHub()
 
 	mock := &mockService{
-		subscribeFn: func(ctx context.Context) <-chan service.Event {
-			out := make(chan service.Event, 10)
-			go func() {
-				defer close(out)
-				for {
-					select {
-					case <-ctx.Done():
-						return
-					case ev, ok := <-eventCh:
-						if !ok {
-							return
-						}
-						select {
-						case out <- ev:
-						case <-ctx.Done():
-							return
-						}
-					}
-				}
-			}()
-			return out
-		},
+		subscribeFn: hub.subscribe,
 		getProgressStateFn: func(ctx context.Context) (service.ProgressState, error) {
 			return service.ProgressState{}, nil
 		},
@@ -316,11 +281,18 @@ func TestClientReconnectionDetectsServerShutdown(t *testing.T) {
 	eventStream := rc.Events().Subscribe(ctx)
 
 	// Send one event to confirm connection.
-	eventCh <- service.Event{
+	// Broadcast semantics: wait until the SSE handler's subscription is live
+	// (the server's internal recorder is the other subscriber) before sending,
+	// or the event is dropped on the floor.
+	if !hub.waitForSubscribers(2, 3*time.Second) {
+		t.Fatal("timed out waiting for SSE subscription")
+	}
+
+	hub.send(service.Event{
 		Type:      service.EventTypeHeartbeat,
 		Timestamp: time.Now(),
 		Payload:   service.HeartbeatPayload{ServerTime: time.Now()},
-	}
+	})
 
 	// Wait for first event.
 	select {
@@ -403,31 +375,10 @@ func TestSSEConnectionOutlivesRESTClientTimeout(t *testing.T) {
 	)
 
 	// Controlled event channel — the test goroutine sends events on a schedule.
-	eventCh := make(chan service.Event, 10)
+	hub := newTestEventHub()
 
 	mock := &mockService{
-		subscribeFn: func(ctx context.Context) <-chan service.Event {
-			out := make(chan service.Event, 10)
-			go func() {
-				defer close(out)
-				for {
-					select {
-					case <-ctx.Done():
-						return
-					case ev, ok := <-eventCh:
-						if !ok {
-							return
-						}
-						select {
-						case out <- ev:
-						case <-ctx.Done():
-							return
-						}
-					}
-				}
-			}()
-			return out
-		},
+		subscribeFn: hub.subscribe,
 		getProgressStateFn: func(ctx context.Context) (service.ProgressState, error) {
 			return service.ProgressState{}, nil
 		},
@@ -472,32 +423,39 @@ func TestSSEConnectionOutlivesRESTClientTimeout(t *testing.T) {
 	eventStream := rc.Events().Subscribe(ctx)
 	start := time.Now()
 
+	// Broadcast semantics: wait until the SSE handler's subscription is live
+	// (the server's internal recorder is the other subscriber) before sending,
+	// or the first event is dropped on the floor.
+	if !hub.waitForSubscribers(2, 3*time.Second) {
+		t.Fatal("timed out waiting for SSE subscription")
+	}
+
 	// Send events on a timed schedule in a background goroutine.
 	go func() {
 		// t=0s: event before timeout — confirms the stream is working.
-		eventCh <- service.Event{
+		hub.send(service.Event{
 			Type:      service.EventTypeOperatorText,
 			Timestamp: time.Now(),
 			Payload:   service.OperatorTextPayload{Text: "before-timeout-1"},
-		}
+		})
 
 		// t=3s: event before timeout — confirms the stream is still alive.
 		time.Sleep(3 * time.Second)
-		eventCh <- service.Event{
+		hub.send(service.Event{
 			Type:      service.EventTypeOperatorText,
 			Timestamp: time.Now(),
 			Payload:   service.OperatorTextPayload{Text: "before-timeout-2"},
-		}
+		})
 
 		// t=7s: event AFTER the 5s REST timeout — the critical event.
 		// On the old code, the SSE connection is already dead by now.
 		time.Sleep(4 * time.Second)
 		t.Logf("sending post-timeout event at %v", time.Since(start).Round(time.Millisecond))
-		eventCh <- service.Event{
+		hub.send(service.Event{
 			Type:      service.EventTypeOperatorText,
 			Timestamp: time.Now(),
 			Payload:   service.OperatorTextPayload{Text: postTimeoutLabel},
-		}
+		})
 	}()
 
 	// Drain events until we find the post-timeout event or time out.

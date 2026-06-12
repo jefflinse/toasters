@@ -56,6 +56,22 @@ func (w *Watcher) Start(ctx context.Context) error {
 			if !ok {
 				return nil
 			}
+			// A definition directory created after startup (e.g. the user
+			// adds user/toolchains/ for the first time) must join the watch
+			// set, or files written into it are invisible until restart.
+			// Its appearance also schedules a reload — the creating tool
+			// typically writes files into it within the debounce window.
+			if event.Has(fsnotify.Create) && w.isWatchableDir(event.Name) {
+				_ = w.watcher.Add(event.Name)
+				if !debounceTimer.Stop() {
+					select {
+					case <-debounceTimer.C:
+					default:
+					}
+				}
+				debounceTimer.Reset(w.debounce)
+				continue
+			}
 			// React to .md file changes (definitions) and .yaml/.yml changes
 			// in providers/, {system,user}/graphs/, and {system,user}/schemas/.
 			isYAML := strings.HasSuffix(event.Name, ".yaml") || strings.HasSuffix(event.Name, ".yml")
@@ -105,12 +121,13 @@ func (w *Watcher) Stop() error {
 	return w.watcher.Close()
 }
 
-// addWatchDirs adds all relevant config directories to the fsnotify watcher.
-// Directories that don't exist are silently skipped.
-func (w *Watcher) addWatchDirs() {
+// watchDirs returns every directory the watcher cares about. The configDir
+// root and the system/user roots are included so that definition directories
+// created AFTER startup produce Create events the watcher can react to.
+func (w *Watcher) watchDirs() []string {
 	configDir := w.loader.configDir
-
-	dirs := []string{
+	return []string{
+		configDir,
 		filepath.Join(configDir, "system"),
 		filepath.Join(configDir, "system", "skills"),
 		filepath.Join(configDir, "system", "graphs"),
@@ -118,6 +135,7 @@ func (w *Watcher) addWatchDirs() {
 		filepath.Join(configDir, "system", "instructions"),
 		filepath.Join(configDir, "system", "toolchains"),
 		filepath.Join(configDir, "system", "schemas"),
+		filepath.Join(configDir, "user"),
 		filepath.Join(configDir, "user", "skills"),
 		filepath.Join(configDir, "user", "graphs"),
 		filepath.Join(configDir, "user", "roles"),
@@ -126,8 +144,24 @@ func (w *Watcher) addWatchDirs() {
 		filepath.Join(configDir, "user", "schemas"),
 		filepath.Join(configDir, "providers"),
 	}
+}
 
-	for _, dir := range dirs {
+// isWatchableDir reports whether path is one of the definition directories
+// the watcher wants in its watch set.
+func (w *Watcher) isWatchableDir(path string) bool {
+	for _, d := range w.watchDirs() {
+		if path == d {
+			return true
+		}
+	}
+	return false
+}
+
+// addWatchDirs adds all relevant config directories to the fsnotify watcher.
+// Directories that don't exist are silently skipped; they are picked up by
+// the Create handling in Start if they appear later.
+func (w *Watcher) addWatchDirs() {
+	for _, dir := range w.watchDirs() {
 		_ = w.watcher.Add(dir) // best-effort; skip if missing
 	}
 }

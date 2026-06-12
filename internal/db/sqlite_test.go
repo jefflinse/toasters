@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -1758,5 +1760,54 @@ func TestRetryTask(t *testing.T) {
 	// Retrying a missing task errors.
 	if err := store.RetryTask(ctx, "nope", "x"); err == nil {
 		t.Error("expected error retrying missing task, got nil")
+	}
+}
+
+// Concurrent RetryTask calls on the same failed task: the status guard
+// (WHERE status = 'failed') makes the transition compare-and-set, so exactly
+// one caller wins and the rest get ErrNotFound — the executor never
+// double-dispatches a retry.
+func TestRetryTask_ConcurrentTransitions(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+
+	if err := store.CreateJob(ctx, &Job{ID: "job-1", Title: "J", Status: JobStatusActive}); err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	if err := store.CreateTask(ctx, &Task{
+		ID: "task-1", JobID: "job-1", Title: "T", Status: TaskStatusFailed, GraphID: "bug-fix",
+	}); err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+
+	const callers = 8
+	var wg sync.WaitGroup
+	var wins atomic.Int32
+	for i := 0; i < callers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			err := store.RetryTask(ctx, "task-1", "bug-fix")
+			switch {
+			case err == nil:
+				wins.Add(1)
+			case errors.Is(err, ErrNotFound):
+				// lost the race — expected for all but one caller
+			default:
+				t.Errorf("unexpected RetryTask error: %v", err)
+			}
+		}()
+	}
+	wg.Wait()
+
+	if got := wins.Load(); got != 1 {
+		t.Errorf("RetryTask succeeded %d times, want exactly 1", got)
+	}
+	task, err := store.GetTask(ctx, "task-1")
+	if err != nil {
+		t.Fatalf("GetTask: %v", err)
+	}
+	if task.Status != TaskStatusInProgress {
+		t.Errorf("task status = %q, want in_progress", task.Status)
 	}
 }

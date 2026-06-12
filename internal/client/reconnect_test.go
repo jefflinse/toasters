@@ -15,33 +15,11 @@ import (
 func TestSSE_ContextCancellationStopsReconnect(t *testing.T) {
 	t.Parallel()
 
-	// Subscribe returns a channel that stays open (simulating a live stream).
-	eventCh := make(chan service.Event, 10)
+	// Events flow through a fan-out hub matching real broadcast semantics.
+	hub := newTestEventHub()
 
 	mock := &mockService{
-		subscribeFn: func(ctx context.Context) <-chan service.Event {
-			// Forward events until context is cancelled, then close.
-			out := make(chan service.Event, 10)
-			go func() {
-				defer close(out)
-				for {
-					select {
-					case <-ctx.Done():
-						return
-					case ev, ok := <-eventCh:
-						if !ok {
-							return
-						}
-						select {
-						case out <- ev:
-						case <-ctx.Done():
-							return
-						}
-					}
-				}
-			}()
-			return out
-		},
+		subscribeFn: hub.subscribe,
 	}
 
 	rc := setupTestServer(t, mock)
@@ -51,12 +29,19 @@ func TestSSE_ContextCancellationStopsReconnect(t *testing.T) {
 	ch := rc.Events().Subscribe(ctx)
 
 	// Send one event to confirm the stream is working.
-	eventCh <- service.Event{
+	// Broadcast semantics: wait until the SSE handler's subscription is live
+	// (the server's internal recorder is the other subscriber) before sending,
+	// or the event is dropped on the floor.
+	if !hub.waitForSubscribers(2, 3*time.Second) {
+		t.Fatal("timed out waiting for SSE subscription")
+	}
+
+	hub.send(service.Event{
 		Seq:       1,
 		Type:      service.EventTypeOperatorText,
 		Timestamp: testTime,
 		Payload:   service.OperatorTextPayload{Text: "before cancel"},
-	}
+	})
 
 	select {
 	case ev, ok := <-ch:

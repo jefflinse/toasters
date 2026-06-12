@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/jefflinse/toasters/internal/service"
@@ -72,12 +73,33 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 	// when the client disconnects (ctx is cancelled).
 	ch := s.svc.Events().Subscribe(ctx)
 
-	// Per-connection sequence counter.
-	var seq uint64
-
 	reqID := requestIDFromContext(ctx)
 	slog.Info("SSE client connected", "request_id", reqID)
 	defer slog.Info("SSE client disconnected", "request_id", reqID)
+
+	// lastSent is the global service sequence number of the last event
+	// written to this connection — events carry their service-assigned Seq
+	// on the wire (id: line + envelope), so clients can dedupe and resume.
+	var lastSent uint64
+
+	// Last-Event-ID resume: replay buffered events the client missed during
+	// a reconnect blip. Best-effort — anything older than the ring is
+	// recovered by the client's snapshot resync. The subscription above is
+	// already live, so events landing in both the ring and the channel are
+	// deduped by the lastSent guard in the loop below.
+	if lastID := r.Header.Get("Last-Event-ID"); lastID != "" {
+		if seq, err := strconv.ParseUint(lastID, 10, 64); err == nil {
+			missed := s.eventRing.since(seq)
+			slog.Info("SSE resume", "request_id", reqID, "last_event_id", seq, "replayed", len(missed))
+			for _, ev := range missed {
+				if err := writeSSEEvent(w, rc, ev); err != nil {
+					slog.Debug("SSE replay write error", "error", err, "request_id", reqID)
+					return
+				}
+				lastSent = ev.Seq
+			}
+		}
+	}
 
 	// Heartbeats are produced by LocalService.heartbeatLoop and arrive on the
 	// subscription channel like any other event. No SSE-side ticker is needed
@@ -92,11 +114,16 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 				// Channel closed — subscriber removed.
 				return
 			}
-			seq++
-			if err := writeSSEEvent(w, rc, seq, ev); err != nil {
+			// Seq 0 means the producer didn't assign one (synthetic/test
+			// events) — deliver those unconditionally.
+			if ev.Seq != 0 && ev.Seq <= lastSent {
+				continue // already delivered during replay
+			}
+			if err := writeSSEEvent(w, rc, ev); err != nil {
 				slog.Debug("SSE write error", "error", err, "request_id", reqID)
 				return
 			}
+			lastSent = ev.Seq
 		}
 	}
 }
@@ -109,14 +136,17 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 const sseWriteTimeout = 30 * time.Second
 
 // writeSSEEvent writes a single SSE event to the response writer and flushes.
-func writeSSEEvent(w http.ResponseWriter, rc *http.ResponseController, seq uint64, ev service.Event) error {
+// The wire seq is the event's GLOBAL service-assigned sequence number — a
+// per-connection counter would make Last-Event-ID resume and client-side
+// dedupe impossible.
+func writeSSEEvent(w http.ResponseWriter, rc *http.ResponseController, ev service.Event) error {
 	// Fresh deadline per write — events may be arbitrarily far apart, so an
 	// absolute deadline set once at connect would expire on healthy streams.
 	_ = rc.SetWriteDeadline(time.Now().Add(sseWriteTimeout))
 	wirePayload := EventPayloadToWire(ev)
 
 	envelope := SSEEvent{
-		Seq:         seq,
+		Seq:         ev.Seq,
 		Type:        string(ev.Type),
 		Timestamp:   ev.Timestamp,
 		TurnID:      ev.TurnID,
@@ -131,7 +161,7 @@ func writeSSEEvent(w http.ResponseWriter, rc *http.ResponseController, seq uint6
 	}
 
 	// Write SSE format: id, event, data, blank line.
-	if _, err := fmt.Fprintf(w, "id: %d\nevent: %s\ndata: %s\n\n", seq, ev.Type, data); err != nil {
+	if _, err := fmt.Fprintf(w, "id: %d\nevent: %s\ndata: %s\n\n", ev.Seq, ev.Type, data); err != nil {
 		return fmt.Errorf("writing SSE event: %w", err)
 	}
 	if err := rc.Flush(); err != nil {

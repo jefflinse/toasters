@@ -148,10 +148,12 @@ func TestServerGracefulShutdownWithSSEClients(t *testing.T) {
 	// Verify all SSE connections were closed.
 	wg.Wait()
 
-	// All clients should have detected the closure.
+	// All subscriptions should have closed: one per SSE client (cancelled by
+	// CloseAllSSEConnections) plus the server's internal event recorder
+	// (cancelled by Shutdown).
 	closed := connClosed.Load()
-	if closed != int32(numClients) {
-		t.Errorf("closed connections = %d, want %d", closed, numClients)
+	if closed != int32(numClients)+1 {
+		t.Errorf("closed connections = %d, want %d (clients + recorder)", closed, numClients+1)
 	}
 }
 

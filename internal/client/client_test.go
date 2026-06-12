@@ -1012,13 +1012,11 @@ func TestErrorPropagation_NotFound(t *testing.T) {
 func TestSSE_EventDelivery(t *testing.T) {
 	t.Parallel()
 
-	// The mock Subscribe returns a channel that we control.
-	eventCh := make(chan service.Event, 10)
+	// Events flow through a fan-out hub matching real broadcast semantics.
+	hub := newTestEventHub()
 
 	mock := &mockService{
-		subscribeFn: func(_ context.Context) <-chan service.Event {
-			return eventCh
-		},
+		subscribeFn: hub.subscribe,
 	}
 
 	rc := setupTestServer(t, mock)
@@ -1029,14 +1027,21 @@ func TestSSE_EventDelivery(t *testing.T) {
 	ch := rc.Events().Subscribe(ctx)
 
 	// Emit 3 events from the mock.
-	eventCh <- service.Event{
+	// Broadcast semantics: wait until the SSE handler's subscription is live
+	// (the server's internal recorder is the other subscriber) before sending,
+	// or the event is dropped on the floor.
+	if !hub.waitForSubscribers(2, 3*time.Second) {
+		t.Fatal("timed out waiting for SSE subscription")
+	}
+
+	hub.send(service.Event{
 		Seq:       1,
 		Type:      service.EventTypeOperatorText,
 		Timestamp: testTime,
 		TurnID:    "turn-1",
 		Payload:   service.OperatorTextPayload{Text: "hello world"},
-	}
-	eventCh <- service.Event{
+	})
+	hub.send(service.Event{
 		Seq:       2,
 		Type:      service.EventTypeTaskCompleted,
 		Timestamp: testTime,
@@ -1046,13 +1051,13 @@ func TestSSE_EventDelivery(t *testing.T) {
 			GraphID: "team-1",
 			Summary: "done",
 		},
-	}
-	eventCh <- service.Event{
+	})
+	hub.send(service.Event{
 		Seq:       3,
 		Type:      service.EventTypeHeartbeat,
 		Timestamp: testTime,
 		Payload:   service.HeartbeatPayload{ServerTime: testTime},
-	}
+	})
 
 	// Receive and verify events. Note: the server assigns its own seq numbers
 	// per-connection, so we don't check seq values. Also, the server may emit

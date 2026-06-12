@@ -22,7 +22,7 @@ func TestSSE_HeadersPrecedeBody(t *testing.T) {
 	srv := New(mockSvc)
 
 	// One event, then a closed channel so the handler exits after writing it.
-	mockSvc.events.ch <- service.Event{Type: service.EventTypeHeartbeat}
+	mockSvc.events.ch <- service.Event{Type: service.EventTypeHeartbeat, Seq: 1}
 	close(mockSvc.events.ch)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/events", nil)
@@ -103,5 +103,70 @@ func TestSSE_StreamingUnsupportedReturnsJSONError(t *testing.T) {
 	}
 	if resp.Error.Code != "internal_error" {
 		t.Errorf("error code = %q, want internal_error", resp.Error.Code)
+	}
+}
+
+// A reconnecting client presenting Last-Event-ID gets the buffered events it
+// missed, in order, and live events it already received via replay are not
+// duplicated (C23: SSE resume).
+func TestSSE_LastEventIDResume(t *testing.T) {
+	t.Parallel()
+
+	mockSvc := newMockService()
+	mockSvc.events.ch = make(chan service.Event, 4)
+	srv := New(mockSvc)
+
+	// The ring holds seqs 1..5 from before the client's blip.
+	for i := uint64(1); i <= 5; i++ {
+		srv.eventRing.add(service.Event{Type: service.EventTypeHeartbeat, Seq: i})
+	}
+
+	// The live subscription delivers a stale event (4, also replayed from the
+	// ring) and a genuinely new one (6).
+	mockSvc.events.ch <- service.Event{Type: service.EventTypeHeartbeat, Seq: 4}
+	mockSvc.events.ch <- service.Event{Type: service.EventTypeHeartbeat, Seq: 6}
+	close(mockSvc.events.ch)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/events", nil)
+	req.Header.Set("Last-Event-ID", "3")
+	rec := httptest.NewRecorder()
+	srv.events(rec, req)
+
+	body := rec.Body.String()
+	var ids []string
+	for _, line := range strings.Split(body, "\n") {
+		if strings.HasPrefix(line, "id: ") {
+			ids = append(ids, strings.TrimPrefix(line, "id: "))
+		}
+	}
+	want := []string{"4", "5", "6"}
+	if len(ids) != len(want) {
+		t.Fatalf("event ids = %v, want %v\nbody:\n%s", ids, want, body)
+	}
+	for i := range want {
+		if ids[i] != want[i] {
+			t.Fatalf("event ids = %v, want %v", ids, want)
+		}
+	}
+}
+
+// The ring evicts oldest entries at capacity and since() respects ordering.
+func TestEventRing_EvictionAndSince(t *testing.T) {
+	t.Parallel()
+
+	var r eventRing
+	for i := uint64(1); i <= eventRingSize+10; i++ {
+		r.add(service.Event{Seq: i})
+	}
+	all := r.since(0)
+	if len(all) != eventRingSize {
+		t.Fatalf("ring holds %d events, want %d", len(all), eventRingSize)
+	}
+	if all[0].Seq != 11 || all[len(all)-1].Seq != eventRingSize+10 {
+		t.Fatalf("ring range = [%d, %d], want [11, %d]", all[0].Seq, all[len(all)-1].Seq, eventRingSize+10)
+	}
+	tail := r.since(eventRingSize + 8)
+	if len(tail) != 2 || tail[0].Seq != eventRingSize+9 {
+		t.Fatalf("since() returned %d events starting at %d", len(tail), tail[0].Seq)
 	}
 }

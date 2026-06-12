@@ -95,6 +95,13 @@ func buildFanoutNode(graphID string, n Node, cfg TemplateConfig, registry *RoleR
 	// fan-out returns. Safe because a compiled node executes sequentially
 	// within a single task's graph run (each task compiles its own graph;
 	// loop re-entry is sequential), so split and the cleanup defer never race.
+	//
+	// Cleanup also relies on rhizome joining every branch goroutine before
+	// Fanout returns. Verified against rhizome v0.6.0: Fanout wg.Wait()s on
+	// all paths — including cancel-on-error, which cancels the branch context
+	// but still waits for the goroutines — so no branch can touch iso.dirs
+	// after the node returns. Re-verify if rhizome's fanout implementation
+	// changes.
 	var iso struct {
 		dirs    []string
 		cleanup func()

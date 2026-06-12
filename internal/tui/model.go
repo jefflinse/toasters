@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strings"
 	"time"
 
@@ -1708,12 +1709,49 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return BlockersResyncMsg{Blockers: blockers}
 		}
-		return m, tea.Batch(m.addToast("Server connection restored", toastSuccess), resyncBlockers)
+		// Refetch chat history too: operator text streamed during the outage
+		// was never delivered, so the conversation has a hole the SSE replay
+		// ring may not cover (long outages).
+		resyncChat := func() tea.Msg {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			history, err := svc.Operator().History(ctx)
+			if err != nil {
+				slog.Warn("failed to refetch chat history after reconnect", "error", err)
+				return nil
+			}
+			return ChatResyncMsg{History: history}
+		}
+		return m, tea.Batch(m.addToast("Server connection restored", toastSuccess), resyncBlockers, resyncChat)
 
 	case BlockersResyncMsg:
 		m.blockers = msg.Blockers
 		if m.blockersSel >= len(m.blockers) {
 			m.blockersSel = 0
+		}
+		return m, nil
+
+	case ChatResyncMsg:
+		// The server's persisted history is authoritative for plain chat
+		// messages; locally-derived blocks (job updates/results, worker
+		// streams) only exist client-side, so keep them and re-interleave by
+		// timestamp.
+		var local []service.ChatEntry
+		for _, e := range m.chat.entries {
+			if e.Kind != service.ChatEntryKindMessage {
+				local = append(local, e)
+			}
+		}
+		merged := make([]service.ChatEntry, 0, len(local)+len(msg.History))
+		merged = append(merged, msg.History...)
+		merged = append(merged, local...)
+		sort.SliceStable(merged, func(i, j int) bool {
+			return merged[i].Timestamp.Before(merged[j].Timestamp)
+		})
+		m.chat.entries = merged
+		m.updateViewportContent()
+		if !m.scroll.userScrolled {
+			m.chatViewport.GotoBottom()
 		}
 		return m, nil
 
