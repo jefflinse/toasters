@@ -46,9 +46,28 @@ Other tasks in this job (handled by separate runs):
    with this toolchain's knowledge.
 4. If a graph fits, output `{graph_id: "<id>", toolchain: "<id>"}` and
    stop.
-5. If no graph fits because the task is too broad or cross-cutting,
-   output `{rejected: true, tasks: [...]}` with a concrete subtask
-   breakdown. Each subtask will be routed through fine-decompose again.
+5. If a graph *kind* fits but the task is **too big for one run** — it
+   spans multiple graphs' worth of work — output
+   `{rejected: true, tasks: [...]}` with a concrete subtask breakdown.
+   Each subtask is routed through fine-decompose again. Only split when
+   the smaller pieces would each map cleanly onto a graph.
+6. If **no graph fits the *kind* of work at all** — the catalog has
+   nothing for what this task is (e.g. the task is research, writing, or
+   analysis but only software graphs are installed) — output
+   `{no_graph: true, reason: "..."}`. Do **NOT** split in this case:
+   the subtasks would be the same unsupported kind of work and splitting
+   just multiplies the problem. The reason should say plainly what kind
+   of graph is missing. The system surfaces the task to the user instead
+   of fragmenting it.
+
+**Splitting (5) vs no-graph (6) — the key distinction:** split only when
+smaller pieces *would* match a graph. If shrinking the task wouldn't make
+any catalog graph apply, it's a no-graph case, not a split. "Research the
+company's history" does not become graph-able by splitting it into
+"research the founding date" — both are research, and if there's no
+research graph, both are no-graph. Choosing `rejected` here is the most
+common and most damaging mistake: it recurses into a flood of equally
+unsupported subtasks.
 
 ## Available toolchains
 
@@ -70,7 +89,7 @@ genuinely spans multiple graphs' worth of work.
 {{ instructions.call-complete }}
 
 The `complete` payload (schema: `decomposition-result`) takes one of
-two shapes:
+three shapes:
 
 **Graph selected:**
 
@@ -80,15 +99,21 @@ two shapes:
   available toolchains above).
 - `reason` — one sentence on why this graph and toolchain fit.
 
-**Rejection with subtasks:**
+**Rejection with subtasks (task too big for one graph):**
 
 - `rejected` — `true`.
 - `tasks` — array of `{title, description, depends_on}` entries that
   together replace the original task.
 - `reason` — one or two sentences on why the task was too broad.
 
-Do not populate both `graph_id` and `tasks`. The service consumes one
-or the other.
+**No graph fits this kind of work:**
+
+- `no_graph` — `true`.
+- `reason` — what kind of graph is missing (e.g. "no research/report
+  graph for information-gathering tasks").
+
+Populate exactly one of `graph_id`, `tasks` (with `rejected`), or
+`no_graph`. The service consumes one shape.
 
 ## Guidelines
 

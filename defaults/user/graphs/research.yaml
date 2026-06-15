@@ -1,0 +1,23 @@
+id: research
+name: Research
+description: >
+  General-purpose information gathering and reporting for non-software work.
+  A researcher gathers information from the web and the workspace, then writes
+  a structured markdown report file into the workspace. Use this for any task
+  about producing information rather than building or changing software —
+  "research X", "find out about Y", "summarize Z", "write a report on ...",
+  competitive/market/background analysis, fact-finding, and similar. This is
+  the right home for tasks that don't match a software graph (bugfix, feature,
+  prototype, qa).
+tags: [kind:research, kind:general]
+
+entry: research
+exit: research
+
+nodes:
+  - id: research
+    role: researcher
+
+edges:
+  - from: research
+    to: end

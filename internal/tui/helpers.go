@@ -1485,6 +1485,21 @@ func (m *Model) gridTotalPages(cellsPerPage int) int {
 // in the Workers pane: every active session, plus at most
 // maxCompletedWorkersInPane most-recently-ended non-active sessions.
 // Ordering matches sortedRuntimeSessions (active first by start time, then
+// activePlanningCount returns how many decomposition (system) graph nodes are
+// currently running. displayRuntimeSessions hides these, so when real workers
+// are idle the Workers pane would otherwise read "No workers running" while
+// the job is in fact churning through decomposition — accurate but baffling.
+// The pane uses this to say "Planning…" instead.
+func (m *Model) activePlanningCount() int {
+	n := 0
+	for _, rs := range m.runtimeSessions {
+		if rs.system && rs.status == "active" {
+			n++
+		}
+	}
+	return n
+}
+
 // terminal sessions by start time), so rendering code doesn't need to care.
 func (m *Model) displayRuntimeSessions() []*runtimeSlot {
 	all := m.sortedRuntimeSessions()
