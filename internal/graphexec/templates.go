@@ -22,11 +22,15 @@ type TemplateConfig struct {
 
 	// ToolExecutorFor builds a tool executor scoped to a workspace directory.
 	// When non-nil it takes precedence over ToolExecutor: each RoleNode
-	// resolves its tools via ToolExecutorFor(state.WorkspaceDir). This is what
-	// lets a fanout branch operating in an isolated workspace get tools pointed
-	// at that workspace rather than the task's shared one. Production wires
-	// this to Executor.buildToolExecutor.
-	ToolExecutorFor func(workspaceDir string) runtime.ToolExecutor
+	// resolves its tools via ToolExecutorFor(state.WorkspaceDir,
+	// state.WorkspaceBase). This is what lets a fanout branch operating in an
+	// isolated workspace get tools pointed at that workspace rather than the
+	// task's shared one. workspaceBase is the task's canonical workspace;
+	// when it differs from workspaceDir (fan-out branch), absolute paths
+	// under it are aliased into workspaceDir so leaked canonical paths in
+	// instructions and artifacts keep working inside the branch. Production
+	// wires this to Executor.buildToolExecutor.
+	ToolExecutorFor func(workspaceDir, workspaceBase string) runtime.ToolExecutor
 
 	// Model is the default model for all nodes.
 	Model string

@@ -21,6 +21,16 @@ type TaskState struct {
 	// Workspace.
 	WorkspaceDir string
 
+	// WorkspaceBase is the task's canonical workspace. It equals
+	// WorkspaceDir except inside a fan-out branch, where WorkspaceDir is
+	// the branch's isolated copy. Tool executors alias absolute paths
+	// under WorkspaceBase into WorkspaceDir so instructions and upstream
+	// artifacts that leak the real workspace path (task descriptions, plan
+	// output) keep working inside the branch — otherwise models hit
+	// "escapes working directory" on valid-looking paths and route around
+	// the guard with shell, defeating isolation.
+	WorkspaceBase string
+
 	// Provider/model config for LLM calls within nodes.
 	ProviderName string
 	Model        string
@@ -68,13 +78,14 @@ type TaskState struct {
 // NewTaskState creates a TaskState with the required identity and workspace fields.
 func NewTaskState(jobID, taskID, workspaceDir, providerName, model string) *TaskState {
 	return &TaskState{
-		JobID:        jobID,
-		TaskID:       taskID,
-		WorkspaceDir: workspaceDir,
-		ProviderName: providerName,
-		Model:        model,
-		Artifacts:    make(map[string]any),
-		NodeOutputs:  make(map[string]json.RawMessage),
+		JobID:         jobID,
+		TaskID:        taskID,
+		WorkspaceDir:  workspaceDir,
+		WorkspaceBase: workspaceDir,
+		ProviderName:  providerName,
+		Model:         model,
+		Artifacts:     make(map[string]any),
+		NodeOutputs:   make(map[string]json.RawMessage),
 	}
 }
 

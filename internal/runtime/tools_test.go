@@ -8,8 +8,12 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/jefflinse/toasters/internal/provider"
 )
@@ -1135,4 +1139,138 @@ func TestQueryGraphs_OnlySystemGraphsReturnsEmpty(t *testing.T) {
 	if !strings.Contains(out, "No graphs are currently loaded.") {
 		t.Errorf("expected empty-catalog sentinel when only system graphs remain; got:\n%s", out)
 	}
+}
+
+// WithPathAlias remaps absolute paths under the canonical workspace into the
+// executor's working directory — fan-out branch isolation. Pre-fix, workers
+// whose instructions leaked the canonical absolute path got "escapes working
+// directory" from the file tools and routed around them with shell, writing
+// into the shared workspace and defeating isolation.
+func TestPathAlias_RemapsCanonicalWorkspace(t *testing.T) {
+	base := t.TempDir() // canonical task workspace (leaked into prompts)
+	iso := t.TempDir()  // this branch's isolated copy
+	ct := NewCoreTools(iso, WithPathAlias(base))
+	ctx := context.Background()
+
+	// Writing to a canonical-workspace absolute path lands in the branch dir.
+	args := mustJSON(t, map[string]any{
+		"path":    filepath.Join(base, "backend", "main.go"),
+		"content": "package main",
+	})
+	if _, err := ct.Execute(ctx, "write_file", args); err != nil {
+		t.Fatalf("write_file via canonical path: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(iso, "backend", "main.go")); err != nil {
+		t.Errorf("file not written into isolated branch dir: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(base, "backend")); !os.IsNotExist(err) {
+		t.Errorf("canonical workspace was touched; isolation defeated")
+	}
+
+	// Reading back through the canonical path works too.
+	out, err := ct.Execute(ctx, "read_file", mustJSON(t, map[string]any{
+		"path": filepath.Join(base, "backend", "main.go"),
+	}))
+	if err != nil {
+		t.Fatalf("read_file via canonical path: %v", err)
+	}
+	assertContains(t, out, "package main")
+
+	// Traversal through the alias is still rejected: base/../evil cleans to
+	// a path outside the alias and outside the workdir.
+	if _, err := ct.Execute(ctx, "write_file", mustJSON(t, map[string]any{
+		"path":    filepath.Join(base, "..", "evil.txt"),
+		"content": "nope",
+	})); err == nil {
+		t.Error("write outside alias+workdir accepted; want escape rejection")
+	}
+
+	// Unrelated absolute paths are still rejected.
+	if _, err := ct.Execute(ctx, "write_file", mustJSON(t, map[string]any{
+		"path":    "/tmp/elsewhere.txt",
+		"content": "nope",
+	})); err == nil {
+		t.Error("write to unrelated absolute path accepted; want escape rejection")
+	}
+}
+
+// A timed-out command must take its WHOLE process tree with it and return
+// promptly. Pre-fix, the context killed only /bin/sh: a backgrounded
+// grandchild survived holding the output pipe, CombinedOutput blocked
+// forever (past the timeout, past session cancel), and the worker session
+// wedged — found live when a worker started the server it had just built.
+func TestShell_TimeoutKillsProcessTree(t *testing.T) {
+	ct := NewCoreTools(t.TempDir(), WithShell(true))
+
+	start := time.Now()
+	// The background sleep simulates a server; $! is its pid. The foreground
+	// sleep keeps sh alive so the 1s timeout fires while both run.
+	out, err := ct.Execute(context.Background(), "shell", mustJSON(t, map[string]any{
+		"command": "sleep 300 & echo PID=$!; sleep 300",
+		"timeout": 1,
+	}))
+	elapsed := time.Since(start)
+
+	if err == nil || !strings.Contains(err.Error(), "timed out") {
+		t.Fatalf("err = %v, want timeout error", err)
+	}
+	// Bounded: timeout (1s) + WaitDelay (5s) + slack. Pre-fix this blocked
+	// for the full 300s sleep.
+	if elapsed > 8*time.Second {
+		t.Fatalf("shell returned after %v; tool call is not bounded", elapsed)
+	}
+
+	// The backgrounded grandchild must be dead — pre-fix it survived,
+	// holding the pipe and squatting on its port.
+	m := regexp.MustCompile(`PID=(\d+)`).FindStringSubmatch(out)
+	if m == nil {
+		t.Fatalf("no PID in output: %q", out)
+	}
+	pid, _ := strconv.Atoi(m[1])
+	deadline := time.Now().Add(3 * time.Second)
+	for syscall.Kill(pid, 0) == nil { // ESRCH once the group kill lands
+		if time.Now().After(deadline) {
+			t.Fatalf("backgrounded child %d still alive after timeout kill", pid)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// A command that exits successfully but leaves a child holding the output
+// pipe must return within WaitDelay instead of blocking until the child
+// exits on its own.
+func TestShell_OrphanedPipeHolderDoesNotWedgeReturn(t *testing.T) {
+	ct := NewCoreTools(t.TempDir(), WithShell(true))
+
+	start := time.Now()
+	// sh exits immediately; the disowned sleep inherits stdout. On unix the
+	// group kill doesn't fire (no cancellation), so this exercises WaitDelay.
+	_, err := ct.Execute(context.Background(), "shell", mustJSON(t, map[string]any{
+		"command": "sleep 300 & echo started",
+		"timeout": 60,
+	}))
+	elapsed := time.Since(start)
+
+	if elapsed > shellWaitDelay+3*time.Second {
+		t.Fatalf("shell returned after %v; want ~WaitDelay (%v)", elapsed, shellWaitDelay)
+	}
+	if err == nil || !strings.Contains(err.Error(), "background child") {
+		t.Fatalf("err = %v, want background-child guidance", err)
+	}
+}
+
+// The documented one-command smoke-test pattern works: start, exercise,
+// kill — everything within one call, no errors, output intact.
+func TestShell_OneCommandServerPattern(t *testing.T) {
+	ct := NewCoreTools(t.TempDir(), WithShell(true))
+
+	out, err := ct.Execute(context.Background(), "shell", mustJSON(t, map[string]any{
+		"command": "sleep 60 & SRV=$!; echo exercising; kill $SRV; wait; echo done",
+		"timeout": 10,
+	}))
+	if err != nil {
+		t.Fatalf("one-command pattern errored: %v", err)
+	}
+	assertContains(t, out, "exercising")
+	assertContains(t, out, "done")
 }

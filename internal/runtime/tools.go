@@ -42,6 +42,7 @@ type WorkerSpawner interface {
 // CoreTools implements the standard worker tool set.
 type CoreTools struct {
 	workDir      string
+	aliasFrom    string // absolute prefix remapped onto workDir (fan-out isolation); empty = no alias
 	allowShell   bool
 	spawner      WorkerSpawner  // for spawn_worker; may be nil
 	depth        int            // current spawn depth
@@ -97,6 +98,17 @@ func WithSpawner(s WorkerSpawner, depth, maxDepth int) CoreToolsOption {
 // WithStore enables progress tools by providing a database store.
 func WithStore(store db.Store) CoreToolsOption {
 	return func(ct *CoreTools) { ct.store = store }
+}
+
+// WithPathAlias remaps absolute paths under `from` onto the working
+// directory. Used by fan-out isolation: a branch's tools run in an isolated
+// copy of the task workspace, but the worker's instructions and upstream
+// artifacts reference the canonical workspace by absolute path. Without the
+// alias those valid-looking paths fail the escape check and models route
+// around the file tools with shell, writing into the shared workspace and
+// defeating isolation.
+func WithPathAlias(from string) CoreToolsOption {
+	return func(ct *CoreTools) { ct.aliasFrom = filepath.Clean(from) }
 }
 
 // WithSessionContext sets the session context for progress tool calls.
@@ -319,12 +331,12 @@ func (ct *CoreTools) Definitions() []ToolDef {
 		},
 		{
 			Name:        "shell",
-			Description: "Execute a shell command. Returns stdout and stderr combined.",
+			Description: "Execute a shell command. Returns stdout and stderr combined. The command and its ENTIRE process tree are killed when the timeout expires — there is no way to leave a process running between calls. To smoke-test a server or other long-running process, do everything in ONE command: start it in the background, wait briefly, exercise it, then kill it (e.g. `./server & sleep 1; curl localhost:8080/health; kill %1`).",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
 					"command": {"type": "string", "description": "Shell command to execute"},
-					"timeout": {"type": "integer", "description": "Timeout in seconds. Default: 120"}
+					"timeout": {"type": "integer", "description": "Timeout in seconds. Default: 120, max: 600."}
 				},
 				"required": ["command"]
 			}`),
@@ -464,6 +476,15 @@ func (ct *CoreTools) resolvePath(path string) (string, error) {
 	var resolved string
 	if filepath.IsAbs(path) {
 		resolved = filepath.Clean(path)
+		// Alias: an absolute path under the canonical workspace maps into
+		// this executor's working directory (fan-out branch isolation).
+		if ct.aliasFrom != "" && ct.aliasFrom != ct.workDir {
+			if resolved == ct.aliasFrom {
+				resolved = filepath.Clean(ct.workDir)
+			} else if strings.HasPrefix(resolved, ct.aliasFrom+string(filepath.Separator)) {
+				resolved = filepath.Join(ct.workDir, resolved[len(ct.aliasFrom)+1:])
+			}
+		}
 	} else {
 		resolved = filepath.Clean(filepath.Join(ct.workDir, path))
 	}
@@ -887,6 +908,19 @@ func (ct *CoreTools) grepFiles(_ context.Context, args json.RawMessage) (string,
 	return b.String(), nil
 }
 
+const (
+	// maxShellTimeout caps the model-requested shell timeout so one tool
+	// call can't park a session for hours.
+	maxShellTimeout = 10 * time.Minute
+
+	// shellWaitDelay bounds how long CombinedOutput waits on the output
+	// pipe after the command exits or is cancelled. A surviving child
+	// holding the pipe (backgrounded server on a non-unix platform, or a
+	// process that ignored SIGKILL semantics mid-teardown) costs at most
+	// this much extra, instead of wedging the session forever.
+	shellWaitDelay = 5 * time.Second
+)
+
 func (ct *CoreTools) shell(ctx context.Context, args json.RawMessage) (string, error) {
 	if !ct.allowShell {
 		return "", fmt.Errorf("shell tool is disabled")
@@ -904,19 +938,38 @@ func (ct *CoreTools) shell(ctx context.Context, args json.RawMessage) (string, e
 	if timeout <= 0 {
 		timeout = 120 * time.Second
 	}
+	if timeout > maxShellTimeout {
+		timeout = maxShellTimeout
+	}
 
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, "/bin/sh", "-c", params.Command)
 	cmd.Dir = ct.workDir
+	// Boundedness invariant: this call must NEVER outlive timeout+WaitDelay.
+	// configureProcessTree kills the whole process group on cancellation
+	// (CommandContext's default kills only /bin/sh, orphaning backgrounded
+	// grandchildren); WaitDelay stops CombinedOutput waiting on the output
+	// pipe if anything survives holding it. Without both, a worker that
+	// backgrounds a server wedges its session forever.
+	configureProcessTree(cmd)
+	cmd.WaitDelay = shellWaitDelay
 
 	output, err := cmd.CombinedOutput()
 	result := string(output)
 
 	if err != nil {
 		if ctx.Err() == context.DeadlineExceeded {
-			return result, fmt.Errorf("command timed out after %s", timeout)
+			return result, fmt.Errorf("command timed out after %s (the entire process tree was killed); "+
+				"long-running processes must be started, exercised, and stopped within a single command", timeout)
+		}
+		if errors.Is(err, exec.ErrWaitDelay) {
+			// The command itself exited but left a child holding the output
+			// pipe (e.g. a backgrounded server). Output up to abandonment is
+			// returned; tell the model how to do this correctly.
+			return result, fmt.Errorf("command exited but a background child kept running and held the output stream; " +
+				"start, exercise, and stop background processes within one command (e.g. `srv & sleep 1; curl ...; kill %%1`)")
 		}
 		// Include exit code in result but don't return error — the LLM should see the output.
 		return fmt.Sprintf("%s\nexit status: %s", result, err.Error()), nil
