@@ -306,9 +306,28 @@ func parsePromptQuestions(raw json.RawMessage) ([]PromptQuestion, error) {
 		return []PromptQuestion{q}, nil
 	case '[':
 		// Array of strings and/or objects, mixed.
-		var elems []json.RawMessage
-		if err := json.Unmarshal(raw, &elems); err != nil {
+		//
+		// Stream the elements rather than json.Unmarshal the whole array:
+		// small local models routinely truncate a long questions array
+		// (dropping the closing ']' or cutting off mid-element), and a strict
+		// decode of the whole thing throws away every complete element along
+		// with the broken tail. Decoding element-by-element recovers all the
+		// well-formed questions and stops at the first damaged one.
+		dec := json.NewDecoder(bytes.NewReader(raw))
+		if _, err := dec.Token(); err != nil { // consume opening '['
 			return nil, err
+		}
+		var elems []json.RawMessage
+		for dec.More() {
+			var el json.RawMessage
+			if err := dec.Decode(&el); err != nil {
+				// Truncated trailing element — keep what parsed cleanly.
+				break
+			}
+			elems = append(elems, el)
+		}
+		if len(elems) == 0 {
+			return nil, fmt.Errorf("no parseable questions in array: %s", string(raw))
 		}
 		var out []PromptQuestion
 		for _, el := range elems {
@@ -316,23 +335,26 @@ func parsePromptQuestions(raw json.RawMessage) ([]PromptQuestion, error) {
 			if len(el) == 0 {
 				continue
 			}
+			// One malformed element shouldn't discard its well-formed
+			// siblings — skip it and keep the rest.
 			if el[0] == '"' {
 				var s string
 				if err := json.Unmarshal(el, &s); err != nil {
-					return nil, err
+					continue
 				}
-				qs, err := questionsFromString(s)
-				if err != nil {
-					return nil, err
+				if qs, err := questionsFromString(s); err == nil {
+					out = append(out, qs...)
 				}
-				out = append(out, qs...)
 			} else {
 				var q PromptQuestion
 				if err := json.Unmarshal(el, &q); err != nil {
-					return nil, err
+					continue
 				}
 				out = append(out, q)
 			}
+		}
+		if len(out) == 0 {
+			return nil, fmt.Errorf("no parseable questions in array: %s", string(raw))
 		}
 		return out, nil
 	default:
