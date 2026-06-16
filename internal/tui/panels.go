@@ -237,7 +237,17 @@ func (m Model) renderLeftPanel(panelWidth, panelHeight int) string {
 	}
 
 	if !hasAnyRuntime {
-		workerLines = append(workerLines, DimStyle.Italic(true).Render("No workers running"))
+		// Decomposition nodes are hidden from this pane, so a job that's busy
+		// planning would read as idle. Say what's actually happening.
+		if planning := m.activePlanningCount(); planning > 0 {
+			msg := "Planning… decomposing tasks"
+			if planning > 1 {
+				msg = fmt.Sprintf("Planning… decomposing %d tasks", planning)
+			}
+			workerLines = append(workerLines, DimStyle.Italic(true).Render(msg))
+		} else {
+			workerLines = append(workerLines, DimStyle.Italic(true).Render("No workers running"))
+		}
 	}
 	if m.focused == focusWorkers {
 		workerLines = append(workerLines, DimStyle.Render("Enter → grid view"))

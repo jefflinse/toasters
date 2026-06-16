@@ -120,3 +120,29 @@ func TestChatResyncMsg_MergesHistoryPreservingLocalBlocks(t *testing.T) {
 		t.Errorf("entry 2 = %+v, want recovered missed reply", got.chat.entries[2])
 	}
 }
+
+// activePlanningCount counts active decomposition (system) nodes — the ones
+// displayRuntimeSessions hides. The Workers pane uses it to show "Planning…"
+// instead of "No workers running" while a job is busy decomposing (the
+// confusing state seen live: job running, panel claims nothing running).
+func TestActivePlanningCount(t *testing.T) {
+	m := newMinimalModel(t)
+	m.runtimeSessions = map[string]*runtimeSlot{
+		"sys-1":  {sessionID: "sys-1", system: true, status: "active"},
+		"sys-2":  {sessionID: "sys-2", system: true, status: "active"},
+		"sys-3":  {sessionID: "sys-3", system: true, status: "completed"}, // done — not counted
+		"real-1": {sessionID: "real-1", system: false, status: "active"},  // real worker — not planning
+	}
+
+	if got := m.activePlanningCount(); got != 2 {
+		t.Errorf("activePlanningCount = %d, want 2 (only active system nodes)", got)
+	}
+
+	// No system nodes active → zero, so the pane shows "No workers running".
+	m.runtimeSessions = map[string]*runtimeSlot{
+		"real-1": {sessionID: "real-1", system: false, status: "active"},
+	}
+	if got := m.activePlanningCount(); got != 0 {
+		t.Errorf("activePlanningCount = %d, want 0", got)
+	}
+}

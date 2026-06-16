@@ -13,9 +13,30 @@ import (
 // by the decompose-ordering tests (task creation + dependency edges).
 type recordingStore struct {
 	mockStore
-	mu       sync.Mutex
-	tasks    []*db.Task
-	depEdges [][2]string // [taskID, dependsOnID]
+	mu          sync.Mutex
+	tasks       []*db.Task
+	depEdges    [][2]string // [taskID, dependsOnID]
+	feedEntries []*db.FeedEntry
+}
+
+func (r *recordingStore) UpdateTaskStatus(_ context.Context, id string, status db.TaskStatus, summary string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, t := range r.tasks {
+		if t.ID == id {
+			t.Status = status
+			t.Summary = summary
+			return nil
+		}
+	}
+	return fmt.Errorf("task not found: %s", id)
+}
+
+func (r *recordingStore) CreateFeedEntry(_ context.Context, e *db.FeedEntry) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.feedEntries = append(r.feedEntries, e)
+	return nil
 }
 
 func (r *recordingStore) CreateTask(_ context.Context, t *db.Task) error {
@@ -185,5 +206,77 @@ func TestDispatchFineDecomposeForTask_DefersWhenPredecessorsIncomplete(t *testin
 	store.markCompleted(store.tasks[0].ID)
 	if !svc.taskIsReady(context.Background(), store.tasks[1]) {
 		t.Errorf("taskIsReady(b) = false after a completed, want true")
+	}
+}
+
+// applyFineResult with a no_graph verdict must terminate the task (failed,
+// terminal so the job can complete) and surface it in the feed — WITHOUT
+// splitting it into subtasks. Splitting an out-of-domain task is the runaway
+// that produced 77 tasks from 20; no_graph is the bail-out that stops it.
+func TestApplyFineResult_NoGraphSurfacesInsteadOfSplitting(t *testing.T) {
+	svc, store := newDecomposeTestService(t)
+	ctx := context.Background()
+
+	parent := &db.Task{
+		ID:     "task-research",
+		JobID:  "job-1",
+		Title:  "Research company history",
+		Status: db.TaskStatusInProgress,
+	}
+	store.tasks = append(store.tasks, parent)
+	before := len(store.tasks)
+
+	svc.applyFineResult(ctx, parent.ID, decompositionResult{
+		NoGraph: true,
+		Reason:  "no research/report graph for information-gathering tasks",
+	})
+
+	// No subtasks created.
+	if len(store.tasks) != before {
+		t.Errorf("created %d new tasks, want 0 (no_graph must not split)", len(store.tasks)-before)
+	}
+	// Task driven to a terminal state so the job can complete.
+	got, _ := store.GetTask(ctx, parent.ID)
+	if got.Status != db.TaskStatusFailed {
+		t.Errorf("status = %q, want failed", got.Status)
+	}
+	if got.Summary == "" {
+		t.Error("summary should explain no graph fit")
+	}
+	// Surfaced in the feed.
+	if len(store.feedEntries) != 1 {
+		t.Fatalf("feed entries = %d, want 1", len(store.feedEntries))
+	}
+	if store.feedEntries[0].JobID != "job-1" {
+		t.Errorf("feed entry job = %q, want job-1", store.feedEntries[0].JobID)
+	}
+}
+
+// A rejection (too-broad) still splits — the no_graph path must not have
+// regressed the legitimate split case.
+func TestApplyFineResult_RejectionStillSplits(t *testing.T) {
+	svc, store := newDecomposeTestService(t)
+	ctx := context.Background()
+
+	parent := &db.Task{ID: "task-big", JobID: "job-1", Title: "Build everything", Status: db.TaskStatusInProgress}
+	store.tasks = append(store.tasks, parent)
+
+	svc.applyFineResult(ctx, parent.ID, decompositionResult{
+		Rejected: true,
+		Reason:   "spans multiple graphs",
+		Tasks: []decomposedTask{
+			{Title: "part one", Description: "d1"},
+			{Title: "part two", Description: "d2"},
+		},
+	})
+
+	var created int
+	for _, tk := range store.tasks {
+		if tk.ParentID == parent.ID {
+			created++
+		}
+	}
+	if created != 2 {
+		t.Errorf("created %d subtasks, want 2", created)
 	}
 }

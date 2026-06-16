@@ -44,6 +44,7 @@ type decompositionResult struct {
 	GraphID   string           `json:"graph_id,omitempty"`
 	Toolchain string           `json:"toolchain,omitempty"`
 	Rejected  bool             `json:"rejected,omitempty"`
+	NoGraph   bool             `json:"no_graph,omitempty"`
 	Reason    string           `json:"reason,omitempty"`
 }
 
@@ -288,12 +289,47 @@ func (s *LocalService) applyFineResult(ctx context.Context, parentID string, res
 	switch {
 	case result.GraphID != "":
 		s.assignGraphToParent(ctx, parent, result.GraphID, result.Toolchain, result.Reason)
+	case result.NoGraph:
+		s.handleNoGraphFit(ctx, parent, result.Reason)
 	case result.Rejected && len(result.Tasks) > 0:
 		s.replaceParentWithSubtasks(ctx, parent, result)
 	default:
 		slog.Warn("fine-decompose produced neither graph_id nor subtasks",
 			"parent_id", parentID, "reason", result.Reason)
 	}
+}
+
+// handleNoGraphFit terminates a task that no installed graph can run. The
+// decomposer signals this (no_graph) when splitting would not help because
+// every subtask would be the same unsupported kind of work — the runaway
+// breadth-explosion we'd otherwise get by recursively rejecting out-of-domain
+// tasks until the depth cap. Mark the task failed (terminal, so the job can
+// still complete) with an actionable reason and surface it in the feed,
+// without routing through the operator's task-failed retry path — retrying
+// fine-decompose would just reproduce the same no-graph result.
+func (s *LocalService) handleNoGraphFit(ctx context.Context, parent *db.Task, reason string) {
+	if reason == "" {
+		reason = "no installed graph fits this kind of work"
+	}
+	summary := fmt.Sprintf("No installed graph fits this task: %s. Install or define a graph for this kind of work, or rescope the job.", reason)
+	if err := s.cfg.Store.UpdateTaskStatus(ctx, parent.ID, db.TaskStatusFailed, summary); err != nil {
+		slog.Error("failed to mark no-graph task failed", "task_id", parent.ID, "error", err)
+		return
+	}
+	entry := &db.FeedEntry{
+		EntryType: db.FeedEntrySystemEvent,
+		Content:   fmt.Sprintf("⚠️ No graph fits task %q — %s", parent.Title, reason),
+		JobID:     parent.JobID,
+	}
+	if err := s.cfg.Store.CreateFeedEntry(ctx, entry); err != nil {
+		slog.Warn("failed to create no-graph feed entry", "task_id", parent.ID, "error", err)
+	}
+	// Deliberately NOT routed through BroadcastTaskFailed: the operator's
+	// task-failed path nudges retry_task, which re-runs fine-decompose and
+	// reproduces the same no-graph verdict — an infinite loop. The feed entry
+	// is the surface; the failed status lets the job reach a terminal state.
+	slog.Info("fine-decompose found no fitting graph; task surfaced to user",
+		"task_id", parent.ID, "job_id", parent.JobID, "reason", reason)
 }
 
 // assignGraphToParent wires the selected graph to the parent task and
