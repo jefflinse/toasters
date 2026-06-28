@@ -36,7 +36,8 @@
       "Bash(python3 /tmp/remove_funcs.py /Users/jefflinse/dev/toasters/internal/progress/handlers_test.go TestReportBlocker_Success TestReportBlocker_AllSeverities TestReportBlocker_StoreError TestReportBlocker_MissingJobID)",
       "Bash(python3 /tmp/remove_funcs.py /Users/jefflinse/dev/toasters/internal/server/handlers_test.go TestRespondToBlocker_TooManyAnswers TestRespondToBlocker_AnswerTooLarge TestRespondToBlocker_AnswersAtLimit TestRespondToBlocker_EmptyAnswers TestRespondToBlocker_EmptyAnswerInArray)",
       "Bash(python3 /tmp/remove_funcs.py /Users/jefflinse/dev/toasters/internal/operator/operator_test.go TestEventLoop_BlockerReported_RoutesToLLM)",
-      "Bash(python3 *)"
+      "Bash(python3 *)",
+      "Bash(awk '{print $1}')"
     ]
   }
 }

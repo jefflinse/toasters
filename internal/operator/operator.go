@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/jefflinse/toasters/internal/db"
+	"github.com/jefflinse/toasters/internal/graphexec"
 	"github.com/jefflinse/toasters/internal/hitl"
 	"github.com/jefflinse/toasters/internal/prompt"
 	"github.com/jefflinse/toasters/internal/provider"
@@ -75,17 +76,9 @@ type Operator struct {
 	onReasoning func(turnID, text string)                                            // called with streamed reasoning chunks; optional
 	onEvent     func(event Event)                                                    // called when the event loop processes an event
 	onTurnDone  func(turnID string, tokensIn, tokensOut, reasoningTokens int)        // called when the operator finishes processing a turn
-	onPrompt    func(requestID string, questions []PromptQuestion)                   // called when the operator calls ask_user
+	onPrompt    func(requestID string, questions []graphexec.PromptQuestion)         // called when the operator calls ask_user
 	onResolve   func(requestID string)                                               // called when an ask_user request finishes (answered or cancelled)
 	onToolCall  func(name string, args json.RawMessage, result string, isError bool) // called after each operator tool executes
-}
-
-// PromptQuestion is a single question within an ask_user round. The operator
-// can ask several at once; the TUI presents them together and returns one
-// combined answer string.
-type PromptQuestion struct {
-	Question string
-	Options  []string
 }
 
 // Config holds configuration for creating an Operator.
@@ -116,7 +109,7 @@ type Config struct {
 	// turn (the operator may make several when tool calls are involved).
 	// reasoningTokens is 0 for providers that don't surface them.
 	OnTurnDone  func(turnID string, tokensIn, tokensOut, reasoningTokens int)
-	OnPrompt    func(requestID string, questions []PromptQuestion)                   // called when the operator calls ask_user
+	OnPrompt    func(requestID string, questions []graphexec.PromptQuestion)         // called when the operator calls ask_user
 	OnResolve   func(requestID string)                                               // called when an ask_user request finishes (answered or cancelled)
 	OnToolCall  func(name string, args json.RawMessage, result string, isError bool) // called after each operator tool executes
 	SessionFile string                                                               // path to persist the operator conversation (e.g. ~/.config/toasters/sessions/operator.json)
@@ -764,7 +757,7 @@ func (o *Operator) handleUserMessage(ctx context.Context, payload UserMessagePay
 // unanswered prompt must resolve eventually or the whole operator freezes.
 // On timeout the tool returns a no-response message (not an error) so the
 // LLM continues the turn with its best judgment.
-func (o *Operator) promptUser(ctx context.Context, requestID string, questions []PromptQuestion) (string, error) {
+func (o *Operator) promptUser(ctx context.Context, requestID string, questions []graphexec.PromptQuestion) (string, error) {
 	if o.broker == nil {
 		return "", fmt.Errorf("operator: no HITL broker configured")
 	}

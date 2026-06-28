@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/jefflinse/toasters/internal/graphexec"
-	"github.com/jefflinse/toasters/internal/operator"
 )
 
 // drainFor waits up to a second for an event of the given type and returns it.
@@ -69,7 +68,7 @@ func TestBroadcastOperatorPrompt_RegistersBlockerEmptySource(t *testing.T) {
 	defer cancel()
 	ch := svc.subscribe(ctx)
 
-	svc.BroadcastOperatorPrompt("op-1", []operator.PromptQuestion{{Question: "Q?"}})
+	svc.BroadcastOperatorPrompt("op-1", []graphexec.PromptQuestion{{Question: "Q?"}})
 
 	ev := drainFor(t, ch, EventTypeBlockerAdded)
 	b := ev.Payload.(Blocker)

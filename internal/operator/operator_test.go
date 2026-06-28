@@ -2108,7 +2108,7 @@ func TestPromptUser_FiresOnResolve(t *testing.T) {
 		}
 	}()
 
-	ans, err := op.promptUser(context.Background(), "req-1", []PromptQuestion{{Question: "Q?"}})
+	ans, err := op.promptUser(context.Background(), "req-1", []graphexec.PromptQuestion{{Question: "Q?"}})
 	if err != nil {
 		t.Fatalf("promptUser: %v", err)
 	}
@@ -2249,7 +2249,7 @@ func TestPromptUser_TimesOutWithNoResponse(t *testing.T) {
 	// Nobody answers. promptUser must return a no-response message (not an
 	// error) so the LLM turn — and the event loop blocked behind it — can
 	// continue.
-	ans, err := op.promptUser(context.Background(), "req-timeout", []PromptQuestion{{Question: "Q?"}})
+	ans, err := op.promptUser(context.Background(), "req-timeout", []graphexec.PromptQuestion{{Question: "Q?"}})
 	if err != nil {
 		t.Fatalf("promptUser after timeout should return a message, not an error: %v", err)
 	}
@@ -2290,7 +2290,7 @@ func TestPromptUser_CancellationStillPropagates(t *testing.T) {
 
 	// Real cancellation (shutdown, operator replacement) must surface as an
 	// error, not be swallowed into a synthetic answer.
-	if _, err := op.promptUser(ctx, "req-cancel", []PromptQuestion{{Question: "Q?"}}); err == nil {
+	if _, err := op.promptUser(ctx, "req-cancel", []graphexec.PromptQuestion{{Question: "Q?"}}); err == nil {
 		t.Fatal("cancelled promptUser should return an error, not a synthetic answer")
 	}
 }
