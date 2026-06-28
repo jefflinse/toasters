@@ -13,7 +13,7 @@ import "context"
 //
 // Two implementations exist:
 //   - LocalService: in-process, delegates to db.Store, operator.Operator,
-//     runtime.Runtime, mcp.Manager, etc. Used in embedded mode.
+//     runtime.Runtime, mcp.Manager, etc. Used in-process by the server.
 //   - RemoteClient: over HTTP + SSE, used when connecting to a standalone
 //     toasters server.
 //

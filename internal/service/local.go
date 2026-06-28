@@ -98,8 +98,8 @@ type LocalConfig struct {
 	Operator         *operator.Operator
 	MCPManager       *mcp.Manager
 	Provider         provider.Provider // operator's LLM provider (for ListModels, generation)
-	DefaultProvider  string            // default provider for system workers and team leads
-	DefaultModel     string            // default model for system workers and team leads
+	DefaultProvider  string            // default provider for system workers
+	DefaultModel     string            // default model for system workers
 	Loader           *loader.Loader
 	ConfigDir        string
 	WorkspaceDir     string

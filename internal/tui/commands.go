@@ -14,7 +14,6 @@ var allCommands = []SlashCommand{
 	{Name: "/quit", Description: "Exit the application"},
 	{Name: "/help", Description: "Show help information"},
 	{Name: "/new", Description: "Start a new session"},
-	{Name: "/teams", Description: "Browse and manage teams"},
 	{Name: "/skills", Description: "Browse and manage skills"},
 	{Name: "/workers", Description: "Browse and manage workers"},
 	{Name: "/mcp", Description: "View MCP server status and tools"},

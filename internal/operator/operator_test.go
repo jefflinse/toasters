@@ -638,7 +638,7 @@ func TestEventLoop_TaskCompleted_AssignsNextTask(t *testing.T) {
 	mp := &mockProvider{
 		name: "test-provider",
 		responses: []mockResponse{
-			// Spawned team lead worker responds.
+			// Spawned worker responds.
 			{events: []provider.StreamEvent{
 				{Type: provider.EventText, Text: "Working on second task"},
 				{Type: provider.EventDone},

@@ -28,7 +28,7 @@ func TestHTTPTransport_URLConstruction(t *testing.T) {
 	}{
 		{"GET", "GET", "/api/v1/jobs"},
 		{"POST", "POST", "/api/v1/operator/messages"},
-		{"PUT", "PUT", "/api/v1/teams/team-1/coordinator"},
+		{"PUT", "PUT", "/api/v1/providers/provider-1"},
 		{"DELETE", "DELETE", "/api/v1/skills/skill-1"},
 	}
 
