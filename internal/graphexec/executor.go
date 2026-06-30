@@ -412,7 +412,11 @@ func (e *Executor) Execute(ctx context.Context, graph *rhizome.CompiledGraph[*Ta
 		if _, _, loadErr := e.checkpointStore.Load(ctx, state.TaskID); loadErr == nil {
 			slog.Info("resuming graph from checkpoint",
 				"job_id", state.JobID, "task_id", state.TaskID)
-			result, err = graph.Resume(ctx, state.TaskID, &TaskState{}, runOpts...)
+			// Mark the run as resuming so the re-running (interrupted) node
+			// gets a hygiene directive to reconcile partial work rather than
+			// duplicate it. Resume already skips completed nodes, so only that
+			// one node re-runs.
+			result, err = graph.Resume(withResuming(ctx), state.TaskID, &TaskState{}, runOpts...)
 		} else {
 			if !errors.Is(loadErr, rhizome.ErrNoCheckpoint) {
 				slog.Warn("checkpoint load failed; running graph fresh",
