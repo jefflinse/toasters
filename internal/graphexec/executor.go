@@ -3,6 +3,7 @@ package graphexec
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -30,6 +31,15 @@ type GraphSource interface {
 	Graphs() []*Definition
 }
 
+// CheckpointStore persists graph execution state so a run can resume from its
+// last completed node after a crash or restart. Save/Load come from
+// rhizome.CheckpointStore; Delete lets the executor drop a checkpoint once a
+// task reaches a terminal status. *db.CheckpointStore implements it.
+type CheckpointStore interface {
+	rhizome.CheckpointStore
+	Delete(ctx context.Context, threadID string) error
+}
+
 // Executor wraps rhizome graph execution with toasters infrastructure.
 // It resolves providers, applies middleware for events and persistence,
 // and updates task status after execution.
@@ -45,6 +55,12 @@ type Executor struct {
 	defaultModel  string
 	nodeTimeout   time.Duration
 	retryAttempts int
+
+	// checkpointStore, when non-nil, enables node-granular checkpoint/resume:
+	// graphs compile WithCheckpointing, each run carries a thread id (the task
+	// id), and Execute resumes from the last checkpoint if one survives a
+	// crash. Nil disables checkpointing entirely (behaves as plain Run).
+	checkpointStore CheckpointStore
 
 	// Worker-default knobs are read on each task dispatch and may be
 	// updated live via SetWorkerDefaults when the user changes /settings.
@@ -119,6 +135,12 @@ type ExecutorConfig struct {
 	// temperature default for graph nodes. May be updated live via
 	// SetWorkerDefaults.
 	WorkerTemperature float64
+
+	// CheckpointStore, when non-nil, enables node-granular checkpoint/resume
+	// so an interrupted graph resumes from its last completed node instead of
+	// re-running from the entry node. Production wires this to the SQLite
+	// store; leave nil to disable (tests, non-SQLite backends).
+	CheckpointStore CheckpointStore
 }
 
 // NewExecutor creates an Executor with the given configuration.
@@ -145,6 +167,7 @@ func NewExecutor(cfg ExecutorConfig) *Executor {
 		retryAttempts:         retries,
 		workerThinkingEnabled: cfg.WorkerThinkingEnabled,
 		workerTemperature:     cfg.WorkerTemperature,
+		checkpointStore:       cfg.CheckpointStore,
 	}
 }
 
@@ -200,6 +223,15 @@ func (e *Executor) endTask(taskID string) {
 	}
 	e.drainMu.Unlock()
 	e.taskWG.Done()
+}
+
+// isDraining reports whether the executor is shutting down. Used to tell a
+// shutdown-cancelled run (leave the task resumable) apart from a user-
+// initiated CancelJob (persist as cancelled), since both cancel the run ctx.
+func (e *Executor) isDraining() bool {
+	e.drainMu.Lock()
+	defer e.drainMu.Unlock()
+	return e.draining
 }
 
 // CancelJob cancels every in-flight graph execution belonging to jobID and
@@ -350,7 +382,7 @@ func (e *Executor) Execute(ctx context.Context, graph *rhizome.CompiledGraph[*Ta
 	//   Recover     — per-attempt panic safety; Retry sees panics as errors
 	//   Timeout     — per-attempt deadline (doc: Timeout inside Retry)
 	//   Logging     — slog per attempt
-	result, err := graph.Run(ctx, state,
+	runOpts := []rhizome.RunOption[*TaskState]{
 		rhizome.WithMiddleware[*TaskState](
 			NodeContextMiddleware(e.eventSink),
 			EventMiddleware(e.eventSink),
@@ -361,7 +393,34 @@ func (e *Executor) Execute(ctx context.Context, graph *rhizome.CompiledGraph[*Ta
 			LoggingMiddleware(),
 		),
 		rhizome.WithInterruptHandler[*TaskState](e.interruptHandler),
+	}
+
+	var (
+		result *TaskState
+		err    error
 	)
+	switch {
+	case e.checkpointStore == nil:
+		// Checkpointing disabled: plain run from the entry node.
+		result, err = graph.Run(ctx, state, runOpts...)
+	default:
+		// Checkpointing enabled: carry a thread id (the task id) so rhizome
+		// persists state after each node. If a checkpoint survived a prior
+		// crash, resume from the last completed node instead of re-running the
+		// whole graph; otherwise run fresh.
+		runOpts = append(runOpts, rhizome.WithThreadID[*TaskState](state.TaskID))
+		if _, _, loadErr := e.checkpointStore.Load(ctx, state.TaskID); loadErr == nil {
+			slog.Info("resuming graph from checkpoint",
+				"job_id", state.JobID, "task_id", state.TaskID)
+			result, err = graph.Resume(ctx, state.TaskID, &TaskState{}, runOpts...)
+		} else {
+			if !errors.Is(loadErr, rhizome.ErrNoCheckpoint) {
+				slog.Warn("checkpoint load failed; running graph fresh",
+					"task_id", state.TaskID, "error", loadErr)
+			}
+			result, err = graph.Run(ctx, state, runOpts...)
+		}
+	}
 
 	// Persist the terminal status on a detached context: when the run failed
 	// because ctx was cancelled (shutdown, kill), reusing ctx would fail the
@@ -369,6 +428,34 @@ func (e *Executor) Execute(ctx context.Context, graph *rhizome.CompiledGraph[*Ta
 	// the job's serial-dispatch gate behind it.
 	persistCtx, cancelPersist := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 	defer cancelPersist()
+
+	// Graceful shutdown: if the run was cancelled because the executor is
+	// draining, leave the task in_progress with its checkpoint intact rather
+	// than writing a terminal status. The next boot's ReconcileInterrupted
+	// resets it to pending and recovery resumes it from the checkpoint, so a
+	// deploy/restart resumes on the same machinery as a hard crash. Writing
+	// 'cancelled' here (and deleting the checkpoint below) would instead
+	// strand the job — a cancelled task is never re-dispatched. A user
+	// CancelJob also cancels the ctx but does not set draining, so it falls
+	// through to the normal terminal path and is persisted as cancelled.
+	if err != nil && ctx.Err() != nil && e.isDraining() {
+		slog.Info("graph interrupted by shutdown; leaving task resumable on restart",
+			"job_id", state.JobID, "task_id", state.TaskID)
+		return fmt.Errorf("graph execution interrupted by shutdown: %w", err)
+	}
+
+	// Drop the checkpoint: reaching here means the run produced a terminal
+	// outcome (completed, failed, or user-cancelled) and we're about to
+	// persist it, so the in-flight checkpoint is obsolete. A checkpoint
+	// therefore survives only when the process exited before this point — a
+	// hard crash or a graceful shutdown (handled above) — which is exactly
+	// the case recovery resumes.
+	if e.checkpointStore != nil {
+		if delErr := e.checkpointStore.Delete(persistCtx, state.TaskID); delErr != nil {
+			slog.Warn("failed to delete checkpoint at terminal status",
+				"task_id", state.TaskID, "error", delErr)
+		}
+	}
 
 	// Update task status based on outcome.
 	if err != nil {
@@ -547,6 +634,7 @@ func (e *Executor) prepareTask(req TaskRequest) (*rhizome.CompiledGraph[*TaskSta
 		Store:                 e.store,
 		WorkerThinkingEnabled: thinking,
 		WorkerTemperature:     temperature,
+		CheckpointStore:       e.checkpointStore,
 	}
 
 	if e.graphs == nil {

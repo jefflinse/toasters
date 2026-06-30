@@ -89,11 +89,25 @@ func NewTaskState(jobID, taskID, workspaceDir, providerName, model string) *Task
 	}
 }
 
+// MarshalBinary serializes the full state as JSON so rhizome can checkpoint it
+// after each node — TaskState satisfies rhizome.Snapshotter. Every field is
+// exported and JSON-friendly (strings, json.RawMessage, and a map[string]any
+// of prompt fragments), so this is a straight round-trip with no
+// hand-maintained schema to drift out of sync with the struct.
+func (s *TaskState) MarshalBinary() ([]byte, error) {
+	return json.Marshal(s)
+}
+
+// UnmarshalBinary restores state produced by MarshalBinary. rhizome calls it
+// on a fresh *TaskState during Resume, then continues from the next node.
+func (s *TaskState) UnmarshalBinary(data []byte) error {
+	return json.Unmarshal(data, s)
+}
+
 // clone returns an independent copy of the state safe for a fan-out branch to
 // mutate concurrently: the Artifacts and NodeOutputs maps (and the Inputs
 // slice) are deep-copied so branches never share mutable backing storage.
-// Scalar fields are copied by value; Err is shared (errors are treated as
-// immutable).
+// Scalar fields are copied by value.
 func (s *TaskState) clone() *TaskState {
 	if s == nil {
 		return nil

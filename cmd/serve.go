@@ -130,6 +130,9 @@ func runServe(cmd *cobra.Command, args []string) error {
 
 	// Open SQLite database for persistence.
 	var store db.Store
+	// checkpoints, when non-nil, backs node-granular graph checkpoint/resume.
+	// Only the SQLite store provides it; it stays nil for any other backend.
+	var checkpoints *db.CheckpointStore
 	dbPath, err := config.DatabasePath(cfg, workspaceDir)
 	if err != nil {
 		slog.Warn("failed to resolve database path", "error", err)
@@ -139,6 +142,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 			slog.Warn("failed to open database", "path", dbPath, "error", dbErr)
 		} else {
 			store = sqliteStore
+			checkpoints = sqliteStore.CheckpointStore()
 			defer func() { _ = sqliteStore.Close() }()
 
 			// Reclaim rows orphaned by a previous run (crash or unclean stop):
@@ -295,7 +299,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 	// each task's workspace directory (mirroring runtime.SpawnWorker) — the
 	// MCP manager is long-lived and shared. The broker is shared with the
 	// operator so ask_user from either path lands in the same TUI modal.
-	graphExec := graphexec.NewExecutor(graphexec.ExecutorConfig{
+	execCfg := graphexec.ExecutorConfig{
 		Registry:              registry,
 		MCPManager:            mcpManager,
 		PromptEngine:          promptEngine,
@@ -306,7 +310,15 @@ func runServe(cmd *cobra.Command, args []string) error {
 		DefaultModel:          defaultModel,
 		WorkerThinkingEnabled: cfg.WorkerThinkingEnabled,
 		WorkerTemperature:     cfg.WorkerTemperature,
-	})
+	}
+	// Enable node-granular checkpoint/resume when SQLite is the backend. Set
+	// only when non-nil so the interface field stays a true nil (a typed-nil
+	// *db.CheckpointStore would read as non-nil and break the executor's
+	// checkpointing guard).
+	if checkpoints != nil {
+		execCfg.CheckpointStore = checkpoints
+	}
+	graphExec := graphexec.NewExecutor(execCfg)
 
 	// Share the graph executor with the service so both the startup-time
 	// operator (created just below) and any live-activated operator
