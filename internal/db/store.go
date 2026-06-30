@@ -69,12 +69,16 @@ type Store interface {
 
 	// Recovery
 	//
-	// ReconcileInterrupted marks rows orphaned by a previous process as
-	// failed: worker sessions still 'active' and tasks still 'in_progress'
-	// belong to a runtime that no longer exists. Without this sweep, ghost
-	// sessions pollute every progress snapshot and a phantom in_progress
-	// task wedges its job's serial-dispatch gate forever. Call once at
-	// startup, before the runtime and graph executor start.
+	// ReconcileInterrupted reclaims rows orphaned by a previous process:
+	// worker sessions still 'active' are marked failed (their runtime no
+	// longer exists), and tasks still 'in_progress' are reset to 'pending'
+	// so they become re-dispatchable. Without this sweep, ghost sessions
+	// pollute every progress snapshot and a phantom in_progress task wedges
+	// its job's serial-dispatch gate forever. Call once at startup, before
+	// the runtime and graph executor start; the operator's recovery sweep
+	// (Operator.recoverInterrupted) then re-dispatches the requeued tasks
+	// once its event loop is live. Returns the counts of sessions failed
+	// and tasks requeued.
 	ReconcileInterrupted(ctx context.Context) (sessions int, tasks int, err error)
 
 	// Lifecycle

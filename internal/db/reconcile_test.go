@@ -2,7 +2,6 @@ package db
 
 import (
 	"context"
-	"strings"
 	"testing"
 )
 
@@ -50,9 +49,10 @@ func TestReconcileInterrupted(t *testing.T) {
 	}
 
 	// The in-progress task is failed with an explanatory summary; all other
-	// statuses are untouched.
+	// statuses are untouched. The in-progress task is reset to pending (not
+	// failed) so the operator's recovery sweep can re-dispatch it.
 	want := map[string]TaskStatus{
-		"t-running": TaskStatusFailed,
+		"t-running": TaskStatusPending,
 		"t-pending": TaskStatusPending,
 		"t-done":    TaskStatusCompleted,
 		"t-failed":  TaskStatusFailed,
@@ -70,8 +70,8 @@ func TestReconcileInterrupted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetTask(t-running): %v", err)
 	}
-	if !strings.Contains(running.Summary, "Interrupted") {
-		t.Errorf("interrupted task summary = %q, want it to mention the interruption", running.Summary)
+	if running.Summary != "" {
+		t.Errorf("requeued task summary = %q, want it cleared", running.Summary)
 	}
 
 	active, err := store.GetActiveSessions(ctx)

@@ -720,6 +720,83 @@ func TestEventLoop_TaskCompleted_AssignsNextTask(t *testing.T) {
 	assertEqual(t, string(db.TaskStatusInProgress), string(updatedTask.Status))
 }
 
+// TestRun_RecoversInterruptedJobOnStart verifies that when the event loop
+// starts, it re-dispatches active jobs that have a graphed task left ready by
+// a prior shutdown. ReconcileInterrupted resets interrupted in_progress tasks
+// to pending; recovery then kicks the job's pipeline back into motion without
+// any user action. Without this, a crash mid-job leaves the job active but
+// stalled forever. (The negative case — an active job with nothing ready,
+// which must NOT produce a recovery feed entry — is covered by
+// TestEventLoop_JobComplete_MarksDone.)
+func TestRun_RecoversInterruptedJobOnStart(t *testing.T) {
+	store := newOperatorTestStore(t)
+	ctx := context.Background()
+
+	job := &db.Job{ID: "job-1", Title: "Interrupted job", Status: db.JobStatusActive}
+	assertNoError(t, store.CreateJob(ctx, job))
+
+	// A graphed task reset to pending — the state ReconcileInterrupted leaves
+	// after the server was killed while this task was in_progress.
+	task := &db.Task{
+		ID: "task-1", JobID: "job-1", Title: "Resume me",
+		Status: db.TaskStatusPending, GraphID: "bug-fix",
+	}
+	assertNoError(t, store.CreateTask(ctx, task))
+
+	mp := &mockProvider{name: "test-provider"}
+	reg := newTestRegistry(mp)
+	rt := runtime.New(store, reg)
+	gExec := newMockGraphExecutor()
+
+	engine := testPromptEngine(t, map[string]string{"lead-agent": "You are a test lead."})
+	eventCh := make(chan Event, eventChSize)
+	systemTools := NewSystemTools(SystemToolsConfig{
+		Store: store, PromptEngine: engine,
+		DefaultProvider: "test-provider", DefaultModel: "test-model",
+		EventCh: eventCh, WorkDir: t.TempDir(),
+		GraphExecutor: gExec,
+	})
+	tools := newOperatorTools(rt, engine, "test-provider", "test-model", store, systemTools, t.TempDir())
+
+	op := &Operator{
+		rt: rt, prov: mp, model: "test-model", tools: tools, store: store,
+		eventCh: eventCh, workDir: t.TempDir(), systemPrompt: "You are the operator.",
+	}
+
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	// Start runs recoverInterrupted before consuming any events; no event sent.
+	op.Start(ctx)
+
+	gExec.waitForGraphCall(t)
+
+	calls := gExec.getCalls()
+	if len(calls) != 1 {
+		t.Fatalf("want 1 graph dispatch from recovery, got %d", len(calls))
+	}
+	assertEqual(t, "task-1", calls[0].TaskID)
+
+	updated, err := store.GetTask(ctx, "task-1")
+	assertNoError(t, err)
+	assertEqual(t, string(db.TaskStatusInProgress), string(updated.Status))
+
+	// A recovery feed entry was posted for the resumed job.
+	entries, err := store.ListRecentFeedEntries(ctx, 10)
+	assertNoError(t, err)
+	var resumeEntry *db.FeedEntry
+	for _, e := range entries {
+		if e.EntryType == db.FeedEntrySystemEvent {
+			resumeEntry = e
+			break
+		}
+	}
+	if resumeEntry == nil {
+		t.Fatalf("want a system-event recovery feed entry, got %+v", entries)
+	}
+	assertContains(t, resumeEntry.Content, "Resumed job after server restart")
+}
+
 // TestEventLoop_TaskCompleted_SkipsGraphlessTask verifies the operator does not
 // prompt the LLM about graphless ready tasks. Graph assignment is the service's
 // job (fine-decompose); the operator has no tool to assign a graph, so prompting

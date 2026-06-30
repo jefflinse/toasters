@@ -269,6 +269,12 @@ func (o *Operator) Start(ctx context.Context) {
 
 // run is the event loop. It blocks on the event channel and dispatches events.
 func (o *Operator) run(ctx context.Context) {
+	// Re-dispatch any jobs left mid-flight by a previous shutdown before
+	// consuming live events, so an interrupted job resumes instead of sitting
+	// 'active' forever. This runs on the event-loop goroutine, so it is
+	// serialized with all later event handling — no races on assignNextTask.
+	o.recoverInterrupted(ctx)
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -556,6 +562,54 @@ func (o *Operator) assignNextTask(ctx context.Context, jobID string) {
 		o.reportAdvanceFailure(ctx, jobID, fmt.Sprintf(
 			"could not start task %q on graph %q: %s", task.Title, task.GraphID, err))
 	}
+}
+
+// recoverInterrupted re-dispatches jobs left active by a previous shutdown.
+// ReconcileInterrupted (run at boot, before the operator exists) reset their
+// in-flight tasks back to 'pending'; now that dispatch is live we kick each
+// active job's pipeline back into motion so it resumes from the next ready
+// task. Without this, a crash mid-job leaves the job 'active' with a ready
+// task that nothing ever assigns — the silent forever-stalled state.
+func (o *Operator) recoverInterrupted(ctx context.Context) {
+	if o.store == nil {
+		return
+	}
+	active := db.JobStatusActive
+	jobs, err := o.store.ListJobs(ctx, db.JobFilter{Status: &active})
+	if err != nil {
+		slog.Error("recovery: failed to list active jobs", "error", err)
+		return
+	}
+	for _, job := range jobs {
+		// Only resume jobs that actually have a graphed task ready to
+		// dispatch. A job that's active but has nothing ready (awaiting
+		// fine-decompose, or effectively complete) needs no kick and no
+		// spurious feed entry. This mirrors assignNextTask's own filter:
+		// graphless tasks are picked up by fine-decompose, not here.
+		ready, err := o.store.GetReadyTasks(ctx, job.ID)
+		if err != nil {
+			slog.Error("recovery: failed to check ready tasks", "job_id", job.ID, "error", err)
+			continue
+		}
+		if !hasGraphedTask(ready) {
+			continue
+		}
+		slog.Info("recovery: resuming job interrupted by previous shutdown",
+			"job_id", job.ID, "title", job.Title)
+		o.postFeedEntry(ctx, db.FeedEntrySystemEvent,
+			fmt.Sprintf("♻️ Resumed job after server restart: %s", job.Title), job.ID)
+		o.assignNextTask(ctx, job.ID)
+	}
+}
+
+// hasGraphedTask reports whether any task in the slice has a graph assigned.
+func hasGraphedTask(tasks []*db.Task) bool {
+	for _, t := range tasks {
+		if t.GraphID != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // checkJobComplete checks if all tasks for a job are done. If so, it sends
