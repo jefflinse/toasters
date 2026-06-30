@@ -18,6 +18,38 @@ import (
 	"github.com/jefflinse/toasters/internal/runtime"
 )
 
+// resumingCtxKey marks a graph run as a resume after an interruption. The
+// executor sets it on the context passed to CompiledGraph.Resume; RoleNode
+// reads it to prepend a hygiene directive so the re-running (interrupted)
+// node reconciles any partial work left on disk instead of duplicating it.
+type resumingCtxKey struct{}
+
+func withResuming(ctx context.Context) context.Context {
+	return context.WithValue(ctx, resumingCtxKey{}, true)
+}
+
+func isResuming(ctx context.Context) bool {
+	v, _ := ctx.Value(resumingCtxKey{}).(bool)
+	return v
+}
+
+// resumeHygienePreamble is prepended to a node's first message when its task
+// is resuming after an interruption. The graph skips already-completed nodes,
+// but the node that was mid-flight when the process died re-runs from scratch,
+// and its partial side effects (half-written files — and, if it commits,
+// possibly a commit) may still be on disk. This directs the model to reconcile
+// the existing state rather than blindly redo work. It is the reconciliation
+// mechanism for resume: resuming already minimizes re-execution (only the
+// interrupted node re-runs), and this keeps that single re-run from
+// duplicating non-idempotent effects.
+const resumeHygienePreamble = "NOTE: This task is resuming after an interruption — " +
+	"a previous attempt of this step did not finish. Earlier steps completed and are " +
+	"saved (they will not re-run), but THIS step may have partially executed before the " +
+	"interruption. Before acting, inspect the current state of the workspace; if you use " +
+	"version control, run `git status` and `git log` first. Continue from where it left " +
+	"off and do NOT duplicate work that is already present — e.g. recreating files that " +
+	"already exist, or repeating a commit that was already made.\n\n"
+
 // RoleNode returns a generic rhizome NodeFunc bound to a single role. The
 // system prompt is composed from the role's markdown body; the terminal
 // output shape comes from the role's declared schema; the tool allowlist
@@ -50,6 +82,12 @@ func RoleNode(cfg TemplateConfig, role *prompt.Role, nodeID string, slots map[st
 		baseOnEvent := onEventSink(ctx)
 
 		messages := []provider.Message{{Role: "user", Content: buildInitialMessage(state)}}
+		// On a resumed run the interrupted node re-runs from scratch; warn the
+		// model that partial work from the prior attempt may be on disk so it
+		// reconciles rather than duplicates (commits, files, …).
+		if isResuming(ctx) {
+			messages[0].Content = resumeHygienePreamble + messages[0].Content
+		}
 
 		// A node terminates with StatusNeedsContext when it calls request_context
 		// because it lacks information to proceed. Rather than failing the task —

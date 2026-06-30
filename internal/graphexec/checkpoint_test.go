@@ -126,6 +126,54 @@ func TestSQLiteCheckpoint_ResumeSkipsCompletedNodes(t *testing.T) {
 	}
 }
 
+// TestResumeHygiene_FlagReachesResumedNode verifies that the resume signal the
+// executor sets (withResuming) propagates through rhizome's Resume into the
+// re-running node, so RoleNode prepends its reconciliation directive. The node
+// sees isResuming==false on a fresh run and ==true when resumed.
+func TestResumeHygiene_FlagReachesResumedNode(t *testing.T) {
+	store, err := db.Open(filepath.Join(t.TempDir(), "hygiene.db"))
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+	cp := store.CheckpointStore()
+
+	var seen []bool
+	build := func(failN2 bool) *rhizome.CompiledGraph[*TaskState] {
+		g := rhizome.New[*TaskState]()
+		_ = g.AddNode("n1", func(_ context.Context, s *TaskState) (*TaskState, error) { return s, nil })
+		_ = g.AddNode("n2", func(ctx context.Context, s *TaskState) (*TaskState, error) {
+			seen = append(seen, isResuming(ctx))
+			if failN2 {
+				return s, fmt.Errorf("simulated crash at n2")
+			}
+			return s, nil
+		})
+		_ = g.AddEdge(rhizome.Start, "n1")
+		_ = g.AddEdge("n1", "n2")
+		_ = g.AddEdge("n2", rhizome.End)
+		cg, cErr := g.Compile(rhizome.WithCheckpointing(cp))
+		if cErr != nil {
+			t.Fatalf("compile: %v", cErr)
+		}
+		return cg
+	}
+
+	// Fresh run: n2 sees resuming=false, then errors so a checkpoint at n1 remains.
+	if _, err := build(true).Run(context.Background(), NewTaskState("j", "t", "/ws", "p", "m"),
+		rhizome.WithThreadID[*TaskState]("t")); err == nil {
+		t.Fatal("want first run to fail at n2")
+	}
+	// Resume exactly as the executor does (withResuming): n2 sees resuming=true.
+	if _, err := build(false).Resume(withResuming(context.Background()), "t", &TaskState{},
+		rhizome.WithThreadID[*TaskState]("t")); err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	if len(seen) != 2 || seen[0] || !seen[1] {
+		t.Fatalf("isResuming per n2 run = %v, want [false true]", seen)
+	}
+}
+
 // TestExecute_ShutdownLeavesTaskResumable verifies that when the executor is
 // draining (graceful shutdown / deploy) and a run is cancelled mid-graph,
 // Execute leaves the task in_progress with its checkpoint intact instead of
