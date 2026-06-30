@@ -1,6 +1,8 @@
 package graphexec
 
 import (
+	"github.com/jefflinse/rhizome"
+
 	"github.com/jefflinse/toasters/internal/db"
 	"github.com/jefflinse/toasters/internal/prompt"
 	"github.com/jefflinse/toasters/internal/provider"
@@ -46,6 +48,11 @@ type TemplateConfig struct {
 	// the model never called `complete`) can read the full transcript via
 	// SQLite. Optional — when nil, graph nodes skip persistence.
 	Store db.Store
+
+	// CheckpointStore, when non-nil, makes Compile enable rhizome
+	// checkpointing (WithCheckpointing) so graph state is persisted after
+	// every node and the run can resume after a crash. Nil disables it.
+	CheckpointStore rhizome.CheckpointStore
 
 	// WorkerThinkingEnabled is the default value of the per-request thinking
 	// toggle for graph nodes. Roles may override via their frontmatter.

@@ -122,6 +122,13 @@ func Compile(def *Definition, cfg TemplateConfig, registry *RoleRegistry) (*rhiz
 	if def.MaxIterations > 0 {
 		opts = append(opts, rhizome.WithMaxNodeExecs(def.MaxIterations))
 	}
+	if cfg.CheckpointStore != nil {
+		// Persist TaskState after every node so a crashed run can resume from
+		// its last completed node. Requires the run to carry a thread id
+		// (WithThreadID), which the executor supplies; tests that compile with
+		// a store must do the same or rhizome returns ErrThreadIDRequired.
+		opts = append(opts, rhizome.WithCheckpointing(cfg.CheckpointStore))
+	}
 	return g.Compile(opts...)
 }
 
