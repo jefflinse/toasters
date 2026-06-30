@@ -867,7 +867,10 @@ func (o *Operator) persistSession() {
 		return
 	}
 	tmp := o.sessionFile + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+	// 0o600: the session file holds the full operator conversation
+	// (instructions, tool results, anything pasted in) and must not be
+	// world-readable on a multi-user or shared host.
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
 		slog.Warn("failed to write operator session", "path", tmp, "error", err)
 		return
 	}
