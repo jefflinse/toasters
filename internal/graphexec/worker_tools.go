@@ -185,7 +185,7 @@ func parseAskUserPayload(args json.RawMessage) (AskUserPayload, error) {
 	}
 	payload.Question = raw.Question
 	payload.Options = raw.Options
-	qs, err := parsePromptQuestions(raw.Questions)
+	qs, err := ParsePromptQuestions(raw.Questions)
 	if err != nil {
 		return payload, err
 	}
@@ -193,7 +193,7 @@ func parseAskUserPayload(args json.RawMessage) (AskUserPayload, error) {
 	// The model sometimes packs the whole questions array into the single
 	// "question" string field too; route it through the same parser.
 	if len(payload.Questions) == 0 && payload.Question != "" {
-		if fromQ, perr := questionsFromString(payload.Question); perr == nil && len(fromQ) > 0 {
+		if fromQ, perr := QuestionsFromString(payload.Question); perr == nil && len(fromQ) > 0 {
 			if !(len(fromQ) == 1 && fromQ[0].Question == payload.Question) {
 				payload.Questions = fromQ
 				payload.Question = ""
@@ -203,31 +203,60 @@ func parseAskUserPayload(args json.RawMessage) (AskUserPayload, error) {
 	return payload, nil
 }
 
-// parsePromptQuestions leniently decodes the ask_user "questions" field into
-// graph-node PromptQuestions. See operator.parsePromptQuestions for the same
-// logic on the operator side.
-func parsePromptQuestions(raw json.RawMessage) ([]PromptQuestion, error) {
+// ParsePromptQuestions leniently decodes the ask_user "questions" field. Small
+// local models emit it inconsistently — a bare string, an array of strings, a
+// single object, or the intended array of {question, options} objects — and a
+// strict []PromptQuestion unmarshal rejects all but the last, leaving the
+// caller unable to ask anything. Accept all of these shapes.
+//
+// This is graphexec's LLM-facing edge (alongside AskUserTool/PromptQuestion); a
+// future standalone extraction would strip or wrap this layer. It is shared by
+// the operator's ask_user tool so the lenient/recovery behavior lives in one
+// place.
+func ParsePromptQuestions(raw json.RawMessage) ([]PromptQuestion, error) {
 	raw = bytes.TrimSpace(raw)
 	if len(raw) == 0 || string(raw) == "null" {
 		return nil, nil
 	}
 	switch raw[0] {
 	case '"':
+		// Bare string → a free-form question, unless it's itself JSON.
 		var s string
 		if err := json.Unmarshal(raw, &s); err != nil {
 			return nil, err
 		}
-		return questionsFromString(s)
+		return QuestionsFromString(s)
 	case '{':
+		// Single object → one question.
 		var q PromptQuestion
 		if err := json.Unmarshal(raw, &q); err != nil {
 			return nil, err
 		}
 		return []PromptQuestion{q}, nil
 	case '[':
-		var elems []json.RawMessage
-		if err := json.Unmarshal(raw, &elems); err != nil {
+		// Array of strings and/or objects, mixed.
+		//
+		// Stream the elements rather than json.Unmarshal the whole array:
+		// small local models routinely truncate a long questions array
+		// (dropping the closing ']' or cutting off mid-element), and a strict
+		// decode of the whole thing throws away every complete element along
+		// with the broken tail. Decoding element-by-element recovers all the
+		// well-formed questions and stops at the first damaged one.
+		dec := json.NewDecoder(bytes.NewReader(raw))
+		if _, err := dec.Token(); err != nil { // consume opening '['
 			return nil, err
+		}
+		var elems []json.RawMessage
+		for dec.More() {
+			var el json.RawMessage
+			if err := dec.Decode(&el); err != nil {
+				// Truncated trailing element — keep what parsed cleanly.
+				break
+			}
+			elems = append(elems, el)
+		}
+		if len(elems) == 0 {
+			return nil, fmt.Errorf("no parseable questions in array: %s", string(raw))
 		}
 		var out []PromptQuestion
 		for _, el := range elems {
@@ -235,23 +264,26 @@ func parsePromptQuestions(raw json.RawMessage) ([]PromptQuestion, error) {
 			if len(el) == 0 {
 				continue
 			}
+			// One malformed element shouldn't discard its well-formed
+			// siblings — skip it and keep the rest.
 			if el[0] == '"' {
 				var s string
 				if err := json.Unmarshal(el, &s); err != nil {
-					return nil, err
+					continue
 				}
-				qs, err := questionsFromString(s)
-				if err != nil {
-					return nil, err
+				if qs, err := QuestionsFromString(s); err == nil {
+					out = append(out, qs...)
 				}
-				out = append(out, qs...)
 			} else {
 				var q PromptQuestion
 				if err := json.Unmarshal(el, &q); err != nil {
-					return nil, err
+					continue
 				}
 				out = append(out, q)
 			}
+		}
+		if len(out) == 0 {
+			return nil, fmt.Errorf("no parseable questions in array: %s", string(raw))
 		}
 		return out, nil
 	default:
@@ -259,15 +291,18 @@ func parsePromptQuestions(raw json.RawMessage) ([]PromptQuestion, error) {
 	}
 }
 
-// questionsFromString turns a string value into questions, recursing when the
-// model double-encoded the array as a JSON string. Mirrors operator.go.
-func questionsFromString(s string) ([]PromptQuestion, error) {
+// QuestionsFromString turns a string value into questions. Models sometimes
+// double-encode — packing the whole questions array into a JSON string — so if
+// the (trimmed) content is itself JSON, parse it recursively; otherwise it's a
+// single free-form question. Recursion is bounded: the recursive call only
+// happens for '['/'{'-leading content, which never re-enters this string path.
+func QuestionsFromString(s string) ([]PromptQuestion, error) {
 	s = strings.TrimSpace(s)
 	if s == "" {
 		return nil, nil
 	}
 	if s[0] == '[' || s[0] == '{' {
-		if qs, err := parsePromptQuestions(json.RawMessage(s)); err == nil && len(qs) > 0 {
+		if qs, err := ParsePromptQuestions(json.RawMessage(s)); err == nil && len(qs) > 0 {
 			return qs, nil
 		}
 	}

@@ -17,8 +17,7 @@ import (
 //
 // BroadcastTaskCompleted / BroadcastTaskFailed are the operator-advance
 // signals: they must propagate into the operator's event loop so it picks
-// up the next ready task (the team-lead path relies on the equivalent
-// EventTaskCompleted / EventTaskFailed events emitted by team_tools).
+// up the next ready task.
 type EventSink interface {
 	BroadcastGraphNodeStarted(jobID, taskID, node string)
 	BroadcastGraphNodeCompleted(jobID, taskID, node, status string)

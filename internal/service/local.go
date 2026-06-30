@@ -98,8 +98,8 @@ type LocalConfig struct {
 	Operator         *operator.Operator
 	MCPManager       *mcp.Manager
 	Provider         provider.Provider // operator's LLM provider (for ListModels, generation)
-	DefaultProvider  string            // default provider for system workers and team leads
-	DefaultModel     string            // default model for system workers and team leads
+	DefaultProvider  string            // default provider for system workers
+	DefaultModel     string            // default model for system workers
 	Loader           *loader.Loader
 	ConfigDir        string
 	WorkspaceDir     string
@@ -1222,7 +1222,7 @@ func (s *LocalService) BroadcastPrompt(requestID string, questions []graphexec.P
 // operator's OnPrompt callback, wired from BOTH the boot path (cmd/serve.go)
 // and live activation (startOperator) so a missing wire on one path can't
 // silently swallow operator prompts.
-func (s *LocalService) BroadcastOperatorPrompt(requestID string, questions []operator.PromptQuestion) {
+func (s *LocalService) BroadcastOperatorPrompt(requestID string, questions []graphexec.PromptQuestion) {
 	qs := make([]PromptQuestion, len(questions))
 	for i, q := range questions {
 		qs[i] = PromptQuestion{Question: q.Question, Options: q.Options}

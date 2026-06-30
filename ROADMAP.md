@@ -5,6 +5,8 @@
 
 This is the master plan for evolving Toasters from a TUI prototype into a full agentic orchestration platform. Work is organized into four phases, each containing well-scoped deliverables that build on each other. Each deliverable is designed to be completable in 1–5 days and to produce a working, testable result.
 
+> **⚠️ Partially superseded (note added 2026-06-28).** The Phase 1–3 *schema and design sketches* below predate the `internal/graphexec` (rhizome) and role-schema refactors. In particular, the "agents / teams / coordinator" model has been replaced: task dispatch now flows through declarative graphs (each node is a role with typed I/O), there is no `team_lead`, and the DB tables `agents`/`teams`/`agent_sessions` are gone (renamed to `workers`/dropped, see migrations 006/009/011). Treat the phase *goals and rationale* as current and the *concrete schemas/tables/endpoints* as historical. For the current architecture see `CLAUDE.md`, `DESIGN_DAG_RUNTIME.md`, and `API_SPEC.md`.
+
 ---
 
 ## Table of Contents
