@@ -908,6 +908,79 @@ func (ct *CoreTools) grepFiles(_ context.Context, args json.RawMessage) (string,
 	return b.String(), nil
 }
 
+// shellEnvAllowlist is the set of environment variable names passed through to
+// the shell tool's subprocess. Everything else in the server's environment —
+// most importantly provider API keys (ANTHROPIC_API_KEY et al.) and MCP tokens,
+// which are expanded from this process's env at config load — is withheld so a
+// prompt-injected worker cannot exfiltrate them by running `env` (or piping it
+// out) in the shell. This is a default-deny allowlist on purpose: a denylist
+// would silently leak every future secret whose name doesn't match a pattern.
+// Nothing legitimate is lost because provider/MCP calls happen in-process,
+// never through this shell. This scrub is defense-in-depth, not a confinement
+// boundary on its own — see the note at the cmd.Env assignment in shell().
+//
+// The list is deliberately generous toward toolchains a worker genuinely needs
+// so build/test commands keep working; see also shellEnvAllowedPrefixes.
+var shellEnvAllowlist = map[string]bool{
+	// Core process environment.
+	"HOME":    true,
+	"PATH":    true,
+	"USER":    true,
+	"LOGNAME": true,
+	"SHELL":   true,
+	"TERM":    true,
+	"TMPDIR":  true,
+	"TZ":      true,
+	"PWD":     true,
+	"LANG":    true,
+	// Go toolchain — workers build and test Go code. Most of these default off
+	// HOME, but pass through any explicit overrides on the host.
+	"GOPATH":     true,
+	"GOCACHE":    true,
+	"GOMODCACHE": true,
+	"GOROOT":     true,
+	"GOFLAGS":    true,
+	"GOPROXY":    true,
+	// Network egress configuration (legitimate for fetching deps behind a proxy).
+	"HTTP_PROXY":  true,
+	"HTTPS_PROXY": true,
+	"NO_PROXY":    true,
+	"http_proxy":  true,
+	"https_proxy": true,
+	"no_proxy":    true,
+}
+
+// shellEnvAllowedPrefixes passes through whole families of variables by prefix —
+// locale (LC_ALL, LC_CTYPE, …) being the one that breaks tools when missing.
+var shellEnvAllowedPrefixes = []string{"LC_"}
+
+// shellEnvAllowed reports whether an environment variable name may be passed
+// through to the shell subprocess.
+func shellEnvAllowed(name string) bool {
+	if shellEnvAllowlist[name] {
+		return true
+	}
+	for _, prefix := range shellEnvAllowedPrefixes {
+		if strings.HasPrefix(name, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// scrubbedEnv filters an environment (in os.Environ()'s "KEY=VALUE" form) down
+// to the shell allowlist, dropping secrets the worker has no in-shell use for.
+func scrubbedEnv(environ []string) []string {
+	out := make([]string, 0, len(environ))
+	for _, kv := range environ {
+		name, _, ok := strings.Cut(kv, "=")
+		if ok && shellEnvAllowed(name) {
+			out = append(out, kv)
+		}
+	}
+	return out
+}
+
 const (
 	// maxShellTimeout caps the model-requested shell timeout so one tool
 	// call can't park a session for hours.
@@ -947,6 +1020,14 @@ func (ct *CoreTools) shell(ctx context.Context, args json.RawMessage) (string, e
 
 	cmd := exec.CommandContext(ctx, "/bin/sh", "-c", params.Command)
 	cmd.Dir = ct.workDir
+	// Defense-in-depth: withhold the server's secrets (provider API keys, MCP
+	// tokens) from the subprocess env block. Without this the worker inherits
+	// the full server env and a prompt-injected `env` exfiltrates them outright.
+	// This is NOT full confinement: a same-uid shell can still read the parent
+	// server's env on Linux (/proc/<ppid>/environ) and on-disk secrets on any
+	// platform. Closing those requires process-level isolation (the Pillar 2
+	// sandbox follow-up); this scrub is the cheap first layer.
+	cmd.Env = scrubbedEnv(os.Environ())
 	// Boundedness invariant: this call must NEVER outlive timeout+WaitDelay.
 	// configureProcessTree kills the whole process group on cancellation
 	// (CommandContext's default kills only /bin/sh, orphaning backgrounded

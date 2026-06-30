@@ -435,6 +435,75 @@ func TestShell(t *testing.T) {
 	})
 }
 
+// TestShell_ScrubsSubprocessEnvBlock proves the env-block scrub end to end:
+// secrets in the server's environment are not copied into the shell tool's
+// subprocess env, while a variable a worker legitimately needs (PATH) still is.
+//
+// NOTE: this verifies env-block scrubbing only — defense-in-depth, not a
+// confinement boundary. A same-uid worker shell can still recover the server's
+// secrets by other means (on Linux, `cat /proc/<ppid>/environ`; on any platform,
+// reading on-disk secrets like server.token over an unrestricted network).
+// Real confinement requires process-level isolation (separate uid / sandbox),
+// tracked as the Pillar 2 follow-up.
+func TestShell_ScrubsSubprocessEnvBlock(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "sk-leakme-secret")
+	t.Setenv("FAKE_DB_PASSWORD", "leakme-too")
+
+	ct := NewCoreTools(t.TempDir(), WithShell(true))
+	result, err := ct.Execute(context.Background(), "shell", mustJSON(t, map[string]any{
+		"command": "env",
+	}))
+	assertNoError(t, err)
+
+	if strings.Contains(result, "leakme") {
+		t.Errorf("shell subprocess inherited a secret from the server env:\n%s", result)
+	}
+	// The worker still gets the toolchain environment it needs to do real work.
+	assertContains(t, result, "PATH=")
+}
+
+func TestScrubbedEnv(t *testing.T) {
+	in := []string{
+		"PATH=/usr/bin",
+		"HOME=/home/worker",
+		"GOCACHE=/home/worker/.cache/go-build",
+		"LC_CTYPE=UTF-8",
+		"ANTHROPIC_API_KEY=sk-secret",
+		"MCP_TOKEN=tok-secret",
+		"DATABASE_URL=postgres://user:pass@host/db",
+		"SOME_RANDOM_VAR=value",
+		"malformed-entry-no-equals",
+	}
+
+	got := scrubbedEnv(in)
+	kept := make(map[string]bool, len(got))
+	for _, kv := range got {
+		kept[kv] = true
+	}
+
+	for _, want := range []string{
+		"PATH=/usr/bin",
+		"HOME=/home/worker",
+		"GOCACHE=/home/worker/.cache/go-build",
+		"LC_CTYPE=UTF-8", // prefix-allowed
+	} {
+		if !kept[want] {
+			t.Errorf("scrubbedEnv dropped an allowed var: %q", want)
+		}
+	}
+
+	for _, kv := range got {
+		name, _, _ := strings.Cut(kv, "=")
+		if shellEnvAllowed(name) {
+			continue
+		}
+		t.Errorf("scrubbedEnv leaked a non-allowed var: %q", kv)
+	}
+	if len(got) != 4 {
+		t.Errorf("scrubbedEnv kept %d vars, want 4 (the allowed set); got %v", len(got), got)
+	}
+}
+
 func TestWebFetch(t *testing.T) {
 	t.Run("successful fetch", func(t *testing.T) {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
