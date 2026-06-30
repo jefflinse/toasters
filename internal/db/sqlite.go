@@ -792,10 +792,14 @@ func (s *SQLiteStore) ReconcileInterrupted(ctx context.Context) (int, int, error
 	}
 	sessions, _ := res.RowsAffected()
 
+	// Reset interrupted tasks to 'pending' (not 'failed') so the operator's
+	// recovery sweep re-dispatches them once its event loop starts. Marking
+	// them 'failed' here would strand the job: nothing re-runs a failed task
+	// automatically, and the job would sit 'active' but stalled forever.
 	res, err = s.db.ExecContext(ctx,
 		`UPDATE tasks SET status = ?, summary = ?, updated_at = ? WHERE status = ?`,
-		string(TaskStatusFailed),
-		"Interrupted: the server stopped while this task was running. Retry to re-run it.",
+		string(TaskStatusPending),
+		"",
 		now, string(TaskStatusInProgress))
 	if err != nil {
 		return int(sessions), 0, fmt.Errorf("reconciling interrupted tasks: %w", err)
