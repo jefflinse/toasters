@@ -1,4 +1,5 @@
-// Grid screen: dynamic NxM worker slot grid rendering, context bar, token bar, and reasoning block display.
+// Worker node cards: the rich left-bar card rendering shared by the nodes
+// screen's list rows, plus the tool-activity and reasoning helpers.
 package tui
 
 import (
@@ -14,168 +15,18 @@ import (
 	"charm.land/lipgloss/v2"
 )
 
-const (
-	minGridCellInnerW = 40 // minimum inner cell content width
-	minGridCellInnerH = 6  // minimum inner cell content height: headline + meta + ctx bar + 3 activity lines
-	gridHotkeyBarH    = 1  // hotkey bar height
-	gridCellFrameW    = 2  // per-cell horizontal frame: left bar (1) + left padding (1)
-
-	// maxGridSlots is the maximum number of worker slots displayed in the grid.
-	maxGridSlots = 16
-)
-
-// gridCellLeftBar is the left-bar border used by every grid cell, mirroring the
-// worker cards in the main chat viewport so the two surfaces read as one style.
-var gridCellLeftBar = lipgloss.Border{Left: "▌"}
-
-// computeGridDimensions returns the number of columns and rows for the grid
-// given the terminal dimensions. Minimum is 1×1.
-func computeGridDimensions(termW, termH int) (cols, rows int) {
-	minCellW := minGridCellInnerW + gridCellFrameW
-	availH := termH - gridHotkeyBarH
-	cols = termW / minCellW
-	rows = availH / minGridCellInnerH
-	if cols < 1 {
-		cols = 1
-	}
-	if rows < 1 {
-		rows = 1
-	}
-	return cols, rows
-}
-
-// gridCellFrame returns the left-bar frame style for a grid cell at the given
-// outer dimensions. The border color encodes status/focus; content is padded to
-// fill the cell so rows tile cleanly.
-func gridCellFrame(cellW, cellH int, borderColor color.Color) lipgloss.Style {
-	// lipgloss Width is the total rendered width (border + padding included), so
-	// the content area is cellW - gridCellFrameW; renderGrid sizes the card body
-	// to match. Floor at a width that still leaves room for the frame.
-	if cellW < gridCellFrameW+1 {
-		cellW = gridCellFrameW + 1
-	}
-	if cellH < 1 {
-		cellH = 1
-	}
-	return lipgloss.NewStyle().
-		Border(gridCellLeftBar, false, false, false, true).
-		BorderForeground(borderColor).
-		PaddingLeft(1).
-		Width(cellW).
-		Height(cellH)
-}
-
-// renderEmptyCell renders a dim empty placeholder cell with the given dimensions.
-// cellW and cellH are the outer cell dimensions (including the left-bar frame).
-func renderEmptyCell(cellW, cellH int, focused bool) string {
-	borderColor := color.Color(ColorBorder)
-	if focused {
-		borderColor = ColorPrimary
-	}
-	return gridCellFrame(cellW, cellH, borderColor).Render(DimStyle.Italic(true).Render("empty"))
-}
-
-func (m *Model) renderGrid() string {
-	// Safety floor: ensure cols/rows are at least 1.
-	cols := m.grid.gridCols
-	rows := m.grid.gridRows
-	if cols < 1 {
-		cols = 1
-	}
-	if rows < 1 {
-		rows = 1
-	}
-
-	cellsPerPage := cols * rows
-	cellW := m.width / cols
-	cellH := (m.height - gridHotkeyBarH) / rows
-
-	cells := make([]string, cellsPerPage)
-
-	// Collect sorted runtime sessions for display (narrowed by any filter).
-	sortedRT := m.filteredGridSessions()
-	pageOffset := m.grid.gridPage * cellsPerPage
-
-	for i := range cellsPerPage {
-		absIdxPos := pageOffset + i
-		focused := i == m.grid.gridFocusCell
-
-		innerH := cellH
-		innerW := cellW - gridCellFrameW
-		if innerH < 1 {
-			innerH = 1
-		}
-		if innerW < 1 {
-			innerW = 1
-		}
-
-		if absIdxPos < len(sortedRT) {
-			rs := sortedRT[absIdxPos]
-			cells[i] = m.renderRuntimeGridCell(rs, cellW, cellH, innerW, innerH, focused)
-		} else {
-			cells[i] = renderEmptyCell(cellW, cellH, focused)
-		}
-	}
-
-	totalPages := m.gridTotalPages(cellsPerPage)
-	var hotkeyBar string
-	switch {
-	case m.grid.confirmKill:
-		hotkeyBar = ModalWarningStyle.Render("  ⚠ Kill this worker?  [Enter] confirm   [Esc] cancel")
-	case m.grid.filterActive:
-		matches := len(m.filteredGridSessions())
-		hotkeyBar = DimStyle.Render(fmt.Sprintf(
-			"  filter: %s_   ·   %d match(es)   ·   enter: apply   ·   esc: clear",
-			m.grid.filterQuery, matches,
-		))
-	default:
-		bar := fmt.Sprintf(
-			"  arrows: navigate   ·   enter: open   ·   p: prompt   ·   x: kill   ·   /: filter   ·   [/]: page %d/%d   ·   ctrl+g / esc: close",
-			m.grid.gridPage+1, totalPages,
-		)
-		if m.grid.filterQuery != "" {
-			bar += fmt.Sprintf("   ·   filter: %s", m.grid.filterQuery)
-		}
-		hotkeyBar = DimStyle.Render(bar)
-	}
-	hotkeyBar = lipgloss.NewStyle().Width(m.width).Render(hotkeyBar)
-
-	rowStrings := make([]string, rows)
-	for r := range rows {
-		rowCells := cells[r*cols : (r+1)*cols]
-		rowStrings[r] = lipgloss.JoinHorizontal(lipgloss.Top, rowCells...)
-	}
-	gridBody := lipgloss.JoinVertical(lipgloss.Left, rowStrings...)
-	return lipgloss.JoinVertical(lipgloss.Left, hotkeyBar, gridBody)
-}
-
-// gridCellBorderColor picks the left-bar color for a cell: the theme accent for
-// active sessions (bright primary when focused), and dim/border tones for
-// finished ones — errors and cancellations read red. Uses the shared palette so
-// the grid tracks the rest of the TUI's theme instead of hardcoded hues.
-func gridCellBorderColor(rs *runtimeSlot, focused bool) color.Color {
+// nodeStatusColor picks the status color for a node: the theme accent (green)
+// for active sessions, red for errors/cancellations, and a dim tone for
+// finished ones. Uses the shared palette so nodes track the rest of the theme.
+func nodeStatusColor(rs *runtimeSlot) color.Color {
 	switch {
 	case rs.status == "active":
-		if focused {
-			return ColorPrimary
-		}
-		return ColorAccent
+		return ColorConnected
 	case rs.status == "failed" || rs.status == "cancelled":
 		return ColorError
-	case focused:
-		return ColorPrimary
 	default:
 		return ColorBorder
 	}
-}
-
-// renderRuntimeGridCell renders a single runtime session into a grid cell using
-// the same ▌ left-bar card style the main chat viewport uses for worker streams,
-// so the grid and the chat read as one visual language.
-func (m *Model) renderRuntimeGridCell(rs *runtimeSlot, cellW, cellH, innerW, innerH int, focused bool) string {
-	frame := gridCellFrame(cellW, cellH, gridCellBorderColor(rs, focused))
-	ctxMax := m.modelContext[rs.model]
-	return frame.Render(renderWorkerCard(rs, innerW, innerH, ctxMax, focused, m.spinnerFrame))
 }
 
 // renderWorkerCard renders the inner content of a worker card (without the

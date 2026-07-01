@@ -119,19 +119,9 @@ func (m *Model) View() tea.View {
 		return v
 	}
 
-	// Grid screen takes over the full terminal.
-	if m.grid.showGrid {
-		gridView := m.renderGrid()
-		if m.cockpit.show {
-			overlaid, clampedScroll := m.renderCockpit()
-			m.cockpit.scroll[m.cockpit.tab] = clampedScroll
-
-			v := tea.NewView(overlaid)
-			v.AltScreen = true
-			v.MouseMode = tea.MouseModeCellMotion
-			return v
-		}
-		v := tea.NewView(gridView)
+	// Nodes screen takes over the full terminal.
+	if m.nodes.show {
+		v := tea.NewView(m.renderNodes())
 		v.AltScreen = true
 		v.MouseMode = tea.MouseModeCellMotion
 		return v

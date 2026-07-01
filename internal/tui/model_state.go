@@ -14,21 +14,32 @@ type streamingState struct {
 	operatorByline   string // formatted byline for the in-progress operator stream; cleared when done
 }
 
-// gridState holds all state for the dynamic NxM worker grid screen.
-type gridState struct {
-	showGrid      bool
-	gridFocusCell int // 0-(cols*rows-1) within current page
-	gridPage      int // current page index
-	gridCols      int // computed from terminal width
-	gridRows      int // computed from terminal height
+// nodesState holds all state for the master-detail nodes screen: a scrollable
+// list of runtime worker sessions on the left and a tabbed detail pane (Output /
+// Prompt / Stats) for the selected node on the right.
+type nodesState struct {
+	show bool
+
+	// List (master) state.
+	sel        int // selected index into the filtered node list
+	listScroll int // row offset of the list viewport (rows, not items)
+
+	// focusDetail moves keyboard focus between the list (false) and the detail
+	// pane (true). Selection still tracks in the list while the detail is
+	// focused; the detail always shows the selected node.
+	focusDetail bool
+
+	// Detail (cockpit) state, applied to the selected node.
+	tab          cockpitTab
+	tabScroll    [cockpitTabCount]int // per-tab scroll offset
+	userScrolled bool                 // Output tab: suppresses auto-tail after a manual scroll
 
 	// confirmKill gates the destructive "kill worker" action behind an
-	// Enter/Esc confirmation, mirroring the jobs modal's confirmCancel.
-	confirmKill          bool
-	confirmKillSessionID string
+	// Enter/Esc confirmation. It kills the selected node.
+	confirmKill bool
 
 	// filterActive is true while "/" capture is on; filterQuery narrows the
-	// displayed sessions by job id / role / status (case-insensitive substring).
+	// listed sessions by job id / role / status (case-insensitive substring).
 	filterActive bool
 	filterQuery  string
 }
@@ -70,7 +81,7 @@ type blockersModalState struct {
 	sel  int // cursor index into m.blockers
 }
 
-// cockpitTab identifies which pane of the worker cockpit is shown.
+// cockpitTab identifies which tab of the node detail pane is shown.
 type cockpitTab int
 
 const (
@@ -79,24 +90,6 @@ const (
 	cockpitTabStats
 	cockpitTabCount // sentinel: number of tabs
 )
-
-// cockpitState holds the worker-detail cockpit: a tabbed, scrollable, near-
-// fullscreen overlay showing one runtime session's live output, its prompt, and
-// its stats. Opened from the grid drill-in; it replaces the separate output and
-// prompt modals so a session is inspected on one surface.
-type cockpitState struct {
-	show      bool
-	sessionID string     // runtime session ID being viewed
-	tab       cockpitTab // active tab
-	// scroll is the per-tab scroll offset so switching tabs preserves position.
-	scroll [cockpitTabCount]int
-	// userScrolled suppresses the Output tab's auto-tail once the user scrolls
-	// up, so live events don't yank the view back to the bottom.
-	userScrolled bool
-	// confirmKill gates the destructive "kill worker" action behind an
-	// Enter/Esc confirmation, mirroring the grid's own kill flow.
-	confirmKill bool
-}
 
 // cmdPopupState holds all state for the slash command autocomplete popup.
 type cmdPopupState struct {
