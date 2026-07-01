@@ -321,11 +321,13 @@ type fleetMember struct {
 	costUSD   float64
 	tps       float64 // tokens/sec (valid only when hasTPS)
 	hasTPS    bool
+	activity  string // most-recent tool-call label (workers only; empty for operator/none)
 }
 
 // buildFleet assembles the ordered list of LLMs to display: the operator first
-// (always pinned), then active workers, then the most-recent finished ones —
-// the ordering displayRuntimeSessions already produces.
+// (always pinned), then the currently-active workers. Finished workers are
+// intentionally excluded — the fleet is a live view; completed sessions live in
+// the grid drill-in and job history.
 func (m Model) buildFleet() []fleetMember {
 	members := make([]fleetMember, 0, 1+len(m.runtimeSessions))
 
@@ -348,8 +350,11 @@ func (m Model) buildFleet() []fleetMember {
 	}
 	members = append(members, op)
 
-	// Workers.
+	// Active workers only.
 	for _, rs := range m.displayRuntimeSessions() {
+		if rs.status != "active" {
+			continue
+		}
 		role := strings.TrimPrefix(rs.workerName, "graph:")
 		shortJobID := rs.jobID
 		if len(shortJobID) > 8 {
@@ -363,12 +368,14 @@ func (m Model) buildFleet() []fleetMember {
 			label:     label,
 			icon:      "⚡",
 			model:     rs.model,
-			active:    rs.status == "active",
-			done:      rs.status != "active",
+			active:    true,
 			ctxUsed:   int(rs.contextTokens),
 			ctxMax:    m.modelContext[rs.model],
 			tokensOut: rs.tokensOut,
 			costUSD:   rs.costUSD,
+		}
+		if n := len(rs.activities); n > 0 {
+			mem.activity = rs.activities[n-1].label
 		}
 		elapsed := time.Since(rs.startTime)
 		if !rs.endTime.IsZero() {
@@ -485,27 +492,54 @@ func (m Model) renderSidebar(sbWidth int) string {
 	return paneStyle.Width(sbWidth).Height(paneH).Render(sb.String())
 }
 
-// renderFleetMember renders one LLM block: a status/label line, model name, a
-// compact context-window bar, and a throughput/cost line.
+// memStatusIcon returns the leading status glyph for a fleet member: a spinner
+// while active, two spaces for an idle operator.
+func (m Model) memStatusIcon(mem fleetMember) string {
+	if mem.active {
+		return string(spinnerChars[m.spinnerFrame%len(spinnerChars)]) + " "
+	}
+	return "  "
+}
+
+// memStats returns the throughput/cost/tokens segments in priority order — the
+// most useful metrics first so a tight width drops the least essential (output
+// tokens, which the context bar already implies) before cost or rate.
+func memStats(mem fleetMember) []string {
+	var stats []string
+	if mem.hasTPS {
+		stats = append(stats, fmt.Sprintf("%.0f t/s", mem.tps))
+	}
+	if mem.costUSD > 0 {
+		stats = append(stats, fmt.Sprintf("~$%.2f", mem.costUSD))
+	}
+	if mem.tokensOut > 0 {
+		stats = append(stats, formatTokenCount(mem.tokensOut)+"↓")
+	}
+	return stats
+}
+
+// renderFleetMember renders one LLM block honoring the configured row density.
+// Both densities show the context bar and the most-recent activity line (for
+// workers); compact folds throughput onto the label line and stats onto the bar
+// line, dropping the standalone model line (still visible in the grid drill-in).
 func (m Model) renderFleetMember(mem fleetMember, contentWidth int) string {
+	if m.fleetDensity == "compact" {
+		return m.renderFleetMemberCompact(mem, contentWidth)
+	}
+	return m.renderFleetMemberFull(mem, contentWidth)
+}
+
+func (m Model) renderFleetMemberFull(mem fleetMember, contentWidth int) string {
 	var b strings.Builder
 
-	// Line 1: icon + status + label.
-	var statusIcon string
-	switch {
-	case mem.active:
-		statusIcon = string(spinnerChars[m.spinnerFrame%len(spinnerChars)]) + " "
-	case mem.done:
-		statusIcon = "✓ "
-	default:
-		statusIcon = "  " // operator idle
+	// Line 1: icon + status + label. Measure the prefix with lipgloss.Width so a
+	// double-width glyph (e.g. ⚡) doesn't push the label past the column.
+	prefix := mem.icon + m.memStatusIcon(mem)
+	labelMax := contentWidth - lipgloss.Width(prefix)
+	if labelMax < 1 {
+		labelMax = 1
 	}
-	head := mem.icon + statusIcon + truncateStr(mem.label, contentWidth-3)
-	if mem.done {
-		b.WriteString(DimStyle.Render(head))
-	} else {
-		b.WriteString(SidebarValueStyle.Render(head))
-	}
+	b.WriteString(SidebarValueStyle.Render(prefix + truncateStr(mem.label, labelMax)))
 	b.WriteString("\n")
 
 	// Line 2: model name (dim).
@@ -520,22 +554,64 @@ func (m Model) renderFleetMember(mem fleetMember, contentWidth int) string {
 	b.WriteString("  " + renderMiniContextBar(mem.ctxUsed, mem.ctxMax, contentWidth-2))
 	b.WriteString("\n")
 
-	// Line 4: throughput, cost, output tokens — ordered so the metrics the user
-	// most cares about survive truncation on a narrow column. Cost precedes the
-	// (least essential, partly redundant with the context bar) output-token
-	// count so a tight width drops tokens rather than spend.
-	var stats []string
-	if mem.hasTPS {
-		stats = append(stats, fmt.Sprintf("%.0f t/s", mem.tps))
+	// Line 4: throughput · cost · tokens.
+	if stats := memStats(mem); len(stats) > 0 {
+		b.WriteString("  " + DimStyle.Render(truncateStr(strings.Join(stats, " · "), contentWidth-2)))
+		b.WriteString("\n")
 	}
+
+	// Line 5: most-recent activity (workers only).
+	if mem.activity != "" {
+		b.WriteString(DimStyle.Render("  ↳ " + truncateStr(mem.activity, contentWidth-4)))
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+func (m Model) renderFleetMemberCompact(mem fleetMember, contentWidth int) string {
+	var b strings.Builder
+
+	// Line 1: icon + status + label ........ t/s (right-aligned).
+	tps := ""
+	if mem.hasTPS {
+		tps = fmt.Sprintf("%.0f t/s", mem.tps)
+	}
+	prefix := mem.icon + m.memStatusIcon(mem)
+	labelMax := contentWidth - lipgloss.Width(prefix) - lipgloss.Width(tps) - 1
+	if labelMax < 1 {
+		labelMax = 1
+	}
+	left := prefix + truncateStr(mem.label, labelMax)
+	gap := contentWidth - lipgloss.Width(left) - lipgloss.Width(tps)
+	if gap < 1 {
+		gap = 1
+	}
+	b.WriteString(SidebarValueStyle.Render(left) + strings.Repeat(" ", gap) + DimStyle.Render(tps))
+	b.WriteString("\n")
+
+	// Line 2: context bar + cost/tokens folded onto the same line.
+	var tail []string
 	if mem.costUSD > 0 {
-		stats = append(stats, fmt.Sprintf("~$%.2f", mem.costUSD))
+		tail = append(tail, fmt.Sprintf("~$%.2f", mem.costUSD))
 	}
 	if mem.tokensOut > 0 {
-		stats = append(stats, formatTokenCount(mem.tokensOut)+"↓")
+		tail = append(tail, formatTokenCount(mem.tokensOut)+"↓")
 	}
-	if len(stats) > 0 {
-		b.WriteString("  " + DimStyle.Render(truncateStr(strings.Join(stats, " · "), contentWidth-2)))
+	barW := contentWidth - 2
+	tailStr := ""
+	if len(tail) > 0 {
+		tailStr = " · " + strings.Join(tail, " · ")
+		barW -= lipgloss.Width(tailStr)
+	}
+	if barW < 6 {
+		barW = 6
+	}
+	b.WriteString("  " + renderMiniContextBar(mem.ctxUsed, mem.ctxMax, barW) + DimStyle.Render(tailStr))
+	b.WriteString("\n")
+
+	// Line 3: most-recent activity (workers only).
+	if mem.activity != "" {
+		b.WriteString(DimStyle.Render("  ↳ " + truncateStr(mem.activity, contentWidth-4)))
 		b.WriteString("\n")
 	}
 	return b.String()

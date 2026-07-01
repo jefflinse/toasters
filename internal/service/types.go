@@ -635,6 +635,10 @@ type Settings struct {
 	// visible by default. When false, the panel is hidden until the user
 	// reveals it via Ctrl+O.
 	ShowOperatorPanelByDefault bool `json:"show_operator_panel_by_default"`
+
+	// FleetRowDensity controls fleet-panel row height: "full" or "compact".
+	// Empty is treated as "full".
+	FleetRowDensity string `json:"fleet_row_density"`
 }
 
 // ---------------------------------------------------------------------------

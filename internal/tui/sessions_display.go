@@ -332,6 +332,11 @@ func (m *Model) shouldShowLeftPanel() bool {
 func (m *Model) applyPanelVisibilityDefaults(s service.Settings) {
 	m.showJobsPanelDefault = s.ShowJobsPanelByDefault
 	m.showOperatorPanelDefault = s.ShowOperatorPanelByDefault
+	// Service GetSettings already normalizes this; guard the empty case in case
+	// a msg arrives before a full round-trip.
+	if m.fleetDensity = s.FleetRowDensity; m.fleetDensity == "" {
+		m.fleetDensity = "full"
+	}
 	if m.settingsModal.show {
 		// Heuristic for "this came from a save, not the initial load":
 		// the modal is open. Clear overrides so the new default wins.

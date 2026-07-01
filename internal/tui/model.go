@@ -152,7 +152,10 @@ type Model struct {
 	// refreshed whenever /settings is loaded or saved.
 	showJobsPanelDefault     bool
 	showOperatorPanelDefault bool
-	leftPanelWidthOverride   int // 0 = use default computed width; >0 = user-resized width
+	// fleetDensity is the settings-driven fleet-panel row density ("full" or
+	// "compact"), refreshed whenever /settings is loaded or saved.
+	fleetDensity           string
+	leftPanelWidthOverride int // 0 = use default computed width; >0 = user-resized width
 
 	// Shared spinner animation frame counter.
 	spinnerFrame   int
@@ -246,6 +249,7 @@ func NewModel(cfg ModelConfig) Model {
 	// of starting hidden because of the bool zero value.
 	m.showOperatorPanelDefault = true
 	m.showJobsPanelDefault = false
+	m.fleetDensity = "full"
 
 	return m
 }
