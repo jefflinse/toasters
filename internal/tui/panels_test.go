@@ -82,7 +82,7 @@ func TestRenderMiniContextBar(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			got := renderMiniContextBar(tt.used, tt.tot, tt.width)
+			got := renderMiniContextBar(tt.used, tt.tot, tt.width, false)
 			if !strings.Contains(got, tt.wantSub) {
 				t.Errorf("renderMiniContextBar(%d,%d,%d) = %q, want substring %q",
 					tt.used, tt.tot, tt.width, got, tt.wantSub)

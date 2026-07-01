@@ -117,7 +117,7 @@ func renderWorkerCard(rs *runtimeSlot, innerW, innerH, ctxMax int, focused bool,
 
 	// --- Live context-window bar ---
 	if innerH >= 3 {
-		lines = append(lines, indent+renderMiniContextBar(int(rs.contextTokens), ctxMax, innerW-len(indent)))
+		lines = append(lines, indent+renderMiniContextBar(int(rs.contextTokens), ctxMax, innerW-len(indent), !active))
 	}
 
 	// --- Activity items (newest first), styled like the chat's tool blocks ---
@@ -150,11 +150,12 @@ func gridCellIcon(status string) (string, lipgloss.Style) {
 	}
 }
 
-// gridWorkerLabel returns the team-scoped worker label used as a card headline
-// when the session has no task text. Mirrors the loader's ID construction,
-// avoiding a double "team/team/worker" prefix.
+// gridWorkerLabel returns the worker label used as a card headline when the
+// session has no task text. The "graph:" prefix is stripped (graph-ness is
+// implied — same as the main screen's Fleet pane), and a team scope is applied
+// without double-prefixing "team/team/worker".
 func gridWorkerLabel(rs *runtimeSlot) string {
-	label := rs.workerName
+	label := strings.TrimPrefix(rs.workerName, "graph:")
 	if label == "" {
 		label = "runtime"
 	}
