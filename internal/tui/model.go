@@ -22,8 +22,8 @@ import (
 const (
 	inputHeight = 3
 
-	minLeftPanelWidth    = 22
-	minWidthForLeftPanel = 100
+	minSidebarWidth    = 22
+	minWidthForSidebar = 100
 )
 
 // ModelConfig holds all dependencies and configuration needed to create a Model.
@@ -124,30 +124,34 @@ type Model struct {
 
 	flashText string // transient status line; empty = hidden
 
-	lpWidth int // cached left panel width for mouse hit-testing
+	sidebarWidth int // cached sidebar width for mouse hit-testing
 
-	// lastLeftPanelShown tracks the visibility outcome from the last
+	// lastSidebarShown tracks the visibility outcome from the last
 	// resizeComponents call so we can re-run the size math when the left
 	// panel flips between shown/hidden due to state changes (a job or
 	// worker appearing/disappearing) rather than an explicit toggle.
 	// Without this the chat viewport keeps a stale width and the
 	// scrollbar column drifts.
-	lastLeftPanelShown bool
+	lastSidebarShown bool
 
 	// Collapsible panel state. The override pointer tracks an explicit user
 	// toggle via ctrl+j: nil means "follow the configured default behavior",
 	// non-nil pins the panel to the boolean's value regardless of content or
-	// settings. This lets ctrl+j reveal an empty left panel even when there's
+	// settings. This lets ctrl+j reveal an empty sidebar even when there's
 	// nothing to show — the prior plain-bool design silently lost that toggle
 	// because the auto-hide gate fired first.
-	leftPanelOverride *bool
-	// Settings-driven default for the left panel's baseline visibility,
+	sidebarOverride *bool
+	// Settings-driven default for the sidebar's baseline visibility,
 	// refreshed whenever /settings is loaded or saved.
 	showJobsPanelDefault bool
 	// fleetDensity is the settings-driven fleet-panel row density ("full" or
 	// "compact"), refreshed whenever /settings is loaded or saved.
-	fleetDensity           string
-	leftPanelWidthOverride int // 0 = use default computed width; >0 = user-resized width
+	fleetDensity string
+	// sidebarSide is the settings-driven side of the chat window the sidebar
+	// renders on ("left" or "right"), refreshed whenever /settings is loaded
+	// or saved.
+	sidebarSide          string
+	sidebarWidthOverride int // 0 = use default computed width; >0 = user-resized width
 
 	// Shared spinner animation frame counter.
 	spinnerFrame   int
@@ -234,6 +238,7 @@ func NewModel(cfg ModelConfig) Model {
 	// after; this seeding just avoids relying on zero values until it lands.
 	m.showJobsPanelDefault = false
 	m.fleetDensity = "full"
+	m.sidebarSide = "left"
 
 	return m
 }
@@ -257,7 +262,7 @@ func (m *Model) Init() tea.Cmd {
 }
 
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	defer m.syncLeftPanelVisibility()
+	defer m.syncSidebarVisibility()
 
 	var cmds []tea.Cmd
 

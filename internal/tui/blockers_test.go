@@ -196,7 +196,7 @@ func TestRenderPromptModal_RendersWizard(t *testing.T) {
 	}
 }
 
-func TestRenderLeftPanel_BlockerCounts(t *testing.T) {
+func TestRenderSidebar_BlockerCounts(t *testing.T) {
 	t.Parallel()
 
 	for _, n := range []int{0, 1, 3} {
@@ -207,11 +207,11 @@ func TestRenderLeftPanel_BlockerCounts(t *testing.T) {
 			m.blockers[i] = service.Blocker{RequestID: string(rune('a' + i)), Questions: []service.PromptQuestion{{Question: "Q"}}}
 		}
 		// Must not panic and must produce output for a reasonable panel size.
-		out := m.renderLeftPanel(40, 30)
+		out := m.renderSidebar(40, 30)
 		if out == "" {
-			t.Errorf("n=%d: renderLeftPanel returned empty", n)
+			t.Errorf("n=%d: renderSidebar returned empty", n)
 		}
-		_, _, blockersH := m.leftPanelHeights(40, 30)
+		_, _, blockersH := m.sidebarPaneHeights(40, 30)
 		if blockersH < 1 {
 			t.Errorf("n=%d: blockers pane height = %d, want >= 1", n, blockersH)
 		}

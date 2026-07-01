@@ -214,6 +214,65 @@ func TestUpdateSettings_InvalidTemperatureWritesNothing(t *testing.T) {
 	}
 }
 
+// TestUpdateSettings_PersistsSidebarSide verifies the sidebar-side pref is
+// written to config.yaml and applied to the live AppConfig, and that an
+// unrecognized value is normalized to "left" rather than rejected (it's a
+// pure UI pref — same lenient treatment as fleet_row_density).
+func TestUpdateSettings_PersistsSidebarSide(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(configPath,
+		[]byte("coarse_granularity: medium\nfine_granularity: medium\n"), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	appCfg := &config.Config{CoarseGranularity: "medium", FineGranularity: "medium"}
+	svc := NewLocal(LocalConfig{ConfigDir: dir, AppConfig: appCfg})
+
+	err := svc.UpdateSettings(context.Background(), Settings{
+		CoarseGranularity: "medium",
+		FineGranularity:   "medium",
+		SidebarSide:       "right",
+	})
+	if err != nil {
+		t.Fatalf("UpdateSettings: %v", err)
+	}
+
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("re-read config: %v", err)
+	}
+	if !strings.Contains(string(data), "sidebar_side: right") {
+		t.Errorf("config.yaml missing sidebar_side, got:\n%s", data)
+	}
+	if appCfg.SidebarSide != "right" {
+		t.Errorf("AppConfig.SidebarSide = %q, want %q", appCfg.SidebarSide, "right")
+	}
+
+	got, err := svc.GetSettings(context.Background())
+	if err != nil {
+		t.Fatalf("GetSettings: %v", err)
+	}
+	if got.SidebarSide != "right" {
+		t.Errorf("GetSettings SidebarSide = %q, want %q", got.SidebarSide, "right")
+	}
+
+	// A bogus value normalizes to "left" instead of failing the update.
+	err = svc.UpdateSettings(context.Background(), Settings{
+		CoarseGranularity: "medium",
+		FineGranularity:   "medium",
+		SidebarSide:       "diagonal",
+	})
+	if err != nil {
+		t.Fatalf("UpdateSettings with bogus side: %v", err)
+	}
+	if appCfg.SidebarSide != "left" {
+		t.Errorf("AppConfig.SidebarSide after bogus value = %q, want %q", appCfg.SidebarSide, "left")
+	}
+}
+
 // TestUpdateSettings_RejectedWhenNoAppConfig verifies the service can't be
 // coerced into writing when no config is wired (LocalConfig.AppConfig nil).
 func TestUpdateSettings_RejectedWhenNoAppConfig(t *testing.T) {

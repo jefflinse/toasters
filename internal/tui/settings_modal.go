@@ -115,7 +115,7 @@ var settingsRows = []settingsRow{
 	},
 	{
 		label: "Show Jobs Panel by Default",
-		desc:  "Keep the left panel (Jobs / Fleet / Blockers) visible even when there are no jobs to show. Ctrl+J still overrides per session.",
+		desc:  "Keep the sidebar (Jobs / Fleet / Blockers) visible even when there are no jobs to show. Ctrl+J still overrides per session.",
 		get: func(s *service.Settings) string {
 			if s.ShowJobsPanelByDefault {
 				return "on"
@@ -131,6 +131,13 @@ var settingsRows = []settingsRow{
 		get:     func(s *service.Settings) string { return config.ValidFleetDensity(s.FleetRowDensity) },
 		set:     func(s *service.Settings, v string) { s.FleetRowDensity = v },
 		options: config.FleetRowDensityLevels,
+	},
+	{
+		label:   "Sidebar Side",
+		desc:    "Which side of the chat window the sidebar (Jobs / Fleet / Blockers) renders on.",
+		get:     func(s *service.Settings) string { return config.ValidSidebarSide(s.SidebarSide) },
+		set:     func(s *service.Settings, v string) { s.SidebarSide = v },
+		options: config.SidebarSideOptions,
 	},
 }
 

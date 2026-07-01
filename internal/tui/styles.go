@@ -34,12 +34,6 @@ var (
 
 // Layout styles.
 var (
-	// SidebarStyle is used for the right info sidebar.
-	SidebarStyle = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder(), false, false, false, true).
-			BorderForeground(ColorBorder).
-			Padding(1, 1)
-
 	// ChatAreaStyle is used for the main chat message area.
 	// No left padding: user-message block borders and assistant indents
 	// render from col 0 so the block's left border (▌) lines up with the
@@ -130,11 +124,6 @@ var (
 			Foreground(ColorError).
 			Bold(true)
 
-	// SidebarHeaderStyle styles section headers in the sidebar.
-	SidebarHeaderStyle = lipgloss.NewStyle().
-				Bold(true).
-				Foreground(ColorPrimary)
-
 	// SidebarLabelStyle styles stat labels in the sidebar.
 	SidebarLabelStyle = lipgloss.NewStyle().
 				Foreground(ColorDim)
@@ -195,22 +184,22 @@ var (
 				Foreground(lipgloss.Color("250")).
 				Italic(true)
 
-	// LeftPanelStyle is the outer container for the left panel.
+	// SidebarStyle is the outer container for the sidebar.
 	// No border — individual panes have their own borders.
-	LeftPanelStyle = lipgloss.NewStyle()
+	SidebarStyle = lipgloss.NewStyle()
 
-	// LeftPanelHeaderStyle styles section headers within the left panel.
-	LeftPanelHeaderStyle = lipgloss.NewStyle().
+	// SidebarHeaderStyle styles section headers within the sidebar.
+	SidebarHeaderStyle = lipgloss.NewStyle().
 				Bold(true).
 				Foreground(lipgloss.Color("51"))
 
-	// FocusedPaneStyle wraps a left-panel pane that currently has keyboard focus.
+	// FocusedPaneStyle wraps a sidebar pane that currently has keyboard focus.
 	FocusedPaneStyle = lipgloss.NewStyle().
 				Border(lipgloss.RoundedBorder()).
 				BorderForeground(ColorAccent).
 				PaddingLeft(1).PaddingRight(1)
 
-	// UnfocusedPaneStyle wraps a left-panel pane that does not have keyboard focus.
+	// UnfocusedPaneStyle wraps a sidebar pane that does not have keyboard focus.
 	// Uses a hidden border so layout metrics (border size + padding) match
 	// FocusedPaneStyle and focus changes don't shift surrounding content.
 	UnfocusedPaneStyle = lipgloss.NewStyle().

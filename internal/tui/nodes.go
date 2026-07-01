@@ -29,7 +29,7 @@ type nodesLayout struct {
 }
 
 // nodesLayoutFor computes the nodes-screen geometry. listW is the desired list
-// (left pane) width — passed in so it can match the main screen's left panel,
+// (left pane) width — passed in so it can match the main screen's sidebar,
 // making the screen read as a drill-in of the Fleet pane. It's clamped so the
 // detail pane keeps a usable minimum.
 func nodesLayoutFor(termW, termH, listW int) nodesLayout {
@@ -94,7 +94,7 @@ func (m *Model) toggleNodes() {
 // renderNodes renders the full nodes screen: the list (left) and detail (right)
 // panes above a help/filter bar at the bottom.
 func (m *Model) renderNodes() string {
-	lay := nodesLayoutFor(m.width, m.height, m.effectiveLeftPanelWidth())
+	lay := nodesLayoutFor(m.width, m.height, m.effectiveSidebarWidth())
 	nodes := m.filteredNodeSessions()
 
 	bar := m.renderNodesBar()

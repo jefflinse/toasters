@@ -285,6 +285,7 @@ func (s *LocalService) GetSettings(_ context.Context) (Settings, error) {
 			ShowJobsPanelByDefault:     false,
 			ShowOperatorPanelByDefault: true,
 			FleetRowDensity:            config.ValidFleetDensity(""),
+			SidebarSide:                config.ValidSidebarSide(""),
 		}, nil
 	}
 	return Settings{
@@ -295,6 +296,7 @@ func (s *LocalService) GetSettings(_ context.Context) (Settings, error) {
 		ShowJobsPanelByDefault:     s.cfg.AppConfig.ShowJobsPanelByDefault,
 		ShowOperatorPanelByDefault: s.cfg.AppConfig.ShowOperatorPanelByDefault,
 		FleetRowDensity:            config.ValidFleetDensity(s.cfg.AppConfig.FleetRowDensity),
+		SidebarSide:                config.ValidSidebarSide(s.cfg.AppConfig.SidebarSide),
 	}, nil
 }
 
@@ -381,6 +383,12 @@ func (s *LocalService) UpdateSettings(_ context.Context, next Settings) error {
 		return fmt.Errorf("persisting fleet_row_density: %w", err)
 	}
 	s.cfg.AppConfig.FleetRowDensity = density
+
+	side := config.ValidSidebarSide(next.SidebarSide)
+	if err := config.SetTopLevelScalar(s.cfg.ConfigDir, "sidebar_side", side); err != nil {
+		return fmt.Errorf("persisting sidebar_side: %w", err)
+	}
+	s.cfg.AppConfig.SidebarSide = side
 
 	return nil
 }

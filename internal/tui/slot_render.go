@@ -318,6 +318,11 @@ func renderDiffLines(diff string, width int) string {
 		}
 		gutter := DimStyle.Render(fmt.Sprintf("%*d", gutterWidth, r.num))
 		code := truncate(sanitizeDiffCode(r.code), codeWidth)
+		// Pad added/removed lines to the full code width so the background
+		// tint fills the row to EOL instead of stopping at the last character.
+		if pad := codeWidth - lipgloss.Width(code); pad > 0 {
+			code += strings.Repeat(" ", pad)
+		}
 		switch r.marker {
 		case '+':
 			lines = append(lines, gutter+" "+addStyle.Render("+"+code))

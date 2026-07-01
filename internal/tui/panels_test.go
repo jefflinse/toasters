@@ -5,7 +5,37 @@ import (
 	"testing"
 )
 
-func TestLeftPanelWidth(t *testing.T) {
+func TestPointInSidebar(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		side string
+		x    int
+		want bool
+	}{
+		{name: "left side, inside panel", side: "left", x: 0, want: true},
+		{name: "left side, last panel column", side: "left", x: 29, want: true},
+		{name: "left side, first chat column", side: "left", x: 30, want: false},
+		{name: "left side, far right", side: "left", x: 119, want: false},
+		{name: "right side, far left is chat", side: "right", x: 0, want: false},
+		{name: "right side, last chat column", side: "right", x: 89, want: false},
+		{name: "right side, first panel column", side: "right", x: 90, want: true},
+		{name: "right side, last column", side: "right", x: 119, want: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			m := Model{width: 120, sidebarWidth: 30, sidebarSide: tt.side}
+			if got := m.pointInSidebar(tt.x); got != tt.want {
+				t.Errorf("pointInSidebar(%d) with side %q = %v, want %v", tt.x, tt.side, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestDefaultSidebarWidth(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -26,36 +56,36 @@ func TestLeftPanelWidth(t *testing.T) {
 		{
 			name:      "narrow terminal clamps to minimum",
 			termWidth: 40,
-			want:      minLeftPanelWidth, // 40/4 = 10 < 22
+			want:      minSidebarWidth, // 40/4 = 10 < 22
 		},
 		{
 			name:      "very narrow terminal clamps to minimum",
 			termWidth: 10,
-			want:      minLeftPanelWidth, // 10/4 = 2 < 22
+			want:      minSidebarWidth, // 10/4 = 2 < 22
 		},
 		{
 			name:      "zero terminal width clamps to minimum",
 			termWidth: 0,
-			want:      minLeftPanelWidth, // 0/4 = 0 < 22
+			want:      minSidebarWidth, // 0/4 = 0 < 22
 		},
 		{
 			name:      "terminal width exactly at 4x minimum",
-			termWidth: minLeftPanelWidth * 4,
-			want:      minLeftPanelWidth, // 88/4 = 22 == minLeftPanelWidth
+			termWidth: minSidebarWidth * 4,
+			want:      minSidebarWidth, // 88/4 = 22 == minSidebarWidth
 		},
 		{
 			name:      "terminal width just above 4x minimum",
-			termWidth: minLeftPanelWidth*4 + 4,
-			want:      minLeftPanelWidth + 1, // (88+4)/4 = 23
+			termWidth: minSidebarWidth*4 + 4,
+			want:      minSidebarWidth + 1, // (88+4)/4 = 23
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			got := leftPanelWidth(tt.termWidth)
+			got := defaultSidebarWidth(tt.termWidth)
 			if got != tt.want {
-				t.Errorf("leftPanelWidth(%d) = %d, want %d", tt.termWidth, got, tt.want)
+				t.Errorf("defaultSidebarWidth(%d) = %d, want %d", tt.termWidth, got, tt.want)
 			}
 		})
 	}
@@ -157,7 +187,7 @@ func TestBuildFleet(t *testing.T) {
 	}
 }
 
-func TestEffectiveLeftPanelWidth(t *testing.T) {
+func TestEffectiveSidebarWidth(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -170,13 +200,13 @@ func TestEffectiveLeftPanelWidth(t *testing.T) {
 			name:          "no override returns default computed width",
 			termWidth:     200,
 			widthOverride: 0,
-			want:          50, // leftPanelWidth(200) = 200/4 = 50
+			want:          50, // defaultSidebarWidth(200) = 200/4 = 50
 		},
 		{
 			name:          "no override with narrow terminal clamps to minimum",
 			termWidth:     40,
 			widthOverride: 0,
-			want:          minLeftPanelWidth, // 40/4 = 10 < 22
+			want:          minSidebarWidth, // 40/4 = 10 < 22
 		},
 		{
 			name:          "override respected when within bounds",
@@ -188,7 +218,7 @@ func TestEffectiveLeftPanelWidth(t *testing.T) {
 			name:          "override clamped to minimum",
 			termWidth:     200,
 			widthOverride: 5,
-			want:          minLeftPanelWidth,
+			want:          minSidebarWidth,
 		},
 		{
 			name:          "override clamped to half terminal width",
@@ -199,8 +229,8 @@ func TestEffectiveLeftPanelWidth(t *testing.T) {
 		{
 			name:          "override exactly at minimum",
 			termWidth:     200,
-			widthOverride: minLeftPanelWidth,
-			want:          minLeftPanelWidth,
+			widthOverride: minSidebarWidth,
+			want:          minSidebarWidth,
 		},
 		{
 			name:          "override exactly at max (half terminal)",
@@ -221,11 +251,11 @@ func TestEffectiveLeftPanelWidth(t *testing.T) {
 			t.Parallel()
 			m := newMinimalModel(t)
 			m.width = tt.termWidth
-			m.leftPanelWidthOverride = tt.widthOverride
+			m.sidebarWidthOverride = tt.widthOverride
 
-			got := m.effectiveLeftPanelWidth()
+			got := m.effectiveSidebarWidth()
 			if got != tt.want {
-				t.Errorf("effectiveLeftPanelWidth() = %d, want %d (termWidth=%d, override=%d)",
+				t.Errorf("effectiveSidebarWidth() = %d, want %d (termWidth=%d, override=%d)",
 					got, tt.want, tt.termWidth, tt.widthOverride)
 			}
 		})
