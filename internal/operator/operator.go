@@ -705,6 +705,18 @@ func (o *Operator) handleUserMessage(ctx context.Context, payload UserMessagePay
 		consecutiveFailed int
 		lastToolErr       string
 	)
+
+	// createdJobTitles is a turn-scoped idempotency guard against create_job
+	// firing twice for one user request (issue #35): a local model narrated
+	// "I'll create a job..." in round 1, called create_job, then — after
+	// seeing the terse {"job_id":...} result — narrated "Got it, I'll create
+	// a job..." again in round 2 and called create_job a second time with the
+	// same title, producing two jobs for one request. The event loop
+	// processes one turn at a time (see run()), so this map — local to this
+	// single handleUserMessage call — deterministically catches a repeat
+	// regardless of what the model does. Go owns the state, not the prompt.
+	createdJobTitles := make(map[string]string) // normalized title -> create_job result
+
 	for {
 		if ctx.Err() != nil {
 			return
@@ -763,13 +775,26 @@ func (o *Operator) handleUserMessage(ctx context.Context, payload UserMessagePay
 		for _, tc := range toolCalls {
 			slog.Info("operator tool call", "tool", tc.Name, "id", tc.ID)
 
-			result, execErr := o.tools.Execute(ctx, tc.Name, tc.Arguments)
+			var result string
+			var execErr error
 
-			if execErr != nil {
-				slog.Warn("operator tool execution error", "tool", tc.Name, "error", execErr)
-				result = fmt.Sprintf("error: %s", execErr.Error())
-				failed++
-				lastToolErr = execErr.Error()
+			if dupResult, isDup := duplicateCreateJobResult(tc.Name, tc.Arguments, createdJobTitles); isDup {
+				slog.Warn("operator: skipped duplicate create_job call within the same turn",
+					"args", string(tc.Arguments))
+				result = dupResult
+			} else {
+				result, execErr = o.tools.Execute(ctx, tc.Name, tc.Arguments)
+
+				if execErr != nil {
+					slog.Warn("operator tool execution error", "tool", tc.Name, "error", execErr)
+					result = fmt.Sprintf("error: %s", execErr.Error())
+					failed++
+					lastToolErr = execErr.Error()
+				} else if tc.Name == "create_job" {
+					if title, ok := createJobTitleFromArgs(tc.Arguments); ok {
+						createdJobTitles[normalizeJobTitle(title)] = result
+					}
+				}
 			}
 
 			// Surface the tool call to subscribers (the TUI renders it as a
@@ -804,6 +829,52 @@ func (o *Operator) handleUserMessage(ctx context.Context, payload UserMessagePay
 
 		// Loop — send tool results back to LLM for the next response.
 	}
+}
+
+// createJobTitleFromArgs pulls the "title" field out of create_job tool-call
+// arguments for duplicate detection. Returns ok=false if args don't parse or
+// carry no title — createJob's own validation reports that error, this just
+// declines to treat an unparseable call as a duplicate.
+func createJobTitleFromArgs(args json.RawMessage) (string, bool) {
+	var params struct {
+		Title string `json:"title"`
+	}
+	if err := json.Unmarshal(args, &params); err != nil || params.Title == "" {
+		return "", false
+	}
+	return params.Title, true
+}
+
+// normalizeJobTitle lowercases and collapses whitespace so trivial
+// formatting differences ("Create Hello World CLI" vs "create   hello world
+// cli") still count as the same title for duplicate detection.
+func normalizeJobTitle(title string) string {
+	return strings.Join(strings.Fields(strings.ToLower(title)), " ")
+}
+
+// duplicateCreateJobResult reports whether name/args is a create_job call
+// repeating a title already created earlier in seen (the current turn's
+// title -> result map). When it is, it returns a result string that tells
+// the model the job already exists instead of running create_job again —
+// see the createdJobTitles comment in handleUserMessage for why this guard
+// is scoped the way it is.
+func duplicateCreateJobResult(name string, args json.RawMessage, seen map[string]string) (result string, isDup bool) {
+	if name != "create_job" {
+		return "", false
+	}
+	title, ok := createJobTitleFromArgs(args)
+	if !ok {
+		return "", false
+	}
+	prior, dup := seen[normalizeJobTitle(title)]
+	if !dup {
+		return "", false
+	}
+	return fmt.Sprintf(
+		"A job titled %q was already created earlier in this turn (result: %s). "+
+			"Do not create another job for this request — use the existing job.",
+		title, prior,
+	), true
 }
 
 // promptUser implements the ask_user tool. Delegates to the shared HITL

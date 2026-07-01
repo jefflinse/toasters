@@ -2341,6 +2341,137 @@ func TestHandleUserMessage_StopsAtRoundCap(t *testing.T) {
 	}
 }
 
+// TestHandleUserMessage_DedupesCreateJobWithinTurn reproduces issue #35: for
+// one user request, the model narrates "I'll create a job..." and calls
+// create_job, then — instead of recognizing the tool result as done — narrates
+// "Got it — I'll create a job..." again and calls create_job a second time
+// with the same title, before finally finishing the turn. Only one job may
+// exist afterward; the second call must be short-circuited to the job the
+// first call created.
+func TestHandleUserMessage_DedupesCreateJobWithinTurn(t *testing.T) {
+	store := newOperatorTestStore(t)
+	engine := testPromptEngine(t, map[string]string{
+		"scheduler":  "You are the scheduler.",
+		"decomposer": "You are the decomposer.",
+	})
+	eventCh := make(chan Event, 64)
+	workDir := t.TempDir()
+	t.Setenv("HOME", workDir) // create_job validates the workspace is under $HOME
+	systemTools := NewSystemTools(SystemToolsConfig{
+		Store: store, PromptEngine: engine,
+		DefaultProvider: "test-provider", DefaultModel: "test-model",
+		EventCh: eventCh, WorkDir: workDir,
+	})
+	tools := newOperatorTools(nil, engine, "test-provider", "test-model", store, systemTools, workDir)
+	provTools := operatorToolsToProviderTools(tools.Definitions())
+
+	createArgs, err := json.Marshal(map[string]string{
+		"title":       "Create Hello World CLI in Go",
+		"description": "Write a Go CLI that prints Hello World",
+	})
+	assertNoError(t, err)
+
+	mp := &mockProvider{
+		name: "test",
+		responses: []mockResponse{
+			{events: []provider.StreamEvent{
+				{Type: provider.EventText, Text: "I'll create a job for this straightforward task..."},
+				{Type: provider.EventToolCall, ToolCall: &provider.ToolCall{ID: "tc-1", Name: "create_job", Arguments: createArgs}},
+				{Type: provider.EventDone},
+			}},
+			{events: []provider.StreamEvent{
+				{Type: provider.EventText, Text: "Got it — I'll create a job for this straightforward task..."},
+				{Type: provider.EventToolCall, ToolCall: &provider.ToolCall{ID: "tc-2", Name: "create_job", Arguments: createArgs}},
+				{Type: provider.EventDone},
+			}},
+			{events: []provider.StreamEvent{
+				{Type: provider.EventText, Text: "The job has been created."},
+				{Type: provider.EventDone},
+			}},
+		},
+	}
+
+	rt := runtime.New(nil, newTestRegistry(mp))
+	var textBuf strings.Builder
+	var mu sync.Mutex
+	op := &Operator{
+		rt:           rt,
+		prov:         mp,
+		model:        "test-model",
+		tools:        tools,
+		eventCh:      make(chan Event, 64),
+		workDir:      workDir,
+		systemPrompt: "You are the operator.",
+		provTools:    provTools,
+		onText: func(_, s string) {
+			mu.Lock()
+			textBuf.WriteString(s)
+			mu.Unlock()
+		},
+	}
+
+	op.handleUserMessage(context.Background(),
+		UserMessagePayload{Text: "[JOB REQUEST] Create a simple Hello World CLI program in Go."})
+
+	if n := len(mp.getRequests()); n != 3 {
+		t.Fatalf("ChatStream calls = %d, want 3 (two create_job rounds + final text)", n)
+	}
+
+	jobs, err := store.ListAllJobs(context.Background())
+	assertNoError(t, err)
+	if len(jobs) != 1 {
+		t.Fatalf("jobs in store = %d, want 1 — duplicate create_job call must not create a second job (got %+v)", len(jobs), jobs)
+	}
+}
+
+func TestDuplicateCreateJobResult(t *testing.T) {
+	seen := map[string]string{
+		"create hello world cli in go": `{"job_id":"job-1"}`,
+	}
+
+	// Non-create_job calls are never flagged, regardless of args.
+	if _, dup := duplicateCreateJobResult("create_task", json.RawMessage(`{"title":"Create Hello World CLI in Go"}`), seen); dup {
+		t.Error("non-create_job call flagged as duplicate")
+	}
+
+	// A first-time title (not in seen) is not a duplicate.
+	fresh, _ := json.Marshal(map[string]string{"title": "Build a REST API"})
+	if _, dup := duplicateCreateJobResult("create_job", fresh, seen); dup {
+		t.Error("unseen title flagged as duplicate")
+	}
+
+	// Same title, different casing/whitespace, is still a duplicate.
+	repeat, _ := json.Marshal(map[string]string{"title": "  create   HELLO world CLI in GO  "})
+	result, dup := duplicateCreateJobResult("create_job", repeat, seen)
+	if !dup {
+		t.Fatal("repeated title (case/whitespace-insensitive) not flagged as duplicate")
+	}
+	assertContains(t, result, "job-1")
+	assertContains(t, result, "already created")
+
+	// Malformed/untitled args are not treated as duplicates — createJob's own
+	// validation surfaces the "title is required" error for those.
+	if _, dup := duplicateCreateJobResult("create_job", json.RawMessage(`not json`), seen); dup {
+		t.Error("malformed args flagged as duplicate")
+	}
+	if _, dup := duplicateCreateJobResult("create_job", json.RawMessage(`{}`), seen); dup {
+		t.Error("missing title flagged as duplicate")
+	}
+}
+
+func TestNormalizeJobTitle(t *testing.T) {
+	cases := map[string]string{
+		"Create Hello World CLI in Go": "create hello world cli in go",
+		"  extra   spaces  ":           "extra spaces",
+		"already lower":                "already lower",
+	}
+	for in, want := range cases {
+		if got := normalizeJobTitle(in); got != want {
+			t.Errorf("normalizeJobTitle(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 func TestNormalizeToolCallArgs(t *testing.T) {
 	tcs := []provider.ToolCall{
 		{ID: "a", Name: "ask_user", Arguments: json.RawMessage("")},           // empty → repaired
