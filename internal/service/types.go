@@ -461,6 +461,14 @@ type WorkerStreamItem struct {
 	ToolError  bool
 	StartedAt  time.Time
 	EndedAt    time.Time // zero while in flight
+
+	// File change attached to a write_file/edit_file tool item, delivered
+	// by a session.file_change event (display-only; never LLM context).
+	FileDiff      string // unified diff body (hunks only), capped server-side
+	DiffAdded     int
+	DiffRemoved   int
+	DiffCreated   bool // write_file created a new file
+	DiffTruncated bool // diff was capped server-side
 }
 
 // WorkerStreamSnapshot is the payload for a ChatEntryKindWorkerStream

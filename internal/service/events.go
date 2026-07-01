@@ -98,6 +98,13 @@ const (
 	// Payload: SessionToolResultPayload. Carries SessionID.
 	EventTypeSessionToolResult EventType = "session.tool_result"
 
+	// EventTypeSessionFileChange is sent when a worker's write_file or
+	// edit_file tool mutates a file. It carries a capped unified diff as a
+	// display side-channel: the diff is shown in the TUI but never included
+	// in the tool result string the LLM sees.
+	// Payload: SessionFileChangePayload. Carries SessionID.
+	EventTypeSessionFileChange EventType = "session.file_change"
+
 	// EventTypeSessionDone is sent when a worker session completes.
 	// Payload: SessionDonePayload. Carries SessionID.
 	EventTypeSessionDone EventType = "session.done"
@@ -439,6 +446,20 @@ type SessionToolCallPayload struct {
 // SessionToolResultPayload is the payload for EventTypeSessionToolResult events.
 type SessionToolResultPayload struct {
 	Result ToolCallResult
+}
+
+// SessionFileChangePayload is the payload for EventTypeSessionFileChange
+// events. The TUI pairs it with the session's matching in-flight
+// write_file/edit_file tool item (by tool name + path — mycelium tool events
+// carry no call IDs) and renders the diff beneath the tool block.
+type SessionFileChangePayload struct {
+	ToolName  string // "write_file" or "edit_file"
+	Path      string // path as the model passed it
+	Diff      string // unified diff body (hunks only), capped server-side
+	Added     int    // total lines added by the change
+	Removed   int    // total lines removed
+	Created   bool   // write_file created a new file
+	Truncated bool   // Diff was capped server-side
 }
 
 // SessionDonePayload is the payload for EventTypeSessionDone events.
