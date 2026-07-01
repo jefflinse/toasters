@@ -15,24 +15,26 @@ import (
 )
 
 const (
-	minGridCellInnerW = 36 // minimum inner cell width
-	minGridCellInnerH = 5  // minimum inner cell height: header + meta + separator + 2 activity lines
+	minGridCellInnerW = 40 // minimum inner cell content width
+	minGridCellInnerH = 6  // minimum inner cell content height: headline + meta + ctx bar + 3 activity lines
 	gridHotkeyBarH    = 1  // hotkey bar height
-	gridCellBorderW   = 4  // total horizontal border+padding per cell
-	gridCellBorderH   = 2  // total vertical border+padding per cell
+	gridCellFrameW    = 2  // per-cell horizontal frame: left bar (1) + left padding (1)
 
 	// maxGridSlots is the maximum number of worker slots displayed in the grid.
 	maxGridSlots = 16
 )
 
+// gridCellLeftBar is the left-bar border used by every grid cell, mirroring the
+// worker cards in the main chat viewport so the two surfaces read as one style.
+var gridCellLeftBar = lipgloss.Border{Left: "▌"}
+
 // computeGridDimensions returns the number of columns and rows for the grid
 // given the terminal dimensions. Minimum is 1×1.
 func computeGridDimensions(termW, termH int) (cols, rows int) {
-	minCellW := minGridCellInnerW + gridCellBorderW
-	minCellH := minGridCellInnerH + gridCellBorderH
+	minCellW := minGridCellInnerW + gridCellFrameW
 	availH := termH - gridHotkeyBarH
 	cols = termW / minCellW
-	rows = availH / minCellH
+	rows = availH / minGridCellInnerH
 	if cols < 1 {
 		cols = 1
 	}
@@ -42,28 +44,35 @@ func computeGridDimensions(termW, termH int) (cols, rows int) {
 	return cols, rows
 }
 
+// gridCellFrame returns the left-bar frame style for a grid cell at the given
+// outer dimensions. The border color encodes status/focus; content is padded to
+// fill the cell so rows tile cleanly.
+func gridCellFrame(cellW, cellH int, borderColor color.Color) lipgloss.Style {
+	// lipgloss Width is the total rendered width (border + padding included), so
+	// the content area is cellW - gridCellFrameW; renderGrid sizes the card body
+	// to match. Floor at a width that still leaves room for the frame.
+	if cellW < gridCellFrameW+1 {
+		cellW = gridCellFrameW + 1
+	}
+	if cellH < 1 {
+		cellH = 1
+	}
+	return lipgloss.NewStyle().
+		Border(gridCellLeftBar, false, false, false, true).
+		BorderForeground(borderColor).
+		PaddingLeft(1).
+		Width(cellW).
+		Height(cellH)
+}
+
 // renderEmptyCell renders a dim empty placeholder cell with the given dimensions.
-// cellW and cellH are the outer cell dimensions (including border); the safety
-// floor of 1 is enforced by computeGridDimensions and the renderGrid safety floor.
+// cellW and cellH are the outer cell dimensions (including the left-bar frame).
 func renderEmptyCell(cellW, cellH int, focused bool) string {
-	var borderColor color.Color
+	borderColor := color.Color(ColorBorder)
 	if focused {
 		borderColor = ColorPrimary
-	} else {
-		borderColor = ColorBorder
 	}
-	borderType := lipgloss.RoundedBorder()
-	if focused {
-		borderType = lipgloss.ThickBorder()
-	}
-	cellStyle := lipgloss.NewStyle().
-		Width(cellW).
-		Height(cellH).
-		Border(borderType).
-		BorderForeground(borderColor).
-		Padding(0, 1)
-	emptyContent := DimStyle.Render("empty")
-	return cellStyle.Render(emptyContent)
+	return gridCellFrame(cellW, cellH, borderColor).Render(DimStyle.Italic(true).Render("empty"))
 }
 
 func (m *Model) renderGrid() string {
@@ -91,8 +100,8 @@ func (m *Model) renderGrid() string {
 		absIdxPos := pageOffset + i
 		focused := i == m.grid.gridFocusCell
 
-		innerH := cellH - gridCellBorderH
-		innerW := cellW - gridCellBorderW
+		innerH := cellH
+		innerW := cellW - gridCellFrameW
 		if innerH < 1 {
 			innerH = 1
 		}
@@ -140,192 +149,129 @@ func (m *Model) renderGrid() string {
 	return lipgloss.JoinVertical(lipgloss.Left, hotkeyBar, gridBody)
 }
 
-// renderRuntimeGridCell renders a single runtime session into a grid cell as a
-// structured smart card:
-//
-//	⚡ team/worker-name · <uuid-short> · 1m24s   ← header
-//	──────────────────────────────────────────   ← dim separator
-//	building core data models                    ← task description (word-wrapped, ≤2 lines)
-//	──────────────────────────────────────────   ← dim separator (only if task non-empty)
-//	• write: main.go                             ← activity items, newest first
-//	• shell: go test ./...
-func (m *Model) renderRuntimeGridCell(rs *runtimeSlot, cellW, cellH, innerW, innerH int, focused bool) string {
-	// Green border for active runtime sessions.
-	var borderColor color.Color
-	if rs.status == "active" {
+// gridCellBorderColor picks the left-bar color for a cell: the theme accent for
+// active sessions (bright primary when focused), and dim/border tones for
+// finished ones — errors and cancellations read red. Uses the shared palette so
+// the grid tracks the rest of the TUI's theme instead of hardcoded hues.
+func gridCellBorderColor(rs *runtimeSlot, focused bool) color.Color {
+	switch {
+	case rs.status == "active":
 		if focused {
-			borderColor = lipgloss.Color("#5fff5f") // bright green when focused
-		} else {
-			borderColor = ColorConnected // bright green for active sessions
+			return ColorPrimary
 		}
-	} else {
-		if focused {
-			borderColor = ColorPrimary
-		} else {
-			borderColor = ColorDim
-		}
+		return ColorAccent
+	case rs.status == "failed" || rs.status == "cancelled":
+		return ColorError
+	case focused:
+		return ColorPrimary
+	default:
+		return ColorBorder
 	}
-
-	borderType := lipgloss.RoundedBorder()
-	if focused {
-		borderType = lipgloss.ThickBorder()
-	}
-
-	cellStyle := lipgloss.NewStyle().
-		Width(cellW).
-		Height(cellH).
-		Border(borderType).
-		BorderForeground(borderColor).
-		Padding(0, 1)
-
-	return cellStyle.Render(renderWorkerCard(rs, innerW, innerH, focused, m.spinnerFrame))
 }
 
-// renderWorkerCard renders the inner content of a worker smart card (without border).
-// innerW and innerH define the available content dimensions.
-// focused indicates whether this card has focus (affects header style).
-// spinnerFrame is the current animation frame for the braille spinner.
-func renderWorkerCard(rs *runtimeSlot, innerW, innerH int, focused bool, spinnerFrame int) string {
-	// Graceful degrade: too narrow to show a useful card.
-	if innerH < 4 {
-		jobID := rs.jobID
-		if len(jobID) > 8 {
-			jobID = jobID[:8]
-		}
-		mini := DimStyle.Render(truncateStr(jobID, innerW))
-		miniLines := strings.Split(mini, "\n")
-		if len(miniLines) > innerH {
-			miniLines = miniLines[:innerH]
-		}
-		return strings.Join(miniLines, "\n")
+// renderRuntimeGridCell renders a single runtime session into a grid cell using
+// the same ▌ left-bar card style the main chat viewport uses for worker streams,
+// so the grid and the chat read as one visual language.
+func (m *Model) renderRuntimeGridCell(rs *runtimeSlot, cellW, cellH, innerW, innerH int, focused bool) string {
+	frame := gridCellFrame(cellW, cellH, gridCellBorderColor(rs, focused))
+	ctxMax := m.modelContext[rs.model]
+	return frame.Render(renderWorkerCard(rs, innerW, innerH, ctxMax, focused, m.spinnerFrame))
+}
+
+// renderWorkerCard renders the inner content of a worker card (without the
+// left-bar frame). The layout, top to bottom:
+//
+//	🍞 build data models · a1b2c3d · 1m24s   ← headline (task, else role) + job/elapsed
+//	  lmstudio/gemma-4-26b · 4.2k↑ 1.1k↓      ← model + tokens/cost (dim)
+//	  ████████░░░░░░░ 34%                      ← live context-window bar
+//	  ⚙ write_file (main.go)                   ← recent activity, newest first
+//	  ⚙ shell (go test ./...)
+//
+// innerW and innerH are the available content dimensions; ctxMax is the model's
+// context length (0 if unknown). Sections drop out from the bottom up as height
+// shrinks so a short cell still shows the headline.
+func renderWorkerCard(rs *runtimeSlot, innerW, innerH, ctxMax int, focused bool, spinnerFrame int) string {
+	if innerW < 1 {
+		innerW = 1
+	}
+	if innerH < 1 {
+		innerH = 1
 	}
 
-	var hdrStyle lipgloss.Style
-	if focused {
-		hdrStyle = HeaderStyle
-	} else {
-		hdrStyle = SidebarHeaderStyle
-	}
+	active := rs.status == "active"
 
-	// --- Header line ---
-	// Use endTime for completed sessions so the duration stops incrementing.
+	// --- Headline: icon + task/role, with job id · elapsed right-aligned ---
 	end := time.Now()
 	if !rs.endTime.IsZero() {
 		end = rs.endTime
 	}
 	elapsed := end.Sub(rs.startTime).Round(time.Second)
-	statusMark := "⚡"
-	if rs.status != "active" {
-		statusMark = "✓"
+
+	icon, iconStyle := gridCellIcon(rs.status)
+	headline := rs.task
+	if headline == "" {
+		headline = gridWorkerLabel(rs)
 	}
-	workerLabel := rs.workerName
-	if workerLabel == "" {
-		workerLabel = "runtime"
-	}
-	// The workerName may already be team-scoped (e.g. "auto-opencode/orchestrator")
-	// from the loader's ID construction. Only prepend teamName if it's not already
-	// a prefix to avoid double-prefixing like "auto-opencode/auto-opencode/orchestrator".
-	if rs.teamName != "" && !strings.HasPrefix(workerLabel, rs.teamName+"/") {
-		workerLabel = rs.teamName + "/" + workerLabel
-	}
-	// Short job ID (first 8 chars).
+
 	shortJobID := rs.jobID
 	if len(shortJobID) > 8 {
 		shortJobID = shortJobID[:8]
 	}
-	header := fmt.Sprintf("%s %s · %s · %s", statusMark, workerLabel, shortJobID, elapsed)
-	headerLine := hdrStyle.Render(truncateStr(header, innerW))
+	right := shortJobID
+	if right != "" {
+		right += " · "
+	}
+	right += elapsed.String()
+	rightStyled := DimStyle.Render(right)
 
-	// --- Meta line (model/provider · tokens · cost) ---
-	// Only shown when there's vertical room (>= 5 inner lines) so the
-	// graceful-degrade and tiny-cell paths are untouched.
-	metaLine := ""
-	if innerH >= 5 {
+	// Fit the headline into whatever the right-hand meta leaves, keeping at least
+	// a few chars. The prefix (icon + space) is measured with lipgloss.Width so a
+	// double-width glyph doesn't shove the text past the column.
+	prefix := icon + " "
+	headlineMax := innerW - lipgloss.Width(prefix) - lipgloss.Width(rightStyled) - 1
+	if headlineMax < 6 {
+		// Too tight to co-locate — drop the right-hand meta and give the
+		// headline the whole line.
+		rightStyled = ""
+		headlineMax = innerW - lipgloss.Width(prefix)
+	}
+	if headlineMax < 1 {
+		headlineMax = 1
+	}
+	headStyle := lipgloss.NewStyle().Bold(true).Foreground(ColorAccent)
+	if !active {
+		headStyle = DimStyle
+	}
+	left := iconStyle.Render(icon) + " " + headStyle.Render(truncateStr(headline, headlineMax))
+	headerLine := left
+	if rightStyled != "" {
+		gap := innerW - lipgloss.Width(left) - lipgloss.Width(rightStyled)
+		if gap < 1 {
+			gap = 1
+		}
+		headerLine = left + strings.Repeat(" ", gap) + rightStyled
+	}
+
+	lines := []string{headerLine}
+	indent := "  "
+
+	// --- Meta: model/provider · tokens · cost (dim) ---
+	if innerH >= 2 {
 		if meta := workerCardMeta(rs); meta != "" {
-			metaLine = DimStyle.Render(truncateStr(meta, innerW))
-		}
-	}
-	hasMeta := metaLine != ""
-
-	// --- Separator after header ---
-	separator := DimStyle.Render(strings.Repeat("─", innerW))
-
-	// --- Task description section ---
-	// Word-wrap the task to innerW, cap at 2 lines.
-	var taskLines []string
-	if rs.task != "" {
-		wrapped := wrapText(rs.task, innerW)
-		all := strings.Split(wrapped, "\n")
-		if len(all) > 2 {
-			all = all[:2]
-		}
-		if rs.status == "active" {
-			taskLines = append(taskLines, all...)
-		} else {
-			// Dim for completed/killed.
-			for _, l := range all {
-				taskLines = append(taskLines, DimStyle.Render(l))
-			}
-		}
-	}
-	hasTask := len(taskLines) > 0
-
-	// --- Line budget ---
-	// 1 header + 1 separator = 2 fixed lines.
-	// Task section: len(taskLines) + 1 separator (if non-empty).
-	taskSectionLines := 0
-	if hasTask {
-		taskSectionLines = len(taskLines) + 1 // task lines + task separator
-	}
-	// activityH may be 0 when the task section fills the available height;
-	// the hard-clamp below ensures we never overflow innerH.
-	metaLines := 0
-	if hasMeta {
-		metaLines = 1
-	}
-	activityH := innerH - 2 - metaLines - taskSectionLines
-	if activityH < 0 {
-		activityH = 0
-	}
-
-	// --- Activity items (newest first) ---
-	bulletStyle := DimStyle
-	labelStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
-	maxLabelW := innerW - 2 // "• " prefix
-	if maxLabelW < 1 {
-		maxLabelW = 1
-	}
-
-	var activityLines []string
-	if len(rs.activities) == 0 && rs.status == "active" {
-		// Waiting state — show a single dim placeholder.
-		if activityH > 0 {
-			activityLines = append(activityLines, DimStyle.Render("waiting for activity…"))
-		}
-	} else {
-		// Iterate newest-first (activities are oldest-first).
-		for i := len(rs.activities) - 1; i >= 0 && len(activityLines) < activityH; i-- {
-			lbl := rs.activities[i].label
-			if len([]rune(lbl)) > maxLabelW {
-				lbl = string([]rune(lbl)[:maxLabelW])
-			}
-			line := bulletStyle.Render("• ") + labelStyle.Render(lbl)
-			activityLines = append(activityLines, line)
+			lines = append(lines, DimStyle.Render(indent+truncateStr(meta, innerW-len(indent))))
 		}
 	}
 
-	// --- Assemble lines slice ---
-	var lines []string
-	lines = append(lines, headerLine)
-	if hasMeta {
-		lines = append(lines, metaLine)
+	// --- Live context-window bar ---
+	if innerH >= 3 {
+		lines = append(lines, indent+renderMiniContextBar(int(rs.contextTokens), ctxMax, innerW-len(indent)))
 	}
-	lines = append(lines, separator)
-	if hasTask {
-		lines = append(lines, taskLines...)
-		lines = append(lines, separator)
+
+	// --- Activity items (newest first), styled like the chat's tool blocks ---
+	activityH := innerH - len(lines)
+	if activityH > 0 {
+		lines = append(lines, gridActivityLines(rs, innerW, indent, activityH)...)
 	}
-	lines = append(lines, activityLines...)
 
 	// Hard-clamp to innerH lines.
 	if len(lines) > innerH {
@@ -333,8 +279,67 @@ func renderWorkerCard(rs *runtimeSlot, innerW, innerH int, focused bool, spinner
 	}
 
 	_ = spinnerFrame // reserved for future animated content in the card body
+	_ = focused
 
 	return strings.Join(lines, "\n")
+}
+
+// gridCellIcon returns the leading glyph and its style for a cell, keyed on the
+// session status.
+func gridCellIcon(status string) (string, lipgloss.Style) {
+	switch status {
+	case "active":
+		return "🍞", lipgloss.NewStyle().Foreground(ColorAccent)
+	case "failed", "cancelled":
+		return "✗", lipgloss.NewStyle().Foreground(ColorError)
+	default:
+		return "✓", lipgloss.NewStyle().Foreground(ColorConnected)
+	}
+}
+
+// gridWorkerLabel returns the team-scoped worker label used as a card headline
+// when the session has no task text. Mirrors the loader's ID construction,
+// avoiding a double "team/team/worker" prefix.
+func gridWorkerLabel(rs *runtimeSlot) string {
+	label := rs.workerName
+	if label == "" {
+		label = "runtime"
+	}
+	if rs.teamName != "" && !strings.HasPrefix(label, rs.teamName+"/") {
+		label = rs.teamName + "/" + label
+	}
+	return label
+}
+
+// gridActivityLines renders up to maxLines of recent activity for a card,
+// newest first, each prefixed with a dim gear so a tool call reads the same way
+// it does in the chat's tool blocks. A running session with no activity yet
+// shows a single dim placeholder.
+func gridActivityLines(rs *runtimeSlot, innerW int, indent string, maxLines int) []string {
+	if maxLines <= 0 {
+		return nil
+	}
+	if len(rs.activities) == 0 {
+		if rs.status == "active" {
+			return []string{DimStyle.Italic(true).Render(indent + "waiting for activity…")}
+		}
+		return nil
+	}
+	gear := lipgloss.NewStyle().Foreground(ColorPrimary).Render("⚙")
+	labelStyle := lipgloss.NewStyle().Foreground(ColorSecondary)
+	if rs.status != "active" {
+		labelStyle = DimStyle
+	}
+	maxLabelW := innerW - len(indent) - 2 // gear + space
+	if maxLabelW < 1 {
+		maxLabelW = 1
+	}
+	var out []string
+	for i := len(rs.activities) - 1; i >= 0 && len(out) < maxLines; i-- {
+		lbl := truncateStr(rs.activities[i].label, maxLabelW)
+		out = append(out, indent+gear+" "+labelStyle.Render(lbl))
+	}
+	return out
 }
 
 // workerCardMeta builds the compact provider/model · tokens · cost line shown
@@ -388,161 +393,6 @@ func commaInt(n int) string {
 		b.WriteString(s[i : i+3])
 	}
 	return b.String()
-}
-
-// renderContextBar renders a segmented progress bar showing context window usage.
-// The bar has two segments: system prompt tokens (dimmer) and conversation tokens
-// (gradient from green → yellow → red). When streaming, conversation cells pulse.
-// systemTokens is the estimated token count of the system prompt.
-func renderContextBar(used, systemTokens, total, width int, streaming bool, spinnerFrame int) string {
-	if width < 4 {
-		width = 4
-	}
-
-	var pct float64
-	var summary string
-	if total > 0 {
-		pct = float64(used) / float64(total)
-		if pct > 1 {
-			pct = 1
-		}
-		summary = fmt.Sprintf("%s / %s (%.0f%%)", commaInt(used), commaInt(total), pct*100)
-	} else {
-		summary = fmt.Sprintf("%s / ?", commaInt(used))
-	}
-
-	// Calculate system vs conversation segments.
-	var sysPct float64
-	if total > 0 && systemTokens > 0 {
-		sysPct = float64(systemTokens) / float64(total)
-		if sysPct > pct {
-			sysPct = pct // system can't exceed total used
-		}
-	}
-	sysFilled := int(sysPct * float64(width))
-	totalFilled := int(pct * float64(width))
-	convFilled := totalFilled - sysFilled
-	empty := width - totalFilled
-
-	// Gradient anchors: green → yellow (midpoint) → red.
-	type rgb struct{ r, g, b uint8 }
-	green := rgb{82, 196, 26}
-	yellow := rgb{250, 173, 20}
-	red := rgb{245, 34, 45}
-
-	// lerpRGB interpolates between two colors by t in [0,1].
-	lerpRGB := func(a, b rgb, t float64) rgb {
-		return rgb{
-			r: uint8(float64(a.r)*(1-t) + float64(b.r)*t),
-			g: uint8(float64(a.g)*(1-t) + float64(b.g)*t),
-			b: uint8(float64(a.b)*(1-t) + float64(b.b)*t),
-		}
-	}
-
-	sysStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-	emptyStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("237"))
-
-	var bar strings.Builder
-
-	// System prompt segment — dim solid fill.
-	bar.WriteString(sysStyle.Render(strings.Repeat("▓", sysFilled)))
-
-	// Conversation segment — gradient fill.
-	for i := range convFilled {
-		// t is position across the full bar width.
-		var t float64
-		if width > 1 {
-			t = float64(sysFilled+i) / float64(width-1)
-		}
-		var c rgb
-		if t < 0.5 {
-			c = lerpRGB(green, yellow, t*2)
-		} else {
-			c = lerpRGB(yellow, red, (t-0.5)*2)
-		}
-		cellChar := "█"
-		if streaming && i%2 == spinnerFrame%2 {
-			cellChar = "▓"
-		}
-		bar.WriteString(lipgloss.NewStyle().
-			Foreground(lipgloss.Color(fmt.Sprintf("#%02x%02x%02x", c.r, c.g, c.b))).
-			Render(cellChar))
-	}
-
-	// Empty segment.
-	bar.WriteString(emptyStyle.Render(strings.Repeat("░", empty)))
-
-	// Summary line with system/conversation breakdown.
-	var detail string
-	if systemTokens > 0 {
-		convTokens := used - systemTokens
-		if convTokens < 0 {
-			convTokens = 0
-		}
-		detail = fmt.Sprintf("sys ~%s · conv ~%s", commaInt(systemTokens), commaInt(convTokens))
-	}
-
-	lines := bar.String() + "\n" + DimStyle.Render(summary)
-	if detail != "" {
-		lines += "\n" + DimStyle.Render(detail)
-	}
-	return lines
-}
-
-// miniTokenBar returns a compact 8-char token usage bar with gradient coloring
-// and a compact token count suffix, e.g. "[████░░░░] 45k".
-// maxTokens is the reference ceiling (200k).
-func miniTokenBar(totalTokens int) string {
-	const barWidth = 8
-	const maxTokens = 200_000
-
-	pct := float64(totalTokens) / float64(maxTokens)
-	if pct > 1 {
-		pct = 1
-	}
-	filled := int(pct * barWidth)
-	if filled < 0 {
-		filled = 0
-	}
-	empty := barWidth - filled
-
-	// Gradient anchors: green → yellow (midpoint) → red.
-	type rgb struct{ r, g, b uint8 }
-	green := rgb{82, 196, 26}
-	yellow := rgb{250, 173, 20}
-	red := rgb{245, 34, 45}
-	lerpRGB := func(a, b rgb, t float64) rgb {
-		return rgb{
-			r: uint8(float64(a.r)*(1-t) + float64(b.r)*t),
-			g: uint8(float64(a.g)*(1-t) + float64(b.g)*t),
-			b: uint8(float64(a.b)*(1-t) + float64(b.b)*t),
-		}
-	}
-
-	emptyStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("237"))
-
-	var bar strings.Builder
-	bar.WriteString("[")
-	for i := range filled {
-		var t float64
-		if barWidth > 1 {
-			t = float64(i) / float64(barWidth-1)
-		}
-		var c rgb
-		if t < 0.5 {
-			c = lerpRGB(green, yellow, t*2)
-		} else {
-			c = lerpRGB(yellow, red, (t-0.5)*2)
-		}
-		bar.WriteString(lipgloss.NewStyle().
-			Foreground(lipgloss.Color(fmt.Sprintf("#%02x%02x%02x", c.r, c.g, c.b))).
-			Render("█"))
-	}
-	bar.WriteString(emptyStyle.Render(strings.Repeat("░", empty)))
-	bar.WriteString("] ")
-	bar.WriteString(compactNum(totalTokens))
-
-	return bar.String()
 }
 
 // renderReasoningBlock renders a chain-of-thought reasoning trace as a dimmed,
