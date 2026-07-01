@@ -692,6 +692,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.blockersSel >= len(m.blockers) {
 			m.blockersSel = 0
 		}
+		if m.blockersModal.sel >= len(m.blockers) {
+			m.blockersModal.sel = 0
+		}
 		return m, nil
 
 	case ChatResyncMsg:

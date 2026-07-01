@@ -225,6 +225,13 @@ var (
 				Background(lipgloss.Color("238")).
 				Bold(true)
 
+	// BlockerCountStyle styles the pending-count suffix in the Blockers pane
+	// title and the Blockers modal header. Orange to match the pane's title
+	// gradient and the "waiting on input" accents.
+	BlockerCountStyle = lipgloss.NewStyle().
+				Foreground(ColorStreaming).
+				Bold(true)
+
 	// TaskUpdatesPaneStyle styles the task updates section at the bottom of the right sidebar.
 	TaskUpdatesPaneStyle = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("237")).

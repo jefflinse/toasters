@@ -196,6 +196,103 @@ func TestRenderPromptModal_RendersWizard(t *testing.T) {
 	}
 }
 
+func TestRenderBlockersModal_TwoPanel(t *testing.T) {
+	t.Parallel()
+
+	m := newMinimalModel(t)
+	m.width = 140
+	m.height = 40
+	m.blockers = []service.Blocker{
+		{
+			RequestID: "r1",
+			Questions: []service.PromptQuestion{{Question: "What features should the system support?"}},
+			CreatedAt: time.Now().Add(-2 * time.Minute),
+		},
+		{
+			RequestID: "r2",
+			Source:    "graph:plan",
+			Questions: []service.PromptQuestion{
+				{Question: "Which path?", Options: []string{"left", "right"}},
+				{Question: "How deep?"},
+			},
+			CreatedAt: time.Now().Add(-30 * time.Second),
+		},
+	}
+	m.blockersModal = blockersModalState{show: true, sel: 1}
+
+	out := m.renderBlockersModal()
+	for _, want := range []string{
+		"2 waiting",                // count in the queue header
+		"node plan",                // selected blocker's attribution header
+		"Questions (2)",            // multi-question section header
+		"Which path?", "How deep?", // both questions in the detail panel
+		"○ left", "○ right", // options as bullets
+		"[Enter] Answer", "[x] Dismiss", // footer hints
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("modal output missing %q", want)
+		}
+	}
+}
+
+func TestRenderBlockersModal_Empty(t *testing.T) {
+	t.Parallel()
+
+	m := newMinimalModel(t)
+	m.width = 120
+	m.height = 40
+	m.blockersModal = blockersModalState{show: true}
+
+	out := m.renderBlockersModal()
+	if !strings.Contains(out, "No pending blockers") {
+		t.Error("empty modal should render the no-blockers state")
+	}
+}
+
+func TestBuildBlockersLines_CountAndMultiQuestion(t *testing.T) {
+	t.Parallel()
+
+	m := newMinimalModel(t)
+	m.blockers = []service.Blocker{
+		{
+			RequestID: "r1",
+			Questions: []service.PromptQuestion{{Question: "First?"}, {Question: "Second?"}, {Question: "Third?"}},
+			CreatedAt: time.Now().Add(-time.Minute),
+		},
+	}
+
+	joined := strings.Join(m.buildBlockersLines(60), "\n")
+	if !strings.Contains(joined, "1 waiting") {
+		t.Errorf("pane title missing pending count, got:\n%s", joined)
+	}
+	if !strings.Contains(joined, "First?") {
+		t.Errorf("pane missing first question, got:\n%s", joined)
+	}
+	if !strings.Contains(joined, "(+2 more)") {
+		t.Errorf("pane missing extra-question marker, got:\n%s", joined)
+	}
+}
+
+func TestCompactAge(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		ago  time.Duration
+		want string
+	}{
+		{5 * time.Second, "5s"},
+		{90 * time.Second, "1m"},
+		{45 * time.Minute, "45m"},
+		{3 * time.Hour, "3h"},
+		{50 * time.Hour, "2d"},
+	}
+	for _, tt := range tests {
+		if got := compactAge(time.Now().Add(-tt.ago)); got != tt.want {
+			t.Errorf("compactAge(-%v) = %q, want %q", tt.ago, got, tt.want)
+		}
+	}
+}
+
 func TestRenderSidebar_BlockerCounts(t *testing.T) {
 	t.Parallel()
 

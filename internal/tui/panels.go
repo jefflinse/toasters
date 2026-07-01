@@ -158,28 +158,43 @@ func (m Model) buildJobsLines(contentWidth int) []string {
 	return lines
 }
 
-// buildBlockersLines builds the Blockers pane content (title, blocker rows, hint).
+// buildBlockersLines builds the Blockers pane content (title with pending
+// count, two-line blocker rows, hint). Each blocker renders as an attribution
+// line (who's asking, about what, how long ago) and a question line so the
+// question isn't crowded out by the attribution.
 func (m Model) buildBlockersLines(contentWidth int) []string {
 	var lines []string
 	blockersTitle := gradientText("Blockers", [3]uint8{255, 175, 0}, [3]uint8{255, 90, 0})
 	if m.focused == focusBlockers {
 		blockersTitle = rainbowText("Blockers", m.spinnerFrame)
 	}
+	if n := len(m.blockers); n > 0 {
+		blockersTitle += BlockerCountStyle.Render(fmt.Sprintf(" · %d waiting", n))
+	}
 	lines = append(lines, blockersTitle)
 	if len(m.blockers) == 0 {
 		lines = append(lines, DimStyle.Italic(true).Render("No blockers"))
 	} else {
 		for i, b := range m.blockers {
+			selected := m.focused == focusBlockers && i == m.blockersSel
 			marker := "  "
-			if m.focused == focusBlockers && i == m.blockersSel {
+			if selected {
 				marker = "▶ "
 			}
-			label := m.blockerLabel(b) + ": " + blockerFirstQuestion(b)
-			line := "⛔ " + truncateStr(label, contentWidth-5)
-			if m.focused == focusBlockers && i == m.blockersSel {
-				lines = append(lines, BlockerSelectedStyle.Render(marker+line))
+			attr := "⛔ " + m.blockerLabel(b) + " · " + compactAge(b.CreatedAt)
+			question := blockerFirstQuestion(b)
+			if extra := len(b.Questions) - 1; extra > 0 {
+				question += fmt.Sprintf(" (+%d more)", extra)
+			}
+			attrLine := marker + truncateStr(attr, contentWidth-3)
+			questionLine := "     " + truncateStr(question, contentWidth-6)
+			if selected {
+				lines = append(lines,
+					BlockerSelectedStyle.Render(attrLine),
+					BlockerSelectedStyle.Render(questionLine),
+				)
 			} else {
-				lines = append(lines, marker+line)
+				lines = append(lines, attrLine, DimStyle.Render(questionLine))
 			}
 		}
 	}
