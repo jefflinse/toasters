@@ -522,10 +522,15 @@ func (st *SystemTools) dispatchGraphTask(ctx context.Context, task *db.Task, job
 		TaskTitle:       task.Title,
 		TaskDescription: task.Description,
 		GraphID:         graphID,
-		Siblings:        graphexec.FormatSiblingTitles(graphexec.SiblingTitles(allTasks, task.ID)),
-		WorkspaceDir:    job.WorkspaceDir,
-		ProviderName:    st.defaultProvider,
-		Model:           st.defaultModel,
+		// Recovers the toolchain fine-decompose chose for this task (persisted
+		// on task metadata) — this dispatch may be the serial-gate advance for
+		// a task that was pre-assigned earlier, not the initial dispatch, so
+		// the caller has no toolchain of its own to pass.
+		Toolchain:    db.ParseTaskMetadata(task.Metadata).Toolchain,
+		Siblings:     graphexec.FormatSiblingTitles(graphexec.SiblingTitles(allTasks, task.ID)),
+		WorkspaceDir: job.WorkspaceDir,
+		ProviderName: st.defaultProvider,
+		Model:        st.defaultModel,
 	}
 	go func() {
 		// Detach from the per-turn operator ctx, but stay scoped to the
@@ -661,10 +666,15 @@ func (st *SystemTools) retryTask(ctx context.Context, args json.RawMessage) (str
 		TaskTitle:       task.Title,
 		TaskDescription: task.Description,
 		GraphID:         graphID,
-		Siblings:        graphexec.FormatSiblingTitles(graphexec.SiblingTitles(allTasks, task.ID)),
-		WorkspaceDir:    job.WorkspaceDir,
-		ProviderName:    st.defaultProvider,
-		Model:           st.defaultModel,
+		// task was fetched before RetryTask reset its status; RetryTask never
+		// touches the metadata column, so the toolchain fine-decompose chose
+		// at initial dispatch is still there — recover it rather than
+		// dropping it, or slot-bound roles fail to compose on retry.
+		Toolchain:    db.ParseTaskMetadata(task.Metadata).Toolchain,
+		Siblings:     graphexec.FormatSiblingTitles(graphexec.SiblingTitles(allTasks, task.ID)),
+		WorkspaceDir: job.WorkspaceDir,
+		ProviderName: st.defaultProvider,
+		Model:        st.defaultModel,
 	}
 	go func() {
 		if err := st.graphExecutor.ExecuteTask(st.lifetimeCtx, req); err != nil {

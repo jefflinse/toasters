@@ -3,6 +3,7 @@ package db
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 )
 
@@ -90,6 +91,43 @@ type Task struct {
 	Metadata        json.RawMessage // extensible JSON blob
 	ResultSummary   string          // structured result summary
 	Recommendations string          // structured recommendations
+}
+
+// TaskMetadata is the JSON shape stored in Task.Metadata for real
+// (non-bootstrap) tasks. It currently carries only the toolchain chosen by
+// fine-decompose, which slot-bound roles need via the `task.toolchain`
+// artifact. Dispatch sites that rebuild a graphexec.TaskRequest after the
+// task's initial dispatch — retry, serial-gate advance, and pre-assignment —
+// read it back from here rather than losing it.
+type TaskMetadata struct {
+	Toolchain string `json:"toolchain,omitempty"`
+}
+
+// MarshalTaskMetadata encodes m for storage on Task.Metadata. Returns nil
+// (not "{}") for the zero value so tasks that don't need metadata keep a
+// NULL column.
+func MarshalTaskMetadata(m TaskMetadata) (json.RawMessage, error) {
+	if m == (TaskMetadata{}) {
+		return nil, nil
+	}
+	b, err := json.Marshal(m)
+	if err != nil {
+		return nil, fmt.Errorf("marshaling task metadata: %w", err)
+	}
+	return json.RawMessage(b), nil
+}
+
+// ParseTaskMetadata decodes a task's Metadata column. Empty or malformed
+// metadata yields the zero value — callers treat "no toolchain recorded" as
+// a normal, if degraded, case rather than an error, since not every task
+// (or every graph) needs one.
+func ParseTaskMetadata(raw json.RawMessage) TaskMetadata {
+	var m TaskMetadata
+	if len(raw) == 0 {
+		return m
+	}
+	_ = json.Unmarshal(raw, &m)
+	return m
 }
 
 // ProgressReport records a point-in-time status update for a job or task.

@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	"github.com/jefflinse/toasters/internal/db"
@@ -91,7 +92,10 @@ func (s *noopStore) UpdateTaskResult(_ context.Context, _, _, _ string) error { 
 func (s *noopStore) AssignTaskToGraph(_ context.Context, _, _ string) error   { return nil }
 func (s *noopStore) PreAssignTaskGraph(_ context.Context, _, _ string) error  { return nil }
 func (s *noopStore) RetryTask(_ context.Context, _, _ string) error           { return nil }
-func (s *noopStore) AddTaskDependency(_ context.Context, _, _ string) error   { return nil }
+func (s *noopStore) SetTaskMetadata(_ context.Context, _ string, _ json.RawMessage) error {
+	return nil
+}
+func (s *noopStore) AddTaskDependency(_ context.Context, _, _ string) error { return nil }
 func (s *noopStore) GetReadyTasks(_ context.Context, _ string) ([]*db.Task, error) {
 	return nil, nil
 }

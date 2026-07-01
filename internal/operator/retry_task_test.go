@@ -60,6 +60,43 @@ func TestRetryTask_RerunsFailedTaskInPlace(t *testing.T) {
 	}
 }
 
+// TestRetryTask_PropagatesToolchainFromMetadata reproduces issue #31: a task
+// dispatched by fine-decompose with a toolchain (e.g. "go") must not lose it
+// on retry_task, or slot resolution for `slots: { toolchain: "{{
+// task.toolchain }}" }` hard-errors with "has no value in task data" —
+// retryTask rebuilds the TaskRequest from the task row, and the toolchain is
+// otherwise only ever carried by the original dispatch call, never the row.
+func TestRetryTask_PropagatesToolchainFromMetadata(t *testing.T) {
+	ctx := context.Background()
+	st, store, gExec, workDir := newTestSystemToolsWithCatalog(t, []*graphexec.Definition{
+		{ID: "bug-fix", Name: "Bug Fix"},
+	})
+	_, taskID := seedGraphJob(t, ctx, store, workDir)
+	failTask(t, ctx, store, taskID, "bug-fix")
+
+	meta, err := db.MarshalTaskMetadata(db.TaskMetadata{Toolchain: "go"})
+	if err != nil {
+		t.Fatalf("MarshalTaskMetadata: %v", err)
+	}
+	if err := store.SetTaskMetadata(ctx, taskID, meta); err != nil {
+		t.Fatalf("SetTaskMetadata: %v", err)
+	}
+
+	args, _ := json.Marshal(map[string]string{"task_id": taskID})
+	if _, err := st.Execute(ctx, "retry_task", args); err != nil {
+		t.Fatalf("retry_task: %v", err)
+	}
+
+	gExec.waitForGraphCall(t)
+	calls := gExec.getCalls()
+	if len(calls) != 1 {
+		t.Fatalf("ExecuteTask called %d times, want 1", len(calls))
+	}
+	if calls[0].Toolchain != "go" {
+		t.Errorf("dispatched Toolchain = %q, want %q (lost on retry)", calls[0].Toolchain, "go")
+	}
+}
+
 func TestRetryTask_RejectsNonFailedTask(t *testing.T) {
 	ctx := context.Background()
 	st, store, gExec, workDir := newTestSystemToolsWithCatalog(t, []*graphexec.Definition{

@@ -326,7 +326,20 @@ func resolveSlotValues(slots, artifacts, instructions map[string]string) (map[st
 			fullKey := category + "." + key
 			resolved, ok := artifacts[fullKey]
 			if !ok || resolved == "" {
-				return nil, fmt.Errorf("slot %q: reference %q has no value in task data", name, value)
+				if fullKey == "task.toolchain" {
+					return nil, fmt.Errorf(
+						"slot %q: reference %q has no value in task data — this role binds a "+
+							"toolchain slot but the dispatch that started this task carried no "+
+							"Toolchain (TaskRequest.Toolchain empty). Toolchain is chosen by "+
+							"fine-decompose and must be persisted on the task and recovered by "+
+							"every re-dispatch path (initial assign, retry, serial-gate advance)",
+						name, value)
+				}
+				return nil, fmt.Errorf(
+					"slot %q: reference %q has no value in task data — the dispatch that "+
+						"started this task did not set a %q artifact; check the TaskRequest "+
+						"built by whichever code path dispatched it",
+					name, value, fullKey)
 			}
 			out[name] = resolved
 		}
