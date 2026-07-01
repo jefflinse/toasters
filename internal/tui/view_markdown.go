@@ -91,7 +91,7 @@ func toastersStyle() ansi.StyleConfig {
 }
 
 // ensureMarkdownRenderer creates or recreates the glamour renderer for the current width.
-// It also recreates outputMdRender sized for the fullscreen output modal.
+// It also recreates outputMdRender sized for the fullscreen cockpit overlay.
 func (m *Model) ensureMarkdownRenderer() {
 	w := m.chatViewport.Width() - AssistantMsgIndent
 	if w < 1 {
@@ -105,7 +105,7 @@ func (m *Model) ensureMarkdownRenderer() {
 		m.mdRender = r
 	}
 
-	// Output modal renderer: sized for the fullscreen modal inner width.
+	// Cockpit renderer: sized for the fullscreen overlay's inner width.
 	// Modal is m.width-4 wide; inner width after border+padding is m.width-8.
 	outputW := m.width - 8
 	if outputW < 40 {

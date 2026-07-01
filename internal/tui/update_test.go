@@ -24,10 +24,10 @@ func ctrlKey(ch rune) tea.KeyPressMsg {
 }
 
 // --------------------------------------------------------------------------
-// updatePromptModal tests
+// updateCockpit tests
 // --------------------------------------------------------------------------
 
-func TestUpdatePromptModal_Dismiss(t *testing.T) {
+func TestUpdateCockpit_Dismiss(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -35,23 +35,25 @@ func TestUpdatePromptModal_Dismiss(t *testing.T) {
 		key  tea.KeyPressMsg
 	}{
 		{"esc dismisses", specialKey(tea.KeyEscape)},
-		{"p dismisses", keyPress('p')},
 		{"q dismisses", keyPress('q')},
+		{"ctrl+g dismisses", ctrlKey('g')},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			m := newMinimalModel(t)
-			m.promptModal.show = true
-			m.promptModal.content = "some prompt"
-			m.promptModal.scroll = 5
+			m.cockpit.show = true
+			m.cockpit.sessionID = "sess-1"
 
-			result, cmd := m.updatePromptModal(tt.key)
+			result, cmd := m.updateCockpit(tt.key)
 			got := result.(*Model)
 
-			if got.promptModal.show {
-				t.Error("showPromptModal should be false after dismiss")
+			if got.cockpit.show {
+				t.Error("cockpit.show should be false after dismiss")
+			}
+			if got.cockpit.sessionID != "" {
+				t.Error("cockpit.sessionID should be cleared on dismiss")
 			}
 			if cmd != nil {
 				t.Error("expected nil cmd on dismiss")
@@ -60,264 +62,128 @@ func TestUpdatePromptModal_Dismiss(t *testing.T) {
 	}
 }
 
-func TestUpdatePromptModal_ScrollDown(t *testing.T) {
+func TestUpdateCockpit_TabSwitch(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name string
-		key  tea.KeyPressMsg
+		name  string
+		start cockpitTab
+		key   tea.KeyPressMsg
+		want  cockpitTab
 	}{
-		{"down scrolls down", specialKey(tea.KeyDown)},
-		{"j scrolls down", keyPress('j')},
+		{"tab cycles forward", cockpitTabOutput, specialKey(tea.KeyTab), cockpitTabPrompt},
+		{"tab wraps", cockpitTabStats, specialKey(tea.KeyTab), cockpitTabOutput},
+		{"right cycles forward", cockpitTabOutput, keyPress('l'), cockpitTabPrompt},
+		{"left cycles back", cockpitTabPrompt, keyPress('h'), cockpitTabOutput},
+		{"left wraps", cockpitTabOutput, keyPress('h'), cockpitTabStats},
+		{"1 selects output", cockpitTabStats, keyPress('1'), cockpitTabOutput},
+		{"2 selects prompt", cockpitTabOutput, keyPress('2'), cockpitTabPrompt},
+		{"3 selects stats", cockpitTabOutput, keyPress('3'), cockpitTabStats},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			m := newMinimalModel(t)
-			m.promptModal.show = true
-			m.promptModal.scroll = 3
+			m.cockpit.show = true
+			m.cockpit.tab = tt.start
 
-			result, _ := m.updatePromptModal(tt.key)
+			result, _ := m.updateCockpit(tt.key)
 			got := result.(*Model)
 
-			if got.promptModal.scroll != 4 {
-				t.Errorf("promptModalScroll = %d, want 4", got.promptModal.scroll)
+			if got.cockpit.tab != tt.want {
+				t.Errorf("tab = %d, want %d", got.cockpit.tab, tt.want)
 			}
 		})
 	}
 }
 
-func TestUpdatePromptModal_ScrollUp(t *testing.T) {
+func TestUpdateCockpit_Scroll(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
-		name       string
-		key        tea.KeyPressMsg
-		startAt    int
-		wantScroll int
-	}{
-		{"up scrolls up from 3", specialKey(tea.KeyUp), 3, 2},
-		{"k scrolls up from 3", keyPress('k'), 3, 2},
-		{"up at 0 stays at 0", specialKey(tea.KeyUp), 0, 0},
-		{"k at 0 stays at 0", keyPress('k'), 0, 0},
-	}
+	t.Run("down increments active tab scroll", func(t *testing.T) {
+		t.Parallel()
+		m := newMinimalModel(t)
+		m.cockpit.show = true
+		m.cockpit.tab = cockpitTabPrompt
+		m.cockpit.scroll[cockpitTabPrompt] = 3
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			m := newMinimalModel(t)
-			m.promptModal.show = true
-			m.promptModal.scroll = tt.startAt
+		result, _ := m.updateCockpit(keyPress('j'))
+		got := result.(*Model)
 
-			result, _ := m.updatePromptModal(tt.key)
-			got := result.(*Model)
+		if got.cockpit.scroll[cockpitTabPrompt] != 4 {
+			t.Errorf("scroll = %d, want 4", got.cockpit.scroll[cockpitTabPrompt])
+		}
+	})
 
-			if got.promptModal.scroll != tt.wantScroll {
-				t.Errorf("promptModalScroll = %d, want %d", got.promptModal.scroll, tt.wantScroll)
-			}
-		})
-	}
+	t.Run("up on output sets userScrolled", func(t *testing.T) {
+		t.Parallel()
+		m := newMinimalModel(t)
+		m.cockpit.show = true
+		m.cockpit.tab = cockpitTabOutput
+		m.cockpit.scroll[cockpitTabOutput] = 5
+
+		result, _ := m.updateCockpit(keyPress('k'))
+		got := result.(*Model)
+
+		if got.cockpit.scroll[cockpitTabOutput] != 4 {
+			t.Errorf("scroll = %d, want 4", got.cockpit.scroll[cockpitTabOutput])
+		}
+		if !got.cockpit.userScrolled {
+			t.Error("expected userScrolled to be set after scrolling up on the Output tab")
+		}
+	})
+
+	t.Run("G re-enables output auto-tail", func(t *testing.T) {
+		t.Parallel()
+		m := newMinimalModel(t)
+		m.cockpit.show = true
+		m.cockpit.tab = cockpitTabOutput
+		m.cockpit.userScrolled = true
+
+		result, _ := m.updateCockpit(keyPress('G'))
+		got := result.(*Model)
+
+		if got.cockpit.userScrolled {
+			t.Error("expected userScrolled to be cleared after jumping to bottom")
+		}
+		if got.cockpit.scroll[cockpitTabOutput] != scrollBottom {
+			t.Errorf("scroll = %d, want scrollBottom", got.cockpit.scroll[cockpitTabOutput])
+		}
+	})
+
+	t.Run("scroll does not go below zero", func(t *testing.T) {
+		t.Parallel()
+		m := newMinimalModel(t)
+		m.cockpit.show = true
+		m.cockpit.tab = cockpitTabStats
+		m.cockpit.scroll[cockpitTabStats] = 0
+
+		result, _ := m.updateCockpit(keyPress('k'))
+		got := result.(*Model)
+
+		if got.cockpit.scroll[cockpitTabStats] != 0 {
+			t.Errorf("scroll = %d, want 0 (clamped)", got.cockpit.scroll[cockpitTabStats])
+		}
+	})
 }
 
-func TestUpdatePromptModal_HalfPageScroll(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name       string
-		key        tea.KeyPressMsg
-		startAt    int
-		wantScroll int
-	}{
-		{"ctrl+d scrolls down 10", ctrlKey('d'), 5, 15},
-		{"ctrl+u scrolls up 10", ctrlKey('u'), 15, 5},
-		{"ctrl+u clamps to 0", ctrlKey('u'), 3, 0},
-		{"ctrl+u from 0 stays at 0", ctrlKey('u'), 0, 0},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			m := newMinimalModel(t)
-			m.promptModal.show = true
-			m.promptModal.scroll = tt.startAt
-
-			result, _ := m.updatePromptModal(tt.key)
-			got := result.(*Model)
-
-			if got.promptModal.scroll != tt.wantScroll {
-				t.Errorf("promptModalScroll = %d, want %d", got.promptModal.scroll, tt.wantScroll)
-			}
-		})
-	}
-}
-
-func TestUpdatePromptModal_UnhandledKey(t *testing.T) {
+func TestUpdateCockpit_UnhandledKey(t *testing.T) {
 	t.Parallel()
 
 	m := newMinimalModel(t)
-	m.promptModal.show = true
-	m.promptModal.scroll = 5
+	m.cockpit.show = true
+	m.cockpit.tab = cockpitTabOutput
+	m.cockpit.scroll[cockpitTabOutput] = 5
 
-	result, cmd := m.updatePromptModal(keyPress('x'))
+	result, cmd := m.updateCockpit(keyPress('z'))
 	got := result.(*Model)
 
-	// Unhandled key should not change state.
-	if got.promptModal.scroll != 5 {
-		t.Errorf("promptModalScroll = %d, want 5 (unchanged)", got.promptModal.scroll)
+	if !got.cockpit.show {
+		t.Error("cockpit.show should remain true for unhandled key")
 	}
-	if !got.promptModal.show {
-		t.Error("showPromptModal should remain true for unhandled key")
-	}
-	if cmd != nil {
-		t.Error("expected nil cmd for unhandled key")
-	}
-}
-
-// --------------------------------------------------------------------------
-// updateOutputModal tests
-// --------------------------------------------------------------------------
-
-func TestUpdateOutputModal_Dismiss(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name string
-		key  tea.KeyPressMsg
-	}{
-		{"esc dismisses", specialKey(tea.KeyEscape)},
-		{"o dismisses", keyPress('o')},
-		{"q dismisses", keyPress('q')},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			m := newMinimalModel(t)
-			m.outputModal.show = true
-			m.outputModal.content = "some output"
-			m.outputModal.scroll = 5
-
-			result, cmd := m.updateOutputModal(tt.key)
-			got := result.(*Model)
-
-			if got.outputModal.show {
-				t.Error("showOutputModal should be false after dismiss")
-			}
-			if cmd != nil {
-				t.Error("expected nil cmd on dismiss")
-			}
-		})
-	}
-}
-
-func TestUpdateOutputModal_ScrollDown(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name string
-		key  tea.KeyPressMsg
-	}{
-		{"down scrolls down", specialKey(tea.KeyDown)},
-		{"j scrolls down", keyPress('j')},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			m := newMinimalModel(t)
-			m.outputModal.show = true
-			m.outputModal.scroll = 3
-
-			result, _ := m.updateOutputModal(tt.key)
-			got := result.(*Model)
-
-			if got.outputModal.scroll != 4 {
-				t.Errorf("outputModalScroll = %d, want 4", got.outputModal.scroll)
-			}
-		})
-	}
-}
-
-func TestUpdateOutputModal_ScrollUp(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name       string
-		key        tea.KeyPressMsg
-		startAt    int
-		wantScroll int
-	}{
-		{"up scrolls up from 3", specialKey(tea.KeyUp), 3, 2},
-		{"k scrolls up from 3", keyPress('k'), 3, 2},
-		{"up at 0 stays at 0", specialKey(tea.KeyUp), 0, 0},
-		{"k at 0 stays at 0", keyPress('k'), 0, 0},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			m := newMinimalModel(t)
-			m.outputModal.show = true
-			m.outputModal.scroll = tt.startAt
-
-			result, _ := m.updateOutputModal(tt.key)
-			got := result.(*Model)
-
-			if got.outputModal.scroll != tt.wantScroll {
-				t.Errorf("outputModalScroll = %d, want %d", got.outputModal.scroll, tt.wantScroll)
-			}
-		})
-	}
-}
-
-func TestUpdateOutputModal_HalfPageScroll(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name       string
-		key        tea.KeyPressMsg
-		startAt    int
-		wantScroll int
-	}{
-		{"ctrl+d scrolls down 10", ctrlKey('d'), 5, 15},
-		{"ctrl+u scrolls up 10", ctrlKey('u'), 15, 5},
-		{"ctrl+u clamps to 0", ctrlKey('u'), 3, 0},
-		{"ctrl+u from 0 stays at 0", ctrlKey('u'), 0, 0},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			m := newMinimalModel(t)
-			m.outputModal.show = true
-			m.outputModal.scroll = tt.startAt
-
-			result, _ := m.updateOutputModal(tt.key)
-			got := result.(*Model)
-
-			if got.outputModal.scroll != tt.wantScroll {
-				t.Errorf("outputModalScroll = %d, want %d", got.outputModal.scroll, tt.wantScroll)
-			}
-		})
-	}
-}
-
-func TestUpdateOutputModal_UnhandledKey(t *testing.T) {
-	t.Parallel()
-
-	m := newMinimalModel(t)
-	m.outputModal.show = true
-	m.outputModal.scroll = 5
-
-	result, cmd := m.updateOutputModal(keyPress('x'))
-	got := result.(*Model)
-
-	if got.outputModal.scroll != 5 {
-		t.Errorf("outputModalScroll = %d, want 5 (unchanged)", got.outputModal.scroll)
-	}
-	if !got.outputModal.show {
-		t.Error("showOutputModal should remain true for unhandled key")
+	if got.cockpit.scroll[cockpitTabOutput] != 5 {
+		t.Errorf("scroll = %d, want 5 (unchanged)", got.cockpit.scroll[cockpitTabOutput])
 	}
 	if cmd != nil {
 		t.Error("expected nil cmd for unhandled key")
@@ -549,9 +415,9 @@ func TestUpdateGrid_EnterWithNoSession(t *testing.T) {
 	result, cmd := m.updateGrid(specialKey(tea.KeyEnter))
 	got := result.(*Model)
 
-	// Should not panic with no session, and should not open output modal.
-	if got.outputModal.show {
-		t.Error("showOutputModal should be false when no session is focused")
+	// Should not panic with no session, and should not open the cockpit.
+	if got.cockpit.show {
+		t.Error("cockpit should not open when no session is focused")
 	}
 	if cmd != nil {
 		t.Error("expected nil cmd when no session is focused")
@@ -568,9 +434,9 @@ func TestUpdateGrid_PromptWithNoSession(t *testing.T) {
 	result, cmd := m.updateGrid(keyPress('p'))
 	got := result.(*Model)
 
-	// Should not panic with no session, and should not open prompt modal.
-	if got.promptModal.show {
-		t.Error("showPromptModal should be false when no session is focused")
+	// Should not panic with no session, and should not open the cockpit.
+	if got.cockpit.show {
+		t.Error("cockpit should not open when no session is focused")
 	}
 	if cmd != nil {
 		t.Error("expected nil cmd when no session is focused")

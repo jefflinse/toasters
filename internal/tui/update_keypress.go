@@ -64,14 +64,9 @@ func (m *Model) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.updatePromptMode(msg)
 	}
 
-	// When the prompt modal is visible, intercept all keys before any other handling.
-	if m.promptModal.show {
-		return m.updatePromptModal(msg)
-	}
-
-	// When the output modal is visible, intercept all keys before grid navigation.
-	if m.outputModal.show {
-		return m.updateOutputModal(msg)
+	// When the cockpit overlay is visible, intercept all keys before grid navigation.
+	if m.cockpit.show {
+		return m.updateCockpit(msg)
 	}
 
 	// When the grid screen is visible, handle navigation and dismiss it.

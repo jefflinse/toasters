@@ -9,69 +9,6 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
-// updatePromptModal handles key events when the prompt modal is visible.
-func (m *Model) updatePromptModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "esc", "p", "q":
-		m.promptModal.show = false
-		return m, nil
-	case "up", "k":
-		if m.promptModal.scroll > 0 {
-			m.promptModal.scroll--
-		}
-		return m, nil
-	case "down", "j":
-		m.promptModal.scroll++
-		return m, nil
-	case "ctrl+u":
-		m.promptModal.scroll -= 10
-		if m.promptModal.scroll < 0 {
-			m.promptModal.scroll = 0
-		}
-		return m, nil
-	case "ctrl+d":
-		m.promptModal.scroll += 10
-		return m, nil
-	}
-	return m, nil
-}
-
-// updateOutputModal handles key events when the output modal is visible.
-// Any upward movement sets userScrolled so new session events don't yank the
-// view back to the bottom; the view-path clamp (renderOutputModal) is what
-// ultimately bounds the forward-moving keys.
-func (m *Model) updateOutputModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "esc", "o", "q":
-		m.outputModal.show = false
-		m.outputModal.sessionID = ""
-		m.outputModal.userScrolled = false
-	case "up", "k":
-		if m.outputModal.scroll > 0 {
-			m.outputModal.scroll--
-			m.outputModal.userScrolled = true
-		}
-	case "down", "j":
-		m.outputModal.scroll++
-	case "ctrl+u":
-		m.outputModal.scroll -= 10
-		if m.outputModal.scroll < 0 {
-			m.outputModal.scroll = 0
-		}
-		m.outputModal.userScrolled = true
-	case "ctrl+d":
-		m.outputModal.scroll += 10
-	case "g":
-		m.outputModal.scroll = 0
-		m.outputModal.userScrolled = true
-	case "G", "end":
-		// Jump to bottom; renderOutputModal will clamp to maxScroll.
-		m.outputModal.scroll = 1 << 30
-		m.outputModal.userScrolled = false
-	}
-	return m, nil
-}
-
 // updateGrid handles key events when the grid screen is visible.
 func (m *Model) updateGrid(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	cols := m.grid.gridCols
@@ -118,45 +55,22 @@ func (m *Model) updateGrid(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case "enter":
-		// Enter confirms a pending kill before its normal output-modal role.
+		// Enter confirms a pending kill before its normal cockpit role.
 		if m.grid.confirmKill {
 			sid := m.grid.confirmKillSessionID
 			m.grid.confirmKill = false
 			m.grid.confirmKillSessionID = ""
 			return m, m.killWorkerSession(sid)
 		}
-		// Check for runtime session in this cell.
+		// Open the cockpit on the focused session's Output tab.
 		if rs := m.runtimeSessionForGridCell(m.grid.gridFocusCell); rs != nil {
-			output := rs.outputText()
-			if output != "" {
-				m.outputModal.show = true
-				m.outputModal.content = output
-				m.outputModal.scroll = len(strings.Split(output, "\n")) // auto-tail: start at bottom
-				m.outputModal.sessionID = rs.sessionID
-				m.outputModal.userScrolled = false
-			}
+			m.openCockpit(rs.sessionID, cockpitTabOutput)
 		}
 		return m, nil
 	case "p":
-		// Check for runtime session in this cell.
+		// Open the cockpit on the focused session's Prompt tab.
 		if rs := m.runtimeSessionForGridCell(m.grid.gridFocusCell); rs != nil {
-			// Build a combined prompt view: system prompt + initial message.
-			var promptContent strings.Builder
-			if rs.systemPrompt != "" {
-				promptContent.WriteString("=== System Prompt ===\n\n")
-				promptContent.WriteString(rs.systemPrompt)
-				promptContent.WriteString("\n\n")
-			}
-			if rs.initialMessage != "" {
-				promptContent.WriteString("=== Initial Message ===\n\n")
-				promptContent.WriteString(rs.initialMessage)
-			}
-			content := promptContent.String()
-			if content != "" {
-				m.promptModal.show = true
-				m.promptModal.content = content
-				m.promptModal.scroll = 0
-			}
+			m.openCockpit(rs.sessionID, cockpitTabPrompt)
 		}
 		return m, nil
 	case "[":

@@ -44,7 +44,7 @@ type Model struct {
 	stats          SessionStats
 	err            error
 	mdRender       *glamour.TermRenderer
-	outputMdRender *glamour.TermRenderer // separate renderer sized for the fullscreen output modal
+	outputMdRender *glamour.TermRenderer // separate renderer sized for the fullscreen cockpit overlay
 	// jobsPaneMdRender renders worker output in the Jobs modal's graph
 	// pane. The pane has its own width (different from the chat and the
 	// fullscreen modal) and resizes with the layout, so it gets its own
@@ -54,10 +54,10 @@ type Model struct {
 	jobsPaneMdRenderWidth int
 
 	// Sub-models grouping related state.
-	stream      streamingState
-	grid        gridState
-	prompt      promptModeState
-	promptModal promptModalState
+	stream  streamingState
+	grid    gridState
+	prompt  promptModeState
+	cockpit cockpitState
 
 	// Blockers panel: pending ask_user requests queued for the user to answer
 	// on their own schedule. blockersSel is the cursor in the panel;
@@ -66,11 +66,10 @@ type Model struct {
 	blockersSel   int
 	blockersModal blockersModalState
 
-	outputModal outputModalState
-	cmdPopup    cmdPopupState
-	scroll      scrollState
-	progress    progressState
-	chat        chatState
+	cmdPopup cmdPopupState
+	scroll   scrollState
+	progress progressState
+	chat     chatState
 
 	jobs        []service.Job
 	selectedJob int
@@ -446,7 +445,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		slot.appendText(msg.Text)
 		m.appendWorkerStreamText(slot, msg.Text)
-		m.refreshOutputModalIfShowing(msg.SessionID, slot)
+		m.refreshCockpitAutoTail(msg.SessionID)
 		m.updateViewportContent()
 		if !m.scroll.userScrolled {
 			m.chatViewport.GotoBottom()
@@ -480,7 +479,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		slot.reasoning.WriteString(msg.Text)
-		m.refreshOutputModalIfShowing(msg.SessionID, slot)
+		m.refreshCockpitAutoTail(msg.SessionID)
 		return m, nil
 
 	case SessionToolCallMsg:
@@ -497,7 +496,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.appendWorkerStreamToolCall(slot, msg.ToolID, msg.ToolName, json.RawMessage(msg.ToolInput))
 		}
-		m.refreshOutputModalIfShowing(msg.SessionID, slot)
+		m.refreshCockpitAutoTail(msg.SessionID)
 		m.updateViewportContent()
 		if !m.scroll.userScrolled {
 			m.chatViewport.GotoBottom()
@@ -515,7 +514,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		slot.completeTool(msg.CallID, msg.ToolName, result, msg.IsError)
 		m.appendWorkerStreamToolResult(slot, msg.CallID, msg.ToolName, result, msg.IsError)
-		m.refreshOutputModalIfShowing(msg.SessionID, slot)
+		m.refreshCockpitAutoTail(msg.SessionID)
 		m.updateViewportContent()
 		if !m.scroll.userScrolled {
 			m.chatViewport.GotoBottom()

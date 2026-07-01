@@ -122,17 +122,9 @@ func (m *Model) View() tea.View {
 	// Grid screen takes over the full terminal.
 	if m.grid.showGrid {
 		gridView := m.renderGrid()
-		if m.promptModal.show {
-			overlaid, clampedScroll := m.renderScrollableModal("Prompt", m.promptModal.content, m.promptModal.scroll)
-			m.promptModal.scroll = clampedScroll
-
-			v := tea.NewView(overlaid)
-			v.AltScreen = true
-			v.MouseMode = tea.MouseModeCellMotion
-			return v
-		} else if m.outputModal.show {
-			overlaid, clampedScroll := m.renderOutputModal("Output", m.outputModal.content, m.outputModal.scroll)
-			m.outputModal.scroll = clampedScroll
+		if m.cockpit.show {
+			overlaid, clampedScroll := m.renderCockpit()
+			m.cockpit.scroll[m.cockpit.tab] = clampedScroll
 
 			v := tea.NewView(overlaid)
 			v.AltScreen = true

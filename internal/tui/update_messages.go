@@ -158,8 +158,7 @@ func (m *Model) handleMouseClick(msg tea.MouseClickMsg) (tea.Model, tea.Cmd) {
 	// Don't steal clicks when any overlay is active.
 	if !m.skillsModal.show &&
 		!m.mcpModal.show && !m.catalogModal.show && !m.operatorModal.show &&
-		!m.grid.showGrid &&
-		!m.promptModal.show && !m.outputModal.show && !m.loading {
+		!m.grid.showGrid && !m.loading {
 		if m.shouldShowLeftPanel() && msg.X < m.lpWidth {
 			// Clicked left panel — determine which of the three panes was
 			// clicked. Pane order (top to bottom): Jobs, Fleet, Blockers.

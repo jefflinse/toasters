@@ -70,20 +70,29 @@ type blockersModalState struct {
 	sel  int // cursor index into m.blockers
 }
 
-// promptModalState holds all state for the prompt-viewing modal overlay.
-type promptModalState struct {
-	show    bool
-	content string // the full prompt text being displayed
-	scroll  int    // scroll offset in lines
-}
+// cockpitTab identifies which pane of the worker cockpit is shown.
+type cockpitTab int
 
-// outputModalState holds all state for the output-viewing modal overlay.
-type outputModalState struct {
-	show         bool
-	content      string // the full output text being displayed
-	scroll       int    // scroll offset in lines
-	sessionID    string // runtime session ID being viewed
-	userScrolled bool   // true when the user has scrolled away from the bottom; suppresses auto-tail on new events
+const (
+	cockpitTabOutput cockpitTab = iota
+	cockpitTabPrompt
+	cockpitTabStats
+	cockpitTabCount // sentinel: number of tabs
+)
+
+// cockpitState holds the worker-detail cockpit: a tabbed, scrollable, near-
+// fullscreen overlay showing one runtime session's live output, its prompt, and
+// its stats. Opened from the grid drill-in; it replaces the separate output and
+// prompt modals so a session is inspected on one surface.
+type cockpitState struct {
+	show      bool
+	sessionID string     // runtime session ID being viewed
+	tab       cockpitTab // active tab
+	// scroll is the per-tab scroll offset so switching tabs preserves position.
+	scroll [cockpitTabCount]int
+	// userScrolled suppresses the Output tab's auto-tail once the user scrolls
+	// up, so live events don't yank the view back to the bottom.
+	userScrolled bool
 }
 
 // cmdPopupState holds all state for the slash command autocomplete popup.

@@ -63,53 +63,6 @@ type runtimeSlot struct {
 	thinking    bool
 }
 
-// refreshOutputModalIfShowing updates the output modal's content if it is
-// currently displaying the given session, and applies an auto-tail policy.
-// Called from session text/reasoning/tool_call/tool_result message handlers.
-//
-// Auto-tail only fires when the user hasn't scrolled back (userScrolled=false).
-// Line counting uses the same markdown-rendered view the render path sees, so
-// the clamp matches what the user is actually looking at — an earlier bug
-// computed bounds on raw content lines and yanked the scroll position around
-// whenever markdown expansion changed the line count.
-func (m *Model) refreshOutputModalIfShowing(sessionID string, slot *runtimeSlot) {
-	if !m.outputModal.show || m.outputModal.sessionID != sessionID {
-		return
-	}
-	m.outputModal.content = composeSlotContent(slot)
-	if m.outputModal.userScrolled {
-		return
-	}
-	allLines := m.outputModalLines(m.outputModal.content)
-	_, visibleH := m.outputModalDims()
-	maxScroll := len(allLines) - visibleH
-	if maxScroll < 0 {
-		maxScroll = 0
-	}
-	m.outputModal.scroll = maxScroll
-}
-
-// composeSlotContent returns the runtime slot's rendered body for the
-// output modal. When the underlying provider emitted reasoning, a
-// dimmed "⟳ thinking" section is prepended above the regular output;
-// otherwise the output is returned verbatim.
-func composeSlotContent(slot *runtimeSlot) string {
-	out := slot.outputText()
-	reasoning := slot.reasoning.String()
-	if reasoning == "" {
-		return out
-	}
-	var b strings.Builder
-	b.WriteString(ReasoningHeaderStyle.Render("⟳ thinking"))
-	b.WriteString("\n")
-	b.WriteString(ReasoningStyle.Render(reasoning))
-	if out != "" {
-		b.WriteString("\n\n")
-		b.WriteString(out)
-	}
-	return b.String()
-}
-
 // extractFrontmatterName extracts the name: field from a YAML frontmatter block.
 // Returns empty string if not found. Used to get the name from generated definition content.
 func extractFrontmatterName(content string) string {

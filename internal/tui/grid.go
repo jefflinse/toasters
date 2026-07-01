@@ -130,7 +130,7 @@ func (m *Model) renderGrid() string {
 		))
 	default:
 		bar := fmt.Sprintf(
-			"  arrows: navigate   ·   enter: view output   ·   p: view prompt   ·   x: kill   ·   /: filter   ·   [/]: page %d/%d   ·   ctrl+g / esc: close",
+			"  arrows: navigate   ·   enter: open   ·   p: prompt   ·   x: kill   ·   /: filter   ·   [/]: page %d/%d   ·   ctrl+g / esc: close",
 			m.grid.gridPage+1, totalPages,
 		)
 		if m.grid.filterQuery != "" {
