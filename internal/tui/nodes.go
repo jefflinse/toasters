@@ -15,7 +15,7 @@ import (
 const (
 	nodeRowContentH = 4                   // headline + model + context bar + latest activity
 	nodeRowBlockH   = nodeRowContentH + 1 // + one blank separator row
-	nodesBarH       = 1                   // top help/filter bar
+	nodesBarH       = 1                   // help/filter bar (bottom)
 )
 
 // nodesLayout holds the derived geometry of the nodes screen, shared by the
@@ -91,8 +91,8 @@ func (m *Model) toggleNodes() {
 	m.openNodes()
 }
 
-// renderNodes renders the full nodes screen: a top help/filter bar over the
-// list (left) and detail (right) panes.
+// renderNodes renders the full nodes screen: the list (left) and detail (right)
+// panes above a help/filter bar at the bottom.
 func (m *Model) renderNodes() string {
 	lay := nodesLayoutFor(m.width, m.height, m.effectiveLeftPanelWidth())
 	nodes := m.filteredNodeSessions()
@@ -115,10 +115,10 @@ func (m *Model) renderNodes() string {
 	m.nodes.tabScroll[m.nodes.tab] = clamped
 
 	panes := lipgloss.JoinHorizontal(lipgloss.Top, listPane, detailPane)
-	return lipgloss.JoinVertical(lipgloss.Left, bar, panes)
+	return lipgloss.JoinVertical(lipgloss.Left, panes, bar)
 }
 
-// renderNodesBar renders the top help/filter line spanning the full width.
+// renderNodesBar renders the help/filter line spanning the full width, shown at the bottom of the screen.
 func (m *Model) renderNodesBar() string {
 	var text string
 	switch {
