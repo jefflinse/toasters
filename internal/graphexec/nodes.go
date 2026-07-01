@@ -388,13 +388,28 @@ func buildInitialMessage(state *TaskState) string {
 	if desc := state.GetArtifactString("task.description"); desc != "" {
 		parts = append(parts, fmt.Sprintf("Task: %s", desc))
 	}
-	if state.WorkspaceDir != "" {
+	// Report the canonical workspace, not the physical directory tools
+	// execute in. Inside a fan-out branch, WorkspaceDir is the branch's
+	// isolated temp copy while WorkspaceBase is the job's real workspace
+	// that upstream artifacts (plan output, task descriptions) reference;
+	// the tool executor transparently aliases canonical paths into the
+	// isolated dir (see buildToolExecutor), so surfacing WorkspaceBase here
+	// gives the worker one consistent root instead of two, and never leaks
+	// the temp dir into the model's context. WorkspaceBase always equals
+	// WorkspaceDir outside of fan-out (NewTaskState sets both), so this is
+	// a no-op change there; the fallback guards against any future path
+	// that constructs TaskState without going through NewTaskState.
+	workspace := state.WorkspaceBase
+	if workspace == "" {
+		workspace = state.WorkspaceDir
+	}
+	if workspace != "" {
 		// Prefer-relative nudge: absolute paths embedded in outputs (plans,
 		// task lists) break when downstream nodes run in isolated fan-out
 		// copies of the workspace; relative paths are location-independent.
 		parts = append(parts, fmt.Sprintf(
 			"Workspace: %s (file tools resolve relative paths against this directory; prefer relative paths in your work and outputs)",
-			state.WorkspaceDir))
+			workspace))
 	}
 	// Deterministic order: map iteration would shuffle sections between
 	// composes, hurting prompt-cache hits and making transcripts hard to diff.
