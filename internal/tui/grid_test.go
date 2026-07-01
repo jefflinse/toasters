@@ -858,6 +858,17 @@ func TestWorkerCardMeta(t *testing.T) {
 			want:  "m",
 			empty: false,
 		},
+		{
+			name:     "diff stat included when non-zero",
+			rs:       &runtimeSlot{model: "m", diffAdded: 12, diffRemoved: 3},
+			contains: []string{"m", "+12 −3"},
+		},
+		{
+			name:  "diff stat omitted when zero",
+			rs:    &runtimeSlot{model: "m", diffAdded: 0, diffRemoved: 0},
+			want:  "m",
+			empty: false,
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -873,6 +884,29 @@ func TestWorkerCardMeta(t *testing.T) {
 				if !strings.Contains(got, sub) {
 					t.Errorf("got %q, want it to contain %q", got, sub)
 				}
+			}
+		})
+	}
+}
+
+func TestFormatDiffStat(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name           string
+		added, removed int
+		want           string
+	}{
+		{name: "both added and removed", added: 12, removed: 3, want: "+12 −3"},
+		{name: "add only", added: 5, removed: 0, want: "+5"},
+		{name: "remove only", added: 0, removed: 7, want: "−7"},
+		{name: "both zero", added: 0, removed: 0, want: ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			if got := formatDiffStat(c.added, c.removed); got != c.want {
+				t.Errorf("formatDiffStat(%d, %d) = %q, want %q", c.added, c.removed, got, c.want)
 			}
 		})
 	}

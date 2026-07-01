@@ -222,7 +222,23 @@ func workerCardMeta(rs *runtimeSlot) string {
 	if rs.costUSD > 0 {
 		segs = append(segs, fmt.Sprintf("~$%.2f", rs.costUSD))
 	}
+	if rs.diffAdded > 0 || rs.diffRemoved > 0 {
+		segs = append(segs, formatDiffStat(rs.diffAdded, rs.diffRemoved))
+	}
 	return strings.Join(segs, " · ")
+}
+
+// formatDiffStat renders compact added/removed line counts ("+12 −3").
+// Zero sides are omitted; both zero returns "".
+func formatDiffStat(added, removed int) string {
+	var segs []string
+	if added > 0 {
+		segs = append(segs, fmt.Sprintf("+%d", added))
+	}
+	if removed > 0 {
+		segs = append(segs, fmt.Sprintf("−%d", removed))
+	}
+	return strings.Join(segs, " ")
 }
 
 // commaInt formats an integer with comma-separated thousands (e.g. 200000 → "200,000").

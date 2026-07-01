@@ -138,4 +138,5 @@ type chatState struct {
 type activityItem struct {
 	label    string // formatted display label, e.g. "write: main.go"
 	toolName string // raw tool name
+	statted  bool   // a per-call diff-stat suffix has been appended to label
 }
