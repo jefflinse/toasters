@@ -78,6 +78,10 @@ func TestEventPayloadRoundTrip(t *testing.T) {
 		service.EventTypeSessionToolResult: service.SessionToolResultPayload{
 			Result: service.ToolCallResult{CallID: "c-1", Name: "read_file", Result: "data", Error: "e"},
 		},
+		service.EventTypeSessionFileChange: service.SessionFileChangePayload{
+			ToolName: "edit_file", Path: "a.go", Diff: "@@ -1 +1 @@\n-old\n+new\n",
+			Added: 1, Removed: 1, Created: true, Truncated: true,
+		},
 		service.EventTypeSessionDone: service.SessionDonePayload{
 			WorkerName: "w", JobID: "j-1", TaskID: "t-1", Status: "completed", FinalText: "bye",
 		},

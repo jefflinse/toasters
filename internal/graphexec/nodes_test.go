@@ -405,6 +405,9 @@ func (m *mockEventSink) BroadcastSessionToolCall(sessionID, _, name string, _ js
 func (m *mockEventSink) BroadcastSessionToolResult(sessionID, _, name, _, _ string) {
 	m.record(fmt.Sprintf("session_tool_result:%s:%s", sessionID, name))
 }
+func (m *mockEventSink) BroadcastSessionFileChange(sessionID string, fc runtime.FileChange) {
+	m.record(fmt.Sprintf("session_file_change:%s:%s:%s", sessionID, fc.ToolName, fc.Path))
+}
 
 func TestExecutor_Execute(t *testing.T) {
 	cfg, _ := templateConfig(t, [][]provider.StreamEvent{

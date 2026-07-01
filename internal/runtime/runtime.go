@@ -96,6 +96,7 @@ func (r *Runtime) SpawnWorker(ctx context.Context, opts SpawnOpts) (*Session, er
 	// it directly (e.g. SystemTools for system workers). Otherwise build the
 	// default CoreTools stack with optional MCP dispatch.
 	var tools ToolExecutor
+	var core *CoreTools // non-nil only on the default CoreTools path; wired to sess.emit below
 	if opts.ToolExecutor != nil {
 		tools = opts.ToolExecutor
 	} else {
@@ -112,11 +113,11 @@ func (r *Runtime) SpawnWorker(ctx context.Context, opts SpawnOpts) (*Session, er
 		if len(opts.DisallowedTools) > 0 {
 			coreOpts = append(coreOpts, WithDenylist(opts.DisallowedTools))
 		}
-		coreTools := NewCoreTools(opts.WorkDir, coreOpts...)
+		core = NewCoreTools(opts.WorkDir, coreOpts...)
 		if mcpCaller != nil {
-			tools = NewCompositeTools(coreTools, mcpCaller, mcpDefs)
+			tools = NewCompositeTools(core, mcpCaller, mcpDefs)
 		} else {
-			tools = coreTools
+			tools = core
 		}
 	}
 
@@ -136,6 +137,12 @@ func (r *Runtime) SpawnWorker(ctx context.Context, opts SpawnOpts) (*Session, er
 
 	sess := newSession(id, p, opts, tools)
 	sess.store = r.store // may be nil; enables message persistence in Run()
+
+	if core != nil {
+		core.SetFileChangeNotifier(func(_ context.Context, fc FileChange) {
+			sess.emit(SessionEvent{SessionID: sess.id, Type: SessionEventFileChange, FileChange: &fc})
+		})
+	}
 
 	// Register in sessions map. The wg.Add happens under the same lock as
 	// the closed check: Shutdown sets closed before wg.Wait, so a spawn

@@ -342,6 +342,11 @@ func (e *Executor) buildToolExecutor(workspaceDir, workspaceBase string) runtime
 		coreOpts = append(coreOpts, runtime.WithGraphCatalog(graphSourceCatalog{e.graphs}))
 	}
 	coreTools := runtime.NewCoreTools(workspaceDir, coreOpts...)
+	coreTools.SetFileChangeNotifier(func(ctx context.Context, fc runtime.FileChange) {
+		if nc := NodeContextFromContext(ctx); nc != nil && nc.Sink != nil {
+			nc.Sink.BroadcastSessionFileChange(nc.SessionID, fc)
+		}
+	})
 	if e.mcpManager != nil && len(e.mcpManager.Tools()) > 0 {
 		truncating := mcp.NewTruncatingCaller(e.mcpManager, mcp.DefaultMaxResultLen)
 		return runtime.NewCompositeTools(coreTools, truncating, mcp.ToRuntimeToolDefs(e.mcpManager.Tools()))

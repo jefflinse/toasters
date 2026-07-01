@@ -450,6 +450,16 @@ type wireSessionToolResultPayload struct {
 	Result wireToolCallResult `json:"result"`
 }
 
+type wireSessionFileChangePayload struct {
+	ToolName  string `json:"tool_name"`
+	Path      string `json:"path"`
+	Diff      string `json:"diff"`
+	Added     int    `json:"added"`
+	Removed   int    `json:"removed"`
+	Created   bool   `json:"created,omitempty"`
+	Truncated bool   `json:"truncated,omitempty"`
+}
+
 type wireSessionDonePayload struct {
 	WorkerName string `json:"worker_name"`
 	JobID      string `json:"job_id,omitempty"`
@@ -1085,6 +1095,21 @@ func ParseSSEPayload(eventType string, raw json.RawMessage) (any, error) {
 		}
 		return service.SessionToolResultPayload{
 			Result: wireToolCallResultToService(w.Result),
+		}, nil
+
+	case service.EventTypeSessionFileChange:
+		var w wireSessionFileChangePayload
+		if err := json.Unmarshal(raw, &w); err != nil {
+			return nil, fmt.Errorf("decoding session.file_change payload: %w", err)
+		}
+		return service.SessionFileChangePayload{
+			ToolName:  w.ToolName,
+			Path:      w.Path,
+			Diff:      w.Diff,
+			Added:     w.Added,
+			Removed:   w.Removed,
+			Created:   w.Created,
+			Truncated: w.Truncated,
 		}, nil
 
 	case service.EventTypeSessionDone:

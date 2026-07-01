@@ -37,6 +37,14 @@ type outputItem struct {
 	toolError  bool
 	startedAt  time.Time
 	endedAt    time.Time
+
+	// File change attached to a write_file/edit_file tool item, delivered
+	// by a session.file_change event (display-only; never LLM context).
+	fileDiff      string
+	diffAdded     int
+	diffRemoved   int
+	diffCreated   bool
+	diffTruncated bool
 }
 
 // appendText adds streamed text to the slot. Streamed tokens coalesce
@@ -105,4 +113,115 @@ func (rs *runtimeSlot) completeTool(callID, name, result string, isError bool) {
 	rs.items[idx].toolError = isError
 	rs.items[idx].endedAt = time.Now()
 	delete(rs.toolItemIdx, callID)
+}
+
+// toolArgPath extracts the "path" argument from a tool call's raw JSON
+// arguments, for matching a session.file_change event (tool name + path,
+// no call ID) to the write_file/edit_file item that produced it. Parses
+// leniently — malformed or missing args just yield "".
+func toolArgPath(args json.RawMessage) string {
+	if len(args) == 0 {
+		return ""
+	}
+	var a map[string]any
+	if err := json.Unmarshal(args, &a); err != nil {
+		return ""
+	}
+	p, _ := a["path"].(string)
+	return p
+}
+
+// attachFileChange pairs a session.file_change event with the tool item
+// that produced it and copies over the diff fields. Event ordering is
+// call → file_change → result: the notifier fires mid-execution, so the
+// matching item is normally still pending. On a match, only the diff
+// fields are set — endedAt and toolItemIdx are left untouched so the
+// later tool_result still completes the same item via completeTool
+// instead of finding it "already done" and synthesizing a duplicate.
+//
+// Matching walks items oldest-first: tool name + path match (preferring a
+// still-pending item, but accepting a completed one since ordering isn't
+// guaranteed), then a name-only fallback, then a synthesized standalone
+// item mirroring completeTool's synthesize-on-miss path.
+//
+// Oldest-first (not newest-first) matters because mycelium fires ALL
+// tool_call events for a turn up front, then executes sequentially — so two
+// parallel calls to the same tool+path can both be pending at once, and
+// their file_change notifications arrive in execution (= insertion) order.
+// Newest-first matching would attach the first call's diff to the second
+// call's item. An item that already carries a diff is skipped so a second
+// notification for the same path can't clobber it before it completes.
+func (rs *runtimeSlot) attachFileChange(toolName, path, diff string, added, removed int, created, truncated bool) {
+	set := func(it *outputItem) {
+		it.fileDiff = diff
+		it.diffAdded = added
+		it.diffRemoved = removed
+		it.diffCreated = created
+		it.diffTruncated = truncated
+	}
+
+	// Pass 1: name + path match, preferring the oldest pending item that
+	// doesn't already carry a diff.
+	var completedMatch *outputItem
+	for i := 0; i < len(rs.items); i++ {
+		it := &rs.items[i]
+		if it.kind != outputItemTool || it.toolName != toolName || toolArgPath(it.toolArgs) != path {
+			continue
+		}
+		if it.fileDiff != "" {
+			continue
+		}
+		if it.endedAt.IsZero() {
+			rs.contentVersion++
+			set(it)
+			return
+		}
+		if completedMatch == nil {
+			completedMatch = it
+		}
+	}
+	if completedMatch != nil {
+		rs.contentVersion++
+		set(completedMatch)
+		return
+	}
+
+	// Pass 2: name-only fallback, preferring the oldest pending item that
+	// doesn't already carry a diff.
+	var completedByName *outputItem
+	for i := 0; i < len(rs.items); i++ {
+		it := &rs.items[i]
+		if it.kind != outputItemTool || it.toolName != toolName {
+			continue
+		}
+		if it.fileDiff != "" {
+			continue
+		}
+		if it.endedAt.IsZero() {
+			rs.contentVersion++
+			set(it)
+			return
+		}
+		if completedByName == nil {
+			completedByName = it
+		}
+	}
+	if completedByName != nil {
+		rs.contentVersion++
+		set(completedByName)
+		return
+	}
+
+	// Pass 3: no matching tool item at all — synthesize a completed one so
+	// the diff still surfaces instead of being silently dropped.
+	rs.contentVersion++
+	now := time.Now()
+	it := outputItem{
+		kind:      outputItemTool,
+		toolName:  toolName,
+		startedAt: now,
+		endedAt:   now,
+	}
+	set(&it)
+	rs.items = append(rs.items, it)
 }

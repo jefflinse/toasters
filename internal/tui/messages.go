@@ -215,6 +215,21 @@ type SessionToolResultMsg struct {
 	IsError    bool
 }
 
+// SessionFileChangeMsg is sent when a worker's write_file/edit_file tool
+// call mutates a file. Produced by the event consumer in response to a
+// session.file_change event; the diff is a display side-channel that gets
+// attached to the matching tool-call block, not fed back into LLM context.
+type SessionFileChangeMsg struct {
+	SessionID string
+	ToolName  string
+	Path      string
+	Diff      string
+	Added     int
+	Removed   int
+	Created   bool
+	Truncated bool
+}
+
 // SessionDoneMsg is sent when a worker session terminates.
 // Produced by the event consumer in response to a session.done event.
 type SessionDoneMsg struct {
