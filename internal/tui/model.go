@@ -502,6 +502,22 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case SessionFileChangeMsg:
+		slot, ok := m.runtimeSessions[msg.SessionID]
+		if !ok {
+			return m, nil
+		}
+		// Diff is already capped server-side — no 200-char truncation here,
+		// unlike SessionToolResultMsg.
+		slot.attachFileChange(msg.ToolName, msg.Path, msg.Diff, msg.Added, msg.Removed, msg.Created, msg.Truncated)
+		m.attachWorkerStreamFileChange(slot, msg)
+		m.refreshNodesAutoTail(msg.SessionID)
+		m.updateViewportContent()
+		if !m.scroll.userScrolled {
+			m.chatViewport.GotoBottom()
+		}
+		return m, nil
+
 	case SessionDoneMsg:
 		return m.handleSessionDone(msg)
 

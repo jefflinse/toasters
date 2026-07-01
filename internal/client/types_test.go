@@ -1122,6 +1122,42 @@ func TestParseSSEPayload_SessionToolResult(t *testing.T) {
 	}
 }
 
+func TestParseSSEPayload_SessionFileChange(t *testing.T) {
+	t.Parallel()
+
+	raw := json.RawMessage(`{"tool_name":"edit_file","path":"internal/foo.go","diff":"@@ -1 +1 @@\n-old\n+new\n","added":1,"removed":1,"created":true,"truncated":true}`)
+	payload, err := ParseSSEPayload("session.file_change", raw)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	p, ok := payload.(service.SessionFileChangePayload)
+	if !ok {
+		t.Fatalf("payload type = %T, want SessionFileChangePayload", payload)
+	}
+	if p.ToolName != "edit_file" {
+		t.Errorf("ToolName = %q, want %q", p.ToolName, "edit_file")
+	}
+	if p.Path != "internal/foo.go" {
+		t.Errorf("Path = %q, want %q", p.Path, "internal/foo.go")
+	}
+	if p.Diff != "@@ -1 +1 @@\n-old\n+new\n" {
+		t.Errorf("Diff = %q, unexpected", p.Diff)
+	}
+	if p.Added != 1 {
+		t.Errorf("Added = %d, want 1", p.Added)
+	}
+	if p.Removed != 1 {
+		t.Errorf("Removed = %d, want 1", p.Removed)
+	}
+	if !p.Created {
+		t.Errorf("Created = false, want true")
+	}
+	if !p.Truncated {
+		t.Errorf("Truncated = false, want true")
+	}
+}
+
 func TestParseSSEPayload_SessionDone(t *testing.T) {
 	t.Parallel()
 

@@ -22,6 +22,14 @@ var (
 	ColorReasoning       = compat.AdaptiveColor{Light: lipgloss.Color("240"), Dark: lipgloss.Color("243")}
 	ColorReasoningBorder = compat.AdaptiveColor{Light: lipgloss.Color("245"), Dark: lipgloss.Color("238")}
 	ColorReasoningBg     = compat.AdaptiveColor{Light: lipgloss.Color("253"), Dark: lipgloss.Color("233")}
+
+	// Diff colors for the file-change diff view (renderDiffLines,
+	// slot_render.go). Backgrounds are pale/dark tints of green and red;
+	// foregrounds are picked per-theme so text stays readable against them.
+	ColorDiffAddBg = compat.AdaptiveColor{Light: lipgloss.Color("194"), Dark: lipgloss.Color("22")}
+	ColorDiffAddFg = compat.AdaptiveColor{Light: lipgloss.Color("22"), Dark: lipgloss.Color("120")}
+	ColorDiffDelBg = compat.AdaptiveColor{Light: lipgloss.Color("224"), Dark: lipgloss.Color("52")}
+	ColorDiffDelFg = compat.AdaptiveColor{Light: lipgloss.Color("52"), Dark: lipgloss.Color("210")}
 )
 
 // Layout styles.

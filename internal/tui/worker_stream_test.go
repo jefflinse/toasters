@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -269,6 +270,124 @@ func TestWorkerStreamToolResultEmptyCallIDFallback(t *testing.T) {
 	}
 	if card.Items[0].ToolResult != "wrote 74 bytes to main.go" || card.Items[0].EndedAt.IsZero() {
 		t.Errorf("result not merged into the pending call: %+v", card.Items[0])
+	}
+}
+
+// TestAttachWorkerStreamFileChange_MergesIntoPendingCall verifies a
+// session.file_change event pairs with the matching in-flight write_file
+// call by tool name + path (parsed from ToolArgs), and — critically — does
+// not mark the item done. The later tool_result must still be able to
+// complete the same item instead of finding it "already done" and
+// synthesizing a duplicate.
+func TestAttachWorkerStreamFileChange_MergesIntoPendingCall(t *testing.T) {
+	m := newMinimalModel(t)
+	s := &runtimeSlot{sessionID: "s", workerName: "graph:implement", jobID: "j"}
+
+	args, _ := json.Marshal(map[string]string{"path": "main.go"})
+	m.appendWorkerStreamToolCall(s, "call1", "write_file", args)
+	m.attachWorkerStreamFileChange(s, SessionFileChangeMsg{
+		SessionID: "s", ToolName: "write_file", Path: "main.go",
+		Diff: "@@ -1,1 +1,1 @@\n-a\n+b", Added: 1, Removed: 1,
+	})
+
+	card := m.findWorkerStream("s")
+	if card == nil || len(card.Items) != 1 {
+		t.Fatalf("expected 1 item, card=%+v", card)
+	}
+	it := card.Items[0]
+	if it.FileDiff == "" {
+		t.Fatal("diff not attached")
+	}
+	if !it.EndedAt.IsZero() {
+		t.Error("attaching the diff must not complete the item — tool_result still needs to merge into it")
+	}
+
+	// The result arrives after the diff and must merge into the same item.
+	m.appendWorkerStreamToolResult(s, "call1", "write_file", "wrote 12 bytes", false)
+	if len(card.Items) != 1 {
+		t.Fatalf("expected the result to merge into the same item, got %d items", len(card.Items))
+	}
+	if card.Items[0].FileDiff == "" {
+		t.Error("diff lost after the result merged in")
+	}
+	if card.Items[0].ToolResult != "wrote 12 bytes" {
+		t.Errorf("result not merged: %+v", card.Items[0])
+	}
+}
+
+// TestAttachWorkerStreamFileChange_NameOnlyFallback verifies that when no
+// tool item's path argument matches (e.g. args missing), the newest item
+// with the same tool name is used instead.
+func TestAttachWorkerStreamFileChange_NameOnlyFallback(t *testing.T) {
+	m := newMinimalModel(t)
+	s := &runtimeSlot{sessionID: "s", workerName: "graph:implement", jobID: "j"}
+
+	m.appendWorkerStreamToolCall(s, "call1", "edit_file", nil)
+	m.attachWorkerStreamFileChange(s, SessionFileChangeMsg{
+		SessionID: "s", ToolName: "edit_file", Path: "unresolved/path.go",
+		Diff: "diff body", Added: 2,
+	})
+
+	card := m.findWorkerStream("s")
+	if card == nil || len(card.Items) != 1 {
+		t.Fatalf("expected the fallback to reuse the existing item, got %+v", card)
+	}
+	if card.Items[0].FileDiff != "diff body" {
+		t.Errorf("diff not attached via name-only fallback: %+v", card.Items[0])
+	}
+}
+
+// TestAttachWorkerStreamFileChange_SynthesizesOnTotalMiss verifies that with
+// no matching tool item at all, a completed item is synthesized so the diff
+// still surfaces rather than being dropped silently.
+func TestAttachWorkerStreamFileChange_SynthesizesOnTotalMiss(t *testing.T) {
+	m := newMinimalModel(t)
+	s := &runtimeSlot{sessionID: "s", workerName: "graph:implement", jobID: "j"}
+
+	m.attachWorkerStreamFileChange(s, SessionFileChangeMsg{
+		SessionID: "s", ToolName: "write_file", Path: "new.go",
+		Diff: "diff body", Created: true, Truncated: true,
+	})
+
+	card := m.findWorkerStream("s")
+	if card == nil || len(card.Items) != 1 {
+		t.Fatalf("expected a synthesized item, got %+v", card)
+	}
+	it := card.Items[0]
+	if it.Kind != service.WorkerStreamItemTool || it.ToolName != "write_file" {
+		t.Errorf("synthesized item wrong: %+v", it)
+	}
+	if it.FileDiff != "diff body" || !it.DiffCreated || !it.DiffTruncated {
+		t.Errorf("diff fields not set on synthesized item: %+v", it)
+	}
+	if it.EndedAt.IsZero() {
+		t.Error("synthesized item should be marked complete")
+	}
+}
+
+// TestWorkerStreamItemAsOutputItem_CarriesDiffFields verifies the adapter
+// used by both the chat card and cockpit/jobs-modal renderers copies the
+// diff fields across — easy to miss since it's a separate function from the
+// appenders that set them.
+func TestWorkerStreamItemAsOutputItem_CarriesDiffFields(t *testing.T) {
+	src := &service.WorkerStreamItem{
+		Kind:          service.WorkerStreamItemTool,
+		ToolName:      "write_file",
+		FileDiff:      "@@ -1,1 +1,1 @@\n-a\n+b",
+		DiffAdded:     3,
+		DiffRemoved:   1,
+		DiffCreated:   true,
+		DiffTruncated: true,
+	}
+	got := workerStreamItemAsOutputItem(src)
+	if got.fileDiff != src.FileDiff {
+		t.Errorf("fileDiff = %q, want %q", got.fileDiff, src.FileDiff)
+	}
+	if got.diffAdded != src.DiffAdded || got.diffRemoved != src.DiffRemoved {
+		t.Errorf("diffAdded/diffRemoved = %d/%d, want %d/%d", got.diffAdded, got.diffRemoved, src.DiffAdded, src.DiffRemoved)
+	}
+	if got.diffCreated != src.DiffCreated || got.diffTruncated != src.DiffTruncated {
+		t.Errorf("diffCreated/diffTruncated = %v/%v, want %v/%v", got.diffCreated, got.diffTruncated, src.DiffCreated, src.DiffTruncated)
 	}
 }
 

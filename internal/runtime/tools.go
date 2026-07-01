@@ -58,6 +58,8 @@ type CoreTools struct {
 	taskID       string
 	providerName string
 	model        string
+
+	fileChangeNotifier FileChangeNotifier // display side-channel for write_file/edit_file; may be nil
 }
 
 // GraphCatalog is a read-only view over the loaded graph Definitions,
@@ -152,6 +154,20 @@ func WithProvider(providerName, model string) CoreToolsOption {
 // graph catalog. When unset, query_graphs is absent from Definitions().
 func WithGraphCatalog(cat GraphCatalog) CoreToolsOption {
 	return func(ct *CoreTools) { ct.graphCatalog = cat }
+}
+
+// WithFileChangeNotifier sets the display side-channel invoked after a
+// successful write_file/edit_file mutation. See SetFileChangeNotifier for
+// the post-construction equivalent.
+func WithFileChangeNotifier(n FileChangeNotifier) CoreToolsOption {
+	return func(ct *CoreTools) { ct.fileChangeNotifier = n }
+}
+
+// SetFileChangeNotifier sets the file-change notifier after construction.
+// Needed by callers (runtime.Session) that don't exist yet when CoreTools is
+// built and so can't close over themselves via WithFileChangeNotifier.
+func (ct *CoreTools) SetFileChangeNotifier(n FileChangeNotifier) {
+	ct.fileChangeNotifier = n
 }
 
 // NewCoreTools creates a CoreTools with the given work directory and options.
@@ -600,7 +616,7 @@ func (ct *CoreTools) readFile(_ context.Context, args json.RawMessage) (string, 
 	return b.String(), nil
 }
 
-func (ct *CoreTools) writeFile(_ context.Context, args json.RawMessage) (string, error) {
+func (ct *CoreTools) writeFile(ctx context.Context, args json.RawMessage) (string, error) {
 	var params struct {
 		Path    string `json:"path"`
 		Content string `json:"content"`
@@ -619,6 +635,19 @@ func (ct *CoreTools) writeFile(_ context.Context, args json.RawMessage) (string,
 		return "", fmt.Errorf("content too large to write: %d bytes (max %d)", len(params.Content), maxWriteContentSize)
 	}
 
+	// Captured before the write for the file-change notification; a missing
+	// file means this write creates it. Skipped entirely when nobody's
+	// listening, so an unwatched write doesn't pay for reading the old file.
+	var oldContent string
+	created := false
+	if ct.fileChangeNotifier != nil {
+		if existing, readErr := os.ReadFile(resolved); readErr == nil {
+			oldContent = string(existing)
+		} else if os.IsNotExist(readErr) {
+			created = true
+		}
+	}
+
 	dir := filepath.Dir(resolved)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", fmt.Errorf("creating directories: %w", err)
@@ -629,10 +658,16 @@ func (ct *CoreTools) writeFile(_ context.Context, args json.RawMessage) (string,
 		return "", fmt.Errorf("writing file: %w", err)
 	}
 
+	if ct.fileChangeNotifier != nil {
+		if fc := computeFileChange("write_file", params.Path, oldContent, params.Content, created); fc != (FileChange{}) {
+			ct.fileChangeNotifier(ctx, fc)
+		}
+	}
+
 	return fmt.Sprintf("wrote %d bytes to %s", n, params.Path), nil
 }
 
-func (ct *CoreTools) editFile(_ context.Context, args json.RawMessage) (string, error) {
+func (ct *CoreTools) editFile(ctx context.Context, args json.RawMessage) (string, error) {
 	var params struct {
 		Path      string `json:"path"`
 		OldString string `json:"old_string"`
@@ -673,6 +708,12 @@ func (ct *CoreTools) editFile(_ context.Context, args json.RawMessage) (string, 
 	newText := strings.Replace(text, params.OldString, params.NewString, 1)
 	if err := os.WriteFile(resolved, []byte(newText), 0o644); err != nil {
 		return "", fmt.Errorf("writing file: %w", err)
+	}
+
+	if ct.fileChangeNotifier != nil {
+		if fc := computeFileChange("edit_file", params.Path, text, newText, false); fc != (FileChange{}) {
+			ct.fileChangeNotifier(ctx, fc)
+		}
 	}
 
 	return fmt.Sprintf("edited %s", params.Path), nil

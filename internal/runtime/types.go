@@ -102,13 +102,13 @@ type ToolResultEvent struct {
 // user but deliberately kept OUT of the tool result string returned to the
 // LLM, which already knows what it wrote and shouldn't spend context on it.
 type FileChange struct {
-	ToolName string // "write_file" or "edit_file"
-	Path     string // path as the model passed it (pre-resolution)
-	Diff     string // unified diff body (hunks only, no ---/+++ header), capped
-	Added    int    // total lines added (across the whole change, not the capped diff)
-	Removed  int    // total lines removed
-	Created  bool   // true when write_file created a new file
-	Truncated bool  // true when Diff was capped server-side
+	ToolName  string // "write_file" or "edit_file"
+	Path      string // path as the model passed it (pre-resolution)
+	Diff      string // unified diff body (hunks only, no ---/+++ header), capped
+	Added     int    // total lines added (across the whole change, not the capped diff)
+	Removed   int    // total lines removed
+	Created   bool   // true when write_file created a new file
+	Truncated bool   // true when Diff was capped server-side
 }
 
 // FileChangeNotifier receives FileChange notifications from CoreTools as a

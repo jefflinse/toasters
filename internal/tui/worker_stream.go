@@ -353,6 +353,81 @@ func (m *Model) appendWorkerStreamToolResult(slot *runtimeSlot, callID, toolName
 	})
 }
 
+// attachWorkerStreamFileChange pairs a session.file_change event with the
+// chat card's matching tool item, mirroring attachFileChange in
+// slot_output.go for the worker-stream (chat card) copy of the same
+// lifecycle. Only the diff fields are set on a match — EndedAt is left
+// alone so a later tool_result still completes the item in place instead
+// of finding it "done" and synthesizing a duplicate (see
+// appendWorkerStreamToolResult).
+func (m *Model) attachWorkerStreamFileChange(slot *runtimeSlot, msg SessionFileChangeMsg) {
+	if slot == nil || m.slotHidden(slot) {
+		return
+	}
+	snap := m.ensureWorkerStream(slot)
+	snap.LastActivity = time.Now()
+
+	set := func(it *service.WorkerStreamItem) {
+		it.FileDiff = msg.Diff
+		it.DiffAdded = msg.Added
+		it.DiffRemoved = msg.Removed
+		it.DiffCreated = msg.Created
+		it.DiffTruncated = msg.Truncated
+	}
+
+	// Pass 1: name + path match, preferring a pending item.
+	var completedMatch *service.WorkerStreamItem
+	for i := len(snap.Items) - 1; i >= 0; i-- {
+		it := &snap.Items[i]
+		if it.Kind != service.WorkerStreamItemTool || it.ToolName != msg.ToolName ||
+			toolArgPath(it.ToolArgs) != msg.Path {
+			continue
+		}
+		if it.EndedAt.IsZero() {
+			set(it)
+			return
+		}
+		if completedMatch == nil {
+			completedMatch = it
+		}
+	}
+	if completedMatch != nil {
+		set(completedMatch)
+		return
+	}
+
+	// Pass 2: name-only fallback, preferring the newest pending item.
+	var completedByName *service.WorkerStreamItem
+	for i := len(snap.Items) - 1; i >= 0; i-- {
+		it := &snap.Items[i]
+		if it.Kind != service.WorkerStreamItemTool || it.ToolName != msg.ToolName {
+			continue
+		}
+		if it.EndedAt.IsZero() {
+			set(it)
+			return
+		}
+		if completedByName == nil {
+			completedByName = it
+		}
+	}
+	if completedByName != nil {
+		set(completedByName)
+		return
+	}
+
+	// Pass 3: no matching tool item — synthesize a completed one.
+	now := time.Now()
+	it := service.WorkerStreamItem{
+		Kind:      service.WorkerStreamItemTool,
+		ToolName:  msg.ToolName,
+		StartedAt: now,
+		EndedAt:   now,
+	}
+	set(&it)
+	snap.Items = append(snap.Items, it)
+}
+
 // markWorkerStreamDone flips the Done flag on whichever open worker
 // stream block matches the just-finished session. Called from the
 // SessionDoneMsg handler. The block stays at the top of the stack but
@@ -563,5 +638,11 @@ func workerStreamItemAsOutputItem(it *service.WorkerStreamItem) *outputItem {
 		toolError:  it.ToolError,
 		startedAt:  it.StartedAt,
 		endedAt:    it.EndedAt,
+
+		fileDiff:      it.FileDiff,
+		diffAdded:     it.DiffAdded,
+		diffRemoved:   it.DiffRemoved,
+		diffCreated:   it.DiffCreated,
+		diffTruncated: it.DiffTruncated,
 	}
 }

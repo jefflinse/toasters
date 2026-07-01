@@ -135,6 +135,25 @@ func (s *LocalService) BroadcastSessionToolResult(sessionID, callID, name, resul
 	})
 }
 
+// BroadcastSessionFileChange emits a session.file_change event for a graph
+// node's write_file/edit_file mutation. The TUI pairs it with the matching
+// in-flight tool item by tool name + path.
+func (s *LocalService) BroadcastSessionFileChange(sessionID string, fc runtime.FileChange) {
+	s.broadcast(Event{
+		Type:      EventTypeSessionFileChange,
+		SessionID: sessionID,
+		Payload: SessionFileChangePayload{
+			ToolName:  fc.ToolName,
+			Path:      fc.Path,
+			Diff:      fc.Diff,
+			Added:     fc.Added,
+			Removed:   fc.Removed,
+			Created:   fc.Created,
+			Truncated: fc.Truncated,
+		},
+	})
+}
+
 // BroadcastSessionStarted bridges a runtime session into the unified service
 // event stream. It emits session.started immediately, then spawns a goroutine
 // that subscribes to the session's events and re-emits them as session.text /
@@ -274,6 +293,12 @@ func (s *LocalService) BroadcastSessionStarted(sess *runtime.Session) {
 							},
 						},
 					})
+				case runtime.SessionEventFileChange:
+					if ev.FileChange == nil {
+						continue
+					}
+					flushText()
+					s.BroadcastSessionFileChange(sessionID, *ev.FileChange)
 				}
 
 			case <-textTimerCh:

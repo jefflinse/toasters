@@ -206,6 +206,22 @@ func translateEvent(ev service.Event) tea.Msg {
 			IsError:    p.Result.Error != "",
 		}
 
+	case service.EventTypeSessionFileChange:
+		p, ok := ev.Payload.(service.SessionFileChangePayload)
+		if !ok {
+			return nil
+		}
+		return SessionFileChangeMsg{
+			SessionID: ev.SessionID,
+			ToolName:  p.ToolName,
+			Path:      p.Path,
+			Diff:      p.Diff,
+			Added:     p.Added,
+			Removed:   p.Removed,
+			Created:   p.Created,
+			Truncated: p.Truncated,
+		}
+
 	case service.EventTypeSessionDone:
 		p, ok := ev.Payload.(service.SessionDonePayload)
 		if !ok {

@@ -823,6 +823,16 @@ type wireToolCallResult struct {
 	Error  string `json:"error,omitempty"`
 }
 
+type wireSessionFileChangePayload struct {
+	ToolName  string `json:"tool_name"`
+	Path      string `json:"path"`
+	Diff      string `json:"diff"`
+	Added     int    `json:"added"`
+	Removed   int    `json:"removed"`
+	Created   bool   `json:"created,omitempty"`
+	Truncated bool   `json:"truncated,omitempty"`
+}
+
 type wireSessionDonePayload struct {
 	WorkerName string `json:"worker_name"`
 	JobID      string `json:"job_id,omitempty"`
@@ -987,6 +997,12 @@ func EventPayloadToWire(ev service.Event) any {
 				CallID: p.Result.CallID, Name: p.Result.Name,
 				Result: p.Result.Result, Error: p.Result.Error,
 			},
+		}
+	case service.SessionFileChangePayload:
+		return wireSessionFileChangePayload{
+			ToolName: p.ToolName, Path: p.Path, Diff: p.Diff,
+			Added: p.Added, Removed: p.Removed,
+			Created: p.Created, Truncated: p.Truncated,
 		}
 	case service.SessionDonePayload:
 		return wireSessionDonePayload{

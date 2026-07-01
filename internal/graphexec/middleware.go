@@ -9,6 +9,7 @@ import (
 
 	"github.com/jefflinse/rhizome"
 	"github.com/jefflinse/toasters/internal/db"
+	"github.com/jefflinse/toasters/internal/runtime"
 )
 
 // EventSink receives graph execution events. This interface is satisfied by
@@ -69,6 +70,11 @@ type EventSink interface {
 	// not carry the originating call id on tool-result events); the TUI
 	// renders results inline without requiring a pairing id.
 	BroadcastSessionToolResult(sessionID, callID, name, result, errMsg string)
+	// BroadcastSessionFileChange carries a write_file/edit_file mutation's
+	// diff from a graph node's tool execution, wired via CoreTools'
+	// FileChangeNotifier (see buildToolExecutor in executor.go). It's a pure
+	// display side-channel — never part of the tool result the LLM sees.
+	BroadcastSessionFileChange(sessionID string, fc runtime.FileChange)
 }
 
 type nodeContextKey struct{}
