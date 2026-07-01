@@ -924,6 +924,63 @@ func TestBuildInitialMessage_FiltersJobAndTaskScopedArtifacts(t *testing.T) {
 	}
 }
 
+// buildInitialMessage must show the task's canonical workspace, not the
+// physical directory tools execute in. Inside a fan-out write branch those
+// differ: WorkspaceDir is the branch's isolated temp copy, WorkspaceBase is
+// the job's real workspace that upstream artifacts (plan output, task
+// descriptions) already reference. Showing WorkspaceDir there handed the
+// worker two roots for the same tree — see issue #32.
+func TestBuildInitialMessage_ShowsCanonicalWorkspaceInFanoutBranch(t *testing.T) {
+	state := NewTaskState("job-1", "task-1", "/home/user/toasters/job-1", "mock", "test-model")
+	state.SetArtifact("task.description", "Implement the backend")
+
+	// Simulate what fanout_node.go's split() does: clone the state, then
+	// point the fork's WorkspaceDir at the branch's isolated temp dir while
+	// WorkspaceBase stays untouched.
+	fork := state.clone()
+	fork.WorkspaceDir = "/var/folders/xyz/T/toasters-fanout-12345/0"
+
+	got := buildInitialMessage(fork)
+
+	if !strings.Contains(got, "Workspace: /home/user/toasters/job-1") {
+		t.Errorf("expected canonical workspace (WorkspaceBase) in initial message, got: %q", got)
+	}
+	if strings.Contains(got, "toasters-fanout-12345") {
+		t.Errorf("isolated temp dir (WorkspaceDir) leaked into initial message: %q", got)
+	}
+}
+
+// Outside fan-out, WorkspaceBase and WorkspaceDir are always equal
+// (NewTaskState sets both to the same value), so the fix is a no-op there.
+func TestBuildInitialMessage_NonFanoutUnaffected(t *testing.T) {
+	state := NewTaskState("job-1", "task-1", "/home/user/toasters/job-1", "mock", "test-model")
+	state.SetArtifact("task.description", "Implement the backend")
+
+	got := buildInitialMessage(state)
+
+	if !strings.Contains(got, "Workspace: /home/user/toasters/job-1") {
+		t.Errorf("expected workspace dir in initial message, got: %q", got)
+	}
+}
+
+// Defensive: if a caller ever constructs TaskState without going through
+// NewTaskState and leaves WorkspaceBase unset, buildInitialMessage must
+// still show a usable path rather than dropping the Workspace line.
+func TestBuildInitialMessage_FallsBackToWorkspaceDirWhenBaseUnset(t *testing.T) {
+	state := &TaskState{
+		JobID:        "job-1",
+		TaskID:       "task-1",
+		WorkspaceDir: "/home/user/toasters/job-1",
+		Artifacts:    map[string]any{"task.description": "Implement the backend"},
+	}
+
+	got := buildInitialMessage(state)
+
+	if !strings.Contains(got, "Workspace: /home/user/toasters/job-1") {
+		t.Errorf("expected fallback to WorkspaceDir when WorkspaceBase is unset, got: %q", got)
+	}
+}
+
 func TestBundledRolesCompose(t *testing.T) {
 	engine := testEngine(t)
 	state := NewTaskState("job-1", "task-1", "/workspace", "mock", "test-model")

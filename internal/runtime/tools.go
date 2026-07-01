@@ -549,6 +549,30 @@ func (ct *CoreTools) resolvePath(path string) (string, error) {
 	return absResolved, nil
 }
 
+// displayPath renders a resolvePath result (an absolute, symlink-normalized
+// path under workDir) relative to the workspace for use in tool-result text.
+// Without this, a write_file/edit_file result that echoes the caller's
+// original absolute path can surface the physical working directory —
+// inside a fan-out branch that's an isolated temp dir the model was never
+// told about (see buildInitialMessage, which now only ever shows the
+// canonical workspace). Falls back to the absolute path if a clean relative
+// path can't be computed.
+func (ct *CoreTools) displayPath(resolved string) string {
+	absWorkDir, err := filepath.EvalSymlinks(ct.workDir)
+	if err != nil {
+		return resolved
+	}
+	absWorkDir, err = filepath.Abs(absWorkDir)
+	if err != nil {
+		return resolved
+	}
+	rel, err := filepath.Rel(absWorkDir, resolved)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return resolved
+	}
+	return rel
+}
+
 // --- Tool implementations ---
 
 // maxScanLineBytes is the longest single line read_file and grep accept.
@@ -664,7 +688,7 @@ func (ct *CoreTools) writeFile(ctx context.Context, args json.RawMessage) (strin
 		}
 	}
 
-	return fmt.Sprintf("wrote %d bytes to %s", n, params.Path), nil
+	return fmt.Sprintf("wrote %d bytes to %s", n, ct.displayPath(resolved)), nil
 }
 
 func (ct *CoreTools) editFile(ctx context.Context, args json.RawMessage) (string, error) {
@@ -716,7 +740,7 @@ func (ct *CoreTools) editFile(ctx context.Context, args json.RawMessage) (string
 		}
 	}
 
-	return fmt.Sprintf("edited %s", params.Path), nil
+	return fmt.Sprintf("edited %s", ct.displayPath(resolved)), nil
 }
 
 func (ct *CoreTools) glob(_ context.Context, args json.RawMessage) (string, error) {

@@ -1226,7 +1226,8 @@ func TestPathAlias_RemapsCanonicalWorkspace(t *testing.T) {
 		"path":    filepath.Join(base, "backend", "main.go"),
 		"content": "package main",
 	})
-	if _, err := ct.Execute(ctx, "write_file", args); err != nil {
+	result, err := ct.Execute(ctx, "write_file", args)
+	if err != nil {
 		t.Fatalf("write_file via canonical path: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(iso, "backend", "main.go")); err != nil {
@@ -1234,6 +1235,18 @@ func TestPathAlias_RemapsCanonicalWorkspace(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(base, "backend")); !os.IsNotExist(err) {
 		t.Errorf("canonical workspace was touched; isolation defeated")
+	}
+
+	// The result echoes a workspace-relative path, not the absolute canonical
+	// path the caller passed nor the isolated branch dir it actually landed
+	// in — either would leak an absolute root the model was never told about.
+	wantRel := filepath.Join("backend", "main.go")
+	assertContains(t, result, wantRel)
+	if strings.Contains(result, base) {
+		t.Errorf("write_file result leaked canonical workspace path: %q", result)
+	}
+	if strings.Contains(result, iso) {
+		t.Errorf("write_file result leaked isolated branch dir: %q", result)
 	}
 
 	// Reading back through the canonical path works too.
