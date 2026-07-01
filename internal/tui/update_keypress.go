@@ -456,17 +456,10 @@ func (m *Model) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 			return m, tickCmd
 		}
-		// Open the blocker selection modal when the blockers pane is focused.
+		// Open the blockers modal when the blockers pane is focused. Opens
+		// even with an empty queue — the modal doubles as resolved history.
 		if m.focused == focusBlockers {
-			if len(m.blockers) == 0 {
-				return m, nil
-			}
-			sel := m.blockersSel
-			if sel >= len(m.blockers) {
-				sel = 0
-			}
-			m.blockersModal = blockersModalState{show: true, sel: sel}
-			return m, nil
+			return m, m.openBlockersModal()
 		}
 		// Open the nodes screen when the fleet pane is focused.
 		if m.focused == focusFleet {
@@ -517,15 +510,7 @@ func (m *Model) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			case "/blockers":
 				m.input.Reset()
 				m.cmdPopup.show = false
-				if len(m.blockers) == 0 {
-					return m, m.addToast("No pending blockers", toastInfo)
-				}
-				sel := m.blockersSel
-				if sel >= len(m.blockers) {
-					sel = 0
-				}
-				m.blockersModal = blockersModalState{show: true, sel: sel}
-				return m, nil
+				return m, m.openBlockersModal()
 			case "/fleet":
 				m.input.Reset()
 				m.cmdPopup.show = false

@@ -236,6 +236,12 @@ func (m *mockOperatorService) History(ctx context.Context) ([]service.ChatEntry,
 func (m *mockOperatorService) Blockers(ctx context.Context) ([]service.Blocker, error) {
 	return nil, nil
 }
+func (m *mockOperatorService) DismissPrompt(ctx context.Context, requestID string) error {
+	return nil
+}
+func (m *mockOperatorService) BlockerHistory(ctx context.Context, limit int) ([]service.BlockerRecord, error) {
+	return nil, nil
+}
 
 // mockDefinitionService implements service.DefinitionService
 type mockDefinitionService struct{}

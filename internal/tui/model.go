@@ -692,7 +692,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.blockersSel >= len(m.blockers) {
 			m.blockersSel = 0
 		}
-		if m.blockersModal.sel >= len(m.blockers) {
+		if m.blockersModal.sel >= m.blockersModalRowCount() {
 			m.blockersModal.sel = 0
 		}
 		return m, nil
@@ -758,6 +758,23 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.prompt.promptMode && m.prompt.requestID == msg.RequestID {
 			m.prompt = promptModeState{}
 			m.input.Reset()
+		}
+		// With the modal open, re-pull history so the just-resolved blocker
+		// moves from the pending queue to the resolved section.
+		if m.blockersModal.show {
+			return m, m.fetchBlockerHistory()
+		}
+		return m, nil
+
+	case BlockerHistoryMsg:
+		if msg.Err != nil {
+			m.blockersModal.histErr = msg.Err
+			return m, nil
+		}
+		m.blockersModal.histErr = nil
+		m.blockersModal.history = msg.Records
+		if m.blockersModal.sel >= m.blockersModalRowCount() && m.blockersModal.sel > 0 {
+			m.blockersModal.sel = m.blockersModalRowCount() - 1
 		}
 		return m, nil
 

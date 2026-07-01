@@ -89,6 +89,14 @@ func (o *mockOperator) RespondToPrompt(ctx context.Context, reqID, resp string) 
 	return nil
 }
 
+func (o *mockOperator) DismissPrompt(ctx context.Context, reqID string) error {
+	return nil
+}
+
+func (o *mockOperator) BlockerHistory(ctx context.Context, limit int) ([]service.BlockerRecord, error) {
+	return nil, nil
+}
+
 func (o *mockOperator) Status(ctx context.Context) (service.OperatorStatus, error) {
 	if o.s.statusFn != nil {
 		return o.s.statusFn(ctx)

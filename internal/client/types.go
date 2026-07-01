@@ -341,7 +341,16 @@ type wireBlockerPayload struct {
 }
 
 type wireBlockerResolvedPayload struct {
-	RequestID string `json:"request_id"`
+	RequestID   string `json:"request_id"`
+	Disposition string `json:"disposition,omitempty"`
+}
+
+// wireBlockerRecord is a resolved blocker returned by the history endpoint.
+type wireBlockerRecord struct {
+	wireBlockerPayload
+	ResolvedAt  time.Time `json:"resolved_at"`
+	Disposition string    `json:"disposition"`
+	Answer      string    `json:"answer,omitempty"`
 }
 
 type wirePromptQuestion struct {
@@ -935,7 +944,7 @@ func ParseSSEPayload(eventType string, raw json.RawMessage) (any, error) {
 		if err := json.Unmarshal(raw, &w); err != nil {
 			return nil, fmt.Errorf("decoding blocker.resolved payload: %w", err)
 		}
-		return service.BlockerResolvedPayload{RequestID: w.RequestID}, nil
+		return service.BlockerResolvedPayload{RequestID: w.RequestID, Disposition: w.Disposition}, nil
 
 	case service.EventTypeJobCreated:
 		var w wireJobCreatedPayload

@@ -119,12 +119,32 @@ func (s *LocalService) SendMessage(ctx context.Context, message string) (string,
 // RespondToPrompt sends the user's answer to an active ask_user prompt.
 // Routed through the shared HITL broker, so it works for both operator
 // prompts and graph-node interrupts without the service needing to know
-// which path is waiting.
+// which path is waiting. The outcome is recorded before the broker delivers
+// the response: the waiter's return path calls ResolveBlocker, which consumes
+// the recorded outcome for the history row and the resolved event.
 func (s *LocalService) RespondToPrompt(_ context.Context, requestID string, response string) error {
 	if len(response) > maxResponseLen {
 		return fmt.Errorf("response too large: %d bytes exceeds maximum %d", len(response), maxResponseLen)
 	}
-	return s.broker.Respond(requestID, response)
+	s.recordBlockerOutcome(requestID, BlockerDispositionAnswered, response)
+	if err := s.broker.Respond(requestID, response); err != nil {
+		s.clearBlockerOutcome(requestID)
+		return err
+	}
+	return nil
+}
+
+// DismissPrompt resolves a pending prompt without a real answer: the waiting
+// caller receives a cancellation message and the blocker is recorded as
+// dismissed (vs answered) in history.
+func (s *LocalService) DismissPrompt(_ context.Context, requestID string) error {
+	const dismissalAnswer = "User cancelled."
+	s.recordBlockerOutcome(requestID, BlockerDispositionDismissed, "")
+	if err := s.broker.Respond(requestID, dismissalAnswer); err != nil {
+		s.clearBlockerOutcome(requestID)
+		return err
+	}
+	return nil
 }
 
 // Status returns the current state of the operator.

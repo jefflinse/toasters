@@ -76,11 +76,14 @@ type promptModeState struct {
 	fromBlocker bool
 }
 
-// blockersModalState holds the selection dialog shown when the user opens the
-// Blockers panel: a list of pending blockers to choose one to answer.
+// blockersModalState holds the Blockers modal: the pending queue (answerable)
+// plus resolved history (browsable). The cursor spans both lists — indices
+// below len(m.blockers) address pending blockers, the rest address history.
 type blockersModalState struct {
-	show bool
-	sel  int // cursor index into m.blockers
+	show    bool
+	sel     int                     // cursor across pending + resolved rows
+	history []service.BlockerRecord // resolved blockers, newest-first
+	histErr error                   // last history fetch failure, shown inline
 }
 
 // cockpitTab identifies which tab of the node detail pane is shown.

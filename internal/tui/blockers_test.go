@@ -314,3 +314,79 @@ func TestRenderSidebar_BlockerCounts(t *testing.T) {
 		}
 	}
 }
+
+func TestRenderBlockersModal_ResolvedHistory(t *testing.T) {
+	t.Parallel()
+
+	m := newMinimalModel(t)
+	m.width = 140
+	m.height = 40
+	m.blockers = []service.Blocker{
+		{RequestID: "p1", Questions: []service.PromptQuestion{{Question: "Pending Q?"}}, CreatedAt: time.Now()},
+	}
+	m.blockersModal = blockersModalState{
+		show: true,
+		sel:  1, // first history row (after the one pending row)
+		history: []service.BlockerRecord{
+			{
+				Blocker: service.Blocker{
+					RequestID: "r1",
+					Source:    "graph:plan",
+					Questions: []service.PromptQuestion{{Question: "Old question?"}},
+					CreatedAt: time.Now().Add(-time.Hour),
+				},
+				ResolvedAt:  time.Now().Add(-30 * time.Minute),
+				Disposition: service.BlockerDispositionAnswered,
+				Answer:      "It was option two.",
+			},
+		},
+	}
+
+	out := m.renderBlockersModal()
+	for _, want := range []string{
+		"Resolved",           // history section header
+		"Old question?",      // resolved blocker's question in detail
+		"answered",           // disposition in detail
+		"It was option two.", // the recorded answer
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("modal output missing %q", want)
+		}
+	}
+	// A resolved row is browse-only: no Answer/Dismiss hints in the footer.
+	if strings.Contains(out, "[Enter] Answer") {
+		t.Error("footer should not offer Enter/answer on a resolved row")
+	}
+}
+
+func TestUpdateBlockersModal_CursorSpansHistory(t *testing.T) {
+	t.Parallel()
+
+	m := newMinimalModel(t)
+	m.blockers = []service.Blocker{{RequestID: "p1", Questions: []service.PromptQuestion{{Question: "Q"}}}}
+	m.blockersModal = blockersModalState{
+		show:    true,
+		sel:     0,
+		history: []service.BlockerRecord{{Blocker: service.Blocker{RequestID: "r1"}}},
+	}
+
+	// Down moves onto the history row; Enter there must NOT open the wizard.
+	res, _ := m.updateBlockersModal(specialKey(tea.KeyDown))
+	got := res.(*Model)
+	if got.blockersModal.sel != 1 {
+		t.Fatalf("sel = %d, want 1 (history row)", got.blockersModal.sel)
+	}
+	res, _ = got.updateBlockersModal(specialKey(tea.KeyEnter))
+	got = res.(*Model)
+	if got.prompt.promptMode {
+		t.Error("Enter on a resolved row must not open the answer wizard")
+	}
+	if !got.blockersModal.show {
+		t.Error("modal should stay open after Enter on a resolved row")
+	}
+	// Down at the end of the combined list stays clamped.
+	res, _ = got.updateBlockersModal(specialKey(tea.KeyDown))
+	if res.(*Model).blockersModal.sel != 1 {
+		t.Errorf("sel = %d, want clamped at 1", res.(*Model).blockersModal.sel)
+	}
+}

@@ -400,7 +400,16 @@ type BlockerAddedMsg struct {
 // or elsewhere, or its caller's context was cancelled). Produced from an
 // EventTypeBlockerResolved event. The TUI removes it from the Blockers panel.
 type BlockerResolvedMsg struct {
-	RequestID string
+	RequestID   string
+	Disposition string // one of the service.BlockerDisposition* constants
+}
+
+// BlockerHistoryMsg delivers the resolved-blockers history to the Blockers
+// modal. Produced by fetchBlockerHistory when the modal opens and again when
+// a blocker resolves while it's open.
+type BlockerHistoryMsg struct {
+	Records []service.BlockerRecord
+	Err     error
 }
 
 // OperatorToolCallMsg is sent after the operator executes one of its tools.

@@ -169,6 +169,17 @@ func (s *remoteOperatorService) RespondToPrompt(ctx context.Context, requestID s
 	return nil
 }
 
+func (s *remoteOperatorService) DismissPrompt(ctx context.Context, requestID string) error {
+	resp, err := s.c.http.post(ctx, fmt.Sprintf("/api/v1/operator/prompts/%s/dismiss", url.PathEscape(requestID)), struct{}{})
+	if err != nil {
+		return fmt.Errorf("dismiss prompt: %w", err)
+	}
+	if err := decodeNoContent(resp); err != nil {
+		return fmt.Errorf("dismiss prompt: %w", err)
+	}
+	return nil
+}
+
 func (s *remoteOperatorService) Status(ctx context.Context) (service.OperatorStatus, error) {
 	resp, err := s.c.http.get(ctx, "/api/v1/operator/status")
 	if err != nil {
@@ -213,13 +224,43 @@ func (s *remoteOperatorService) Blockers(ctx context.Context) ([]service.Blocker
 	}
 	blockers := make([]service.Blocker, 0, len(pr.Items))
 	for _, w := range pr.Items {
-		b := service.Blocker{RequestID: w.RequestID, Source: w.Source, JobID: w.JobID, TaskID: w.TaskID, CreatedAt: w.CreatedAt}
-		for _, q := range w.Questions {
-			b.Questions = append(b.Questions, service.PromptQuestion{Question: q.Question, Options: q.Options})
-		}
-		blockers = append(blockers, b)
+		blockers = append(blockers, wireBlockerToService(w))
 	}
 	return blockers, nil
+}
+
+func (s *remoteOperatorService) BlockerHistory(ctx context.Context, limit int) ([]service.BlockerRecord, error) {
+	path := "/api/v1/operator/blockers/history"
+	if limit > 0 {
+		path += fmt.Sprintf("?limit=%d", limit)
+	}
+	resp, err := s.c.http.get(ctx, path)
+	if err != nil {
+		return nil, fmt.Errorf("get blocker history: %w", err)
+	}
+	pr, err := decodeResponse[paginatedResponse[wireBlockerRecord]](resp)
+	if err != nil {
+		return nil, fmt.Errorf("get blocker history: %w", err)
+	}
+	records := make([]service.BlockerRecord, 0, len(pr.Items))
+	for _, w := range pr.Items {
+		records = append(records, service.BlockerRecord{
+			Blocker:     wireBlockerToService(w.wireBlockerPayload),
+			ResolvedAt:  w.ResolvedAt,
+			Disposition: w.Disposition,
+			Answer:      w.Answer,
+		})
+	}
+	return records, nil
+}
+
+// wireBlockerToService converts a wire blocker payload to its service DTO.
+func wireBlockerToService(w wireBlockerPayload) service.Blocker {
+	b := service.Blocker{RequestID: w.RequestID, Source: w.Source, JobID: w.JobID, TaskID: w.TaskID, CreatedAt: w.CreatedAt}
+	for _, q := range w.Questions {
+		b.Questions = append(b.Questions, service.PromptQuestion{Question: q.Question, Options: q.Options})
+	}
+	return b
 }
 
 // ---------------------------------------------------------------------------

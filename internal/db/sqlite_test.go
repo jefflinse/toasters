@@ -1918,3 +1918,102 @@ func TestMarshalParseTaskMetadata(t *testing.T) {
 		t.Errorf("ParseTaskMetadata(malformed) = %+v, want zero value", got)
 	}
 }
+
+// --- Blocker history tests ---
+
+func TestBlockerLifecycle(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t)
+	ctx := context.Background()
+
+	rec := &BlockerRecord{
+		RequestID: "req-1",
+		Source:    "graph:plan",
+		JobID:     "job-1",
+		TaskID:    "task-1",
+		Questions: `[{"question":"Which path?","options":["left","right"]}]`,
+		CreatedAt: time.Now().Add(-time.Minute),
+	}
+	if err := store.CreateBlocker(ctx, rec); err != nil {
+		t.Fatalf("CreateBlocker: %v", err)
+	}
+
+	// Pending rows are not history.
+	hist, err := store.ListBlockerHistory(ctx, 0)
+	if err != nil {
+		t.Fatalf("ListBlockerHistory: %v", err)
+	}
+	if len(hist) != 0 {
+		t.Fatalf("pending blocker should not appear in history; got %d rows", len(hist))
+	}
+
+	if err := store.ResolveBlockerRecord(ctx, "req-1", "answered", "left", time.Now()); err != nil {
+		t.Fatalf("ResolveBlockerRecord: %v", err)
+	}
+
+	hist, err = store.ListBlockerHistory(ctx, 0)
+	if err != nil {
+		t.Fatalf("ListBlockerHistory after resolve: %v", err)
+	}
+	if len(hist) != 1 {
+		t.Fatalf("history rows = %d, want 1", len(hist))
+	}
+	got := hist[0]
+	if got.RequestID != "req-1" || got.Disposition != "answered" || got.Answer != "left" {
+		t.Errorf("record = %+v, want answered/left", got)
+	}
+	if got.ResolvedAt.IsZero() || got.CreatedAt.IsZero() {
+		t.Errorf("timestamps should be set; created=%v resolved=%v", got.CreatedAt, got.ResolvedAt)
+	}
+	if got.Questions != rec.Questions {
+		t.Errorf("questions JSON round-trip mismatch: %q", got.Questions)
+	}
+
+	// A second resolve must not overwrite the first outcome.
+	if err := store.ResolveBlockerRecord(ctx, "req-1", "cancelled", "", time.Now()); err != nil {
+		t.Fatalf("second ResolveBlockerRecord: %v", err)
+	}
+	hist, _ = store.ListBlockerHistory(ctx, 0)
+	if hist[0].Disposition != "answered" {
+		t.Errorf("second resolve overwrote disposition: %q", hist[0].Disposition)
+	}
+}
+
+func TestSweepUnresolvedBlockers(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t)
+	ctx := context.Background()
+
+	for _, id := range []string{"a", "b"} {
+		if err := store.CreateBlocker(ctx, &BlockerRecord{RequestID: id, CreatedAt: time.Now()}); err != nil {
+			t.Fatalf("CreateBlocker(%s): %v", id, err)
+		}
+	}
+	if err := store.ResolveBlockerRecord(ctx, "a", "answered", "yes", time.Now()); err != nil {
+		t.Fatalf("resolve a: %v", err)
+	}
+
+	swept, err := store.SweepUnresolvedBlockers(ctx)
+	if err != nil {
+		t.Fatalf("SweepUnresolvedBlockers: %v", err)
+	}
+	if swept != 1 {
+		t.Errorf("swept = %d, want 1 (only the pending row)", swept)
+	}
+
+	hist, err := store.ListBlockerHistory(ctx, 0)
+	if err != nil {
+		t.Fatalf("ListBlockerHistory: %v", err)
+	}
+	if len(hist) != 2 {
+		t.Fatalf("history rows = %d, want 2", len(hist))
+	}
+	for _, r := range hist {
+		if r.RequestID == "b" && r.Disposition != "cancelled" {
+			t.Errorf("swept blocker disposition = %q, want cancelled", r.Disposition)
+		}
+		if r.RequestID == "a" && r.Disposition != "answered" {
+			t.Errorf("answered blocker disposition = %q, want answered (sweep must not touch it)", r.Disposition)
+		}
+	}
+}

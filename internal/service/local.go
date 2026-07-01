@@ -123,6 +123,12 @@ type LocalService struct {
 	// cancelled). Guarded by blockerMu.
 	blockerMu sync.Mutex
 	blockers  map[string]Blocker
+	// blockerOutcomes records the answer/disposition delivered via
+	// RespondToPrompt/DismissPrompt, keyed by RequestID, so ResolveBlocker —
+	// which only receives the request ID from the waiter's return path — can
+	// persist how the blocker resolved. An ID with no recorded outcome
+	// resolved by cancellation (waiter's ctx ended). Guarded by blockerMu.
+	blockerOutcomes map[string]blockerOutcome
 
 	// activeGraphNodes tracks currently-executing graph nodes, keyed by their
 	// session id ("graph:<taskID>:<node>"). Graph nodes run via the graph engine
@@ -179,6 +185,7 @@ func NewLocal(cfg LocalConfig) *LocalService {
 		asyncSem:         make(chan struct{}, maxConcurrentOps),
 		broker:           hitl.New(),
 		blockers:         make(map[string]Blocker),
+		blockerOutcomes:  make(map[string]blockerOutcome),
 		activeGraphNodes: make(map[string]GraphNodeSnapshot),
 		op:               cfg.Operator,
 		opProvider:       cfg.Provider,

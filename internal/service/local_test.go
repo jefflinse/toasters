@@ -150,6 +150,14 @@ func (m *mockStore) AppendChatEntry(_ context.Context, _ *db.ChatEntry) error {
 func (m *mockStore) ListRecentChatEntries(_ context.Context, _ int) ([]*db.ChatEntry, error) {
 	return nil, nil
 }
+func (m *mockStore) CreateBlocker(_ context.Context, _ *db.BlockerRecord) error { return nil }
+func (m *mockStore) ResolveBlockerRecord(_ context.Context, _, _, _ string, _ time.Time) error {
+	return nil
+}
+func (m *mockStore) ListBlockerHistory(_ context.Context, _ int) ([]*db.BlockerRecord, error) {
+	return nil, nil
+}
+func (m *mockStore) SweepUnresolvedBlockers(_ context.Context) (int, error) { return 0, nil }
 func (m *mockStore) AppendSessionMessage(_ context.Context, _ *db.SessionMessage) error {
 	return fmt.Errorf("not implemented")
 }

@@ -157,6 +157,15 @@ func runServe(cmd *cobra.Command, args []string) error {
 				slog.Info("reclaimed work interrupted by previous shutdown",
 					"sessions_failed", sessions, "tasks_requeued", tasks)
 			}
+
+			// Blockers still pending in the DB have no waiting caller after a
+			// restart — mark them cancelled so history doesn't show phantom
+			// open questions.
+			if swept, recErr := sqliteStore.SweepUnresolvedBlockers(context.Background()); recErr != nil {
+				slog.Warn("failed to sweep unresolved blockers", "error", recErr)
+			} else if swept > 0 {
+				slog.Info("cancelled blockers orphaned by previous shutdown", "count", swept)
+			}
 		}
 	}
 
