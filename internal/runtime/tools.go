@@ -573,6 +573,34 @@ func (ct *CoreTools) displayPath(resolved string) string {
 	return rel
 }
 
+// referencesCanonicalPath reports whether a shell command string embeds the
+// canonical workspace root (aliasFrom) — the fan-out isolation escape hatch
+// described at the shell tool's aliasFrom check. It checks for the cleaned
+// aliasFrom string verbatim, plus a "~/..." form when aliasFrom sits under
+// the user's home directory, since a model that was told "your workspace is
+// ~/toasters/<job>" may paste that shorthand into a shell command instead of
+// the fully expanded path. This is a substring check, not shell parsing: it
+// deliberately over-rejects unusual quoting/escaping rather than risk
+// under-rejecting a real escape.
+func referencesCanonicalPath(command, aliasFrom string) bool {
+	if command == "" || aliasFrom == "" {
+		return false
+	}
+	if strings.Contains(command, aliasFrom) {
+		return true
+	}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		if rel, err := filepath.Rel(home, aliasFrom); err == nil && rel != "." &&
+			!strings.HasPrefix(rel, ".."+string(filepath.Separator)) && rel != ".." {
+			tilde := "~/" + filepath.ToSlash(rel)
+			if strings.Contains(command, tilde) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // --- Tool implementations ---
 
 // maxScanLineBytes is the longest single line read_file and grep accept.
@@ -1070,6 +1098,21 @@ func (ct *CoreTools) shell(ctx context.Context, args json.RawMessage) (string, e
 	}
 	if err := json.Unmarshal(args, &params); err != nil {
 		return "", fmt.Errorf("parsing arguments: %w", err)
+	}
+
+	// Fan-out isolation escape hatch: resolvePath rewrites absolute paths
+	// under the canonical workspace root (aliasFrom) onto this branch's
+	// isolated workDir, but the shell tool hands the command string to
+	// /bin/sh verbatim — an absolute path embedded in the command bypasses
+	// that rewrite entirely and lets a branch worker touch the real
+	// workspace directly. Reject rather than rewrite: shell syntax is too
+	// varied to safely string-substitute a path inside it. Never surface
+	// ct.workDir here — it's the isolated temp dir and shouldn't be
+	// advertised to the model.
+	if ct.aliasFrom != "" && ct.aliasFrom != ct.workDir && referencesCanonicalPath(params.Command, ct.aliasFrom) {
+		return "", fmt.Errorf("this task runs in an isolated branch and the shell tool cannot reference the "+
+			"workspace path %q by absolute path here; re-run the command using paths relative to the working "+
+			"directory instead (e.g. `go build ./...` rather than an absolute path)", ct.aliasFrom)
 	}
 
 	timeout := time.Duration(params.Timeout) * time.Second
