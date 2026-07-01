@@ -412,7 +412,7 @@ func (m Model) renderFleetMemberFull(mem fleetMember, contentWidth int) string {
 	b.WriteString("\n")
 
 	// Line 3: context-window bar.
-	b.WriteString("  " + renderMiniContextBar(mem.ctxUsed, mem.ctxMax, contentWidth-2))
+	b.WriteString("  " + renderMiniContextBar(mem.ctxUsed, mem.ctxMax, contentWidth-2, false))
 	b.WriteString("\n")
 
 	// Line 4: throughput · cost · tokens.
@@ -467,7 +467,7 @@ func (m Model) renderFleetMemberCompact(mem fleetMember, contentWidth int) strin
 	if barW < 6 {
 		barW = 6
 	}
-	b.WriteString("  " + renderMiniContextBar(mem.ctxUsed, mem.ctxMax, barW) + DimStyle.Render(tailStr))
+	b.WriteString("  " + renderMiniContextBar(mem.ctxUsed, mem.ctxMax, barW, false) + DimStyle.Render(tailStr))
 	b.WriteString("\n")
 
 	// Line 3: most-recent activity (workers only).
@@ -481,8 +481,10 @@ func (m Model) renderFleetMemberCompact(mem fleetMember, contentWidth int) strin
 // renderMiniContextBar renders a single-line context-window occupancy bar with a
 // trailing percentage (or a raw token count when the model's context length is
 // unknown). Fill color goes green → yellow → red as the window fills, so a
-// worker about to blow its context reads at a glance.
-func renderMiniContextBar(used, total, width int) string {
+// worker about to blow its context reads at a glance. When dim is set (a
+// finished node), the fill is a muted green regardless of occupancy, so
+// completed rows read as quiet history distinct from live workers.
+func renderMiniContextBar(used, total, width int, dim bool) string {
 	if width < 4 {
 		width = 4
 	}
@@ -513,9 +515,12 @@ func renderMiniContextBar(used, total, width int) string {
 		filled = barW
 	}
 
-	// Threshold coloring: comfortable / warming / near-limit.
+	// Threshold coloring: comfortable / warming / near-limit. A finished node
+	// uses a muted green regardless of occupancy so it reads as quiet history.
 	fillColor := lipgloss.Color("#52c41a") // green
 	switch {
+	case dim:
+		fillColor = lipgloss.Color("#3f6b3f") // dim green
 	case pct >= 0.85:
 		fillColor = lipgloss.Color("#f5222d") // red
 	case pct >= 0.6:

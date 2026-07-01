@@ -45,14 +45,51 @@ func (m *Model) ensureJobsPaneMarkdownRenderer(width int) {
 // renderer, falling back to the raw input on any error so the user
 // always sees something.
 func (m *Model) renderJobsPaneMarkdown(content string) string {
-	if m.jobsPaneMdRender == nil {
+	return renderMarkdownWith(m.jobsPaneMdRender, content)
+}
+
+// renderMarkdownWith renders content through the given glamour renderer,
+// trimming glamour's trailing newlines, and falls back to the raw input when
+// the renderer is nil or errors so the caller always sees something. Callers
+// pass their own correctly-sized renderer (jobs pane, cockpit, chat) rather
+// than sharing one, which would thrash its word-wrap width.
+func renderMarkdownWith(r *glamour.TermRenderer, content string) string {
+	if r == nil {
 		return content
 	}
-	out, err := m.jobsPaneMdRender.Render(content)
+	out, err := r.Render(content)
 	if err != nil {
 		return content
 	}
 	return strings.TrimRight(out, "\n")
+}
+
+// renderOutputItems renders typed output items (streamed text runs + tool calls)
+// into styled lines: text goes through the given glamour renderer, tool calls
+// through renderToolBlock. Extracted so both the graph pane (jobs-pane renderer)
+// and the cockpit (its own modal-width renderer) reuse the styling while each
+// keeps a renderer sized for its own surface.
+func renderOutputItems(items []outputItem, width int, r *glamour.TermRenderer) string {
+	var sb strings.Builder
+	for i := range items {
+		it := &items[i]
+		switch it.kind {
+		case outputItemText:
+			if it.text == "" {
+				continue
+			}
+			if sb.Len() > 0 {
+				sb.WriteString("\n")
+			}
+			sb.WriteString(renderMarkdownWith(r, it.text))
+		case outputItemTool:
+			if sb.Len() > 0 {
+				sb.WriteString("\n")
+			}
+			sb.WriteString(renderToolBlock(it, width))
+		}
+	}
+	return strings.TrimRight(sb.String(), "\n")
 }
 
 // renderSlotOutputContent returns the styled, glamour-rendered content
@@ -82,27 +119,7 @@ func (m *Model) renderSlotOutputContent(slot *runtimeSlot, width int) string {
 
 	m.ensureJobsPaneMarkdownRenderer(width)
 
-	var sb strings.Builder
-	for i := range slot.items {
-		it := &slot.items[i]
-		switch it.kind {
-		case outputItemText:
-			if it.text == "" {
-				continue
-			}
-			if sb.Len() > 0 {
-				sb.WriteString("\n")
-			}
-			sb.WriteString(m.renderJobsPaneMarkdown(it.text))
-		case outputItemTool:
-			if sb.Len() > 0 {
-				sb.WriteString("\n")
-			}
-			sb.WriteString(renderToolBlock(it, width))
-		}
-	}
-
-	rendered := strings.TrimRight(sb.String(), "\n")
+	rendered := renderOutputItems(slot.items, width, m.jobsPaneMdRender)
 	slot.cachedRender = rendered
 	slot.cachedRenderWidth = width
 	slot.cachedRenderVersion = slot.contentVersion

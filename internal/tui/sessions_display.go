@@ -166,13 +166,13 @@ func (m *Model) sortedRuntimeSessions() []*runtimeSlot {
 	return slots
 }
 
-// filteredGridSessions returns the sorted runtime sessions narrowed by the
-// grid's filter query (case-insensitive substring over job id, role/worker
-// name, and status). With an empty query it is exactly sortedRuntimeSessions,
-// so the grid render path and cell-resolution helper can share one source.
-func (m *Model) filteredGridSessions() []*runtimeSlot {
+// filteredNodeSessions returns the sorted runtime sessions narrowed by the
+// nodes screen's filter query (case-insensitive substring over job id,
+// role/worker name, team, and status). With an empty query it is exactly
+// sortedRuntimeSessions.
+func (m *Model) filteredNodeSessions() []*runtimeSlot {
 	all := m.sortedRuntimeSessions()
-	q := strings.ToLower(strings.TrimSpace(m.grid.filterQuery))
+	q := strings.ToLower(strings.TrimSpace(m.nodes.filterQuery))
 	if q == "" {
 		return all
 	}
@@ -184,22 +184,6 @@ func (m *Model) filteredGridSessions() []*runtimeSlot {
 		}
 	}
 	return out
-}
-
-// gridTotalPages returns the number of grid pages for the current filtered
-// session count and per-page cell capacity, always at least 1. This replaces
-// the prior maxGridSlots-based count, which showed phantom pages whenever the
-// live session count was below the 16-slot ceiling.
-func (m *Model) gridTotalPages(cellsPerPage int) int {
-	if cellsPerPage < 1 {
-		cellsPerPage = 1
-	}
-	n := len(m.filteredGridSessions())
-	pages := (n + cellsPerPage - 1) / cellsPerPage
-	if pages < 1 {
-		pages = 1
-	}
-	return pages
 }
 
 // displayRuntimeSessions returns the runtime sessions filtered for display
@@ -372,32 +356,6 @@ func (m *Model) runtimeSessionsForTask(taskID string) []*runtimeSlot {
 		return []*runtimeSlot{}
 	}
 	return slots
-}
-
-// runtimeSessionForGridCell returns the runtime session displayed in the given
-// grid cell index (within the current page), or nil if the cell does not
-// contain a runtime session.
-func (m *Model) runtimeSessionForGridCell(cellIdx int) *runtimeSlot {
-	cols := m.grid.gridCols
-	rows := m.grid.gridRows
-	// Safety floor: mirrors the floor applied in renderGrid.
-	if cols < 1 {
-		cols = 1
-	}
-	if rows < 1 {
-		rows = 1
-	}
-	cellsPerPage := cols * rows
-	pageOffset := m.grid.gridPage * cellsPerPage
-
-	sortedRT := m.filteredGridSessions()
-
-	// The absolute index into the sorted runtime session list for the given cell.
-	absIdx := pageOffset + cellIdx
-	if absIdx < len(sortedRT) {
-		return sortedRT[absIdx]
-	}
-	return nil
 }
 
 // formatFeedEntry returns a styled string for a service.FeedEntry.

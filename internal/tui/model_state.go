@@ -14,21 +14,34 @@ type streamingState struct {
 	operatorByline   string // formatted byline for the in-progress operator stream; cleared when done
 }
 
-// gridState holds all state for the dynamic NxM worker grid screen.
-type gridState struct {
-	showGrid      bool
-	gridFocusCell int // 0-(cols*rows-1) within current page
-	gridPage      int // current page index
-	gridCols      int // computed from terminal width
-	gridRows      int // computed from terminal height
+// nodesState holds all state for the master-detail nodes screen: a scrollable
+// list of runtime worker sessions on the left and a tabbed detail pane (Output /
+// Prompt / Stats) for the selected node on the right.
+type nodesState struct {
+	show bool
+
+	// List (master) state. Selection is keyed by session ID, not list index, so
+	// it stays pinned to the same node when the list reorders live (a worker
+	// finishing moves it from the active group to the finished group).
+	selID      string // session ID of the selected node ("" = none/first)
+	listScroll int    // item offset of the list viewport
+
+	// focusDetail moves keyboard focus between the list (false) and the detail
+	// pane (true). Selection still tracks in the list while the detail is
+	// focused; the detail always shows the selected node.
+	focusDetail bool
+
+	// Detail (cockpit) state, applied to the selected node.
+	tab          cockpitTab
+	tabScroll    [cockpitTabCount]int // per-tab scroll offset
+	userScrolled bool                 // Output tab: suppresses auto-tail after a manual scroll
 
 	// confirmKill gates the destructive "kill worker" action behind an
-	// Enter/Esc confirmation, mirroring the jobs modal's confirmCancel.
-	confirmKill          bool
-	confirmKillSessionID string
+	// Enter/Esc confirmation. It kills the selected node.
+	confirmKill bool
 
 	// filterActive is true while "/" capture is on; filterQuery narrows the
-	// displayed sessions by job id / role / status (case-insensitive substring).
+	// listed sessions by job id / role / status (case-insensitive substring).
 	filterActive bool
 	filterQuery  string
 }
@@ -70,21 +83,15 @@ type blockersModalState struct {
 	sel  int // cursor index into m.blockers
 }
 
-// promptModalState holds all state for the prompt-viewing modal overlay.
-type promptModalState struct {
-	show    bool
-	content string // the full prompt text being displayed
-	scroll  int    // scroll offset in lines
-}
+// cockpitTab identifies which tab of the node detail pane is shown.
+type cockpitTab int
 
-// outputModalState holds all state for the output-viewing modal overlay.
-type outputModalState struct {
-	show         bool
-	content      string // the full output text being displayed
-	scroll       int    // scroll offset in lines
-	sessionID    string // runtime session ID being viewed
-	userScrolled bool   // true when the user has scrolled away from the bottom; suppresses auto-tail on new events
-}
+const (
+	cockpitTabOutput cockpitTab = iota
+	cockpitTabPrompt
+	cockpitTabStats
+	cockpitTabCount // sentinel: number of tabs
+)
 
 // cmdPopupState holds all state for the slash command autocomplete popup.
 type cmdPopupState struct {

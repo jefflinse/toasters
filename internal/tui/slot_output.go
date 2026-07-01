@@ -2,8 +2,6 @@ package tui
 
 import (
 	"encoding/json"
-	"fmt"
-	"strings"
 	"time"
 )
 
@@ -19,9 +17,8 @@ const (
 
 // outputItem is one renderable element in a runtime slot's output
 // stream. Replaces the old strings.Builder accumulator so the graph
-// pane can render text and tool calls as distinct, stylized blocks
-// while legacy callers (output modal, grid mini view) get a plain-text
-// rendering via outputText().
+// pane and the cockpit can render text and tool calls as distinct,
+// stylized blocks (see renderOutputItems).
 //
 // text is a plain string rather than a strings.Builder because items
 // are stored in a slice and slice growth copies elements; copying a
@@ -108,25 +105,4 @@ func (rs *runtimeSlot) completeTool(callID, name, result string, isError bool) {
 	rs.items[idx].toolError = isError
 	rs.items[idx].endedAt = time.Now()
 	delete(rs.toolItemIdx, callID)
-}
-
-// outputText returns a plain-text rendering of the slot's output. Used
-// by callers (output modal, grid mini view) that don't render styled
-// blocks. The format matches the legacy strings.Builder output it
-// replaced so existing UX is preserved.
-func (rs *runtimeSlot) outputText() string {
-	var b strings.Builder
-	for i := range rs.items {
-		it := &rs.items[i]
-		switch it.kind {
-		case outputItemText:
-			b.WriteString(it.text)
-		case outputItemTool:
-			fmt.Fprintf(&b, "\n⚙ %s\n", it.toolName)
-			if !it.endedAt.IsZero() && it.toolResult != "" {
-				fmt.Fprintf(&b, "→ %s\n", it.toolResult)
-			}
-		}
-	}
-	return b.String()
 }

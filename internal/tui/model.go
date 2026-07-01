@@ -44,7 +44,7 @@ type Model struct {
 	stats          SessionStats
 	err            error
 	mdRender       *glamour.TermRenderer
-	outputMdRender *glamour.TermRenderer // separate renderer sized for the fullscreen output modal
+	outputMdRender *glamour.TermRenderer // separate renderer sized for the node detail pane
 	// jobsPaneMdRender renders worker output in the Jobs modal's graph
 	// pane. The pane has its own width (different from the chat and the
 	// fullscreen modal) and resizes with the layout, so it gets its own
@@ -54,10 +54,9 @@ type Model struct {
 	jobsPaneMdRenderWidth int
 
 	// Sub-models grouping related state.
-	stream      streamingState
-	grid        gridState
-	prompt      promptModeState
-	promptModal promptModalState
+	stream streamingState
+	nodes  nodesState
+	prompt promptModeState
 
 	// Blockers panel: pending ask_user requests queued for the user to answer
 	// on their own schedule. blockersSel is the cursor in the panel;
@@ -66,11 +65,10 @@ type Model struct {
 	blockersSel   int
 	blockersModal blockersModalState
 
-	outputModal outputModalState
-	cmdPopup    cmdPopupState
-	scroll      scrollState
-	progress    progressState
-	chat        chatState
+	cmdPopup cmdPopupState
+	scroll   scrollState
+	progress progressState
+	chat     chatState
 
 	jobs        []service.Job
 	selectedJob int
@@ -117,9 +115,6 @@ type Model struct {
 	// fetchGraphs command at startup and on catalog-change events. Used to
 	// resolve a task's graph_id to a dagmap topology.
 	graphDefs map[string]service.GraphDefinition
-
-	// Worker pane state.
-	selectedWorkerSlot int // which slot is highlighted in the workers pane
 
 	loading          bool // true while waiting for AppReadyMsg before initializing the conversation
 	loadingFrame     int  // current animation frame index (0..numLoadingFrames-1)
@@ -225,11 +220,6 @@ func NewModel(cfg ModelConfig) Model {
 
 	m.loading = true
 
-	m.selectedWorkerSlot = 0
-	m.grid.gridFocusCell = 0
-	m.grid.gridCols = 1
-	m.grid.gridRows = 1
-
 	m.chat.completionMsgIdx = make(map[int]bool)
 	m.chat.expandedMsgs = make(map[int]bool)
 	m.chat.selectedMsgIdx = -1
@@ -276,16 +266,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		m.grid.gridCols, m.grid.gridRows = computeGridDimensions(m.width, m.height)
-		// Clamp page and focus cell to new bounds.
-		cellsPerPage := m.grid.gridCols * m.grid.gridRows
-		totalPages := m.gridTotalPages(cellsPerPage)
-		if m.grid.gridPage >= totalPages {
-			m.grid.gridPage = totalPages - 1
-		}
-		if m.grid.gridFocusCell >= cellsPerPage {
-			m.grid.gridFocusCell = cellsPerPage - 1
-		}
 		m.resizeComponents()
 
 	case tea.PasteMsg:
@@ -446,7 +426,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		slot.appendText(msg.Text)
 		m.appendWorkerStreamText(slot, msg.Text)
-		m.refreshOutputModalIfShowing(msg.SessionID, slot)
+		m.refreshNodesAutoTail(msg.SessionID)
 		m.updateViewportContent()
 		if !m.scroll.userScrolled {
 			m.chatViewport.GotoBottom()
@@ -480,7 +460,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		slot.reasoning.WriteString(msg.Text)
-		m.refreshOutputModalIfShowing(msg.SessionID, slot)
+		m.refreshNodesAutoTail(msg.SessionID)
 		return m, nil
 
 	case SessionToolCallMsg:
@@ -497,7 +477,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.appendWorkerStreamToolCall(slot, msg.ToolID, msg.ToolName, json.RawMessage(msg.ToolInput))
 		}
-		m.refreshOutputModalIfShowing(msg.SessionID, slot)
+		m.refreshNodesAutoTail(msg.SessionID)
 		m.updateViewportContent()
 		if !m.scroll.userScrolled {
 			m.chatViewport.GotoBottom()
@@ -515,7 +495,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		slot.completeTool(msg.CallID, msg.ToolName, result, msg.IsError)
 		m.appendWorkerStreamToolResult(slot, msg.CallID, msg.ToolName, result, msg.IsError)
-		m.refreshOutputModalIfShowing(msg.SessionID, slot)
+		m.refreshNodesAutoTail(msg.SessionID)
 		m.updateViewportContent()
 		if !m.scroll.userScrolled {
 			m.chatViewport.GotoBottom()

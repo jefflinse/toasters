@@ -64,19 +64,9 @@ func (m *Model) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.updatePromptMode(msg)
 	}
 
-	// When the prompt modal is visible, intercept all keys before any other handling.
-	if m.promptModal.show {
-		return m.updatePromptModal(msg)
-	}
-
-	// When the output modal is visible, intercept all keys before grid navigation.
-	if m.outputModal.show {
-		return m.updateOutputModal(msg)
-	}
-
-	// When the grid screen is visible, handle navigation and dismiss it.
-	if m.grid.showGrid {
-		return m.updateGrid(msg)
+	// When the nodes screen is visible, it intercepts all keys.
+	if m.nodes.show {
+		return m.updateNodes(msg)
 	}
 
 	// When the log view is visible, handle navigation and dismiss it.
@@ -97,20 +87,20 @@ func (m *Model) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 
 	case "tab":
-		// Cycle focus: chat → jobs → blockers → workers → chat.
+		// Cycle focus in visual order: jobs → fleet → blockers → chat → jobs.
 		// Skip hidden panels.
 		// (Tab inside the slash command popup is handled above and returns early.)
 		next := m.focused
 		for {
 			switch next {
-			case focusChat:
-				next = focusJobs
 			case focusJobs:
-				next = focusBlockers
-			case focusBlockers:
 				next = focusFleet
 			case focusFleet:
+				next = focusBlockers
+			case focusBlockers:
 				next = focusChat
+			case focusChat:
+				next = focusJobs
 			default:
 				next = focusChat
 			}
@@ -128,18 +118,18 @@ func (m *Model) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, focusCmd
 
 	case "shift+tab":
-		// Reverse cycle: chat → workers → blockers → jobs → chat.
+		// Reverse of the visual order: jobs → chat → blockers → fleet → jobs.
 		next := m.focused
 		for {
 			switch next {
-			case focusChat:
-				next = focusFleet
-			case focusFleet:
-				next = focusBlockers
-			case focusBlockers:
-				next = focusJobs
 			case focusJobs:
 				next = focusChat
+			case focusChat:
+				next = focusBlockers
+			case focusBlockers:
+				next = focusFleet
+			case focusFleet:
+				next = focusJobs
 			default:
 				next = focusChat
 			}
@@ -231,13 +221,6 @@ func (m *Model) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
-		// Navigate worker slots when workers pane is focused.
-		if m.focused == focusFleet {
-			if m.selectedWorkerSlot > 0 {
-				m.selectedWorkerSlot--
-			}
-			return m, nil
-		}
 		// Chat focus + at least one JobResult → walk the result-block
 		// selection backward. Blurs the input on first selection so
 		// the action keys (w/d/Enter) aren't swallowed by the textarea.
@@ -263,13 +246,6 @@ func (m *Model) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if m.focused == focusBlockers {
 			if m.blockersSel < len(m.blockers)-1 {
 				m.blockersSel++
-			}
-			return m, nil
-		}
-		// Navigate worker slots when workers pane is focused.
-		if m.focused == focusFleet {
-			if m.selectedWorkerSlot < maxGridSlots-1 {
-				m.selectedWorkerSlot++
 			}
 			return m, nil
 		}
@@ -360,7 +336,7 @@ func (m *Model) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 
 	case "ctrl+g":
-		m.grid.showGrid = !m.grid.showGrid
+		m.toggleNodes()
 		return m, nil
 
 	case `ctrl+\`:
@@ -424,11 +400,6 @@ func (m *Model) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, m.input.Focus())
 			m.updateViewportContent()
 			return m, tea.Batch(cmds...)
-		}
-		// Exit grid screen.
-		if m.grid.showGrid {
-			m.grid.showGrid = false
-			return m, nil
 		}
 		// Cancel an in-flight operator stream.
 		if m.stream.streaming {
@@ -497,9 +468,9 @@ func (m *Model) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.blockersModal = blockersModalState{show: true, sel: sel}
 			return m, nil
 		}
-		// Open grid view when workers pane is focused.
+		// Open the nodes screen when the fleet pane is focused.
 		if m.focused == focusFleet {
-			m.grid.showGrid = true
+			m.openNodes()
 			return m, nil
 		}
 		// focusOperator, focusChat: handled above or fall through to send.

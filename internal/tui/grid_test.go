@@ -14,114 +14,6 @@ import (
 // TestComputeGridDimensions
 // --------------------------------------------------------------------------
 
-func TestComputeGridDimensions(t *testing.T) {
-	t.Parallel()
-
-	// minCellW = minGridCellInnerW + gridCellBorderW = 40 + 4 = 44
-	// minCellH = minGridCellInnerH + gridCellBorderH = 8  + 2 = 10
-	// availH   = termH - gridHotkeyBarH               = termH - 1
-	// cols     = termW / minCellW  (floor, min 1)
-	// rows     = availH / minCellH (floor, min 1)
-	minCellW := minGridCellInnerW + gridCellBorderW // 44
-	minCellH := minGridCellInnerH + gridCellBorderH // 10
-
-	tests := []struct {
-		name     string
-		termW    int
-		termH    int
-		wantCols int
-		wantRows int
-	}{
-		{
-			// 20/44=0 → clamped to 1; (10-1)/10=0 → clamped to 1
-			name:     "very small terminal (20x10) yields 1x1",
-			termW:    20,
-			termH:    10,
-			wantCols: 1,
-			wantRows: 1,
-		},
-		{
-			// 44/44=1 col; (21-1)/10=2 rows
-			name:     "exactly min cell width (44 wide), tall enough for 2 rows",
-			termW:    minCellW,
-			termH:    2*minCellH + gridHotkeyBarH, // 21
-			wantCols: 1,
-			wantRows: 2,
-		},
-		{
-			// 88/44=2 cols; (11-1)/10=1 row
-			name:     "wide enough for 2 columns (88 wide), tall enough for 1 row",
-			termW:    2 * minCellW,
-			termH:    minCellH + gridHotkeyBarH, // 11
-			wantCols: 2,
-			wantRows: 1,
-		},
-		{
-			// 132/44=3 cols; (31-1)/10=3 rows
-			name:     "wide enough for 3 columns (132 wide), tall enough for 3 rows",
-			termW:    3 * minCellW,
-			termH:    3*minCellH + gridHotkeyBarH, // 31
-			wantCols: 3,
-			wantRows: 3,
-		},
-		{
-			// 220/44=5 cols; (50-1)/10=4 rows
-			name:     "large terminal (220x50) yields 5x4",
-			termW:    220,
-			termH:    50,
-			wantCols: 220 / minCellW,                   // 5
-			wantRows: (50 - gridHotkeyBarH) / minCellH, // 4
-		},
-		{
-			// 0/44=0 → clamped to 1; (0-1)/10=-1/10=0 → clamped to 1
-			name:     "zero width yields 1x1",
-			termW:    0,
-			termH:    0,
-			wantCols: 1,
-			wantRows: 1,
-		},
-		{
-			// minCellW/44=1 col; (0-1)/10=-1/10=0 → clamped to 1 — tests the height-zero path
-			name:     "zero height yields 1x1",
-			termW:    minCellW,
-			termH:    0,
-			wantCols: 1,
-			wantRows: 1,
-		},
-		{
-			// (2*minCellW-1)/44=1 col — one pixel short of fitting 2 columns
-			name:     "one pixel short of 2 columns yields 1 col",
-			termW:    2*minCellW - 1,
-			termH:    minCellH + gridHotkeyBarH,
-			wantCols: 1,
-			wantRows: 1,
-		},
-		{
-			// 44/44=1 col; (11-1)/10=1 row — exactly one cell fits
-			name:     "exactly one cell fits (44x11) yields 1x1",
-			termW:    minCellW,
-			termH:    minCellH + gridHotkeyBarH, // 11
-			wantCols: 1,
-			wantRows: 1,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			gotCols, gotRows := computeGridDimensions(tt.termW, tt.termH)
-			if gotCols != tt.wantCols {
-				t.Errorf("computeGridDimensions(%d, %d) cols = %d, want %d",
-					tt.termW, tt.termH, gotCols, tt.wantCols)
-			}
-			if gotRows != tt.wantRows {
-				t.Errorf("computeGridDimensions(%d, %d) rows = %d, want %d",
-					tt.termW, tt.termH, gotRows, tt.wantRows)
-			}
-		})
-	}
-}
-
 func TestCommaInt(t *testing.T) {
 	t.Parallel()
 
@@ -213,110 +105,6 @@ func TestCommaInt(t *testing.T) {
 	}
 }
 
-func TestRenderContextBar(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name         string
-		used         int
-		systemTokens int
-		total        int
-		width        int
-		streaming    bool
-		spinnerFrame int
-		check        func(t *testing.T, result string)
-	}{
-		{
-			name: "basic usage",
-			used: 5000, systemTokens: 1000, total: 200000, width: 20,
-			check: func(t *testing.T, result string) {
-				if !strings.Contains(result, "5,000") {
-					t.Errorf("result should contain '5,000', got %q", result)
-				}
-				if !strings.Contains(result, "200,000") {
-					t.Errorf("result should contain '200,000', got %q", result)
-				}
-			},
-		},
-		{
-			name: "zero total shows question mark",
-			used: 100, systemTokens: 0, total: 0, width: 20,
-			check: func(t *testing.T, result string) {
-				if !strings.Contains(result, "?") {
-					t.Errorf("result should contain '?', got %q", result)
-				}
-			},
-		},
-		{
-			name: "very small width clamped to 4",
-			used: 100, systemTokens: 0, total: 200000, width: 1,
-			check: func(t *testing.T, result string) {
-				// Should not panic.
-				if result == "" {
-					t.Error("expected non-empty result")
-				}
-			},
-		},
-		{
-			name: "100 percent usage",
-			used: 200000, systemTokens: 1000, total: 200000, width: 20,
-			check: func(t *testing.T, result string) {
-				if !strings.Contains(result, "100%") {
-					t.Errorf("result should contain '100%%', got %q", result)
-				}
-			},
-		},
-		{
-			name: "over 100 percent clamped",
-			used: 300000, systemTokens: 1000, total: 200000, width: 20,
-			check: func(t *testing.T, result string) {
-				if !strings.Contains(result, "100%") {
-					t.Errorf("result should contain '100%%', got %q", result)
-				}
-			},
-		},
-		{
-			name: "streaming mode",
-			used: 50000, systemTokens: 2000, total: 200000, width: 20,
-			streaming: true, spinnerFrame: 3,
-			check: func(t *testing.T, result string) {
-				if result == "" {
-					t.Error("expected non-empty result")
-				}
-			},
-		},
-		{
-			name: "system tokens shown in detail",
-			used: 10000, systemTokens: 3000, total: 200000, width: 20,
-			check: func(t *testing.T, result string) {
-				if !strings.Contains(result, "sys") {
-					t.Errorf("result should contain 'sys' detail, got %q", result)
-				}
-				if !strings.Contains(result, "conv") {
-					t.Errorf("result should contain 'conv' detail, got %q", result)
-				}
-			},
-		},
-		{
-			name: "no system tokens omits detail line",
-			used: 5000, systemTokens: 0, total: 200000, width: 20,
-			check: func(t *testing.T, result string) {
-				if strings.Contains(result, "sys") {
-					t.Errorf("result should not contain 'sys' when systemTokens=0, got %q", result)
-				}
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			result := renderContextBar(tt.used, tt.systemTokens, tt.total, tt.width, tt.streaming, tt.spinnerFrame)
-			tt.check(t, result)
-		})
-	}
-}
-
 func TestRenderReasoningBlock(t *testing.T) {
 	t.Parallel()
 
@@ -366,94 +154,6 @@ func TestRenderReasoningBlock(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			result := renderReasoningBlock(tt.reasoning, tt.contentWidth)
-			tt.check(t, result)
-		})
-	}
-}
-
-func TestMiniTokenBar(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name        string
-		totalTokens int
-		check       func(t *testing.T, result string)
-	}{
-		{
-			name:        "zero tokens",
-			totalTokens: 0,
-			check: func(t *testing.T, result string) {
-				if !strings.HasPrefix(result, "[") {
-					t.Errorf("expected bar to start with '[', got %q", result)
-				}
-				if !strings.Contains(result, "0") {
-					t.Errorf("expected result to contain '0', got %q", result)
-				}
-			},
-		},
-		{
-			name:        "small token count",
-			totalTokens: 500,
-			check: func(t *testing.T, result string) {
-				if !strings.HasPrefix(result, "[") {
-					t.Errorf("expected bar to start with '[', got %q", result)
-				}
-				if !strings.Contains(result, "500") {
-					t.Errorf("expected result to contain '500', got %q", result)
-				}
-			},
-		},
-		{
-			name:        "medium token count",
-			totalTokens: 50000,
-			check: func(t *testing.T, result string) {
-				if !strings.HasPrefix(result, "[") {
-					t.Errorf("expected bar to start with '[', got %q", result)
-				}
-				// 50000 should be formatted as "50k" by compactNum.
-				if !strings.Contains(result, "50k") {
-					t.Errorf("expected result to contain '50k', got %q", result)
-				}
-			},
-		},
-		{
-			name:        "max tokens",
-			totalTokens: 200000,
-			check: func(t *testing.T, result string) {
-				if !strings.HasPrefix(result, "[") {
-					t.Errorf("expected bar to start with '[', got %q", result)
-				}
-				if !strings.Contains(result, "200k") {
-					t.Errorf("expected result to contain '200k', got %q", result)
-				}
-			},
-		},
-		{
-			name:        "over max tokens clamped",
-			totalTokens: 400000,
-			check: func(t *testing.T, result string) {
-				// Should not panic. Bar should be fully filled.
-				if !strings.HasPrefix(result, "[") {
-					t.Errorf("expected bar to start with '[', got %q", result)
-				}
-			},
-		},
-		{
-			name:        "negative tokens",
-			totalTokens: -100,
-			check: func(t *testing.T, result string) {
-				// Should not panic.
-				if !strings.HasPrefix(result, "[") {
-					t.Errorf("expected bar to start with '[', got %q", result)
-				}
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			result := miniTokenBar(tt.totalTokens)
 			tt.check(t, result)
 		})
 	}
@@ -752,7 +452,7 @@ func TestRenderWorkerCard(t *testing.T) {
 			startTime:  base,
 		}
 
-		result := renderWorkerCard(rs, 40, 8, false, 0)
+		result := renderWorkerCard(rs, 40, 8, 0, false, 0)
 
 		if result == "" {
 			t.Error("expected non-empty result for active session")
@@ -772,14 +472,14 @@ func TestRenderWorkerCard(t *testing.T) {
 			endTime:    base.Add(5 * time.Minute),
 		}
 
-		result := renderWorkerCard(rs, 40, 8, false, 0)
+		result := renderWorkerCard(rs, 40, 8, 0, false, 0)
 
 		if result == "" {
 			t.Error("expected non-empty result for completed session")
 		}
 	})
 
-	t.Run("graceful degrade when innerH less than 4", func(t *testing.T) {
+	t.Run("clamps output to innerH lines for small heights", func(t *testing.T) {
 		t.Parallel()
 		rs := &runtimeSlot{
 			sessionID:  "sess-3",
@@ -789,13 +489,12 @@ func TestRenderWorkerCard(t *testing.T) {
 			startTime:  base,
 		}
 
-		// Should not panic for any innerH < 4.
+		// Should not panic for any small innerH, and never exceed the budget.
 		for _, h := range []int{0, 1, 2, 3} {
 			t.Run(fmt.Sprintf("innerH=%d", h), func(t *testing.T) {
-				result := renderWorkerCard(rs, 40, h, false, 0)
-				// Result may be empty for h=0 but must not panic.
+				result := renderWorkerCard(rs, 40, h, 0, false, 0)
 				lines := strings.Split(result, "\n")
-				if len(lines) > h && h > 0 {
+				if h > 0 && len(lines) > h {
 					t.Errorf("innerH=%d: got %d lines, expected at most %d", h, len(lines), h)
 				}
 			})
@@ -813,10 +512,10 @@ func TestRenderWorkerCard(t *testing.T) {
 		}
 
 		// Must not panic.
-		_ = renderWorkerCard(rs, 0, 8, false, 0)
+		_ = renderWorkerCard(rs, 0, 8, 0, false, 0)
 	})
 
-	t.Run("includes worker name in output", func(t *testing.T) {
+	t.Run("uses worker label as headline when task is empty", func(t *testing.T) {
 		t.Parallel()
 		rs := &runtimeSlot{
 			sessionID:  "sess-5",
@@ -826,14 +525,14 @@ func TestRenderWorkerCard(t *testing.T) {
 			startTime:  base,
 		}
 
-		result := stripANSI(renderWorkerCard(rs, 60, 10, false, 0))
+		result := stripANSI(renderWorkerCard(rs, 60, 10, 0, false, 0))
 
 		if !strings.Contains(result, "my-special-worker") {
 			t.Errorf("expected worker name 'my-special-worker' in output, got:\n%s", result)
 		}
 	})
 
-	t.Run("includes team-scoped worker name when teamName is set", func(t *testing.T) {
+	t.Run("uses team-scoped worker label as headline when task is empty", func(t *testing.T) {
 		t.Parallel()
 		rs := &runtimeSlot{
 			sessionID:  "sess-6",
@@ -844,7 +543,7 @@ func TestRenderWorkerCard(t *testing.T) {
 			startTime:  base,
 		}
 
-		result := stripANSI(renderWorkerCard(rs, 60, 10, false, 0))
+		result := stripANSI(renderWorkerCard(rs, 60, 10, 0, false, 0))
 
 		// Should contain "backend/builder" (team-scoped label).
 		if !strings.Contains(result, "backend/builder") {
@@ -863,7 +562,7 @@ func TestRenderWorkerCard(t *testing.T) {
 			startTime:  base,
 		}
 
-		result := stripANSI(renderWorkerCard(rs, 60, 10, false, 0))
+		result := stripANSI(renderWorkerCard(rs, 60, 10, 0, false, 0))
 
 		// Should contain "myteam/orchestrator" exactly once, not "myteam/myteam/orchestrator".
 		if strings.Contains(result, "myteam/myteam/orchestrator") {
@@ -874,25 +573,25 @@ func TestRenderWorkerCard(t *testing.T) {
 		}
 	})
 
-	t.Run("includes task description when present", func(t *testing.T) {
+	t.Run("task description is the headline when present", func(t *testing.T) {
 		t.Parallel()
 		rs := &runtimeSlot{
 			sessionID:  "sess-8",
 			workerName: "worker",
 			jobID:      "job-1",
-			task:       "implement the authentication module",
+			task:       "implement auth module",
 			status:     "active",
 			startTime:  base,
 		}
 
-		result := stripANSI(renderWorkerCard(rs, 60, 10, false, 0))
+		result := stripANSI(renderWorkerCard(rs, 60, 10, 0, false, 0))
 
-		if !strings.Contains(result, "implement the authentication module") {
+		if !strings.Contains(result, "implement auth module") {
 			t.Errorf("expected task description in output, got:\n%s", result)
 		}
 	})
 
-	t.Run("handles session with no activities (active shows waiting placeholder)", func(t *testing.T) {
+	t.Run("active session with no activities shows waiting placeholder", func(t *testing.T) {
 		t.Parallel()
 		rs := &runtimeSlot{
 			sessionID:  "sess-9",
@@ -903,15 +602,14 @@ func TestRenderWorkerCard(t *testing.T) {
 			startTime:  base,
 		}
 
-		result := stripANSI(renderWorkerCard(rs, 60, 10, false, 0))
+		result := stripANSI(renderWorkerCard(rs, 60, 10, 0, false, 0))
 
-		// Active session with no activities should show "waiting for activity…".
 		if !strings.Contains(result, "waiting for activity") {
 			t.Errorf("expected 'waiting for activity' placeholder for active session with no activities, got:\n%s", result)
 		}
 	})
 
-	t.Run("handles session with no activities (completed shows nothing)", func(t *testing.T) {
+	t.Run("completed session with no activities shows no placeholder", func(t *testing.T) {
 		t.Parallel()
 		rs := &runtimeSlot{
 			sessionID:  "sess-10",
@@ -923,15 +621,14 @@ func TestRenderWorkerCard(t *testing.T) {
 			endTime:    base.Add(time.Minute),
 		}
 
-		// Must not panic; completed session with no activities should not show waiting placeholder.
-		result := stripANSI(renderWorkerCard(rs, 60, 10, false, 0))
+		result := stripANSI(renderWorkerCard(rs, 60, 10, 0, false, 0))
 
 		if strings.Contains(result, "waiting for activity") {
 			t.Errorf("completed session should not show 'waiting for activity', got:\n%s", result)
 		}
 	})
 
-	t.Run("handles session with activities (shows activity labels)", func(t *testing.T) {
+	t.Run("shows activities newest-first with gear prefix", func(t *testing.T) {
 		t.Parallel()
 		rs := &runtimeSlot{
 			sessionID:  "sess-11",
@@ -946,11 +643,14 @@ func TestRenderWorkerCard(t *testing.T) {
 			},
 		}
 
-		result := stripANSI(renderWorkerCard(rs, 60, 12, false, 0))
+		result := stripANSI(renderWorkerCard(rs, 60, 12, 0, false, 0))
 
 		// Activities are shown newest-first; "read: config.yaml" is the newest.
 		if !strings.Contains(result, "read: config.yaml") {
 			t.Errorf("expected newest activity 'read: config.yaml' in output, got:\n%s", result)
+		}
+		if !strings.Contains(result, "⚙") {
+			t.Errorf("expected gear prefix on activity lines, got:\n%s", result)
 		}
 	})
 
@@ -972,8 +672,7 @@ func TestRenderWorkerCard(t *testing.T) {
 			},
 		}
 
-		// innerH=6: 1 header + 1 separator = 2 fixed; 4 lines for activities.
-		result := renderWorkerCard(rs, 60, 6, false, 0)
+		result := renderWorkerCard(rs, 60, 6, 0, false, 0)
 		lines := strings.Split(result, "\n")
 
 		if len(lines) > 6 {
@@ -991,7 +690,7 @@ func TestRenderWorkerCard(t *testing.T) {
 			startTime:  base,
 		}
 
-		result := stripANSI(renderWorkerCard(rs, 60, 8, false, 0))
+		result := stripANSI(renderWorkerCard(rs, 60, 8, 0, false, 0))
 
 		// Only the first 8 chars of the job ID should appear.
 		if !strings.Contains(result, "abcdef12") {
@@ -1002,7 +701,7 @@ func TestRenderWorkerCard(t *testing.T) {
 		}
 	})
 
-	t.Run("active session shows lightning bolt status mark", func(t *testing.T) {
+	t.Run("active session shows the bread status glyph", func(t *testing.T) {
 		t.Parallel()
 		rs := &runtimeSlot{
 			sessionID:  "sess-14",
@@ -1012,10 +711,10 @@ func TestRenderWorkerCard(t *testing.T) {
 			startTime:  base,
 		}
 
-		result := stripANSI(renderWorkerCard(rs, 60, 8, false, 0))
+		result := stripANSI(renderWorkerCard(rs, 60, 8, 0, false, 0))
 
-		if !strings.Contains(result, "⚡") {
-			t.Errorf("expected '⚡' status mark for active session, got:\n%s", result)
+		if !strings.Contains(result, "🍞") {
+			t.Errorf("expected '🍞' status glyph for active session, got:\n%s", result)
 		}
 	})
 
@@ -1030,10 +729,28 @@ func TestRenderWorkerCard(t *testing.T) {
 			endTime:    base.Add(time.Minute),
 		}
 
-		result := stripANSI(renderWorkerCard(rs, 60, 8, false, 0))
+		result := stripANSI(renderWorkerCard(rs, 60, 8, 0, false, 0))
 
 		if !strings.Contains(result, "✓") {
 			t.Errorf("expected '✓' status mark for completed session, got:\n%s", result)
+		}
+	})
+
+	t.Run("failed session shows cross status mark", func(t *testing.T) {
+		t.Parallel()
+		rs := &runtimeSlot{
+			sessionID:  "sess-15b",
+			workerName: "worker",
+			jobID:      "job-1",
+			status:     "failed",
+			startTime:  base,
+			endTime:    base.Add(time.Minute),
+		}
+
+		result := stripANSI(renderWorkerCard(rs, 60, 8, 0, false, 0))
+
+		if !strings.Contains(result, "✗") {
+			t.Errorf("expected '✗' status mark for failed session, got:\n%s", result)
 		}
 	})
 
@@ -1049,7 +766,7 @@ func TestRenderWorkerCard(t *testing.T) {
 			endTime:    base.Add(2 * time.Minute),
 		}
 
-		result := stripANSI(renderWorkerCard(rs, 60, 8, false, 0))
+		result := stripANSI(renderWorkerCard(rs, 60, 8, 0, false, 0))
 
 		// Duration should be "2m0s".
 		if !strings.Contains(result, "2m0s") {
@@ -1067,10 +784,29 @@ func TestRenderWorkerCard(t *testing.T) {
 			startTime:  base,
 		}
 
-		result := stripANSI(renderWorkerCard(rs, 60, 8, false, 0))
+		result := stripANSI(renderWorkerCard(rs, 60, 8, 0, false, 0))
 
 		if !strings.Contains(result, "runtime") {
 			t.Errorf("expected 'runtime' fallback label when workerName is empty, got:\n%s", result)
+		}
+	})
+
+	t.Run("renders a context bar showing occupancy percentage", func(t *testing.T) {
+		t.Parallel()
+		rs := &runtimeSlot{
+			sessionID:     "sess-18",
+			workerName:    "worker",
+			jobID:         "job-1",
+			status:        "active",
+			startTime:     base,
+			contextTokens: 40000,
+		}
+
+		// ctxMax = 200000 → 40000/200000 = 20%.
+		result := stripANSI(renderWorkerCard(rs, 60, 8, 200000, false, 0))
+
+		if !strings.Contains(result, "20%") {
+			t.Errorf("expected context bar to show '20%%', got:\n%s", result)
 		}
 	})
 }
@@ -1078,98 +814,6 @@ func TestRenderWorkerCard(t *testing.T) {
 // --------------------------------------------------------------------------
 // TestRuntimeSessionForGridCell
 // --------------------------------------------------------------------------
-
-func TestRuntimeSessionForGridCell(t *testing.T) {
-	t.Parallel()
-
-	// Helper: build a sorted runtime session list with the given IDs.
-	// Sessions are given distinct start times so their order is deterministic.
-	makeRT := func(ids ...string) map[string]*runtimeSlot {
-		m := make(map[string]*runtimeSlot, len(ids))
-		base := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
-		for i, id := range ids {
-			m[id] = &runtimeSlot{
-				sessionID: id,
-				status:    "active",
-				startTime: base.Add(time.Duration(i) * time.Second),
-			}
-		}
-		return m
-	}
-
-	tests := []struct {
-		name          string
-		gridPage      int
-		runtimeSess   map[string]*runtimeSlot
-		cellIdx       int
-		wantSessionID string // empty string means expect nil
-	}{
-		{
-			name:          "page 0, no runtime sessions, returns nil",
-			gridPage:      0,
-			runtimeSess:   map[string]*runtimeSlot{},
-			cellIdx:       0,
-			wantSessionID: "",
-		},
-		{
-			name:          "page 0, 3 runtime sessions — cell 0 maps to rt[0]",
-			gridPage:      0,
-			runtimeSess:   makeRT("rt0", "rt1", "rt2"),
-			cellIdx:       0,
-			wantSessionID: "rt0",
-		},
-		{
-			name:          "page 0, 3 runtime sessions — cell 1 maps to rt[1]",
-			gridPage:      0,
-			runtimeSess:   makeRT("rt0", "rt1", "rt2"),
-			cellIdx:       1,
-			wantSessionID: "rt1",
-		},
-		{
-			name:          "page 0, 3 runtime sessions — cell 2 maps to rt[2]",
-			gridPage:      0,
-			runtimeSess:   makeRT("rt0", "rt1", "rt2"),
-			cellIdx:       2,
-			wantSessionID: "rt2",
-		},
-		{
-			name:        "page 1, 4 sessions — cell 0 on page 1 maps to rt[4]",
-			gridPage:    1,
-			runtimeSess: makeRT("rt0", "rt1", "rt2", "rt3", "rt4", "rt5"),
-			cellIdx:     0,
-			// Page 0 has cells 0-3 (4 cells for 2x2 grid) → rt0..rt3 consumed.
-			// Page 1 cell 0 → rt4.
-			wantSessionID: "rt4",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			m := newMinimalModel(t)
-			m.grid.gridPage = tt.gridPage
-			m.grid.gridCols = 2
-			m.grid.gridRows = 2
-			m.runtimeSessions = tt.runtimeSess
-
-			rs := m.runtimeSessionForGridCell(tt.cellIdx)
-
-			if tt.wantSessionID == "" {
-				if rs != nil {
-					t.Errorf("expected nil, got session %q", rs.sessionID)
-				}
-			} else {
-				if rs == nil {
-					t.Fatalf("expected session %q, got nil", tt.wantSessionID)
-				}
-				if rs.sessionID != tt.wantSessionID {
-					t.Errorf("sessionID = %q, want %q", rs.sessionID, tt.wantSessionID)
-				}
-			}
-		})
-	}
-}
 
 func TestWorkerCardMeta(t *testing.T) {
 	t.Parallel()
