@@ -399,6 +399,92 @@ func TestAttachWorkerStreamFileChange_SynthesizesOnTotalMiss(t *testing.T) {
 	}
 }
 
+// TestSessionFileChangeMsg_AccumulatesDiffStatAndPatchesActivity verifies
+// that Model.Update accumulates diffAdded/diffRemoved on the runtime slot
+// across successive session.file_change events for a session (grid.go's
+// worker-card diff-stat is driven off these totals), and patches the
+// matching activity label (tool name + filename) with a "+N −M" suffix
+// exactly once — a second file_change for the same tool but a different
+// path must not touch the already-patched label.
+func TestSessionFileChangeMsg_AccumulatesDiffStatAndPatchesActivity(t *testing.T) {
+	m := newMinimalModel(t)
+	slot := &runtimeSlot{sessionID: "s", workerName: "graph:implement", jobID: "j"}
+	m.runtimeSessions["s"] = slot
+
+	args, _ := json.Marshal(map[string]string{"path": "main.go"})
+	res, _ := m.Update(SessionToolCallMsg{SessionID: "s", ToolID: "call1", ToolName: "write_file", ToolInput: string(args)})
+	got := res.(*Model)
+
+	res, _ = got.Update(SessionFileChangeMsg{
+		SessionID: "s", ToolName: "write_file", Path: "main.go",
+		Diff: "diff-1", Added: 3, Removed: 1,
+	})
+	got = res.(*Model)
+
+	if slot.diffAdded != 3 || slot.diffRemoved != 1 {
+		t.Fatalf("after first file_change: diffAdded=%d diffRemoved=%d, want 3/1", slot.diffAdded, slot.diffRemoved)
+	}
+	if len(slot.activities) != 1 || slot.activities[0].label != "write: main.go +3 −1" {
+		t.Fatalf("activity label = %+v, want %q", slot.activities, "write: main.go +3 −1")
+	}
+
+	// A second file_change for the same tool (another write_file call) must
+	// still accumulate the cumulative totals but must not re-patch the
+	// already-patched activity label.
+	res, _ = got.Update(SessionFileChangeMsg{
+		SessionID: "s", ToolName: "write_file", Path: "other.go",
+		Diff: "diff-2", Added: 2, Removed: 0,
+	})
+	got = res.(*Model)
+
+	if slot.diffAdded != 5 || slot.diffRemoved != 1 {
+		t.Fatalf("after second file_change: diffAdded=%d diffRemoved=%d, want 5/1", slot.diffAdded, slot.diffRemoved)
+	}
+	if len(slot.activities) != 1 || slot.activities[0].label != "write: main.go +3 −1" {
+		t.Fatalf("activity label should not be double-patched: %+v", slot.activities)
+	}
+}
+
+// TestSessionFileChangeMsg_ParallelSamePathCalls verifies stat attribution
+// when a model issues two parallel tool calls to the same tool+path in one
+// turn: all tool_call events (and thus activity entries) land before either
+// call executes, and file_change notifications then arrive in execution
+// (= insertion) order. Each stat must land on its own activity, oldest
+// unpatched first — a newest-first walk would put call1's stat on call2's
+// label.
+func TestSessionFileChangeMsg_ParallelSamePathCalls(t *testing.T) {
+	m := newMinimalModel(t)
+	slot := &runtimeSlot{sessionID: "s", workerName: "graph:implement", jobID: "j"}
+	m.runtimeSessions["s"] = slot
+
+	args, _ := json.Marshal(map[string]string{"path": "main.go"})
+	res, _ := m.Update(SessionToolCallMsg{SessionID: "s", ToolID: "call1", ToolName: "edit_file", ToolInput: string(args)})
+	got := res.(*Model)
+	res, _ = got.Update(SessionToolCallMsg{SessionID: "s", ToolID: "call2", ToolName: "edit_file", ToolInput: string(args)})
+	got = res.(*Model)
+
+	res, _ = got.Update(SessionFileChangeMsg{
+		SessionID: "s", ToolName: "edit_file", Path: "main.go",
+		Diff: "diff-1", Added: 3, Removed: 1,
+	})
+	got = res.(*Model)
+	res, _ = got.Update(SessionFileChangeMsg{
+		SessionID: "s", ToolName: "edit_file", Path: "main.go",
+		Diff: "diff-2", Added: 2, Removed: 5,
+	})
+	_ = res.(*Model)
+
+	if len(slot.activities) != 2 {
+		t.Fatalf("expected 2 activities, got %+v", slot.activities)
+	}
+	if slot.activities[0].label != "edit: main.go +3 −1" {
+		t.Errorf("first activity = %q, want %q", slot.activities[0].label, "edit: main.go +3 −1")
+	}
+	if slot.activities[1].label != "edit: main.go +2 −5" {
+		t.Errorf("second activity = %q, want %q", slot.activities[1].label, "edit: main.go +2 −5")
+	}
+}
+
 // TestWorkerStreamItemAsOutputItem_CarriesDiffFields verifies the adapter
 // used by both the chat card and cockpit/jobs-modal renderers copies the
 // diff fields across — easy to miss since it's a separate function from the

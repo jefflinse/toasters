@@ -54,6 +54,11 @@ type runtimeSlot struct {
 	// round-trip's prompt size), sourced from the runtime live snapshot.
 	contextTokens int64
 
+	// diffAdded/diffRemoved are session-cumulative line counts accumulated
+	// from session.file_change events (see SessionFileChangeMsg), driving
+	// the fleet grid's "+N −M" diff-stat on the worker card.
+	diffAdded, diffRemoved int
+
 	// temperature/thinking are the sampling settings the session runs with.
 	// Set from a session.meta event (graph nodes) since they aren't carried
 	// in the active-session snapshot. hasTemp distinguishes "0.0 temperature"

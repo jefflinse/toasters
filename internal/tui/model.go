@@ -3,7 +3,9 @@ package tui
 import (
 	"encoding/json"
 	"log/slog"
+	"path"
 	"sort"
+	"strings"
 	"time"
 
 	"charm.land/bubbles/v2/key"
@@ -511,6 +513,29 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// unlike SessionToolResultMsg.
 		slot.attachFileChange(msg.ToolName, msg.Path, msg.Diff, msg.Added, msg.Removed, msg.Created, msg.Truncated)
 		m.attachWorkerStreamFileChange(slot, msg)
+		slot.diffAdded += msg.Added
+		slot.diffRemoved += msg.Removed
+		// Patch the matching activity label with a diff-stat suffix so the
+		// grid's activity feed shows per-call line deltas, not just the
+		// card-level cumulative total. Walk oldest-first over unpatched
+		// entries: parallel same-tool calls create all their activities
+		// before any executes, and notifications arrive in execution
+		// (= insertion) order — same reasoning as attachFileChange. The
+		// label's filename must match too (labels are "write: <base>"),
+		// so same-turn writes to different files can't cross-patch.
+		if stat := formatDiffStat(msg.Added, msg.Removed); stat != "" {
+			base := path.Base(msg.Path)
+			for i := range slot.activities {
+				a := &slot.activities[i]
+				if a.toolName != msg.ToolName || a.statted ||
+					(base != "." && !strings.HasSuffix(a.label, " "+base)) {
+					continue
+				}
+				a.label += " " + stat
+				a.statted = true
+				break
+			}
+		}
 		m.refreshNodesAutoTail(msg.SessionID)
 		m.updateViewportContent()
 		if !m.scroll.userScrolled {
