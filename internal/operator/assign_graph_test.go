@@ -144,6 +144,42 @@ func TestAssignTask_RejectsMissingGraphID(t *testing.T) {
 	}
 }
 
+// TestAssignTask_PropagatesToolchainFromMetadata reproduces issue #31 for the
+// serial-gate advance path: when the operator's assignNextTask calls
+// assign_task on a task that fine-decompose already pre-assigned a graph to
+// (toolchain recorded on task metadata), dispatchGraphTask rebuilds the
+// TaskRequest from the task row and must recover the toolchain rather than
+// dispatching with it empty.
+func TestAssignTask_PropagatesToolchainFromMetadata(t *testing.T) {
+	ctx := context.Background()
+	st, store, gExec, workDir := newTestSystemToolsWithCatalog(t, []*graphexec.Definition{
+		{ID: "bug-fix", Name: "Bug Fix"},
+	})
+	_, taskID := seedGraphJob(t, ctx, store, workDir)
+
+	meta, err := db.MarshalTaskMetadata(db.TaskMetadata{Toolchain: "python"})
+	if err != nil {
+		t.Fatalf("MarshalTaskMetadata: %v", err)
+	}
+	if err := store.SetTaskMetadata(ctx, taskID, meta); err != nil {
+		t.Fatalf("SetTaskMetadata: %v", err)
+	}
+
+	args, _ := json.Marshal(map[string]string{"task_id": taskID, "graph_id": "bug-fix"})
+	if _, err := st.Execute(ctx, "assign_task", args); err != nil {
+		t.Fatalf("assign_task: %v", err)
+	}
+
+	gExec.waitForGraphCall(t)
+	calls := gExec.getCalls()
+	if len(calls) != 1 {
+		t.Fatalf("ExecuteTask called %d times, want 1", len(calls))
+	}
+	if calls[0].Toolchain != "python" {
+		t.Errorf("dispatched Toolchain = %q, want %q (lost on serial-gate advance)", calls[0].Toolchain, "python")
+	}
+}
+
 func TestAssignTask_GraphDispatch_DeferredWhenSiblingInProgress(t *testing.T) {
 	ctx := context.Background()
 	st, store, gExec, workDir := newTestSystemToolsWithCatalog(t, []*graphexec.Definition{
@@ -186,4 +222,3 @@ func TestAssignTask_GraphDispatch_DeferredWhenSiblingInProgress(t *testing.T) {
 		t.Errorf("task.GraphID = %q, want bug-fix", task.GraphID)
 	}
 }
-

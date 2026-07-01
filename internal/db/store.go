@@ -1,6 +1,9 @@
 package db
 
-import "context"
+import (
+	"context"
+	"encoding/json"
+)
 
 // Store defines all database operations for the toasters persistence layer.
 type Store interface {
@@ -24,6 +27,13 @@ type Store interface {
 	// failed back to in_progress, re-sets the graph_id, and clears the stale
 	// result fields. Only tasks currently in failed status are affected.
 	RetryTask(ctx context.Context, id string, graphID string) error
+	// SetTaskMetadata overwrites a task's metadata column in place, independent
+	// of status or graph assignment. Used to persist fine-decompose's
+	// toolchain choice onto the task record so later dispatches (retry,
+	// serial-gate advance) can recover it via ParseTaskMetadata — a
+	// graphexec.TaskRequest only carries Toolchain from the dispatch call
+	// that built it, not from the task row.
+	SetTaskMetadata(ctx context.Context, id string, metadata json.RawMessage) error
 	AddTaskDependency(ctx context.Context, taskID, dependsOn string) error
 	GetReadyTasks(ctx context.Context, jobID string) ([]*Task, error)
 	// ListTaskDependents returns the tasks that declare a dependency on the

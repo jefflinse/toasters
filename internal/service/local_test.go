@@ -93,6 +93,9 @@ func (m *mockStore) PreAssignTaskGraph(_ context.Context, _ string, _ string) er
 func (m *mockStore) RetryTask(_ context.Context, _ string, _ string) error {
 	return fmt.Errorf("not implemented")
 }
+func (m *mockStore) SetTaskMetadata(_ context.Context, _ string, _ json.RawMessage) error {
+	return fmt.Errorf("not implemented")
+}
 func (m *mockStore) AddTaskDependency(_ context.Context, _, _ string) error {
 	return fmt.Errorf("not implemented")
 }

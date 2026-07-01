@@ -1838,3 +1838,83 @@ func TestRetryTask_ConcurrentTransitions(t *testing.T) {
 		t.Errorf("task status = %q, want in_progress", task.Status)
 	}
 }
+
+// TestSetTaskMetadata verifies the metadata column round-trips independent
+// of status/graph, and that it survives an unrelated RetryTask call — this
+// is exactly what the toolchain-persistence fix (issue #31) depends on:
+// fine-decompose writes the toolchain via SetTaskMetadata, and a later
+// retry (which only touches status/graph/result fields) must not clobber it.
+func TestSetTaskMetadata(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+
+	if err := store.CreateJob(ctx, &Job{ID: "job-meta", Title: "J", Status: JobStatusActive}); err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	if err := store.CreateTask(ctx, &Task{
+		ID: "task-meta", JobID: "job-meta", Title: "T", Status: TaskStatusFailed, GraphID: "bug-fix",
+	}); err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+
+	meta, err := MarshalTaskMetadata(TaskMetadata{Toolchain: "go"})
+	if err != nil {
+		t.Fatalf("MarshalTaskMetadata: %v", err)
+	}
+	if err := store.SetTaskMetadata(ctx, "task-meta", meta); err != nil {
+		t.Fatalf("SetTaskMetadata: %v", err)
+	}
+
+	got, err := store.GetTask(ctx, "task-meta")
+	if err != nil {
+		t.Fatalf("GetTask: %v", err)
+	}
+	if tc := ParseTaskMetadata(got.Metadata).Toolchain; tc != "go" {
+		t.Errorf("Toolchain = %q, want %q", tc, "go")
+	}
+
+	// RetryTask only touches status/graph/result columns — metadata (and
+	// thus the toolchain) must survive it.
+	if err := store.RetryTask(ctx, "task-meta", "bug-fix"); err != nil {
+		t.Fatalf("RetryTask: %v", err)
+	}
+	got, err = store.GetTask(ctx, "task-meta")
+	if err != nil {
+		t.Fatalf("GetTask after retry: %v", err)
+	}
+	if tc := ParseTaskMetadata(got.Metadata).Toolchain; tc != "go" {
+		t.Errorf("Toolchain after retry = %q, want %q (metadata should survive RetryTask)", tc, "go")
+	}
+
+	// Setting metadata on a missing task errors.
+	if err := store.SetTaskMetadata(ctx, "nope", meta); err == nil {
+		t.Error("expected error setting metadata on missing task, got nil")
+	}
+}
+
+func TestMarshalParseTaskMetadata(t *testing.T) {
+	// Zero value marshals to nil (NULL column), not "{}".
+	raw, err := MarshalTaskMetadata(TaskMetadata{})
+	if err != nil {
+		t.Fatalf("MarshalTaskMetadata(zero): %v", err)
+	}
+	if raw != nil {
+		t.Errorf("MarshalTaskMetadata(zero) = %q, want nil", raw)
+	}
+
+	raw, err = MarshalTaskMetadata(TaskMetadata{Toolchain: "python"})
+	if err != nil {
+		t.Fatalf("MarshalTaskMetadata: %v", err)
+	}
+	if got := ParseTaskMetadata(raw).Toolchain; got != "python" {
+		t.Errorf("round-trip Toolchain = %q, want %q", got, "python")
+	}
+
+	// Empty/malformed metadata degrades to the zero value rather than erroring.
+	if got := ParseTaskMetadata(nil); got != (TaskMetadata{}) {
+		t.Errorf("ParseTaskMetadata(nil) = %+v, want zero value", got)
+	}
+	if got := ParseTaskMetadata(json.RawMessage("not json")); got != (TaskMetadata{}) {
+		t.Errorf("ParseTaskMetadata(malformed) = %+v, want zero value", got)
+	}
+}

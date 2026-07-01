@@ -358,6 +358,7 @@ func (s *LocalService) assignGraphToParent(ctx context.Context, parent *db.Task,
 				slog.Error("pre-assign failed", "task_id", parent.ID, "error", err)
 				return
 			}
+			s.persistTaskToolchain(ctx, parent.ID, toolchain)
 			slog.Info("fine-decompose pre-assigned graph; sibling in progress",
 				"task_id", parent.ID, "graph_id", graphID, "sibling", t.ID, "reason", reason)
 			s.BroadcastTaskAssigned(parent.ID, parent.JobID, graphID, parent.Title)
@@ -369,6 +370,7 @@ func (s *LocalService) assignGraphToParent(ctx context.Context, parent *db.Task,
 		slog.Error("assign-to-graph failed", "task_id", parent.ID, "error", err)
 		return
 	}
+	s.persistTaskToolchain(ctx, parent.ID, toolchain)
 
 	providerID, model := s.currentDefaults()
 	exec := s.currentGraphExecutor()
@@ -397,6 +399,27 @@ func (s *LocalService) assignGraphToParent(ctx context.Context, parent *db.Task,
 		"task_id", parent.ID, "graph_id", graphID, "reason", reason)
 }
 
+// persistTaskToolchain writes fine-decompose's toolchain choice onto the
+// task's metadata column so it survives past the initial dispatch. Without
+// this, a task's `task.toolchain` artifact is only ever populated from the
+// graphexec.TaskRequest that built it — any later dispatch that rebuilds
+// the request from the task row (retry, serial-gate advance) loses it and
+// slot resolution hard-errors for roles that bind a toolchain slot. No-op
+// when toolchain is empty (graphs with no slot-bearing roles).
+func (s *LocalService) persistTaskToolchain(ctx context.Context, taskID, toolchain string) {
+	if toolchain == "" {
+		return
+	}
+	meta, err := db.MarshalTaskMetadata(db.TaskMetadata{Toolchain: toolchain})
+	if err != nil {
+		slog.Error("failed to encode toolchain metadata", "task_id", taskID, "error", err)
+		return
+	}
+	if err := s.cfg.Store.SetTaskMetadata(ctx, taskID, meta); err != nil {
+		slog.Error("failed to persist toolchain metadata", "task_id", taskID, "error", err)
+	}
+}
+
 // redispatchTaskGraph builds a TaskRequest for an already-graph-bound task and
 // runs it on the graph executor in a detached, service-lifetime-scoped
 // goroutine. Unlike assignGraphToParent it does not touch task status — the
@@ -420,6 +443,7 @@ func (s *LocalService) redispatchTaskGraph(ctx context.Context, task *db.Task, j
 		TaskTitle:       task.Title,
 		TaskDescription: task.Description,
 		GraphID:         graphID,
+		Toolchain:       db.ParseTaskMetadata(task.Metadata).Toolchain,
 		Siblings:        graphexec.FormatSiblingTitles(graphexec.SiblingTitles(jobTasks, task.ID)),
 		WorkspaceDir:    job.WorkspaceDir,
 		ProviderName:    providerID,

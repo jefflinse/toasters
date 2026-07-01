@@ -361,6 +361,19 @@ func (s *SQLiteStore) RetryTask(ctx context.Context, id string, graphID string) 
 	return checkRowsAffected(result, "task", id)
 }
 
+// SetTaskMetadata overwrites a task's metadata column in place, independent
+// of status or graph assignment.
+func (s *SQLiteStore) SetTaskMetadata(ctx context.Context, id string, metadata json.RawMessage) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	result, err := s.db.ExecContext(ctx,
+		"UPDATE tasks SET metadata = ?, updated_at = ? WHERE id = ?",
+		nullableJSON(metadata), now, id)
+	if err != nil {
+		return fmt.Errorf("setting task metadata: %w", err)
+	}
+	return checkRowsAffected(result, "task", id)
+}
+
 func (s *SQLiteStore) AddTaskDependency(ctx context.Context, taskID, dependsOn string) error {
 	_, err := s.db.ExecContext(ctx,
 		"INSERT INTO task_dependencies (task_id, depends_on) VALUES (?, ?)",
