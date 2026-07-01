@@ -310,30 +310,32 @@ func graphDefinitionToWire(d service.GraphDefinition) wireGraphDefinition {
 
 // wireSessionSnapshot is the JSON wire representation of a service.SessionSnapshot.
 type wireSessionSnapshot struct {
-	ID        string    `json:"id"`
-	WorkerID  string    `json:"worker_id"`
-	JobID     string    `json:"job_id,omitempty"`
-	TaskID    string    `json:"task_id,omitempty"`
-	Status    string    `json:"status"`
-	Model     string    `json:"model,omitempty"`
-	Provider  string    `json:"provider,omitempty"`
-	StartTime time.Time `json:"start_time"`
-	TokensIn  int64     `json:"tokens_in"`
-	TokensOut int64     `json:"tokens_out"`
+	ID                   string    `json:"id"`
+	WorkerID             string    `json:"worker_id"`
+	JobID                string    `json:"job_id,omitempty"`
+	TaskID               string    `json:"task_id,omitempty"`
+	Status               string    `json:"status"`
+	Model                string    `json:"model,omitempty"`
+	Provider             string    `json:"provider,omitempty"`
+	StartTime            time.Time `json:"start_time"`
+	TokensIn             int64     `json:"tokens_in"`
+	TokensOut            int64     `json:"tokens_out"`
+	CurrentContextTokens int64     `json:"current_context_tokens,omitempty"`
 }
 
 func sessionSnapshotToWire(s service.SessionSnapshot) wireSessionSnapshot {
 	return wireSessionSnapshot{
-		ID:        s.ID,
-		WorkerID:  s.WorkerID,
-		JobID:     s.JobID,
-		TaskID:    s.TaskID,
-		Status:    s.Status,
-		Model:     s.Model,
-		Provider:  s.Provider,
-		StartTime: s.StartTime,
-		TokensIn:  s.TokensIn,
-		TokensOut: s.TokensOut,
+		ID:                   s.ID,
+		WorkerID:             s.WorkerID,
+		JobID:                s.JobID,
+		TaskID:               s.TaskID,
+		Status:               s.Status,
+		Model:                s.Model,
+		Provider:             s.Provider,
+		StartTime:            s.StartTime,
+		TokensIn:             s.TokensIn,
+		TokensOut:            s.TokensOut,
+		CurrentContextTokens: s.CurrentContextTokens,
 	}
 }
 
@@ -685,6 +687,7 @@ type wireOperatorDonePayload struct {
 	TokensIn        int    `json:"tokens_in"`
 	TokensOut       int    `json:"tokens_out"`
 	ReasoningTokens int    `json:"reasoning_tokens"`
+	ContextTokens   int    `json:"context_tokens,omitempty"`
 }
 
 type wireOperatorToolCallPayload struct {
@@ -842,6 +845,11 @@ type wireSessionMetaPayload struct {
 	Thinking    bool    `json:"thinking,omitempty"`
 }
 
+type wireSessionContextPayload struct {
+	SessionID     string `json:"session_id"`
+	ContextTokens int64  `json:"context_tokens"`
+}
+
 type wireOperationCompletedPayload struct {
 	Kind   string              `json:"kind"`
 	Result wireOperationResult `json:"result"`
@@ -904,6 +912,7 @@ func EventPayloadToWire(ev service.Event) any {
 		return wireOperatorDonePayload{
 			ModelName: p.ModelName, TokensIn: p.TokensIn,
 			TokensOut: p.TokensOut, ReasoningTokens: p.ReasoningTokens,
+			ContextTokens: p.ContextTokens,
 		}
 	case service.Blocker:
 		w := wireBlockerPayload{
@@ -992,6 +1001,10 @@ func EventPayloadToWire(ev service.Event) any {
 		return wireSessionMetaPayload{
 			SessionID: p.SessionID, Model: p.Model, Provider: p.Provider,
 			Temperature: p.Temperature, Thinking: p.Thinking,
+		}
+	case service.SessionContextPayload:
+		return wireSessionContextPayload{
+			SessionID: p.SessionID, ContextTokens: p.ContextTokens,
 		}
 	case service.OperationCompletedPayload:
 		return wireOperationCompletedPayload{

@@ -305,8 +305,105 @@ func (m *Model) leftPanelBlockersPaneHeight() int {
 	return blockersContentH + paneFrameV
 }
 
-// renderSidebar builds the right sidebar: a borderless operator/stats pane
-// that fills the full sidebar height.
+// fleetMember is one live LLM invocation shown in the fleet sidebar: the
+// operator or an active/recent worker session. It carries only what the pane
+// renders so buildFleet can source it from different places (operator stats vs.
+// runtime slots) without the render code caring which.
+type fleetMember struct {
+	label     string // "operator" or "<job>:<role>"
+	icon      string // glyph prefix (⬡ operator, ⚡ worker)
+	model     string
+	active    bool // currently streaming
+	done      bool // terminal worker (completed/failed/cancelled)
+	ctxUsed   int  // live context-window occupancy in tokens
+	ctxMax    int  // model context length (0 if unknown)
+	tokensOut int64
+	costUSD   float64
+	tps       float64 // tokens/sec (valid only when hasTPS)
+	hasTPS    bool
+}
+
+// buildFleet assembles the ordered list of LLMs to display: the operator first
+// (always pinned), then active workers, then the most-recent finished ones —
+// the ordering displayRuntimeSessions already produces.
+func (m Model) buildFleet() []fleetMember {
+	members := make([]fleetMember, 0, 1+len(m.runtimeSessions))
+
+	// Operator, pinned first.
+	op := fleetMember{
+		label:     "operator",
+		icon:      "⬡",
+		model:     m.stats.ModelName,
+		active:    m.stream.streaming,
+		ctxUsed:   m.stats.PromptTokens,
+		ctxMax:    m.stats.ContextLength,
+		tokensOut: int64(m.stats.CompletionTokens),
+	}
+	if m.stats.TotalResponses > 0 && m.stats.TotalResponseTime > 0 {
+		op.tps = float64(m.stats.CompletionTokens) / m.stats.TotalResponseTime.Seconds()
+		op.hasTPS = true
+	} else if m.stream.streaming && m.stats.LastResponseTime > 0 && m.stats.CompletionTokensLive > 0 {
+		op.tps = float64(m.stats.CompletionTokensLive) / m.stats.LastResponseTime.Seconds()
+		op.hasTPS = true
+	}
+	members = append(members, op)
+
+	// Workers.
+	for _, rs := range m.displayRuntimeSessions() {
+		role := strings.TrimPrefix(rs.workerName, "graph:")
+		shortJobID := rs.jobID
+		if len(shortJobID) > 8 {
+			shortJobID = shortJobID[:8]
+		}
+		label := role
+		if shortJobID != "" {
+			label = shortJobID + ":" + role
+		}
+		mem := fleetMember{
+			label:     label,
+			icon:      "⚡",
+			model:     rs.model,
+			active:    rs.status == "active",
+			done:      rs.status != "active",
+			ctxUsed:   int(rs.contextTokens),
+			ctxMax:    m.modelContext[rs.model],
+			tokensOut: rs.tokensOut,
+			costUSD:   rs.costUSD,
+		}
+		elapsed := time.Since(rs.startTime)
+		if !rs.endTime.IsZero() {
+			elapsed = rs.endTime.Sub(rs.startTime)
+		}
+		if elapsed > 0 && rs.tokensOut > 0 {
+			mem.tps = float64(rs.tokensOut) / elapsed.Seconds()
+			mem.hasTPS = true
+		}
+		members = append(members, mem)
+	}
+	return members
+}
+
+// fleetTotals computes the footer aggregates. liveCount and totalTPS both count
+// only active members, so "N live · X t/s" reads as one coherent statement about
+// work happening right now — an idle operator or a finished worker still carries
+// a nonzero since-start rate and must not inflate the live throughput. Cost, by
+// contrast, accumulates over every member: it's the run's total spend.
+func fleetTotals(members []fleetMember) (liveCount int, totalTPS, totalCost float64) {
+	for _, mem := range members {
+		if mem.active {
+			liveCount++
+			if mem.hasTPS {
+				totalTPS += mem.tps
+			}
+		}
+		totalCost += mem.costUSD
+	}
+	return liveCount, totalTPS, totalCost
+}
+
+// renderSidebar builds the right sidebar: a borderless "fleet" pane showing
+// every live LLM (operator + workers) with a context-window bar, throughput and
+// cost, capped with a session-wide aggregate footer.
 func (m Model) renderSidebar(sbWidth int) string {
 	// Horizontal padding matches the frame width used by left-panel panes
 	// (border 2 + padding 2 = 4 cols) so content sizing stays consistent.
@@ -316,20 +413,19 @@ func (m Model) renderSidebar(sbWidth int) string {
 		contentWidth = 1
 	}
 
-	// --- Operator stats ---
-	var sb strings.Builder
+	fleet := m.buildFleet()
 
-	// Leading blank row matches ChatAreaStyle's top padding so the
-	// sidebar's "operator" header doesn't butt up against the very top
-	// of the terminal. The left panel's bordered panes already give it
-	// equivalent breathing room; this restores parity on the right.
+	// --- Header: "fleet" + connection status ---
+	var sb strings.Builder
+	// Leading blank row matches ChatAreaStyle's top padding so the header
+	// doesn't butt up against the very top of the terminal.
 	sb.WriteString("\n")
 
 	connStatus := ConnectedStyle.Render("connected")
 	if !m.stats.Connected {
 		connStatus = ErrorStyle.Render("disconnected")
 	}
-	headerText := gradientText("operator", [3]uint8{255, 175, 0}, [3]uint8{175, 50, 200})
+	headerText := gradientText("fleet", [3]uint8{255, 175, 0}, [3]uint8{175, 50, 200})
 	gap := contentWidth - lipgloss.Width(headerText) - lipgloss.Width(connStatus)
 	if gap < 1 {
 		gap = 1
@@ -337,74 +433,162 @@ func (m Model) renderSidebar(sbWidth int) string {
 	sb.WriteString(headerText + strings.Repeat(" ", gap) + connStatus)
 	sb.WriteString("\n\n")
 
-	modelName := m.stats.ModelName
-	if modelName == "" {
-		modelName = "Loading..."
+	// --- Body: one block per LLM, capped to what fits above the footer ---
+	// Each member renders as ~5 lines (label, model, bar, stats, blank).
+	const linesPerMember = 5
+	const footerLines = 3 // separator + two aggregate rows
+	availableLines := m.height - 2 /*header+blank*/ - footerLines
+	maxMembers := len(fleet)
+	if availableLines > 0 {
+		if fit := availableLines / linesPerMember; fit < maxMembers {
+			maxMembers = fit
+		}
 	}
-	sb.WriteString(SidebarLabelStyle.Render("Model"))
-	sb.WriteString("\n")
-	sb.WriteString(SidebarValueStyle.Render(truncateStr(modelName, contentWidth)))
-	sb.WriteString("\n\n")
-
-	sb.WriteString(SidebarLabelStyle.Render("Endpoint"))
-	sb.WriteString("\n")
-	sb.WriteString(SidebarValueStyle.Render(truncateStr(m.stats.Endpoint, contentWidth)))
-	sb.WriteString("\n")
-
-	sb.WriteString("\n")
-
-	// While streaming, blend in live estimates for the current response.
-	liveCompletionTokens := m.stats.CompletionTokens + m.stats.CompletionTokensLive
-	liveReasoningTokens := m.stats.ReasoningTokens + m.stats.ReasoningTokensLive
-
-	sb.WriteString(sidebarRow("Messages", fmt.Sprintf("%d", m.stats.MessageCount)))
-	sb.WriteString(sidebarRow("Prompt ctx", fmt.Sprintf("%d", m.stats.PromptTokens)))
-	sb.WriteString(sidebarRow("Tokens out", fmt.Sprintf("%d", liveCompletionTokens)))
-	sb.WriteString(sidebarRow("Reasoning", fmt.Sprintf("%d", liveReasoningTokens)))
-
-	tokPerSec := "-"
-	if m.stats.TotalResponses > 0 && m.stats.TotalResponseTime > 0 {
-		tps := float64(m.stats.CompletionTokens) / m.stats.TotalResponseTime.Seconds()
-		tokPerSec = fmt.Sprintf("%.1f t/s", tps)
-	} else if m.stream.streaming && m.stats.LastResponseTime > 0 && m.stats.CompletionTokensLive > 0 {
-		tps := float64(m.stats.CompletionTokensLive) / m.stats.LastResponseTime.Seconds()
-		tokPerSec = fmt.Sprintf("%.1f t/s", tps)
-	}
-	sb.WriteString(sidebarRow("Speed", tokPerSec))
-
-	totalTokens := m.stats.PromptTokens + m.stats.CompletionTokensLive + m.stats.ReasoningTokensLive
-	sb.WriteString(SidebarLabelStyle.Render("Context"))
-	sb.WriteString("\n")
-	sb.WriteString(renderContextBar(totalTokens, m.stats.SystemPromptTokens, m.stats.ContextLength, contentWidth, m.stream.streaming, m.spinnerFrame))
-	sb.WriteString("\n")
-
-	lastResp := "-"
-	if m.stats.LastResponseTime > 0 {
-		lastResp = fmt.Sprintf("%.1fs", m.stats.LastResponseTime.Seconds())
-	}
-	avgResp := "-"
-	if m.stats.TotalResponses > 0 {
-		avg := m.stats.TotalResponseTime / time.Duration(m.stats.TotalResponses)
-		avgResp = fmt.Sprintf("%.1fs", avg.Seconds())
-	}
-	sb.WriteString(sidebarRow("Last resp", lastResp))
-	sb.WriteString(sidebarRow("Avg resp", avgResp))
-
-	// Operator pane fills the full sidebar height and renders borderless,
-	// matching the horizontal frame width used by bordered panes so columns
-	// line up.
-	operatorPaneH := m.height
-	if operatorPaneH < 3 {
-		operatorPaneH = 3
+	if maxMembers < 1 {
+		maxMembers = 1 // always show at least the operator
 	}
 
-	operatorPaneStyle := lipgloss.NewStyle().Padding(0, sidebarHPad)
-	return operatorPaneStyle.Width(sbWidth).Height(operatorPaneH).Render(sb.String())
+	shown := fleet
+	if len(shown) > maxMembers {
+		shown = shown[:maxMembers]
+	}
+	for _, mem := range shown {
+		sb.WriteString(m.renderFleetMember(mem, contentWidth))
+		sb.WriteString("\n")
+	}
+	if hidden := len(fleet) - len(shown); hidden > 0 {
+		sb.WriteString(DimStyle.Render(fmt.Sprintf("  +%d more…", hidden)))
+		sb.WriteString("\n")
+	}
+
+	// --- Footer: session-wide aggregates ---
+	liveCount, totalTPS, totalCost := fleetTotals(fleet)
+	sb.WriteString(DimStyle.Render(strings.Repeat("─", contentWidth)))
+	sb.WriteString("\n")
+	sb.WriteString(SidebarLabelStyle.Render(fmt.Sprintf("Σ %d live", liveCount)))
+	if totalTPS > 0 {
+		sb.WriteString(SidebarValueStyle.Render(fmt.Sprintf(" · %.0f t/s", totalTPS)))
+	}
+	sb.WriteString("\n")
+	if totalCost > 0 {
+		sb.WriteString(SidebarLabelStyle.Render(fmt.Sprintf("Σ ~$%.2f this run", totalCost)))
+		sb.WriteString("\n")
+	}
+
+	// Fleet pane fills the full sidebar height and renders borderless, matching
+	// the horizontal frame width used by bordered panes so columns line up.
+	paneH := m.height
+	if paneH < 3 {
+		paneH = 3
+	}
+	paneStyle := lipgloss.NewStyle().Padding(0, sidebarHPad)
+	return paneStyle.Width(sbWidth).Height(paneH).Render(sb.String())
 }
 
-func sidebarRow(label, value string) string {
-	return SidebarLabelStyle.Render(fmt.Sprintf("%-12s", label)) +
-		SidebarValueStyle.Render(value) + "\n"
+// renderFleetMember renders one LLM block: a status/label line, model name, a
+// compact context-window bar, and a throughput/cost line.
+func (m Model) renderFleetMember(mem fleetMember, contentWidth int) string {
+	var b strings.Builder
+
+	// Line 1: icon + status + label.
+	var statusIcon string
+	switch {
+	case mem.active:
+		statusIcon = string(spinnerChars[m.spinnerFrame%len(spinnerChars)]) + " "
+	case mem.done:
+		statusIcon = "✓ "
+	default:
+		statusIcon = "  " // operator idle
+	}
+	head := mem.icon + statusIcon + truncateStr(mem.label, contentWidth-3)
+	if mem.done {
+		b.WriteString(DimStyle.Render(head))
+	} else {
+		b.WriteString(SidebarValueStyle.Render(head))
+	}
+	b.WriteString("\n")
+
+	// Line 2: model name (dim).
+	model := mem.model
+	if model == "" {
+		model = "…"
+	}
+	b.WriteString("  " + DimStyle.Render(truncateStr(model, contentWidth-2)))
+	b.WriteString("\n")
+
+	// Line 3: context-window bar.
+	b.WriteString("  " + renderMiniContextBar(mem.ctxUsed, mem.ctxMax, contentWidth-2))
+	b.WriteString("\n")
+
+	// Line 4: throughput, cost, output tokens — ordered so the metrics the user
+	// most cares about survive truncation on a narrow column. Cost precedes the
+	// (least essential, partly redundant with the context bar) output-token
+	// count so a tight width drops tokens rather than spend.
+	var stats []string
+	if mem.hasTPS {
+		stats = append(stats, fmt.Sprintf("%.0f t/s", mem.tps))
+	}
+	if mem.costUSD > 0 {
+		stats = append(stats, fmt.Sprintf("~$%.2f", mem.costUSD))
+	}
+	if mem.tokensOut > 0 {
+		stats = append(stats, formatTokenCount(mem.tokensOut)+"↓")
+	}
+	if len(stats) > 0 {
+		b.WriteString("  " + DimStyle.Render(truncateStr(strings.Join(stats, " · "), contentWidth-2)))
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+// renderMiniContextBar renders a single-line context-window occupancy bar with a
+// trailing percentage (or a raw token count when the model's context length is
+// unknown). Fill color goes green → yellow → red as the window fills, so a
+// worker about to blow its context reads at a glance.
+func renderMiniContextBar(used, total, width int) string {
+	if width < 4 {
+		width = 4
+	}
+	var pct float64
+	var label string
+	switch {
+	case used <= 0:
+		// No live occupancy reported (e.g. a graph-node worker, whose usage
+		// isn't streamed). Show "—" rather than a misleading 0% empty bar,
+		// even when the model's context length is known.
+		label = " —"
+	case total > 0:
+		pct = float64(used) / float64(total)
+		if pct > 1 {
+			pct = 1
+		}
+		label = fmt.Sprintf(" %.0f%%", pct*100)
+	default:
+		label = " " + formatTokenCount(int64(used))
+	}
+
+	barW := width - lipgloss.Width(label)
+	if barW < 3 {
+		barW = 3
+	}
+	filled := int(pct * float64(barW))
+	if filled > barW {
+		filled = barW
+	}
+
+	// Threshold coloring: comfortable / warming / near-limit.
+	fillColor := lipgloss.Color("#52c41a") // green
+	switch {
+	case pct >= 0.85:
+		fillColor = lipgloss.Color("#f5222d") // red
+	case pct >= 0.6:
+		fillColor = lipgloss.Color("#faad14") // yellow
+	}
+	emptyStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("237"))
+
+	bar := lipgloss.NewStyle().Foreground(fillColor).Render(strings.Repeat("█", filled)) +
+		emptyStyle.Render(strings.Repeat("░", barW-filled))
+	return bar + DimStyle.Render(label)
 }
 
 // taskStatusIndicator returns the status indicator rune and style for a service task status.

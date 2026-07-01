@@ -72,13 +72,13 @@ type Operator struct {
 	askUserTimeout time.Duration
 
 	// Callbacks — set at construction time via Config, immutable after New().
-	onText      func(turnID, text string)                                            // called with streamed text from the operator LLM
-	onReasoning func(turnID, text string)                                            // called with streamed reasoning chunks; optional
-	onEvent     func(event Event)                                                    // called when the event loop processes an event
-	onTurnDone  func(turnID string, tokensIn, tokensOut, reasoningTokens int)        // called when the operator finishes processing a turn
-	onPrompt    func(requestID string, questions []graphexec.PromptQuestion)         // called when the operator calls ask_user
-	onResolve   func(requestID string)                                               // called when an ask_user request finishes (answered or cancelled)
-	onToolCall  func(name string, args json.RawMessage, result string, isError bool) // called after each operator tool executes
+	onText      func(turnID, text string)                                                    // called with streamed text from the operator LLM
+	onReasoning func(turnID, text string)                                                    // called with streamed reasoning chunks; optional
+	onEvent     func(event Event)                                                            // called when the event loop processes an event
+	onTurnDone  func(turnID string, tokensIn, tokensOut, reasoningTokens, contextTokens int) // called when the operator finishes processing a turn
+	onPrompt    func(requestID string, questions []graphexec.PromptQuestion)                 // called when the operator calls ask_user
+	onResolve   func(requestID string)                                                       // called when an ask_user request finishes (answered or cancelled)
+	onToolCall  func(name string, args json.RawMessage, result string, isError bool)         // called after each operator tool executes
 }
 
 // Config holds configuration for creating an Operator.
@@ -103,12 +103,15 @@ type Config struct {
 	OnReasoning func(turnID, text string)
 	OnEvent     func(event Event) // called when the event loop processes an event
 	// OnTurnDone is called when the operator finishes processing a turn.
+	// contextTokens is the prompt size of the most recent round-trip — the
+	// operator's live context-window occupancy (distinct from tokensIn, which
+	// sums every round-trip in the turn).
 	// turnID matches the OnText/OnReasoning calls of the same turn (empty
 	// for system-initiated turns). tokensIn / tokensOut / reasoningTokens
 	// are the totals across all LLM round-trips that occurred during the
 	// turn (the operator may make several when tool calls are involved).
 	// reasoningTokens is 0 for providers that don't surface them.
-	OnTurnDone  func(turnID string, tokensIn, tokensOut, reasoningTokens int)
+	OnTurnDone  func(turnID string, tokensIn, tokensOut, reasoningTokens, contextTokens int)
 	OnPrompt    func(requestID string, questions []graphexec.PromptQuestion)         // called when the operator calls ask_user
 	OnResolve   func(requestID string)                                               // called when an ask_user request finishes (answered or cancelled)
 	OnToolCall  func(name string, args json.RawMessage, result string, isError bool) // called after each operator tool executes
@@ -672,12 +675,14 @@ func (o *Operator) handleUserMessage(ctx context.Context, payload UserMessagePay
 
 	// Aggregate token usage across all LLM round-trips in this turn so the
 	// emitted OnTurnDone reflects the full cost of handling the user message.
-	var totalIn, totalOut int
+	// lastIn tracks the most recent round-trip's prompt size — the operator's
+	// live context occupancy, which (unlike totalIn) is a point-in-time value.
+	var totalIn, totalOut, lastIn int
 	defer func() {
 		o.mu.Lock()
 		o.turnID = ""
 		o.mu.Unlock()
-		o.emitTurnDone(payload.TurnID, totalIn, totalOut, 0)
+		o.emitTurnDone(payload.TurnID, totalIn, totalOut, 0, lastIn)
 	}()
 
 	// Append user message to the long-lived conversation.
@@ -737,6 +742,7 @@ func (o *Operator) handleUserMessage(ctx context.Context, payload UserMessagePay
 		}
 		totalIn += usage.InputTokens
 		totalOut += usage.OutputTokens
+		lastIn = usage.InputTokens
 
 		// Small local models sometimes emit tool calls with empty or malformed
 		// JSON arguments. Left as-is, that invalid JSON poisons the message
@@ -1058,9 +1064,9 @@ func (o *Operator) emitReasoning(text string) {
 }
 
 // emitTurnDone calls the OnTurnDone callback if set.
-func (o *Operator) emitTurnDone(turnID string, tokensIn, tokensOut, reasoningTokens int) {
+func (o *Operator) emitTurnDone(turnID string, tokensIn, tokensOut, reasoningTokens, contextTokens int) {
 	if o.onTurnDone != nil {
-		o.onTurnDone(turnID, tokensIn, tokensOut, reasoningTokens)
+		o.onTurnDone(turnID, tokensIn, tokensOut, reasoningTokens, contextTokens)
 	}
 }
 

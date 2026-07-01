@@ -180,6 +180,14 @@ type SessionMetaMsg struct {
 	Thinking    bool
 }
 
+// SessionContextMsg carries a session's live context-window occupancy (the
+// most recent round-trip's prompt size). Produced from a session.context event;
+// graph-node slots use it to fill the fleet pane's context bar while they run.
+type SessionContextMsg struct {
+	SessionID     string
+	ContextTokens int64
+}
+
 // SessionReasoningMsg carries a chunk of streamed reasoning (chain-of-
 // thought) from a worker session. Produced by the event consumer in
 // response to a session.reasoning event.
@@ -356,6 +364,7 @@ type OperatorDoneMsg struct {
 	TokensIn        int
 	TokensOut       int
 	ReasoningTokens int
+	ContextTokens   int   // operator's live context-window occupancy (last round-trip prompt size)
 	Err             error // non-nil if the turn failed (e.g. SendMessage error)
 }
 

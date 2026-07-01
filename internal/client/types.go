@@ -93,16 +93,17 @@ type wireGraphDefinition struct {
 }
 
 type wireSessionSnapshot struct {
-	ID        string    `json:"id"`
-	WorkerID  string    `json:"worker_id"`
-	JobID     string    `json:"job_id,omitempty"`
-	TaskID    string    `json:"task_id,omitempty"`
-	Status    string    `json:"status"`
-	Model     string    `json:"model,omitempty"`
-	Provider  string    `json:"provider,omitempty"`
-	StartTime time.Time `json:"start_time"`
-	TokensIn  int64     `json:"tokens_in"`
-	TokensOut int64     `json:"tokens_out"`
+	ID                   string    `json:"id"`
+	WorkerID             string    `json:"worker_id"`
+	JobID                string    `json:"job_id,omitempty"`
+	TaskID               string    `json:"task_id,omitempty"`
+	Status               string    `json:"status"`
+	Model                string    `json:"model,omitempty"`
+	Provider             string    `json:"provider,omitempty"`
+	StartTime            time.Time `json:"start_time"`
+	TokensIn             int64     `json:"tokens_in"`
+	TokensOut            int64     `json:"tokens_out"`
+	CurrentContextTokens int64     `json:"current_context_tokens,omitempty"`
 }
 
 type wireActivityItem struct {
@@ -320,6 +321,7 @@ type wireOperatorDonePayload struct {
 	TokensIn        int    `json:"tokens_in"`
 	TokensOut       int    `json:"tokens_out"`
 	ReasoningTokens int    `json:"reasoning_tokens"`
+	ContextTokens   int    `json:"context_tokens,omitempty"`
 }
 
 type wireOperatorToolCallPayload struct {
@@ -468,6 +470,11 @@ type wireSessionMetaPayload struct {
 	Provider    string  `json:"provider,omitempty"`
 	Temperature float64 `json:"temperature,omitempty"`
 	Thinking    bool    `json:"thinking,omitempty"`
+}
+
+type wireSessionContextPayload struct {
+	SessionID     string `json:"session_id"`
+	ContextTokens int64  `json:"context_tokens"`
 }
 
 type wireOperationCompletedPayload struct {
@@ -619,16 +626,17 @@ func wireGraphDefinitionToService(w wireGraphDefinition) service.GraphDefinition
 
 func wireSessionSnapshotToService(w wireSessionSnapshot) service.SessionSnapshot {
 	return service.SessionSnapshot{
-		ID:        w.ID,
-		WorkerID:  w.WorkerID,
-		JobID:     w.JobID,
-		TaskID:    w.TaskID,
-		Status:    w.Status,
-		Model:     w.Model,
-		Provider:  w.Provider,
-		StartTime: w.StartTime,
-		TokensIn:  w.TokensIn,
-		TokensOut: w.TokensOut,
+		ID:                   w.ID,
+		WorkerID:             w.WorkerID,
+		JobID:                w.JobID,
+		TaskID:               w.TaskID,
+		Status:               w.Status,
+		Model:                w.Model,
+		Provider:             w.Provider,
+		StartTime:            w.StartTime,
+		TokensIn:             w.TokensIn,
+		TokensOut:            w.TokensOut,
+		CurrentContextTokens: w.CurrentContextTokens,
 	}
 }
 
@@ -892,6 +900,7 @@ func ParseSSEPayload(eventType string, raw json.RawMessage) (any, error) {
 			TokensIn:        w.TokensIn,
 			TokensOut:       w.TokensOut,
 			ReasoningTokens: w.ReasoningTokens,
+			ContextTokens:   w.ContextTokens,
 		}, nil
 
 	case service.EventTypeBlockerAdded:
@@ -1113,6 +1122,16 @@ func ParseSSEPayload(eventType string, raw json.RawMessage) (any, error) {
 			Provider:    w.Provider,
 			Temperature: w.Temperature,
 			Thinking:    w.Thinking,
+		}, nil
+
+	case service.EventTypeSessionContext:
+		var w wireSessionContextPayload
+		if err := json.Unmarshal(raw, &w); err != nil {
+			return nil, fmt.Errorf("decoding session.context payload: %w", err)
+		}
+		return service.SessionContextPayload{
+			SessionID:     w.SessionID,
+			ContextTokens: w.ContextTokens,
 		}, nil
 
 	case service.EventTypeOperationCompleted:

@@ -291,11 +291,11 @@ func (s *LocalService) startOperator(p provider.Provider, providerID, model stri
 		OnEvent: func(event operator.Event) {
 			s.BroadcastOperatorEvent(event)
 		},
-		OnTurnDone: func(turnID string, tokensIn, tokensOut, reasoningTokens int) {
+		OnTurnDone: func(turnID string, tokensIn, tokensOut, reasoningTokens, contextTokens int) {
 			reasoningBatcher.Flush()
 			batcher.Flush()
 			activeTurn.Store("")
-			s.BroadcastOperatorDone(turnID, model, tokensIn, tokensOut, reasoningTokens)
+			s.BroadcastOperatorDone(turnID, model, tokensIn, tokensOut, reasoningTokens, contextTokens)
 		},
 		OnPrompt:   s.BroadcastOperatorPrompt,
 		OnResolve:  s.ResolveBlocker,

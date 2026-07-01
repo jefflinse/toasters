@@ -51,7 +51,12 @@ type Session struct {
 	termErr   error  // terminal error from Run(), set under mu before return
 	tokensIn  atomic.Int64
 	tokensOut atomic.Int64
-	startTime time.Time
+	// lastInputTokens is the prompt size of the most recent API round-trip —
+	// i.e. the session's current context occupancy. Unlike tokensIn (a
+	// cumulative sum across every round-trip), this reflects how full the
+	// model's context window is right now.
+	lastInputTokens atomic.Int64
+	startTime       time.Time
 
 	// Observer pattern.
 	mu          sync.Mutex
@@ -320,6 +325,9 @@ func (s *Session) collectResponse(ctx context.Context, eventCh <-chan provider.S
 				if ev.Usage != nil {
 					s.tokensIn.Add(int64(ev.Usage.InputTokens))
 					s.tokensOut.Add(int64(ev.Usage.OutputTokens))
+					// The most recent round-trip's prompt size is the current
+					// context occupancy; overwrite rather than accumulate.
+					s.lastInputTokens.Store(int64(ev.Usage.InputTokens))
 				}
 
 			case provider.EventError:
@@ -362,17 +370,18 @@ func (s *Session) Snapshot() SessionSnapshot {
 	s.mu.Unlock()
 
 	return SessionSnapshot{
-		ID:        s.id,
-		WorkerID:  s.workerID,
-		TeamName:  s.teamName,
-		JobID:     s.jobID,
-		TaskID:    s.taskID,
-		Status:    status,
-		Model:     s.model,
-		Provider:  s.prov.Name(),
-		StartTime: s.startTime,
-		TokensIn:  s.tokensIn.Load(),
-		TokensOut: s.tokensOut.Load(),
+		ID:                   s.id,
+		WorkerID:             s.workerID,
+		TeamName:             s.teamName,
+		JobID:                s.jobID,
+		TaskID:               s.taskID,
+		Status:               status,
+		Model:                s.model,
+		Provider:             s.prov.Name(),
+		StartTime:            s.startTime,
+		TokensIn:             s.tokensIn.Load(),
+		TokensOut:            s.tokensOut.Load(),
+		CurrentContextTokens: s.lastInputTokens.Load(),
 	}
 }
 

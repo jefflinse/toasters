@@ -390,6 +390,9 @@ func (m *mockEventSink) BroadcastSessionPrompt(sessionID, _, _ string) {
 func (m *mockEventSink) BroadcastSessionMeta(sessionID, model, _ string, temperature float64, _ bool) {
 	m.record(fmt.Sprintf("session_meta:%s:%s:%.1f", sessionID, model, temperature))
 }
+func (m *mockEventSink) BroadcastSessionContextTokens(sessionID string, contextTokens int64) {
+	m.record(fmt.Sprintf("session_context:%s:%d", sessionID, contextTokens))
+}
 func (m *mockEventSink) BroadcastSessionText(sessionID, text string) {
 	m.record(fmt.Sprintf("session_text:%s:%s", sessionID, text))
 }
@@ -540,6 +543,34 @@ func TestExecutor_Execute_ForwardsSessionReasoning(t *testing.T) {
 }
 
 // --- HITL interrupt handler ---
+
+func TestOnEventSink_ForwardsUsageAsContextTokens(t *testing.T) {
+	sink := &mockEventSink{}
+	ctx := context.WithValue(context.Background(), nodeContextKey{}, &NodeContext{
+		SessionID: "graph:task-1:implement",
+		Sink:      sink,
+	})
+
+	handler := onEventSink(ctx)
+	if handler == nil {
+		t.Fatal("onEventSink returned nil despite a configured sink")
+	}
+	// A usage event (the round-trip's prompt size) must be forwarded as the
+	// session's live context occupancy.
+	handler(agent.Event{Kind: agent.EventKindUsage, Usage: &provider.Usage{InputTokens: 4096, OutputTokens: 100}})
+
+	events := sink.snapshot()
+	want := "session_context:graph:task-1:implement:4096"
+	found := false
+	for _, e := range events {
+		if e == want {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("sink events = %v, want to contain %q", events, want)
+	}
+}
 
 type capturingSink struct {
 	mockEventSink

@@ -707,7 +707,7 @@ func TestBroadcastOperatorDone_ClearsTurnID(t *testing.T) {
 	defer cancel()
 	ch := svc.subscribe(ctx)
 
-	svc.BroadcastOperatorDone("turn-xyz", "claude-3", 100, 200, 0)
+	svc.BroadcastOperatorDone("turn-xyz", "claude-3", 100, 200, 0, 0)
 
 	select {
 	case ev := <-ch:
@@ -755,7 +755,7 @@ func TestBroadcastOperatorDone_SystemTurnLeavesUserGateAlone(t *testing.T) {
 	svc.currentTurnID = "turn-user"
 	svc.turnMu.Unlock()
 
-	svc.BroadcastOperatorDone("", "claude-3", 1, 2, 0)
+	svc.BroadcastOperatorDone("", "claude-3", 1, 2, 0, 0)
 
 	svc.turnMu.Lock()
 	turnID := svc.currentTurnID
@@ -775,7 +775,7 @@ func TestBroadcastOperatorDone_MismatchedTurnLeavesGateAlone(t *testing.T) {
 	svc.currentTurnID = "turn-new"
 	svc.turnMu.Unlock()
 
-	svc.BroadcastOperatorDone("turn-old", "claude-3", 1, 2, 0)
+	svc.BroadcastOperatorDone("turn-old", "claude-3", 1, 2, 0, 0)
 
 	svc.turnMu.Lock()
 	turnID := svc.currentTurnID

@@ -167,6 +167,11 @@ type Model struct {
 	// originate from session.* events on the unified service event stream.
 	runtimeSessions map[string]*runtimeSlot // keyed by session ID
 
+	// modelContext maps a model ID to its context-window length, populated from
+	// the model list. The fleet pane uses it to size per-worker context bars,
+	// since worker sessions carry only the model name, not its context length.
+	modelContext map[string]int
+
 	// Log view state.
 	logView logViewState
 }
@@ -461,6 +466,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			slot.temperature = msg.Temperature
 			slot.hasTemp = true
 			slot.thinking = msg.Thinking
+		}
+		return m, nil
+
+	case SessionContextMsg:
+		// Live context-window occupancy for a graph-node session (their token
+		// counts otherwise only reach the DB at completion). Only apply when the
+		// slot exists; ordering with graph.node_started isn't guaranteed.
+		if slot, ok := m.runtimeSessions[msg.SessionID]; ok {
+			slot.contextTokens = msg.ContextTokens
 		}
 		return m, nil
 

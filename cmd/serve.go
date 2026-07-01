@@ -378,11 +378,11 @@ func runServe(cmd *cobra.Command, args []string) error {
 			OnEvent: func(event operator.Event) {
 				svc.BroadcastOperatorEvent(event)
 			},
-			OnTurnDone: func(turnID string, tokensIn, tokensOut, reasoningTokens int) {
+			OnTurnDone: func(turnID string, tokensIn, tokensOut, reasoningTokens, contextTokens int) {
 				reasoningBatcher.Flush()
 				batcher.Flush()
 				activeTurn.Store("")
-				svc.BroadcastOperatorDone(turnID, cfg.Operator.Model, tokensIn, tokensOut, reasoningTokens)
+				svc.BroadcastOperatorDone(turnID, cfg.Operator.Model, tokensIn, tokensOut, reasoningTokens, contextTokens)
 			},
 			// Without this, an operator started at boot (the case now that a
 			// provider/model ship as config defaults) calls ask_user but the

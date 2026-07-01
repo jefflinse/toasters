@@ -186,6 +186,9 @@ type SessionSnapshot struct {
 	StartTime time.Time
 	TokensIn  int64
 	TokensOut int64
+	// CurrentContextTokens is the live context-window occupancy (prompt size of
+	// the most recent round-trip); 0 if not yet reported.
+	CurrentContextTokens int64
 }
 
 // GraphNodeSnapshot describes a graph node that is currently executing. Graph

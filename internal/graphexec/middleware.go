@@ -46,6 +46,11 @@ type EventSink interface {
 	// by a UUID, not the "graph:<task>:<node>" slot id), so the executor emits
 	// them explicitly once per node for the grid card to display.
 	BroadcastSessionMeta(sessionID, model, provider string, temperature float64, thinking bool)
+	// BroadcastSessionContextTokens carries a node session's live context-window
+	// occupancy (most recent round-trip's prompt size), emitted per round-trip so
+	// the fleet pane's context bar fills while the node runs — graph-node token
+	// counts otherwise only reach the DB at completion.
+	BroadcastSessionContextTokens(sessionID string, contextTokens int64)
 	// BroadcastSessionText carries streamed LLM text from a graph node. The
 	// SessionID convention is "graph:<TaskID>:<Node>" so the TUI's existing
 	// runtimeSlot pipeline picks it up without a special case.

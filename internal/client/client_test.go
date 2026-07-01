@@ -872,7 +872,7 @@ func TestSystem_GetProgressState(t *testing.T) {
 					{ID: "sess-1", WorkerID: "agent-a", Status: service.SessionStatusActive},
 				},
 				LiveSnapshots: []service.SessionSnapshot{
-					{ID: "sess-1", WorkerID: "agent-a", Status: "active", TokensIn: 42},
+					{ID: "sess-1", WorkerID: "agent-a", Status: "active", TokensIn: 42, CurrentContextTokens: 4096},
 				},
 				FeedEntries: []service.FeedEntry{
 					{ID: 1, EntryType: service.FeedEntryTypeTaskStarted, Content: "Task started"},
@@ -918,6 +918,12 @@ func TestSystem_GetProgressState(t *testing.T) {
 
 	if len(ps.LiveSnapshots) != 1 || ps.LiveSnapshots[0].TokensIn != 42 {
 		t.Errorf("live_snapshots = %v, want [{TokensIn: 42}]", ps.LiveSnapshots)
+	}
+	// CurrentContextTokens must survive the full server-encode → client-decode
+	// round-trip; it drives the fleet pane's per-worker context bar.
+	if len(ps.LiveSnapshots) == 1 && ps.LiveSnapshots[0].CurrentContextTokens != 4096 {
+		t.Errorf("live_snapshots[0].CurrentContextTokens = %d, want 4096",
+			ps.LiveSnapshots[0].CurrentContextTokens)
 	}
 
 	if len(ps.FeedEntries) != 1 || ps.FeedEntries[0].EntryType != service.FeedEntryTypeTaskStarted {

@@ -531,6 +531,12 @@ func onEventSink(ctx context.Context) func(agent.Event) {
 				pendingCallIDs = pendingCallIDs[1:]
 			}
 			nc.Sink.BroadcastSessionToolResult(nc.SessionID, callID, ev.ToolName, ev.Result, "")
+		case agent.EventKindUsage:
+			// The round-trip's input tokens are the node's current context
+			// occupancy; forward them so the fleet pane's context bar fills.
+			if ev.Usage != nil {
+				nc.Sink.BroadcastSessionContextTokens(nc.SessionID, int64(ev.Usage.InputTokens))
+			}
 		}
 	}
 }
