@@ -443,6 +443,56 @@ func TestUpdateGrid_PromptWithNoSession(t *testing.T) {
 	}
 }
 
+func TestUpdateGrid_OpensCockpit(t *testing.T) {
+	t.Parallel()
+
+	setup := func() *Model {
+		m := newMinimalModel(t)
+		m.grid.showGrid = true
+		m.grid.gridCols = 1
+		m.grid.gridRows = 1
+		m.grid.gridFocusCell = 0
+		m.runtimeSessions["s1"] = &runtimeSlot{
+			sessionID: "s1", jobID: "alpha", workerName: "coder", status: "active",
+		}
+		return &m
+	}
+
+	t.Run("enter opens the cockpit on the Output tab", func(t *testing.T) {
+		t.Parallel()
+		m := setup()
+		res, _ := m.updateGrid(specialKey(tea.KeyEnter))
+		got := res.(*Model)
+
+		if !got.cockpit.show {
+			t.Fatal("expected cockpit to open on Enter")
+		}
+		if got.cockpit.sessionID != "s1" {
+			t.Errorf("sessionID = %q, want s1", got.cockpit.sessionID)
+		}
+		if got.cockpit.tab != cockpitTabOutput {
+			t.Errorf("tab = %d, want Output", got.cockpit.tab)
+		}
+	})
+
+	t.Run("p opens the cockpit on the Prompt tab", func(t *testing.T) {
+		t.Parallel()
+		m := setup()
+		res, _ := m.updateGrid(keyPress('p'))
+		got := res.(*Model)
+
+		if !got.cockpit.show {
+			t.Fatal("expected cockpit to open on p")
+		}
+		if got.cockpit.sessionID != "s1" {
+			t.Errorf("sessionID = %q, want s1", got.cockpit.sessionID)
+		}
+		if got.cockpit.tab != cockpitTabPrompt {
+			t.Errorf("tab = %d, want Prompt", got.cockpit.tab)
+		}
+	})
+}
+
 func TestUpdateGrid_UnhandledKillKey(t *testing.T) {
 	t.Parallel()
 
