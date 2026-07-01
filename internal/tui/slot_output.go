@@ -130,4 +130,3 @@ func (rs *runtimeSlot) outputText() string {
 	}
 	return b.String()
 }
-

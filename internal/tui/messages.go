@@ -70,7 +70,7 @@ const (
 	focusChat     focusedPanel = iota
 	focusJobs     focusedPanel = iota
 	focusBlockers focusedPanel = iota
-	focusWorkers  focusedPanel = iota
+	focusFleet    focusedPanel = iota
 )
 
 // SessionStats tracks session-level statistics displayed in the sidebar.

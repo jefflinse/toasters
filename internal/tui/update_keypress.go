@@ -108,14 +108,14 @@ func (m *Model) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			case focusJobs:
 				next = focusBlockers
 			case focusBlockers:
-				next = focusWorkers
-			case focusWorkers:
+				next = focusFleet
+			case focusFleet:
 				next = focusChat
 			default:
 				next = focusChat
 			}
 			// Skip left-panel targets when left panel is hidden or empty.
-			if !m.shouldShowLeftPanel() && (next == focusJobs || next == focusBlockers || next == focusWorkers) {
+			if !m.shouldShowLeftPanel() && (next == focusJobs || next == focusBlockers || next == focusFleet) {
 				continue
 			}
 			break
@@ -133,8 +133,8 @@ func (m *Model) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		for {
 			switch next {
 			case focusChat:
-				next = focusWorkers
-			case focusWorkers:
+				next = focusFleet
+			case focusFleet:
 				next = focusBlockers
 			case focusBlockers:
 				next = focusJobs
@@ -144,7 +144,7 @@ func (m *Model) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				next = focusChat
 			}
 			// Skip left-panel targets when left panel is hidden or empty.
-			if !m.shouldShowLeftPanel() && (next == focusJobs || next == focusBlockers || next == focusWorkers) {
+			if !m.shouldShowLeftPanel() && (next == focusJobs || next == focusBlockers || next == focusFleet) {
 				continue
 			}
 			break
@@ -232,7 +232,7 @@ func (m *Model) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		// Navigate worker slots when workers pane is focused.
-		if m.focused == focusWorkers {
+		if m.focused == focusFleet {
 			if m.selectedWorkerSlot > 0 {
 				m.selectedWorkerSlot--
 			}
@@ -267,7 +267,7 @@ func (m *Model) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		// Navigate worker slots when workers pane is focused.
-		if m.focused == focusWorkers {
+		if m.focused == focusFleet {
 			if m.selectedWorkerSlot < maxGridSlots-1 {
 				m.selectedWorkerSlot++
 			}
@@ -378,18 +378,10 @@ func (m *Model) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		// right now", which may be the auto-hidden empty state.
 		next := !m.shouldShowLeftPanel()
 		m.leftPanelOverride = &next
-		if !next && (m.focused == focusJobs || m.focused == focusWorkers) {
+		if !next && (m.focused == focusJobs || m.focused == focusFleet) {
 			cmds = append(cmds, m.setFocus(focusChat))
 			cmds = append(cmds, m.input.Focus())
 		}
-		m.resizeComponents()
-		return m, tea.Batch(cmds...)
-
-	case "ctrl+o":
-		// Toggle right sidebar (Operator stats) visibility. Same
-		// effective-state semantics as ctrl+j above.
-		next := !m.shouldShowSidebar()
-		m.sidebarOverride = &next
 		m.resizeComponents()
 		return m, tea.Batch(cmds...)
 
@@ -506,7 +498,7 @@ func (m *Model) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		// Open grid view when workers pane is focused.
-		if m.focused == focusWorkers {
+		if m.focused == focusFleet {
 			m.grid.showGrid = true
 			return m, nil
 		}

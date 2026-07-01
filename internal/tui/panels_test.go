@@ -61,62 +61,6 @@ func TestLeftPanelWidth(t *testing.T) {
 	}
 }
 
-func TestSidebarWidth(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name      string
-		termWidth int
-		want      int
-	}{
-		{
-			name:      "wide terminal",
-			termWidth: 240,
-			want:      40, // 240/6 = 40
-		},
-		{
-			name:      "medium terminal",
-			termWidth: 180,
-			want:      30, // 180/6 = 30
-		},
-		{
-			name:      "narrow terminal clamps to minimum",
-			termWidth: 60,
-			want:      minLeftPanelWidth, // 60/6 = 10 < 22
-		},
-		{
-			name:      "very narrow terminal clamps to minimum",
-			termWidth: 10,
-			want:      minLeftPanelWidth, // 10/6 = 1 < 22
-		},
-		{
-			name:      "zero terminal width clamps to minimum",
-			termWidth: 0,
-			want:      minLeftPanelWidth, // 0/6 = 0 < 22
-		},
-		{
-			name:      "terminal width exactly at 6x minimum",
-			termWidth: minLeftPanelWidth * 6,
-			want:      minLeftPanelWidth, // 132/6 = 22 == minLeftPanelWidth
-		},
-		{
-			name:      "terminal width just above 6x minimum",
-			termWidth: minLeftPanelWidth*6 + 6,
-			want:      minLeftPanelWidth + 1, // (132+6)/6 = 23
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			got := sidebarWidth(tt.termWidth)
-			if got != tt.want {
-				t.Errorf("sidebarWidth(%d) = %d, want %d", tt.termWidth, got, tt.want)
-			}
-		})
-	}
-}
-
 func TestRenderMiniContextBar(t *testing.T) {
 	t.Parallel()
 
@@ -156,7 +100,7 @@ func TestFleetTotals(t *testing.T) {
 	members := []fleetMember{
 		{label: "operator", active: false, hasTPS: true, tps: 500, costUSD: 0},
 		{label: "w-active", active: true, hasTPS: true, tps: 120, costUSD: 0.03},
-		{label: "w-done", active: false, done: true, hasTPS: true, tps: 40, costUSD: 0.01},
+		{label: "w-done", active: false, hasTPS: true, tps: 40, costUSD: 0.01},
 	}
 	live, tps, cost := fleetTotals(members)
 	if live != 1 {

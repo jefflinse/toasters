@@ -162,25 +162,26 @@ func (m *Model) handleMouseClick(msg tea.MouseClickMsg) (tea.Model, tea.Cmd) {
 		!m.promptModal.show && !m.outputModal.show && !m.loading {
 		if m.shouldShowLeftPanel() && msg.X < m.lpWidth {
 			// Clicked left panel — determine which of the three panes was
-			// clicked. Pane order (top to bottom): Jobs, Blockers, Workers.
-			workersPaneH := m.leftPanelWorkersPaneHeight()
-			blockersPaneH := m.leftPanelBlockersPaneHeight()
-			workersPaneY := m.height - workersPaneH
-			blockersPaneY := workersPaneY - blockersPaneH
+			// clicked. Pane order (top to bottom): Jobs, Fleet, Blockers.
+			// Boundaries come from the same height model the renderer uses.
+			jobsH, fleetH, _ := m.leftPanelHeights(m.lpWidth, m.height)
+			paneFrameV := FocusedPaneStyle.GetVerticalBorderSize()
+			jobsBottom := jobsH + paneFrameV
+			fleetBottom := jobsBottom + fleetH + paneFrameV
 			switch {
-			case msg.Y >= workersPaneY:
-				if m.focused != focusWorkers {
-					cmds = append(cmds, m.setFocus(focusWorkers))
+			case msg.Y < jobsBottom:
+				if m.focused != focusJobs {
+					cmds = append(cmds, m.setFocus(focusJobs))
 					m.input.Blur()
 				}
-			case msg.Y >= blockersPaneY:
-				if m.focused != focusBlockers {
-					cmds = append(cmds, m.setFocus(focusBlockers))
+			case msg.Y < fleetBottom:
+				if m.focused != focusFleet {
+					cmds = append(cmds, m.setFocus(focusFleet))
 					m.input.Blur()
 				}
 			default:
-				if m.focused != focusJobs {
-					cmds = append(cmds, m.setFocus(focusJobs))
+				if m.focused != focusBlockers {
+					cmds = append(cmds, m.setFocus(focusBlockers))
 					m.input.Blur()
 				}
 			}
@@ -241,7 +242,7 @@ func (m *Model) handleSpinnerTick(msg spinnerTickMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 	}
-	if !needTick && (m.focused == focusJobs || m.focused == focusWorkers) {
+	if !needTick && (m.focused == focusJobs || m.focused == focusFleet) {
 		needTick = true
 	}
 	// Jobs modal's focused panel also rainbow-cycles its title.

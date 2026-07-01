@@ -145,20 +145,14 @@ func (m *Model) View() tea.View {
 		return v
 	}
 
-	showSidebar := m.shouldShowSidebar()
 	showLeftPanel := m.shouldShowLeftPanel()
 
-	sbWidth := sidebarWidth(m.width)
 	lpWidth := m.effectiveLeftPanelWidth()
 
 	const columnGap = 1 // consistent gap between adjacent columns
 
 	var mainWidth int
-	if showSidebar && showLeftPanel {
-		mainWidth = m.width - lpWidth - sbWidth - 2*columnGap
-	} else if showSidebar {
-		mainWidth = m.width - sbWidth - columnGap
-	} else if showLeftPanel {
+	if showLeftPanel {
 		mainWidth = m.width - lpWidth - columnGap
 	} else {
 		mainWidth = m.width
@@ -321,14 +315,8 @@ func (m *Model) View() tea.View {
 	gap := strings.Join(gapLines, "\n")
 
 	var content string
-	if showLeftPanel && showSidebar {
-		sidebar := m.renderSidebar(sbWidth)
-		content = lipgloss.JoinHorizontal(lipgloss.Top, leftPanelView, gap, mainColumn, gap, sidebar)
-	} else if showLeftPanel {
+	if showLeftPanel {
 		content = lipgloss.JoinHorizontal(lipgloss.Top, leftPanelView, gap, mainColumn)
-	} else if showSidebar {
-		sidebar := m.renderSidebar(sbWidth)
-		content = lipgloss.JoinHorizontal(lipgloss.Top, mainColumn, gap, sidebar)
 	} else {
 		content = mainColumn
 	}
@@ -353,25 +341,18 @@ func (m *Model) View() tea.View {
 
 // resizeComponents recalculates sizes for viewport and textarea after a resize.
 func (m *Model) resizeComponents() {
-	showSidebar := m.shouldShowSidebar()
 	showLeftPanel := m.shouldShowLeftPanel()
 	m.lastLeftPanelShown = showLeftPanel
 
-	sbWidth := sidebarWidth(m.width)
 	lpWidth := m.effectiveLeftPanelWidth()
 
 	// Cache for mouse hit-testing.
 	m.lpWidth = lpWidth
-	m.sbWidth = sbWidth
 
 	const columnGap = 1 // consistent gap between adjacent columns
 
 	var mainWidth int
-	if showSidebar && showLeftPanel {
-		mainWidth = m.width - lpWidth - sbWidth - 2*columnGap
-	} else if showSidebar {
-		mainWidth = m.width - sbWidth - columnGap
-	} else if showLeftPanel {
+	if showLeftPanel {
 		mainWidth = m.width - lpWidth - columnGap
 	} else {
 		mainWidth = m.width

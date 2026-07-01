@@ -1,4 +1,4 @@
-// Panel rendering: left panel (jobs and teams panes) and right sidebar.
+// Panel rendering: the left panel's three stacked panes — Jobs, Fleet, Blockers.
 package tui
 
 import (
@@ -35,125 +35,123 @@ func (m *Model) effectiveLeftPanelWidth() int {
 	return leftPanelWidth(m.width)
 }
 
-// sidebarWidth returns the sidebar width using the same formula as leftPanelWidth.
-func sidebarWidth(termWidth int) int {
-	w := termWidth / 6
-	if w < minLeftPanelWidth {
-		return minLeftPanelWidth
+// leftPanelContentWidth returns the per-pane content width for a given left
+// panel width (panel width minus one pane's horizontal border+padding frame).
+func leftPanelContentWidth(panelWidth int) int {
+	paneFrameH := FocusedPaneStyle.GetHorizontalBorderSize() + FocusedPaneStyle.GetHorizontalPadding()
+	cw := panelWidth - paneFrameH
+	if cw < 1 {
+		cw = 1
 	}
-	return w
+	return cw
 }
 
+// paneStyleFor returns the bordered pane style for a focused/unfocused pane.
+func paneStyleFor(focused bool) lipgloss.Style {
+	if focused {
+		return FocusedPaneStyle
+	}
+	return UnfocusedPaneStyle
+}
+
+// renderLeftPanel renders the three stacked panes: Jobs (top) and Blockers
+// (bottom) are content-driven; Fleet (middle) takes the remaining height so the
+// live-LLM view gets the slack. All height math lives in leftPanelHeights, which
+// mouse hit-testing shares so pane boundaries can never drift out of sync.
 func (m Model) renderLeftPanel(panelWidth, panelHeight int) string {
-	// Each pane border adds 2 horizontal (left+right border) + 2 horizontal (left+right padding) = 4.
-	paneFrameH := FocusedPaneStyle.GetHorizontalBorderSize() + FocusedPaneStyle.GetHorizontalPadding()
-	contentWidth := panelWidth - paneFrameH
-	if contentWidth < 1 {
-		contentWidth = 1
-	}
+	contentWidth := leftPanelContentWidth(panelWidth)
+	jobsH, fleetH, blockersH := m.leftPanelHeights(panelWidth, panelHeight)
 
-	// Each pane border adds 2 vertical rows (top + bottom border line).
+	jobsContent := lipgloss.NewStyle().Height(jobsH).Render(
+		lipgloss.JoinVertical(lipgloss.Left, m.buildJobsLines(contentWidth)...),
+	)
+	jobsPane := paneStyleFor(m.focused == focusJobs).Width(panelWidth).Render(jobsContent)
+
+	fleetContent := lipgloss.NewStyle().Height(fleetH).Render(
+		lipgloss.JoinVertical(lipgloss.Left, m.buildFleetLines(contentWidth, fleetH)...),
+	)
+	fleetPane := paneStyleFor(m.focused == focusFleet).Width(panelWidth).Render(fleetContent)
+
+	blockersContent := lipgloss.NewStyle().Height(blockersH).Render(
+		lipgloss.JoinVertical(lipgloss.Left, m.buildBlockersLines(contentWidth)...),
+	)
+	blockersPane := paneStyleFor(m.focused == focusBlockers).Width(panelWidth).Render(blockersContent)
+
+	inner := lipgloss.JoinVertical(lipgloss.Left, jobsPane, fleetPane, blockersPane)
+	return LeftPanelStyle.Width(panelWidth).Height(panelHeight).Render(inner)
+}
+
+// leftPanelHeights computes the three panes' content heights. Jobs and Blockers
+// are content-driven (measured from their rendered lines); Fleet takes the rest.
+// When Jobs+Blockers would starve Fleet below minFleetH, Jobs is compressed
+// first (its list scrolls; blockers are usually short). Shared by render and
+// mouse hit-testing so the two never disagree.
+func (m *Model) leftPanelHeights(panelWidth, panelHeight int) (jobsH, fleetH, blockersH int) {
+	contentWidth := leftPanelContentWidth(panelWidth)
 	paneFrameV := FocusedPaneStyle.GetVerticalBorderSize()
-	// 3 panes (Jobs, Blockers, Workers) × 2 rows border = 6 rows of overhead.
-	borderOverhead := 3 * paneFrameV
-
-	// Bottom pane (Workers): content-driven height.
-	// Use the filtered view (active + most-recent completed) so the pane's
-	// height math matches what we actually render.
-	sortedRT := m.displayRuntimeSessions()
-	workerCount := len(sortedRT)
-	// Each active worker with activity gets one extra "↳ <last-activity>" line
-	// below it so users can see what it's doing without opening the grid.
-	activityLineCount := 0
-	for _, rs := range sortedRT {
-		if rs.status == "active" {
-			activityLineCount++
-		}
-	}
-	bottomContentH := 1 + workerCount + activityLineCount // "Workers" header + one line per worker (+ activity line for active workers)
-	if workerCount == 0 {
-		bottomContentH = 2 // header + "No workers running"
-	}
-	if m.focused == focusWorkers {
-		bottomContentH++ // hint line
-	}
-
-	// Middle pane (Blockers): content-driven height, one line per blocker.
-	blockerCount := len(m.blockers)
-	blockersContentH := 1 + blockerCount // "Blockers" header + one line per blocker
-	if blockerCount == 0 {
-		blockersContentH = 2 // header + "No blockers"
-	}
-	if m.focused == focusBlockers {
-		blockersContentH++ // hint line
-	}
-
-	// Jobs hint line appears when the jobs pane is focused.
-	jobsHintH := 0
-	if m.focused == focusJobs && len(m.displayJobs()) > 0 {
-		jobsHintH = 1
-	}
-
-	// Available height for content across all three panes.
-	availableH := panelHeight - borderOverhead
+	availableH := panelHeight - 3*paneFrameV
 	if availableH < 9 {
 		availableH = 9
 	}
+	const minFleetH = 4
 
-	// Top pane gets whatever is left after blockers + workers + jobs hint.
-	topContentH := availableH - bottomContentH - blockersContentH - jobsHintH
-	if topContentH < 3 {
-		topContentH = 3
+	jobsH = lipgloss.Height(lipgloss.JoinVertical(lipgloss.Left, m.buildJobsLines(contentWidth)...))
+	blockersH = lipgloss.Height(lipgloss.JoinVertical(lipgloss.Left, m.buildBlockersLines(contentWidth)...))
+	if blockersH > availableH-minFleetH-1 {
+		blockersH = availableH - minFleetH - 1
 	}
+	if blockersH < 1 {
+		blockersH = 1
+	}
+	if jobsH > availableH-minFleetH-blockersH {
+		jobsH = availableH - minFleetH - blockersH
+	}
+	if jobsH < 1 {
+		jobsH = 1
+	}
+	fleetH = availableH - jobsH - blockersH
+	if fleetH < minFleetH {
+		fleetH = minFleetH
+	}
+	return jobsH, fleetH, blockersH
+}
 
+// buildJobsLines builds the Jobs pane content (title, job blocks, focus hint).
+func (m Model) buildJobsLines(contentWidth int) []string {
 	displayedJobs := m.displayJobs()
-
-	// --- Top pane: Jobs ---
-	var topLines []string
+	var lines []string
 	jobsTitle := gradientText("Jobs", [3]uint8{0, 200, 200}, [3]uint8{175, 50, 200})
 	if m.focused == focusJobs {
 		jobsTitle = rainbowText("Jobs", m.spinnerFrame)
 	}
-	topLines = append(topLines, jobsTitle)
+	lines = append(lines, jobsTitle)
 	if len(displayedJobs) == 0 {
-		topLines = append(topLines, PlaceholderPaneStyle.Render("No jobs"))
+		lines = append(lines, PlaceholderPaneStyle.Render("No jobs"))
 	} else {
-		// Render each job as the same bordered block used in the chat
-		// stream, keyed by status and with live task counts. Blocks stack
-		// with touching borders — a TUI has no sub-row spacing, so the
-		// choice is zero-gap (cards stacked) or a full row between them;
-		// zero-gap keeps the list dense without losing distinctness since
-		// each block still has its own status-colored border.
 		for i, j := range displayedJobs {
 			snap := m.buildJobSnapshot(j.ID)
 			if snap == nil {
 				continue
 			}
-			topLines = append(topLines, renderJobUpdateBlock(snap, contentWidth, i == m.selectedJob, m.spinnerFrame, true))
+			lines = append(lines, renderJobUpdateBlock(snap, contentWidth, i == m.selectedJob, m.spinnerFrame, true))
 		}
 	}
-	// Hint line when jobs pane is focused.
 	if m.focused == focusJobs && len(displayedJobs) > 0 {
-		topLines = append(topLines, DimStyle.Render("↑↓ · Enter → job details"))
+		lines = append(lines, DimStyle.Render("↑↓ · Enter → job details"))
 	}
-	topContent := lipgloss.NewStyle().Height(topContentH + jobsHintH).Render(
-		lipgloss.JoinVertical(lipgloss.Left, topLines...),
-	)
-	topPaneStyle := UnfocusedPaneStyle
-	if m.focused == focusJobs {
-		topPaneStyle = FocusedPaneStyle
-	}
-	topPane := topPaneStyle.Width(panelWidth).Render(topContent)
+	return lines
+}
 
-	// --- Middle pane: Blockers ---
-	var blockerLines []string
+// buildBlockersLines builds the Blockers pane content (title, blocker rows, hint).
+func (m Model) buildBlockersLines(contentWidth int) []string {
+	var lines []string
 	blockersTitle := gradientText("Blockers", [3]uint8{255, 175, 0}, [3]uint8{255, 90, 0})
 	if m.focused == focusBlockers {
 		blockersTitle = rainbowText("Blockers", m.spinnerFrame)
 	}
-	blockerLines = append(blockerLines, blockersTitle)
-	if blockerCount == 0 {
-		blockerLines = append(blockerLines, DimStyle.Italic(true).Render("No blockers"))
+	lines = append(lines, blockersTitle)
+	if len(m.blockers) == 0 {
+		lines = append(lines, DimStyle.Italic(true).Render("No blockers"))
 	} else {
 		for i, b := range m.blockers {
 			marker := "  "
@@ -163,146 +161,94 @@ func (m Model) renderLeftPanel(panelWidth, panelHeight int) string {
 			label := m.blockerLabel(b) + ": " + blockerFirstQuestion(b)
 			line := "⛔ " + truncateStr(label, contentWidth-5)
 			if m.focused == focusBlockers && i == m.blockersSel {
-				blockerLines = append(blockerLines, BlockerSelectedStyle.Render(marker+line))
+				lines = append(lines, BlockerSelectedStyle.Render(marker+line))
 			} else {
-				blockerLines = append(blockerLines, marker+line)
+				lines = append(lines, marker+line)
 			}
 		}
 	}
 	if m.focused == focusBlockers {
 		hint := "Enter → answer"
-		if blockerCount > 0 {
+		if len(m.blockers) > 0 {
 			hint = "↑↓ · Enter → answer · x → dismiss"
 		}
-		blockerLines = append(blockerLines, DimStyle.Render(hint))
+		lines = append(lines, DimStyle.Render(hint))
 	}
-	blockersContent := lipgloss.NewStyle().Height(blockersContentH).Render(
-		lipgloss.JoinVertical(lipgloss.Left, blockerLines...),
-	)
-	blockersPaneStyle := UnfocusedPaneStyle
-	if m.focused == focusBlockers {
-		blockersPaneStyle = FocusedPaneStyle
-	}
-	blockersPane := blockersPaneStyle.Width(panelWidth).Render(blockersContent)
-
-	// --- Bottom pane: Workers ---
-	var workerLines []string
-	workersTitle := gradientText("Workers", [3]uint8{50, 130, 255}, [3]uint8{0, 200, 200})
-	if m.focused == focusWorkers {
-		workersTitle = rainbowText("Workers", m.spinnerFrame)
-	}
-	workerLines = append(workerLines, workersTitle)
-
-	// Runtime sessions.
-	runtimeStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("39"))
-	hasAnyRuntime := len(sortedRT) > 0
-	if hasAnyRuntime {
-		for _, rs := range sortedRT {
-			// "<short-job-id>:<role>" — e.g. graph:plan for job 67cddf28-… → "67cddf28:plan".
-			role := strings.TrimPrefix(rs.workerName, "graph:")
-			shortJobID := rs.jobID
-			if len(shortJobID) > 8 {
-				shortJobID = shortJobID[:8]
-			}
-			label := shortJobID + ":" + role
-			var statusIcon string
-			if rs.status == "active" {
-				statusIcon = string(spinnerChars[m.spinnerFrame%len(spinnerChars)]) + " "
-			} else {
-				statusIcon = "✓ "
-			}
-			prefix := runtimeStyle.Render("⚡")
-			line := prefix + statusIcon + truncateStr(label, contentWidth-4)
-			if rs.status != "active" {
-				workerLines = append(workerLines, DimStyle.Render("⚡"+statusIcon+truncateStr(label, contentWidth-4)))
-			} else {
-				workerLines = append(workerLines, line)
-				// Show last activity for active workers so users can see what
-				// they're doing without opening the grid. bottomContentH is
-				// sized above to reserve a row per active worker; do not skip
-				// the append when there is no activity yet, or the height
-				// reservation won't match the rendered content.
-				const indent = "  ↳ "
-				activityText := "waiting for activity…"
-				if n := len(rs.activities); n > 0 {
-					activityText = rs.activities[n-1].label
-				}
-				maxActivityW := contentWidth - len([]rune(indent))
-				if maxActivityW < 1 {
-					maxActivityW = 1
-				}
-				workerLines = append(workerLines, DimStyle.Render(indent+truncateStr(activityText, maxActivityW)))
-			}
-		}
-	}
-
-	if !hasAnyRuntime {
-		// Decomposition nodes are hidden from this pane, so a job that's busy
-		// planning would read as idle. Say what's actually happening.
-		if planning := m.activePlanningCount(); planning > 0 {
-			msg := "Planning… decomposing tasks"
-			if planning > 1 {
-				msg = fmt.Sprintf("Planning… decomposing %d tasks", planning)
-			}
-			workerLines = append(workerLines, DimStyle.Italic(true).Render(msg))
-		} else {
-			workerLines = append(workerLines, DimStyle.Italic(true).Render("No workers running"))
-		}
-	}
-	if m.focused == focusWorkers {
-		workerLines = append(workerLines, DimStyle.Render("Enter → grid view"))
-	}
-
-	bottomContent := lipgloss.NewStyle().Height(bottomContentH).Render(
-		lipgloss.JoinVertical(lipgloss.Left, workerLines...),
-	)
-	bottomPaneStyle := UnfocusedPaneStyle
-	if m.focused == focusWorkers {
-		bottomPaneStyle = FocusedPaneStyle
-	}
-	bottomPane := bottomPaneStyle.Width(panelWidth).Render(bottomContent)
-
-	inner := lipgloss.JoinVertical(lipgloss.Left, topPane, blockersPane, bottomPane)
-	return LeftPanelStyle.Width(panelWidth).Height(panelHeight).Render(inner)
+	return lines
 }
 
-// leftPanelWorkersPaneHeight returns the rendered height of the Workers bottom pane
-// in the left panel, for use in mouse hit-testing. Must stay in sync with the
-// height math inside renderLeftPanel.
-func (m *Model) leftPanelWorkersPaneHeight() int {
-	paneFrameV := FocusedPaneStyle.GetVerticalBorderSize()
-	sortedRT := m.displayRuntimeSessions()
-	workerCount := len(sortedRT)
-	activityLineCount := 0
-	for _, rs := range sortedRT {
-		if rs.status == "active" {
-			activityLineCount++
-		}
-	}
-	bottomContentH := 1 + workerCount + activityLineCount
-	if workerCount == 0 {
-		bottomContentH = 2
-	}
-	if m.focused == focusWorkers {
-		bottomContentH++
-	}
-	return bottomContentH + paneFrameV
-}
+// buildFleetLines builds the Fleet pane content: a title+connection row, one
+// block per live LLM (operator + active workers) rendered at the configured
+// density, an aggregate footer, and a focus hint. Member blocks are capped to
+// what fits in maxH with a "+N more" line so a burst of workers can't overflow.
+func (m Model) buildFleetLines(contentWidth, maxH int) []string {
+	var lines []string
 
-// leftPanelBlockersPaneHeight returns the rendered height of the Blockers pane
-// in the left panel, for mouse hit-testing. Must stay in sync with the height
-// math inside renderLeftPanel.
-func (m *Model) leftPanelBlockersPaneHeight() int {
-	paneFrameV := FocusedPaneStyle.GetVerticalBorderSize()
-	blockerCount := len(m.blockers)
-	blockersContentH := 1 + blockerCount
-	if blockerCount == 0 {
-		blockersContentH = 2
+	fleetTitle := gradientText("Fleet", [3]uint8{50, 130, 255}, [3]uint8{0, 200, 200})
+	if m.focused == focusFleet {
+		fleetTitle = rainbowText("Fleet", m.spinnerFrame)
 	}
-	if m.focused == focusBlockers {
-		blockersContentH++
+	conn := ConnectedStyle.Render("connected")
+	if !m.stats.Connected {
+		conn = ErrorStyle.Render("disconnected")
 	}
-	return blockersContentH + paneFrameV
+	gap := contentWidth - lipgloss.Width(fleetTitle) - lipgloss.Width(conn)
+	if gap < 1 {
+		gap = 1
+	}
+	lines = append(lines, fleetTitle+strings.Repeat(" ", gap)+conn)
+
+	fleet := m.buildFleet()
+	live, tps, cost := fleetTotals(fleet)
+
+	// Footer: separator + aggregate rows.
+	footer := []string{DimStyle.Render(strings.Repeat("─", contentWidth))}
+	sigma := SidebarLabelStyle.Render(fmt.Sprintf("Σ %d live", live))
+	if tps > 0 {
+		sigma += SidebarValueStyle.Render(fmt.Sprintf(" · %.0f t/s", tps))
+	}
+	footer = append(footer, sigma)
+	if cost > 0 {
+		footer = append(footer, SidebarLabelStyle.Render(fmt.Sprintf("Σ ~$%.2f", cost)))
+	}
+
+	hintH := 0
+	if m.focused == focusFleet {
+		hintH = 1
+	}
+	// Budget for member blocks = maxH - title - footer - hint.
+	memBudget := maxH - 1 - len(footer) - hintH
+	if memBudget < 1 {
+		memBudget = 1
+	}
+
+	var memLines []string
+	shown := 0
+	for _, mem := range fleet {
+		block := strings.Split(strings.TrimRight(m.renderFleetMember(mem, contentWidth), "\n"), "\n")
+		extra := len(block)
+		if shown > 0 {
+			extra++ // blank separator row
+		}
+		if shown > 0 && len(memLines)+extra > memBudget {
+			break
+		}
+		if shown > 0 {
+			memLines = append(memLines, "")
+		}
+		memLines = append(memLines, block...)
+		shown++
+	}
+	if hidden := len(fleet) - shown; hidden > 0 {
+		memLines = append(memLines, DimStyle.Render(fmt.Sprintf("  +%d more…", hidden)))
+	}
+
+	lines = append(lines, memLines...)
+	lines = append(lines, footer...)
+	if m.focused == focusFleet {
+		lines = append(lines, DimStyle.Render("Enter → grid view"))
+	}
+	return lines
 }
 
 // fleetMember is one live LLM invocation shown in the fleet sidebar: the
@@ -313,8 +259,7 @@ type fleetMember struct {
 	label     string // "operator" or "<job>:<role>"
 	icon      string // glyph prefix (⬡ operator, ⚡ worker)
 	model     string
-	active    bool // currently streaming
-	done      bool // terminal worker (completed/failed/cancelled)
+	active    bool // currently streaming (operator) / running (worker)
 	ctxUsed   int  // live context-window occupancy in tokens
 	ctxMax    int  // model context length (0 if unknown)
 	tokensOut int64
@@ -406,90 +351,6 @@ func fleetTotals(members []fleetMember) (liveCount int, totalTPS, totalCost floa
 		totalCost += mem.costUSD
 	}
 	return liveCount, totalTPS, totalCost
-}
-
-// renderSidebar builds the right sidebar: a borderless "fleet" pane showing
-// every live LLM (operator + workers) with a context-window bar, throughput and
-// cost, capped with a session-wide aggregate footer.
-func (m Model) renderSidebar(sbWidth int) string {
-	// Horizontal padding matches the frame width used by left-panel panes
-	// (border 2 + padding 2 = 4 cols) so content sizing stays consistent.
-	const sidebarHPad = 2
-	contentWidth := sbWidth - 2*sidebarHPad
-	if contentWidth < 1 {
-		contentWidth = 1
-	}
-
-	fleet := m.buildFleet()
-
-	// --- Header: "fleet" + connection status ---
-	var sb strings.Builder
-	// Leading blank row matches ChatAreaStyle's top padding so the header
-	// doesn't butt up against the very top of the terminal.
-	sb.WriteString("\n")
-
-	connStatus := ConnectedStyle.Render("connected")
-	if !m.stats.Connected {
-		connStatus = ErrorStyle.Render("disconnected")
-	}
-	headerText := gradientText("fleet", [3]uint8{255, 175, 0}, [3]uint8{175, 50, 200})
-	gap := contentWidth - lipgloss.Width(headerText) - lipgloss.Width(connStatus)
-	if gap < 1 {
-		gap = 1
-	}
-	sb.WriteString(headerText + strings.Repeat(" ", gap) + connStatus)
-	sb.WriteString("\n\n")
-
-	// --- Body: one block per LLM, capped to what fits above the footer ---
-	// Each member renders as ~5 lines (label, model, bar, stats, blank).
-	const linesPerMember = 5
-	const footerLines = 3 // separator + two aggregate rows
-	availableLines := m.height - 2 /*header+blank*/ - footerLines
-	maxMembers := len(fleet)
-	if availableLines > 0 {
-		if fit := availableLines / linesPerMember; fit < maxMembers {
-			maxMembers = fit
-		}
-	}
-	if maxMembers < 1 {
-		maxMembers = 1 // always show at least the operator
-	}
-
-	shown := fleet
-	if len(shown) > maxMembers {
-		shown = shown[:maxMembers]
-	}
-	for _, mem := range shown {
-		sb.WriteString(m.renderFleetMember(mem, contentWidth))
-		sb.WriteString("\n")
-	}
-	if hidden := len(fleet) - len(shown); hidden > 0 {
-		sb.WriteString(DimStyle.Render(fmt.Sprintf("  +%d more…", hidden)))
-		sb.WriteString("\n")
-	}
-
-	// --- Footer: session-wide aggregates ---
-	liveCount, totalTPS, totalCost := fleetTotals(fleet)
-	sb.WriteString(DimStyle.Render(strings.Repeat("─", contentWidth)))
-	sb.WriteString("\n")
-	sb.WriteString(SidebarLabelStyle.Render(fmt.Sprintf("Σ %d live", liveCount)))
-	if totalTPS > 0 {
-		sb.WriteString(SidebarValueStyle.Render(fmt.Sprintf(" · %.0f t/s", totalTPS)))
-	}
-	sb.WriteString("\n")
-	if totalCost > 0 {
-		sb.WriteString(SidebarLabelStyle.Render(fmt.Sprintf("Σ ~$%.2f this run", totalCost)))
-		sb.WriteString("\n")
-	}
-
-	// Fleet pane fills the full sidebar height and renders borderless, matching
-	// the horizontal frame width used by bordered panes so columns line up.
-	paneH := m.height
-	if paneH < 3 {
-		paneH = 3
-	}
-	paneStyle := lipgloss.NewStyle().Padding(0, sidebarHPad)
-	return paneStyle.Width(sbWidth).Height(paneH).Render(sb.String())
 }
 
 // memStatusIcon returns the leading status glyph for a fleet member: a spinner
