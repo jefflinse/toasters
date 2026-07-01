@@ -104,6 +104,7 @@ func translateEvent(ev service.Event) tea.Msg {
 			TokensIn:        p.TokensIn,
 			TokensOut:       p.TokensOut,
 			ReasoningTokens: p.ReasoningTokens,
+			ContextTokens:   p.ContextTokens,
 		}
 
 	case service.EventTypeProgressUpdate:
@@ -158,6 +159,16 @@ func translateEvent(ev service.Event) tea.Msg {
 			Provider:    p.Provider,
 			Temperature: p.Temperature,
 			Thinking:    p.Thinking,
+		}
+
+	case service.EventTypeSessionContext:
+		p, ok := ev.Payload.(service.SessionContextPayload)
+		if !ok {
+			return nil
+		}
+		return SessionContextMsg{
+			SessionID:     p.SessionID,
+			ContextTokens: p.ContextTokens,
 		}
 
 	case service.EventTypeSessionReasoning:

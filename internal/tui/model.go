@@ -18,9 +18,7 @@ import (
 )
 
 const (
-	minSidebarWidth = 24
-	inputHeight     = 3
-	minWidthForBar  = 60
+	inputHeight = 3
 
 	minLeftPanelWidth    = 22
 	minWidthForLeftPanel = 100
@@ -130,7 +128,6 @@ type Model struct {
 	flashText string // transient status line; empty = hidden
 
 	lpWidth int // cached left panel width for mouse hit-testing
-	sbWidth int // cached sidebar width for mouse hit-testing
 
 	// lastLeftPanelShown tracks the visibility outcome from the last
 	// resizeComponents call so we can re-run the size math when the left
@@ -140,19 +137,20 @@ type Model struct {
 	// scrollbar column drifts.
 	lastLeftPanelShown bool
 
-	// Collapsible panel state. Override pointers track explicit user
-	// toggles via ctrl+j / ctrl+o: nil means "follow the configured default
-	// behavior", non-nil pins the panel to the boolean's value regardless
-	// of content or settings. This lets ctrl+j reveal an empty Jobs panel
-	// even when there's nothing to show — the prior plain-bool design
-	// silently lost that toggle because the auto-hide gate fired first.
+	// Collapsible panel state. The override pointer tracks an explicit user
+	// toggle via ctrl+j: nil means "follow the configured default behavior",
+	// non-nil pins the panel to the boolean's value regardless of content or
+	// settings. This lets ctrl+j reveal an empty left panel even when there's
+	// nothing to show — the prior plain-bool design silently lost that toggle
+	// because the auto-hide gate fired first.
 	leftPanelOverride *bool
-	sidebarOverride   *bool
-	// Settings-driven defaults for the panels' baseline visibility,
+	// Settings-driven default for the left panel's baseline visibility,
 	// refreshed whenever /settings is loaded or saved.
-	showJobsPanelDefault     bool
-	showOperatorPanelDefault bool
-	leftPanelWidthOverride   int // 0 = use default computed width; >0 = user-resized width
+	showJobsPanelDefault bool
+	// fleetDensity is the settings-driven fleet-panel row density ("full" or
+	// "compact"), refreshed whenever /settings is loaded or saved.
+	fleetDensity           string
+	leftPanelWidthOverride int // 0 = use default computed width; >0 = user-resized width
 
 	// Shared spinner animation frame counter.
 	spinnerFrame   int
@@ -166,6 +164,11 @@ type Model struct {
 	// / SessionToolCallMsg / SessionToolResultMsg / SessionDoneMsg, all of which
 	// originate from session.* events on the unified service event stream.
 	runtimeSessions map[string]*runtimeSlot // keyed by session ID
+
+	// modelContext maps a model ID to its context-window length, populated from
+	// the model list. The fleet pane uses it to size per-worker context bars,
+	// since worker sessions carry only the model name, not its context length.
+	modelContext map[string]int
 
 	// Log view state.
 	logView logViewState
@@ -234,13 +237,11 @@ func NewModel(cfg ModelConfig) Model {
 	m.chat.collapsedTools = make(map[int]bool)
 	m.runtimeSessions = make(map[string]*runtimeSlot)
 
-	// Seed panel-visibility defaults with the same baseline GetSettings
-	// returns when no AppConfig is wired. Init() will fetch the persisted
-	// settings shortly after; until that round-trip lands, this seeding
-	// keeps the operator sidebar visible (the historical default) instead
-	// of starting hidden because of the bool zero value.
-	m.showOperatorPanelDefault = true
+	// Seed settings-driven defaults with the same baseline GetSettings returns
+	// when no AppConfig is wired. Init() fetches the persisted settings shortly
+	// after; this seeding just avoids relying on zero values until it lands.
 	m.showJobsPanelDefault = false
+	m.fleetDensity = "full"
 
 	return m
 }
@@ -385,7 +386,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.settingsModal.settings = msg.Settings
 			m.settingsModal.dirty = msg.Settings
-			m.applyPanelVisibilityDefaults(msg.Settings)
+			m.applySettings(msg.Settings)
 		}
 
 	case SettingsSavedMsg:
@@ -395,7 +396,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.settingsModal.settings = msg.Settings
 			m.settingsModal.dirty = msg.Settings
-			m.applyPanelVisibilityDefaults(msg.Settings)
+			m.applySettings(msg.Settings)
 			return m, m.addToast("✓ Settings saved", toastSuccess)
 		}
 
@@ -461,6 +462,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			slot.temperature = msg.Temperature
 			slot.hasTemp = true
 			slot.thinking = msg.Thinking
+		}
+		return m, nil
+
+	case SessionContextMsg:
+		// Live context-window occupancy for a graph-node session (their token
+		// counts otherwise only reach the DB at completion). Only apply when the
+		// slot exists; ordering with graph.node_started isn't guaranteed.
+		if slot, ok := m.runtimeSessions[msg.SessionID]; ok {
+			slot.contextTokens = msg.ContextTokens
 		}
 		return m, nil
 

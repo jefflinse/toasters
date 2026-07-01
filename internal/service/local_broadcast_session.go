@@ -49,6 +49,24 @@ func (s *LocalService) BroadcastSessionMeta(sessionID, model, provider string, t
 	})
 }
 
+// BroadcastSessionContextTokens broadcasts a session.context event carrying a
+// node session's live context-window occupancy. Graph nodes emit it per
+// round-trip so the fleet pane's context bar reflects real occupancy while the
+// node runs (DB token counts only update at completion).
+func (s *LocalService) BroadcastSessionContextTokens(sessionID string, contextTokens int64) {
+	if sessionID == "" || contextTokens <= 0 {
+		return
+	}
+	s.broadcast(Event{
+		Type:      EventTypeSessionContext,
+		SessionID: sessionID,
+		Payload: SessionContextPayload{
+			SessionID:     sessionID,
+			ContextTokens: contextTokens,
+		},
+	})
+}
+
 // BroadcastSessionText broadcasts a session.text event for an arbitrary
 // session id. Used by graph nodes (which synthesize session ids of the form
 // "graph:<TaskID>:<Node>") to stream LLM text through the same pipeline as

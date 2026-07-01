@@ -757,7 +757,7 @@ func TestParseSSEPayload_OperatorText(t *testing.T) {
 func TestParseSSEPayload_OperatorDone(t *testing.T) {
 	t.Parallel()
 
-	raw := json.RawMessage(`{"model_name":"claude-sonnet-4-6","tokens_in":100,"tokens_out":200,"reasoning_tokens":50}`)
+	raw := json.RawMessage(`{"model_name":"claude-sonnet-4-6","tokens_in":100,"tokens_out":200,"reasoning_tokens":50,"context_tokens":4096}`)
 	payload, err := ParseSSEPayload("operator.done", raw)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -778,6 +778,30 @@ func TestParseSSEPayload_OperatorDone(t *testing.T) {
 	}
 	if p.ReasoningTokens != 50 {
 		t.Errorf("ReasoningTokens = %d, want 50", p.ReasoningTokens)
+	}
+	if p.ContextTokens != 4096 {
+		t.Errorf("ContextTokens = %d, want 4096", p.ContextTokens)
+	}
+}
+
+func TestParseSSEPayload_SessionContext(t *testing.T) {
+	t.Parallel()
+
+	raw := json.RawMessage(`{"session_id":"graph:task-1:implement","context_tokens":8192}`)
+	payload, err := ParseSSEPayload("session.context", raw)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	p, ok := payload.(service.SessionContextPayload)
+	if !ok {
+		t.Fatalf("payload type = %T, want SessionContextPayload", payload)
+	}
+	if p.SessionID != "graph:task-1:implement" {
+		t.Errorf("SessionID = %q, want %q", p.SessionID, "graph:task-1:implement")
+	}
+	if p.ContextTokens != 8192 {
+		t.Errorf("ContextTokens = %d, want 8192", p.ContextTokens)
 	}
 }
 

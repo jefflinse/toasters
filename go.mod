@@ -11,7 +11,7 @@ require (
 	github.com/charmbracelet/x/ansi v0.11.6
 	github.com/fsnotify/fsnotify v1.9.0
 	github.com/gofrs/uuid/v5 v5.4.0
-	github.com/jefflinse/mycelium v0.2.0
+	github.com/jefflinse/mycelium v0.3.0
 	github.com/jefflinse/rhizome v0.6.0
 	github.com/mark3labs/mcp-go v0.44.0
 	github.com/spf13/cobra v1.10.2

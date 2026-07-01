@@ -115,7 +115,7 @@ var settingsRows = []settingsRow{
 	},
 	{
 		label: "Show Jobs Panel by Default",
-		desc:  "Keep the Jobs/Workers left panel visible even when there are no jobs to show. Ctrl+J still overrides per session.",
+		desc:  "Keep the left panel (Jobs / Fleet / Blockers) visible even when there are no jobs to show. Ctrl+J still overrides per session.",
 		get: func(s *service.Settings) string {
 			if s.ShowJobsPanelByDefault {
 				return "on"
@@ -126,16 +126,11 @@ var settingsRows = []settingsRow{
 		options: func() []string { return []string{"off", "on"} },
 	},
 	{
-		label: "Show Operator Panel by Default",
-		desc:  "Keep the Operator sidebar visible by default. Ctrl+O still overrides per session.",
-		get: func(s *service.Settings) string {
-			if s.ShowOperatorPanelByDefault {
-				return "on"
-			}
-			return "off"
-		},
-		set:     func(s *service.Settings, v string) { s.ShowOperatorPanelByDefault = v == "on" },
-		options: func() []string { return []string{"off", "on"} },
+		label:   "Fleet Row Density",
+		desc:    "How tall each LLM row in the fleet panel is: full (model, bar, stats, activity) or compact (folded).",
+		get:     func(s *service.Settings) string { return config.ValidFleetDensity(s.FleetRowDensity) },
+		set:     func(s *service.Settings, v string) { s.FleetRowDensity = v },
+		options: config.FleetRowDensityLevels,
 	},
 }
 

@@ -283,7 +283,7 @@ func walkFilesTouched(dir string, startedAt, endedAt time.Time) ([]FileTouch, in
 // released only when the finishing turn is the gated one — a system-initiated
 // turn (empty turnID) completing must not open the gate for a user turn that
 // is still queued behind it.
-func (s *LocalService) BroadcastOperatorDone(turnID, modelName string, tokensIn, tokensOut, reasoningTokens int) {
+func (s *LocalService) BroadcastOperatorDone(turnID, modelName string, tokensIn, tokensOut, reasoningTokens, contextTokens int) {
 	s.turnMu.Lock()
 	if turnID != "" && s.currentTurnID == turnID {
 		s.currentTurnID = ""
@@ -311,6 +311,7 @@ func (s *LocalService) BroadcastOperatorDone(turnID, modelName string, tokensIn,
 			TokensIn:        tokensIn,
 			TokensOut:       tokensOut,
 			ReasoningTokens: reasoningTokens,
+			ContextTokens:   contextTokens,
 		},
 	})
 }

@@ -211,8 +211,9 @@ func TestRenderLeftPanel_BlockerCounts(t *testing.T) {
 		if out == "" {
 			t.Errorf("n=%d: renderLeftPanel returned empty", n)
 		}
-		if h := m.leftPanelBlockersPaneHeight(); h < 2 {
-			t.Errorf("n=%d: blockers pane height = %d, want >= 2", n, h)
+		_, _, blockersH := m.leftPanelHeights(40, 30)
+		if blockersH < 1 {
+			t.Errorf("n=%d: blockers pane height = %d, want >= 1", n, blockersH)
 		}
 	}
 }

@@ -265,7 +265,7 @@ func TestOperatorThreadsTurnID(t *testing.T) {
 			textTurns = append(textTurns, turnID)
 			mu.Unlock()
 		},
-		OnTurnDone: func(turnID string, _, _, _ int) {
+		OnTurnDone: func(turnID string, _, _, _, _ int) {
 			mu.Lock()
 			doneTurns = append(doneTurns, turnID)
 			mu.Unlock()
@@ -303,6 +303,71 @@ func TestOperatorThreadsTurnID(t *testing.T) {
 	}
 	if doneTurns[0] != "turn-1" || doneTurns[1] != "" {
 		t.Errorf("OnTurnDone turn IDs = %q, want [\"turn-1\" \"\"]", doneTurns)
+	}
+}
+
+// TestOperatorReportsContextTokens verifies the operator surfaces its live
+// context occupancy (the most recent round-trip's input tokens) through
+// OnTurnDone.contextTokens — the value that drives the fleet pane's operator
+// context bar. Distinct from tokensIn, which sums every round-trip in the turn.
+func TestOperatorReportsContextTokens(t *testing.T) {
+	mp := &mockProvider{
+		name: "test",
+		responses: []mockResponse{
+			{events: []provider.StreamEvent{
+				{Type: provider.EventText, Text: "reply"},
+				{Type: provider.EventUsage, Usage: &provider.Usage{InputTokens: 1234, OutputTokens: 56}},
+				{Type: provider.EventDone},
+			}},
+		},
+	}
+
+	rt := runtime.New(nil, newTestRegistry(mp))
+
+	var mu sync.Mutex
+	var gotContext, gotIn int
+	done := make(chan struct{})
+
+	op, err := New(Config{
+		Runtime:      rt,
+		Provider:     mp,
+		Model:        "test-model",
+		WorkDir:      t.TempDir(),
+		SystemPrompt: "You are the operator.",
+		OnTurnDone: func(_ string, tokensIn, _, _, contextTokens int) {
+			mu.Lock()
+			gotIn = tokensIn
+			gotContext = contextTokens
+			mu.Unlock()
+			close(done)
+		},
+	})
+	if err != nil {
+		t.Fatalf("creating operator: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	op.Start(ctx)
+
+	_ = op.Send(ctx, Event{
+		Type:    EventUserMessage,
+		Payload: UserMessagePayload{Text: "hello", TurnID: "turn-1"},
+	})
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("OnTurnDone not called")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if gotContext != 1234 {
+		t.Errorf("contextTokens = %d, want 1234 (last round-trip prompt size)", gotContext)
+	}
+	if gotIn != 1234 {
+		t.Errorf("tokensIn = %d, want 1234 (single round-trip, sum == last)", gotIn)
 	}
 }
 

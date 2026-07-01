@@ -61,132 +61,99 @@ func TestLeftPanelWidth(t *testing.T) {
 	}
 }
 
-func TestSidebarWidth(t *testing.T) {
+func TestRenderMiniContextBar(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name      string
-		termWidth int
-		want      int
+		name       string
+		used, tot  int
+		width      int
+		wantSub    string // substring that must appear
+		wantNoZero bool   // must not render "100%" when under budget
 	}{
-		{
-			name:      "wide terminal",
-			termWidth: 240,
-			want:      40, // 240/6 = 40
-		},
-		{
-			name:      "medium terminal",
-			termWidth: 180,
-			want:      30, // 180/6 = 30
-		},
-		{
-			name:      "narrow terminal clamps to minimum",
-			termWidth: 60,
-			want:      minLeftPanelWidth, // 60/6 = 10 < 22
-		},
-		{
-			name:      "very narrow terminal clamps to minimum",
-			termWidth: 10,
-			want:      minLeftPanelWidth, // 10/6 = 1 < 22
-		},
-		{
-			name:      "zero terminal width clamps to minimum",
-			termWidth: 0,
-			want:      minLeftPanelWidth, // 0/6 = 0 < 22
-		},
-		{
-			name:      "terminal width exactly at 6x minimum",
-			termWidth: minLeftPanelWidth * 6,
-			want:      minLeftPanelWidth, // 132/6 = 22 == minLeftPanelWidth
-		},
-		{
-			name:      "terminal width just above 6x minimum",
-			termWidth: minLeftPanelWidth*6 + 6,
-			want:      minLeftPanelWidth + 1, // (132+6)/6 = 23
-		},
+		{name: "half full", used: 500, tot: 1000, width: 12, wantSub: "50%"},
+		{name: "over budget clamps to 100", used: 3000, tot: 1000, width: 12, wantSub: "100%"},
+		{name: "unknown total shows token count", used: 1500, tot: 0, width: 12, wantSub: "1.5k"},
+		{name: "empty shows dash", used: 0, tot: 0, width: 12, wantSub: "—"},
+		// No live occupancy but a known window (graph-node worker) must read as
+		// unknown, not a misleading 0%.
+		{name: "no usage with known window shows dash", used: 0, tot: 200000, width: 12, wantSub: "—"},
 	}
-
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			got := sidebarWidth(tt.termWidth)
-			if got != tt.want {
-				t.Errorf("sidebarWidth(%d) = %d, want %d", tt.termWidth, got, tt.want)
+			got := renderMiniContextBar(tt.used, tt.tot, tt.width)
+			if !strings.Contains(got, tt.wantSub) {
+				t.Errorf("renderMiniContextBar(%d,%d,%d) = %q, want substring %q",
+					tt.used, tt.tot, tt.width, got, tt.wantSub)
 			}
 		})
 	}
 }
 
-func TestSidebarRow(t *testing.T) {
+func TestFleetTotals(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
-		name  string
-		label string
-		value string
-		check func(t *testing.T, result string)
-	}{
-		{
-			name:  "basic label and value",
-			label: "Messages",
-			value: "42",
-			check: func(t *testing.T, result string) {
-				if !strings.Contains(result, "Messages") {
-					t.Errorf("result should contain 'Messages', got %q", result)
-				}
-				if !strings.Contains(result, "42") {
-					t.Errorf("result should contain '42', got %q", result)
-				}
-				if !strings.HasSuffix(result, "\n") {
-					t.Errorf("result should end with newline, got %q", result)
-				}
-			},
-		},
-		{
-			name:  "empty label and value",
-			label: "",
-			value: "",
-			check: func(t *testing.T, result string) {
-				// Should not panic and should end with newline.
-				if !strings.HasSuffix(result, "\n") {
-					t.Errorf("result should end with newline, got %q", result)
-				}
-			},
-		},
-		{
-			name:  "long label",
-			label: "Very Long Label",
-			value: "100",
-			check: func(t *testing.T, result string) {
-				if !strings.Contains(result, "Very Long Label") {
-					t.Errorf("result should contain label, got %q", result)
-				}
-				if !strings.Contains(result, "100") {
-					t.Errorf("result should contain value, got %q", result)
-				}
-			},
-		},
-		{
-			name:  "special characters in value",
-			label: "Speed",
-			value: "12.5 t/s",
-			check: func(t *testing.T, result string) {
-				if !strings.Contains(result, "Speed") {
-					t.Errorf("result should contain 'Speed', got %q", result)
-				}
-				if !strings.Contains(result, "12.5 t/s") {
-					t.Errorf("result should contain '12.5 t/s', got %q", result)
-				}
-			},
-		},
+	// Idle operator (has a since-start rate but not active), one active worker,
+	// one completed worker (also has a rate). Live throughput must count only
+	// the active worker; cost must sum across all.
+	members := []fleetMember{
+		{label: "operator", active: false, hasTPS: true, tps: 500, costUSD: 0},
+		{label: "w-active", active: true, hasTPS: true, tps: 120, costUSD: 0.03},
+		{label: "w-done", active: false, hasTPS: true, tps: 40, costUSD: 0.01},
 	}
+	live, tps, cost := fleetTotals(members)
+	if live != 1 {
+		t.Errorf("liveCount = %d, want 1", live)
+	}
+	if tps != 120 {
+		t.Errorf("totalTPS = %.0f, want 120 (active worker only, not idle op or done worker)", tps)
+	}
+	if cost != 0.04 {
+		t.Errorf("totalCost = %.2f, want 0.04 (sum of all members)", cost)
+	}
+}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			result := sidebarRow(tt.label, tt.value)
-			tt.check(t, result)
-		})
+func TestBuildFleet(t *testing.T) {
+	t.Parallel()
+
+	m := Model{
+		runtimeSessions: map[string]*runtimeSlot{
+			"s1": {
+				sessionID:     "s1",
+				workerName:    "graph:plan",
+				jobID:         "abcdef1234567890",
+				status:        "active",
+				model:         "gpt-4o-mini",
+				tokensOut:     2000,
+				contextTokens: 4096,
+			},
+		},
+		modelContext: map[string]int{"gpt-4o-mini": 128000},
+	}
+	m.stats.ModelName = "claude-opus"
+	m.stats.ContextLength = 200000
+	m.stats.PromptTokens = 5000
+
+	fleet := m.buildFleet()
+	if len(fleet) != 2 {
+		t.Fatalf("buildFleet len = %d, want 2 (operator + 1 worker)", len(fleet))
+	}
+	if fleet[0].label != "operator" || fleet[0].icon != "⬡" {
+		t.Errorf("first member = %+v, want operator pinned first", fleet[0])
+	}
+	if fleet[0].ctxUsed != 5000 || fleet[0].ctxMax != 200000 {
+		t.Errorf("operator ctx = %d/%d, want 5000/200000", fleet[0].ctxUsed, fleet[0].ctxMax)
+	}
+	w := fleet[1]
+	if w.label != "abcdef12:plan" {
+		t.Errorf("worker label = %q, want %q", w.label, "abcdef12:plan")
+	}
+	if w.ctxUsed != 4096 || w.ctxMax != 128000 {
+		t.Errorf("worker ctx = %d/%d, want 4096/128000 (joined via modelContext)", w.ctxUsed, w.ctxMax)
+	}
+	if !w.active {
+		t.Errorf("worker should be active")
 	}
 }
 

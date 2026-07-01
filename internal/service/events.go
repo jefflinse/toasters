@@ -119,6 +119,13 @@ const (
 	// Payload: SessionMetaPayload. Carries SessionID.
 	EventTypeSessionMeta EventType = "session.meta"
 
+	// EventTypeSessionContext carries a session's live context-window occupancy
+	// (the most recent round-trip's prompt size). Graph nodes emit it per
+	// round-trip so the fleet pane's per-worker context bar can fill; their
+	// token counts otherwise only land in the DB at completion.
+	// Payload: SessionContextPayload. Carries SessionID.
+	EventTypeSessionContext EventType = "session.context"
+
 	// EventTypeDefinitionsReloaded is sent when definition files change and are
 	// reloaded by the fsnotify watcher. The TUI should refresh its local copies
 	// of skills, workers, and teams. Payload: nil (no payload needed).
@@ -247,6 +254,9 @@ type OperatorDonePayload struct {
 	TokensOut int
 	// ReasoningTokens is the number of reasoning tokens generated (0 if none).
 	ReasoningTokens int
+	// ContextTokens is the operator's live context-window occupancy — the prompt
+	// size of the most recent round-trip (not the per-turn sum in TokensIn).
+	ContextTokens int
 }
 
 // Blocker is the payload for EventTypeBlockerAdded events and the element type
@@ -447,6 +457,14 @@ type SessionMetaPayload struct {
 	Provider    string
 	Temperature float64
 	Thinking    bool
+}
+
+// SessionContextPayload is the payload for EventTypeSessionContext events.
+// ContextTokens is the session's current context-window occupancy — the prompt
+// size of its most recent model round-trip.
+type SessionContextPayload struct {
+	SessionID     string
+	ContextTokens int64
 }
 
 // SessionPromptPayload is the payload for EventTypeSessionPrompt events.

@@ -37,10 +37,14 @@ type Config struct {
 	// ShowOperatorPanelByDefault keeps the right Operator/sidebar panel
 	// visible by default. When false, the panel is hidden until the user
 	// reveals it via Ctrl+O.
-	ShowOperatorPanelByDefault bool           `mapstructure:"show_operator_panel_by_default"`
-	Operator                   OperatorConfig `mapstructure:"operator"`
-	Workers                    WorkersConfig  `mapstructure:"agents"` // config key "agents" kept for backward compatibility
-	MCP                        MCPConfig      `mapstructure:"mcp"`
+	ShowOperatorPanelByDefault bool `mapstructure:"show_operator_panel_by_default"`
+	// FleetRowDensity controls how tall each LLM row in the fleet panel is:
+	// "full" (label / model / bar / stats / activity) or "compact" (folded
+	// onto fewer lines). Empty defaults to "full".
+	FleetRowDensity string         `mapstructure:"fleet_row_density"`
+	Operator        OperatorConfig `mapstructure:"operator"`
+	Workers         WorkersConfig  `mapstructure:"agents"` // config key "agents" kept for backward compatibility
+	MCP             MCPConfig      `mapstructure:"mcp"`
 }
 
 // MCPServerConfig holds configuration for a single MCP server.
@@ -100,6 +104,7 @@ func Load() (*Config, error) {
 	viper.SetDefault("worker_thinking_enabled", false)
 	viper.SetDefault("worker_temperature", 0.1)
 	viper.SetDefault("show_jobs_panel_by_default", true)
+	viper.SetDefault("fleet_row_density", "full")
 	viper.SetDefault("show_operator_panel_by_default", true)
 	viper.SetDefault("agents.defaults.provider", "")
 	viper.SetDefault("agents.defaults.model", "")
@@ -159,6 +164,22 @@ func ValidGranularity(kind, value string) string {
 	}
 	slog.Warn("invalid granularity, defaulting to medium", "kind", kind, "value", value)
 	return "medium"
+}
+
+// FleetRowDensityLevels returns the allowed fleet-row-density values.
+func FleetRowDensityLevels() []string {
+	return []string{"full", "compact"}
+}
+
+// ValidFleetDensity normalizes a fleet-row-density value, defaulting an empty
+// or unrecognized value to "full".
+func ValidFleetDensity(value string) string {
+	switch value {
+	case "full", "compact":
+		return value
+	default:
+		return "full"
+	}
 }
 
 // isPlaintextKey returns true if key is a non-empty API key value that does

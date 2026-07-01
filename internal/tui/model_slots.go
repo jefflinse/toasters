@@ -50,6 +50,9 @@ type runtimeSlot struct {
 	tokensIn  int64
 	tokensOut int64
 	costUSD   float64
+	// contextTokens is the live context-window occupancy (most recent
+	// round-trip's prompt size), sourced from the runtime live snapshot.
+	contextTokens int64
 
 	// temperature/thinking are the sampling settings the session runs with.
 	// Set from a session.meta event (graph nodes) since they aren't carried

@@ -320,42 +320,29 @@ func (m *Model) shouldShowLeftPanel() bool {
 	return false
 }
 
-// applyPanelVisibilityDefaults caches the panel-visibility settings from a
-// freshly loaded or saved Settings snapshot, then runs resizeComponents so
-// any change in the effective visibility takes effect immediately.
+// applySettings caches the user-editable settings from a freshly loaded or
+// saved Settings snapshot, then runs resizeComponents so any change takes effect
+// immediately.
 //
-// The startup load path always keeps any user-set override intact (it's nil
-// at that point anyway). On a /settings save, the user has just expressed
-// an explicit preference, so we drop the override too — otherwise a stale
-// ctrl+j toggle could mask the new default and the save would feel
-// silently broken.
-func (m *Model) applyPanelVisibilityDefaults(s service.Settings) {
+// The startup load path keeps any user-set panel override intact (it's nil at
+// that point anyway). On a /settings save, the user has just expressed an
+// explicit preference, so we drop the override too — otherwise a stale ctrl+j
+// toggle could mask the new default and the save would feel silently broken.
+func (m *Model) applySettings(s service.Settings) {
 	m.showJobsPanelDefault = s.ShowJobsPanelByDefault
-	m.showOperatorPanelDefault = s.ShowOperatorPanelByDefault
+	// Service GetSettings already normalizes this; guard the empty case in case
+	// a msg arrives before a full round-trip.
+	if m.fleetDensity = s.FleetRowDensity; m.fleetDensity == "" {
+		m.fleetDensity = "full"
+	}
 	if m.settingsModal.show {
 		// Heuristic for "this came from a save, not the initial load":
-		// the modal is open. Clear overrides so the new default wins.
+		// the modal is open. Clear the override so the new default wins.
 		m.leftPanelOverride = nil
-		m.sidebarOverride = nil
 	}
 	if m.width > 0 && m.height > 0 {
 		m.resizeComponents()
 	}
-}
-
-// shouldShowSidebar reports whether the right Operator/sidebar panel should
-// be rendered. Same resolution shape as shouldShowLeftPanel: width gate →
-// explicit override → settings default. The legacy default kept the
-// sidebar visible whenever the terminal was wide enough; that's preserved
-// when ShowOperatorPanelByDefault is true (the default).
-func (m *Model) shouldShowSidebar() bool {
-	if m.width < minWidthForBar {
-		return false
-	}
-	if m.sidebarOverride != nil {
-		return *m.sidebarOverride
-	}
-	return m.showOperatorPanelDefault
 }
 
 // runtimeSessionsForTask returns all runtime sessions associated with the given task ID,

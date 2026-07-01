@@ -27,6 +27,16 @@ func (m *Model) handleModels(msg ModelsMsg) (tea.Model, tea.Cmd) {
 		slog.Warn("ListModels failed; sidebar context length unavailable", "error", msg.Err)
 	} else {
 		m.stats.Connected = true
+		// Build a model-ID → context-length map so the fleet pane can size a
+		// context bar per worker (worker sessions carry only the model name).
+		if m.modelContext == nil {
+			m.modelContext = make(map[string]int, len(msg.Models))
+		}
+		for _, mi := range msg.Models {
+			if cl := mi.ContextLength(); cl > 0 {
+				m.modelContext[mi.ID] = cl
+			}
+		}
 		if len(msg.Models) > 0 {
 			if m.stats.ModelName != "" {
 				// We already have a configured model name from
@@ -152,25 +162,26 @@ func (m *Model) handleMouseClick(msg tea.MouseClickMsg) (tea.Model, tea.Cmd) {
 		!m.promptModal.show && !m.outputModal.show && !m.loading {
 		if m.shouldShowLeftPanel() && msg.X < m.lpWidth {
 			// Clicked left panel — determine which of the three panes was
-			// clicked. Pane order (top to bottom): Jobs, Blockers, Workers.
-			workersPaneH := m.leftPanelWorkersPaneHeight()
-			blockersPaneH := m.leftPanelBlockersPaneHeight()
-			workersPaneY := m.height - workersPaneH
-			blockersPaneY := workersPaneY - blockersPaneH
+			// clicked. Pane order (top to bottom): Jobs, Fleet, Blockers.
+			// Boundaries come from the same height model the renderer uses.
+			jobsH, fleetH, _ := m.leftPanelHeights(m.lpWidth, m.height)
+			paneFrameV := FocusedPaneStyle.GetVerticalBorderSize()
+			jobsBottom := jobsH + paneFrameV
+			fleetBottom := jobsBottom + fleetH + paneFrameV
 			switch {
-			case msg.Y >= workersPaneY:
-				if m.focused != focusWorkers {
-					cmds = append(cmds, m.setFocus(focusWorkers))
+			case msg.Y < jobsBottom:
+				if m.focused != focusJobs {
+					cmds = append(cmds, m.setFocus(focusJobs))
 					m.input.Blur()
 				}
-			case msg.Y >= blockersPaneY:
-				if m.focused != focusBlockers {
-					cmds = append(cmds, m.setFocus(focusBlockers))
+			case msg.Y < fleetBottom:
+				if m.focused != focusFleet {
+					cmds = append(cmds, m.setFocus(focusFleet))
 					m.input.Blur()
 				}
 			default:
-				if m.focused != focusJobs {
-					cmds = append(cmds, m.setFocus(focusJobs))
+				if m.focused != focusBlockers {
+					cmds = append(cmds, m.setFocus(focusBlockers))
 					m.input.Blur()
 				}
 			}
@@ -231,7 +242,7 @@ func (m *Model) handleSpinnerTick(msg spinnerTickMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 	}
-	if !needTick && (m.focused == focusJobs || m.focused == focusWorkers) {
+	if !needTick && (m.focused == focusJobs || m.focused == focusFleet) {
 		needTick = true
 	}
 	// Jobs modal's focused panel also rainbow-cycles its title.
@@ -360,6 +371,12 @@ func (m *Model) handleOperatorDone(msg OperatorDoneMsg) (tea.Model, tea.Cmd) {
 	m.stats.CompletionTokens += msg.TokensOut
 	m.stats.ReasoningTokens += msg.ReasoningTokens
 	m.stats.CompletionTokensLive = 0
+	// PromptTokens tracks the operator's live context occupancy — the prompt
+	// size of the most recent round-trip. Only update when the turn reported a
+	// value so a zero (e.g. a provider that omits usage) doesn't blank the bar.
+	if msg.ContextTokens > 0 {
+		m.stats.PromptTokens = msg.ContextTokens
+	}
 	if m.stream.currentResponse != "" {
 		byline := "operator"
 		if msg.ModelName != "" {
@@ -504,29 +521,11 @@ func (m *Model) handleProgressPoll(msg progressPollMsg) (tea.Model, tea.Cmd) {
 		}
 		m.recordGraphNodeStarted(gn.JobID, gn.TaskID, gn.Node)
 	}
-	for _, snap := range msg.LiveSnapshots {
-		if _, ok := m.runtimeSessions[snap.ID]; ok {
-			continue
-		}
-		status := snap.Status
-		if status == "" {
-			status = "active"
-		}
-		m.runtimeSessions[snap.ID] = &runtimeSlot{
-			sessionID:  snap.ID,
-			workerName: snap.WorkerID,
-			jobID:      snap.JobID,
-			taskID:     snap.TaskID,
-			status:     status,
-			startTime:  snap.StartTime,
-			model:      snap.Model,
-			provider:   snap.Provider,
-			tokensIn:   snap.TokensIn,
-			tokensOut:  snap.TokensOut,
-		}
-	}
-	// Enrich live slots with model/provider/cost the snapshot carries but
-	// the session.* event stream drops, so worker cards can show them.
+	// Enrich existing slots with cost (and model/provider/token fallbacks) from
+	// the persisted session records — the session.* event stream drops these.
+	// Runs before the live-snapshot pass so live token/context values win for
+	// sessions the runtime is actively streaming (DB token counts only update on
+	// completion, so they're stale for in-flight work).
 	for _, sess := range msg.Sessions {
 		slot, ok := m.runtimeSessions[sess.ID]
 		if !ok {
@@ -538,6 +537,36 @@ func (m *Model) handleProgressPoll(msg progressPollMsg) (tea.Model, tea.Cmd) {
 		slot.tokensOut = sess.TokensOut
 		if sess.CostUSD != nil {
 			slot.costUSD = *sess.CostUSD
+		}
+	}
+	// Apply live runtime snapshots. These carry real-time token counts and
+	// context occupancy, so they create missing slots and authoritatively
+	// refresh the live fields of existing ones each tick.
+	for _, snap := range msg.LiveSnapshots {
+		status := snap.Status
+		if status == "" {
+			status = "active"
+		}
+		if slot, ok := m.runtimeSessions[snap.ID]; ok {
+			slot.model = snap.Model
+			slot.provider = snap.Provider
+			slot.tokensIn = snap.TokensIn
+			slot.tokensOut = snap.TokensOut
+			slot.contextTokens = snap.CurrentContextTokens
+			continue
+		}
+		m.runtimeSessions[snap.ID] = &runtimeSlot{
+			sessionID:     snap.ID,
+			workerName:    snap.WorkerID,
+			jobID:         snap.JobID,
+			taskID:        snap.TaskID,
+			status:        status,
+			startTime:     snap.StartTime,
+			model:         snap.Model,
+			provider:      snap.Provider,
+			tokensIn:      snap.TokensIn,
+			tokensOut:     snap.TokensOut,
+			contextTokens: snap.CurrentContextTokens,
 		}
 	}
 	// Reconcile slots whose terminal events were lost during an SSE

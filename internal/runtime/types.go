@@ -53,6 +53,9 @@ type SessionSnapshot struct {
 	StartTime time.Time
 	TokensIn  int64
 	TokensOut int64
+	// CurrentContextTokens is the prompt size of the most recent round-trip —
+	// the session's live context-window occupancy (0 if none reported yet).
+	CurrentContextTokens int64
 }
 
 // SessionEvent is emitted by a session for observers.

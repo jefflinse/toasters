@@ -688,8 +688,8 @@ func TestOpenAI_Models_LMStudioEndpoint(t *testing.T) {
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"data": []map[string]any{
-					{"id": "model-a"},
-					{"id": "model-b"},
+					{"id": "model-a", "max_context_length": 262144, "loaded_context_length": 200000},
+					{"id": "model-b", "max_context_length": 131072},
 				},
 			})
 			return
@@ -712,6 +712,77 @@ func TestOpenAI_Models_LMStudioEndpoint(t *testing.T) {
 	}
 	if models[0].Provider != "lmstudio" {
 		t.Errorf("models[0].Provider = %q, want lmstudio", models[0].Provider)
+	}
+	// Context lengths must be parsed — they drive the fleet pane's context bars
+	// and are the whole reason the native endpoint is preferred over /v1/models.
+	if models[0].MaxContextLength != 262144 || models[0].LoadedContextLength != 200000 {
+		t.Errorf("models[0] context = max %d / loaded %d, want 262144 / 200000",
+			models[0].MaxContextLength, models[0].LoadedContextLength)
+	}
+	if got := models[0].ContextLength(); got != 200000 {
+		t.Errorf("models[0].ContextLength() = %d, want 200000 (loaded wins)", got)
+	}
+	if got := models[1].ContextLength(); got != 131072 {
+		t.Errorf("models[1].ContextLength() = %d, want 131072 (max, none loaded)", got)
+	}
+}
+
+// TestOpenAI_Models_PrefersNativeForContextLength verifies that when BOTH
+// endpoints respond, the native /api/v0/models wins — it's the only one that
+// carries context length, which plain /v1/models omits. Regression guard for the
+// bug where /v1/models was tried first and its context-free listing was returned.
+func TestOpenAI_Models_PrefersNativeForContextLength(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/v0/models":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": []map[string]any{
+					{"id": "qwen", "max_context_length": 262144, "loaded_context_length": 200000},
+				},
+			})
+		case "/v1/models":
+			// Standard listing: same model, no context length.
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": []map[string]any{{"id": "qwen"}},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	p := NewOpenAI("lmstudio", srv.URL, "", "")
+	models, err := p.Models(context.Background())
+	if err != nil {
+		t.Fatalf("Models error: %v", err)
+	}
+	if len(models) != 1 {
+		t.Fatalf("expected 1 model, got %d", len(models))
+	}
+	if models[0].ContextLength() != 200000 {
+		t.Errorf("ContextLength() = %d, want 200000 — native endpoint should win over /v1/models",
+			models[0].ContextLength())
+	}
+}
+
+func TestLMStudioModelsURL(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		endpoint, want string
+	}{
+		{"http://localhost:1234/v1", "http://localhost:1234/api/v0/models"},
+		{"http://localhost:1234/v1/", "http://localhost:1234/api/v0/models"},
+		{"http://localhost:1234", "http://localhost:1234/api/v0/models"},
+		{"https://example.com/api/v2", "https://example.com/api/api/v0/models"},
+	}
+	for _, tt := range tests {
+		if got := lmStudioModelsURL(tt.endpoint); got != tt.want {
+			t.Errorf("lmStudioModelsURL(%q) = %q, want %q", tt.endpoint, got, tt.want)
+		}
 	}
 }
 

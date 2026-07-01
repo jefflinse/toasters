@@ -91,16 +91,17 @@ func dbWorkerSessionToService(s *db.WorkerSession) WorkerSession {
 
 func runtimeSnapshotToService(snap runtime.SessionSnapshot) SessionSnapshot {
 	return SessionSnapshot{
-		ID:        snap.ID,
-		WorkerID:  snap.WorkerID,
-		JobID:     snap.JobID,
-		TaskID:    snap.TaskID,
-		Status:    snap.Status,
-		Model:     snap.Model,
-		Provider:  snap.Provider,
-		StartTime: snap.StartTime,
-		TokensIn:  snap.TokensIn,
-		TokensOut: snap.TokensOut,
+		ID:                   snap.ID,
+		WorkerID:             snap.WorkerID,
+		JobID:                snap.JobID,
+		TaskID:               snap.TaskID,
+		Status:               snap.Status,
+		Model:                snap.Model,
+		Provider:             snap.Provider,
+		StartTime:            snap.StartTime,
+		TokensIn:             snap.TokensIn,
+		TokensOut:            snap.TokensOut,
+		CurrentContextTokens: snap.CurrentContextTokens,
 	}
 }
 

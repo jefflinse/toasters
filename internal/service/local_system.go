@@ -284,6 +284,7 @@ func (s *LocalService) GetSettings(_ context.Context) (Settings, error) {
 			WorkerTemperature:          0.1,
 			ShowJobsPanelByDefault:     false,
 			ShowOperatorPanelByDefault: true,
+			FleetRowDensity:            config.ValidFleetDensity(""),
 		}, nil
 	}
 	return Settings{
@@ -293,6 +294,7 @@ func (s *LocalService) GetSettings(_ context.Context) (Settings, error) {
 		WorkerTemperature:          s.cfg.AppConfig.WorkerTemperature,
 		ShowJobsPanelByDefault:     s.cfg.AppConfig.ShowJobsPanelByDefault,
 		ShowOperatorPanelByDefault: s.cfg.AppConfig.ShowOperatorPanelByDefault,
+		FleetRowDensity:            config.ValidFleetDensity(s.cfg.AppConfig.FleetRowDensity),
 	}, nil
 }
 
@@ -373,6 +375,12 @@ func (s *LocalService) UpdateSettings(_ context.Context, next Settings) error {
 	}
 	s.cfg.AppConfig.ShowJobsPanelByDefault = next.ShowJobsPanelByDefault
 	s.cfg.AppConfig.ShowOperatorPanelByDefault = next.ShowOperatorPanelByDefault
+
+	density := config.ValidFleetDensity(next.FleetRowDensity)
+	if err := config.SetTopLevelScalar(s.cfg.ConfigDir, "fleet_row_density", density); err != nil {
+		return fmt.Errorf("persisting fleet_row_density: %w", err)
+	}
+	s.cfg.AppConfig.FleetRowDensity = density
 
 	return nil
 }
