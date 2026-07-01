@@ -375,12 +375,21 @@ func (m *Model) attachWorkerStreamFileChange(slot *runtimeSlot, msg SessionFileC
 		it.DiffTruncated = msg.Truncated
 	}
 
-	// Pass 1: name + path match, preferring a pending item.
+	// Pass 1: name + path match, preferring the oldest pending item that
+	// doesn't already carry a diff. Oldest-first (not newest-first) matters
+	// because mycelium fires ALL tool_call events for a turn up front, then
+	// executes sequentially — two parallel calls to the same tool+path can
+	// both be pending at once, and their file_change notifications arrive in
+	// execution (= insertion) order. Newest-first matching would attach the
+	// first call's diff to the second call's item.
 	var completedMatch *service.WorkerStreamItem
-	for i := len(snap.Items) - 1; i >= 0; i-- {
+	for i := 0; i < len(snap.Items); i++ {
 		it := &snap.Items[i]
 		if it.Kind != service.WorkerStreamItemTool || it.ToolName != msg.ToolName ||
 			toolArgPath(it.ToolArgs) != msg.Path {
+			continue
+		}
+		if it.FileDiff != "" {
 			continue
 		}
 		if it.EndedAt.IsZero() {
@@ -396,11 +405,15 @@ func (m *Model) attachWorkerStreamFileChange(slot *runtimeSlot, msg SessionFileC
 		return
 	}
 
-	// Pass 2: name-only fallback, preferring the newest pending item.
+	// Pass 2: name-only fallback, preferring the oldest pending item that
+	// doesn't already carry a diff.
 	var completedByName *service.WorkerStreamItem
-	for i := len(snap.Items) - 1; i >= 0; i-- {
+	for i := 0; i < len(snap.Items); i++ {
 		it := &snap.Items[i]
 		if it.Kind != service.WorkerStreamItemTool || it.ToolName != msg.ToolName {
+			continue
+		}
+		if it.FileDiff != "" {
 			continue
 		}
 		if it.EndedAt.IsZero() {

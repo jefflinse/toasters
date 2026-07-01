@@ -11,6 +11,7 @@ import (
 
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/glamour"
+	xansi "github.com/charmbracelet/x/ansi"
 )
 
 // glamourDebounce caps how often the graph pane re-renders a streaming
@@ -250,6 +251,13 @@ func parseDiffHunks(diff string) []diffRenderLine {
 			out = append(out, diffRenderLine{marker: '@'})
 			continue
 		}
+		if strings.HasPrefix(raw, `\`) {
+			// go-udiff's "\ No newline at end of file" marker — not a real
+			// hunk line. Must not render and must not advance either line
+			// counter, or every line after it in the hunk gets a skewed
+			// gutter number.
+			continue
+		}
 		marker, code := raw[0], raw[1:]
 		switch marker {
 		case '+':
@@ -309,7 +317,7 @@ func renderDiffLines(diff string, width int) string {
 			continue
 		}
 		gutter := DimStyle.Render(fmt.Sprintf("%*d", gutterWidth, r.num))
-		code := truncate(r.code, codeWidth)
+		code := truncate(sanitizeDiffCode(r.code), codeWidth)
 		switch r.marker {
 		case '+':
 			lines = append(lines, gutter+" "+addStyle.Render("+"+code))
@@ -320,6 +328,33 @@ func renderDiffLines(diff string, width int) string {
 		}
 	}
 	return strings.Join(lines, "\n")
+}
+
+// sanitizeDiffCode strips ANSI/CSI escapes and C0 control characters from a
+// diff code line before it's styled and rendered. The content originates
+// from worker-written file bytes, not our own formatting, so a code line can
+// carry embedded escape sequences (which would bleed into the terminal's
+// styling state) or a bare "\r" left over from a CRLF file — go-udiff splits
+// hunk lines on "\n" only, so the "\r" stays attached to the line. xansi.Strip
+// removes recognized ANSI/CSI/OSC sequences but does not touch a bare "\r",
+// so the C0 pass below is still required. Tabs expand to 4 spaces (rather
+// than being dropped) so gutter alignment and width truncation downstream
+// reflect what a tab-honoring editor would show.
+func sanitizeDiffCode(s string) string {
+	s = xansi.Strip(s)
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		switch {
+		case r == '\t':
+			b.WriteString("    ")
+		case r < 0x20:
+			continue
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
 
 // summarizeToolArgs returns the parenthesized arg portion shown next

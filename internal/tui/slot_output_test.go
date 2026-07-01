@@ -83,6 +83,30 @@ func TestAttachFileChange_FallbackByNameOnly(t *testing.T) {
 	}
 }
 
+// TestAttachFileChange_OldestPendingFirst verifies the fix for parallel tool
+// calls: mycelium fires ALL tool_call events for a turn up front, then
+// executes sequentially, so two calls to the same tool+path can both be
+// pending before either's file_change notification arrives — and those
+// notifications arrive in execution (= insertion) order. Matching must walk
+// oldest-first so the first notification lands on the first item and the
+// second on the second, instead of both landing on the newest (last) item.
+func TestAttachFileChange_OldestPendingFirst(t *testing.T) {
+	rs := &runtimeSlot{}
+	args, _ := json.Marshal(map[string]string{"path": "main.go"})
+	rs.startTool("call1", "write_file", args)
+	rs.startTool("call2", "write_file", args)
+
+	rs.attachFileChange("write_file", "main.go", "diff-1", 1, 0, false, false)
+	rs.attachFileChange("write_file", "main.go", "diff-2", 2, 0, false, false)
+
+	if rs.items[0].fileDiff != "diff-1" {
+		t.Errorf("items[0].fileDiff = %q, want %q (first notification -> oldest pending item)", rs.items[0].fileDiff, "diff-1")
+	}
+	if rs.items[1].fileDiff != "diff-2" {
+		t.Errorf("items[1].fileDiff = %q, want %q (second notification -> second item)", rs.items[1].fileDiff, "diff-2")
+	}
+}
+
 // TestAttachFileChange_SynthesizesOnTotalMiss verifies that when there is no
 // tool item at all for the given name, a completed item is synthesized
 // (mirroring completeTool's synthesize-on-miss path) so the diff still

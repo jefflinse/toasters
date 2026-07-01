@@ -140,6 +140,67 @@ func TestRenderDiffLines(t *testing.T) {
 	}
 }
 
+// TestParseDiffHunks_SkipsNoNewlineMarker verifies go-udiff's "\ No newline
+// at end of file" marker line is skipped entirely — not rendered, and
+// critically not counted against the old/new line counters. A buggy
+// implementation that treats it as a context line would skew the line number
+// of every row that follows it in the hunk.
+func TestParseDiffHunks_SkipsNoNewlineMarker(t *testing.T) {
+	diff := strings.Join([]string{
+		"@@ -1,2 +1,2 @@",
+		" context",
+		"-old",
+		`\ No newline at end of file`,
+		"+new",
+	}, "\n")
+
+	rows := parseDiffHunks(diff)
+
+	for _, r := range rows {
+		if strings.Contains(r.code, "No newline") {
+			t.Fatalf("marker line leaked into rows: %+v", rows)
+		}
+	}
+	want := []diffRenderLine{
+		{marker: '@'},
+		{marker: ' ', num: 1, code: "context"},
+		{marker: '-', num: 2, code: "old"},
+		{marker: '+', num: 2, code: "new"},
+	}
+	if len(rows) != len(want) {
+		t.Fatalf("got %d rows, want %d: %+v", len(rows), len(want), rows)
+	}
+	for i := range want {
+		if rows[i] != want[i] {
+			t.Errorf("row[%d] = %+v, want %+v", i, rows[i], want[i])
+		}
+	}
+}
+
+// TestRenderDiffLines_SanitizesCodeLines verifies a diff code line carrying
+// an embedded ANSI escape, a bare CR (CRLF file — go-udiff splits hunks on
+// "\n" only, leaving "\r" attached), and a tab renders with the escape gone,
+// no stray CR, and the tab expanded to 4 spaces.
+func TestRenderDiffLines_SanitizesCodeLines(t *testing.T) {
+	diff := "@@ -1,1 +1,1 @@\n+\x1b[31mred\r\ttext"
+
+	out := renderDiffLines(diff, 60)
+
+	// The render legitimately carries its own lipgloss/ANSI styling escapes,
+	// so check for the specific injected escape rather than any ESC byte, and
+	// strip styling before checking for the bare CR and tab expansion.
+	if strings.Contains(out, "\x1b[31m") {
+		t.Errorf("injected ANSI escape leaked into rendered diff: %q", out)
+	}
+	if strings.Contains(out, "\r") {
+		t.Errorf("bare CR leaked into rendered diff: %q", out)
+	}
+	stripped := xansi.Strip(out)
+	if !strings.Contains(stripped, "red    text") {
+		t.Errorf("expected tab expanded to 4 spaces: %q", stripped)
+	}
+}
+
 // TestRenderDiffLines_Empty verifies degenerate inputs render nothing rather
 // than panicking.
 func TestRenderDiffLines_Empty(t *testing.T) {

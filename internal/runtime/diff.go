@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"strings"
+	"unicode/utf8"
 
 	"github.com/aymanbagabas/go-udiff"
 )
@@ -77,9 +78,31 @@ func capDiff(body string, maxLines, maxBytes int) (diff string, truncated bool) 
 	var b strings.Builder
 	for i, line := range lines {
 		if i >= maxLines || b.Len()+len(line) > maxBytes {
+			if b.Len() == 0 && line != "" {
+				// The very first line alone exceeds maxBytes. Returning ""
+				// here would render as "diff truncated" with nothing to show;
+				// hard-truncate the line instead so the UI displays something.
+				return truncateBytesRuneSafe(line, maxBytes), true
+			}
 			return b.String(), true
 		}
 		b.WriteString(line)
 	}
 	return b.String(), false
+}
+
+// truncateBytesRuneSafe cuts s to at most maxBytes bytes, backing off to the
+// nearest earlier rune boundary so a multi-byte UTF-8 sequence is never split.
+func truncateBytesRuneSafe(s string, maxBytes int) string {
+	if maxBytes <= 0 {
+		return ""
+	}
+	if len(s) <= maxBytes {
+		return s
+	}
+	cut := maxBytes
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut]
 }

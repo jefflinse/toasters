@@ -315,6 +315,40 @@ func TestAttachWorkerStreamFileChange_MergesIntoPendingCall(t *testing.T) {
 	}
 }
 
+// TestAttachWorkerStreamFileChange_OldestPendingFirst mirrors
+// TestAttachFileChange_OldestPendingFirst in slot_output_test.go: two
+// parallel calls to the same tool+path can both be pending at once (mycelium
+// fires all tool_call events up front, then executes sequentially), and
+// their file_change notifications arrive in execution (= insertion) order.
+// The first notification must land on the first (oldest) pending item, the
+// second on the second, not both on the newest.
+func TestAttachWorkerStreamFileChange_OldestPendingFirst(t *testing.T) {
+	m := newMinimalModel(t)
+	s := &runtimeSlot{sessionID: "s", workerName: "graph:implement", jobID: "j"}
+
+	args, _ := json.Marshal(map[string]string{"path": "main.go"})
+	m.appendWorkerStreamToolCall(s, "call1", "write_file", args)
+	m.appendWorkerStreamToolCall(s, "call2", "write_file", args)
+
+	m.attachWorkerStreamFileChange(s, SessionFileChangeMsg{
+		SessionID: "s", ToolName: "write_file", Path: "main.go", Diff: "diff-1", Added: 1,
+	})
+	m.attachWorkerStreamFileChange(s, SessionFileChangeMsg{
+		SessionID: "s", ToolName: "write_file", Path: "main.go", Diff: "diff-2", Added: 2,
+	})
+
+	card := m.findWorkerStream("s")
+	if card == nil || len(card.Items) != 2 {
+		t.Fatalf("expected 2 items, card=%+v", card)
+	}
+	if card.Items[0].FileDiff != "diff-1" {
+		t.Errorf("Items[0].FileDiff = %q, want %q (first notification -> oldest pending item)", card.Items[0].FileDiff, "diff-1")
+	}
+	if card.Items[1].FileDiff != "diff-2" {
+		t.Errorf("Items[1].FileDiff = %q, want %q (second notification -> second item)", card.Items[1].FileDiff, "diff-2")
+	}
+}
+
 // TestAttachWorkerStreamFileChange_NameOnlyFallback verifies that when no
 // tool item's path argument matches (e.g. args missing), the newest item
 // with the same tool name is used instead.

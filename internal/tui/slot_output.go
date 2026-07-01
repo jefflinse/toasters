@@ -139,10 +139,18 @@ func toolArgPath(args json.RawMessage) string {
 // later tool_result still completes the same item via completeTool
 // instead of finding it "already done" and synthesizing a duplicate.
 //
-// Matching walks items newest-first: tool name + path match (preferring a
+// Matching walks items oldest-first: tool name + path match (preferring a
 // still-pending item, but accepting a completed one since ordering isn't
 // guaranteed), then a name-only fallback, then a synthesized standalone
 // item mirroring completeTool's synthesize-on-miss path.
+//
+// Oldest-first (not newest-first) matters because mycelium fires ALL
+// tool_call events for a turn up front, then executes sequentially — so two
+// parallel calls to the same tool+path can both be pending at once, and
+// their file_change notifications arrive in execution (= insertion) order.
+// Newest-first matching would attach the first call's diff to the second
+// call's item. An item that already carries a diff is skipped so a second
+// notification for the same path can't clobber it before it completes.
 func (rs *runtimeSlot) attachFileChange(toolName, path, diff string, added, removed int, created, truncated bool) {
 	set := func(it *outputItem) {
 		it.fileDiff = diff
@@ -152,11 +160,15 @@ func (rs *runtimeSlot) attachFileChange(toolName, path, diff string, added, remo
 		it.diffTruncated = truncated
 	}
 
-	// Pass 1: name + path match, preferring a pending item.
+	// Pass 1: name + path match, preferring the oldest pending item that
+	// doesn't already carry a diff.
 	var completedMatch *outputItem
-	for i := len(rs.items) - 1; i >= 0; i-- {
+	for i := 0; i < len(rs.items); i++ {
 		it := &rs.items[i]
 		if it.kind != outputItemTool || it.toolName != toolName || toolArgPath(it.toolArgs) != path {
+			continue
+		}
+		if it.fileDiff != "" {
 			continue
 		}
 		if it.endedAt.IsZero() {
@@ -174,11 +186,15 @@ func (rs *runtimeSlot) attachFileChange(toolName, path, diff string, added, remo
 		return
 	}
 
-	// Pass 2: name-only fallback, preferring the newest pending item.
+	// Pass 2: name-only fallback, preferring the oldest pending item that
+	// doesn't already carry a diff.
 	var completedByName *outputItem
-	for i := len(rs.items) - 1; i >= 0; i-- {
+	for i := 0; i < len(rs.items); i++ {
 		it := &rs.items[i]
 		if it.kind != outputItemTool || it.toolName != toolName {
+			continue
+		}
+		if it.fileDiff != "" {
 			continue
 		}
 		if it.endedAt.IsZero() {

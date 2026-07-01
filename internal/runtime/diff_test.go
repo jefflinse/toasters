@@ -103,6 +103,29 @@ func TestCapDiff_NoTruncationWhenSmall(t *testing.T) {
 	}
 }
 
+// TestCapDiff_LongSingleLineNotEmpty verifies that when even the first line
+// alone exceeds maxBytes, capDiff returns a hard-truncated version of that
+// line instead of an empty string — an empty diff would render as "diff
+// truncated" with nothing underneath it.
+func TestCapDiff_LongSingleLineNotEmpty(t *testing.T) {
+	body := "+" + strings.Repeat("x", 200) + "\n"
+
+	diff, truncated := capDiff(body, maxDiffLines, 50)
+
+	if !truncated {
+		t.Errorf("truncated = false, want true for a line exceeding maxBytes")
+	}
+	if diff == "" {
+		t.Fatal("expected a non-empty, hard-truncated diff, got \"\"")
+	}
+	if len(diff) > 50 {
+		t.Errorf("diff is %d bytes, want <= 50", len(diff))
+	}
+	if !strings.HasPrefix(body, diff) {
+		t.Errorf("diff %q is not a prefix of the original line", diff)
+	}
+}
+
 func TestCapDiff_NoFalseTruncationAtExactLimit(t *testing.T) {
 	// A body of exactly maxLines newline-terminated lines must not be
 	// flagged as truncated — SplitAfter's trailing empty element (from the
