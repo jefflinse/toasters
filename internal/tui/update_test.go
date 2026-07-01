@@ -119,7 +119,25 @@ func TestUpdateNodes_FocusAndTabs(t *testing.T) {
 		t.Errorf("after left, tab = %d, want Output", m.nodes.tab)
 	}
 
-	// Esc returns focus to the list without closing the screen.
+	// Plain Tab in the detail pane must NOT switch tabs (only ←→ do).
+	res, _ = m.updateNodes(specialKey(tea.KeyTab))
+	m = res.(*Model)
+	if m.nodes.tab != cockpitTabOutput {
+		t.Errorf("Tab in detail should not switch tabs, tab = %d", m.nodes.tab)
+	}
+
+	// Shift+Tab returns focus to the list without closing the screen.
+	res, _ = m.updateNodes(tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift})
+	m = res.(*Model)
+	if m.nodes.focusDetail {
+		t.Error("Shift+Tab in detail should return focus to the list")
+	}
+	if !m.nodes.show {
+		t.Error("Shift+Tab in detail should not close the nodes screen")
+	}
+
+	// Esc also returns focus to the list.
+	m.nodes.focusDetail = true
 	res, _ = m.updateNodes(specialKey(tea.KeyEscape))
 	m = res.(*Model)
 	if m.nodes.focusDetail {
@@ -221,6 +239,35 @@ func TestToggleNodes(t *testing.T) {
 	m.toggleNodes()
 	if m.nodes.show {
 		t.Error("toggle should close the nodes screen")
+	}
+}
+
+func TestMainScreenTabOrder(t *testing.T) {
+	t.Parallel()
+
+	mm := newMinimalModel(t)
+	mm.width, mm.height = 120, 40
+	show := true
+	mm.leftPanelOverride = &show // force the left panel visible so no target is skipped
+	mm.focused = focusJobs
+	m := &mm
+
+	// Forward: Jobs → Fleet → Blockers → Chat → Jobs.
+	for i, want := range []focusedPanel{focusFleet, focusBlockers, focusChat, focusJobs} {
+		res, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+		m = res.(*Model)
+		if m.focused != want {
+			t.Fatalf("forward step %d: focused = %v, want %v", i, m.focused, want)
+		}
+	}
+
+	// Reverse from Jobs: Chat → Blockers → Fleet → Jobs.
+	for i, want := range []focusedPanel{focusChat, focusBlockers, focusFleet, focusJobs} {
+		res, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift})
+		m = res.(*Model)
+		if m.focused != want {
+			t.Fatalf("reverse step %d: focused = %v, want %v", i, m.focused, want)
+		}
 	}
 }
 

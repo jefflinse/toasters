@@ -28,15 +28,11 @@ type nodesLayout struct {
 	visibleRows int
 }
 
-// nodesLayoutFor computes the nodes-screen geometry for the given terminal size.
-func nodesLayoutFor(termW, termH int) nodesLayout {
-	listW := termW * 2 / 5
-	if listW < 34 {
-		listW = 34
-	}
-	if listW > 56 {
-		listW = 56
-	}
+// nodesLayoutFor computes the nodes-screen geometry. listW is the desired list
+// (left pane) width — passed in so it can match the main screen's left panel,
+// making the screen read as a drill-in of the Fleet pane. It's clamped so the
+// detail pane keeps a usable minimum.
+func nodesLayoutFor(termW, termH, listW int) nodesLayout {
 	if listW > termW-24 {
 		listW = termW - 24
 	}
@@ -98,7 +94,7 @@ func (m *Model) toggleNodes() {
 // renderNodes renders the full nodes screen: a top help/filter bar over the
 // list (left) and detail (right) panes.
 func (m *Model) renderNodes() string {
-	lay := nodesLayoutFor(m.width, m.height)
+	lay := nodesLayoutFor(m.width, m.height, m.effectiveLeftPanelWidth())
 	nodes := m.filteredNodeSessions()
 
 	bar := m.renderNodesBar()
@@ -130,7 +126,7 @@ func (m *Model) renderNodesBar() string {
 		matches := len(m.filteredNodeSessions())
 		text = fmt.Sprintf("  filter: %s_   ·   %d match(es)   ·   enter: apply   ·   esc: clear", m.nodes.filterQuery, matches)
 	case m.nodes.focusDetail:
-		text = "  ←→: tabs   ·   ↑↓: scroll   ·   x: kill   ·   esc: back to list   ·   ctrl+g: close"
+		text = "  ←→: tabs   ·   ↑↓: scroll   ·   x: kill   ·   esc / shift+tab: back to list   ·   ctrl+g: close"
 	default:
 		text = "  ↑↓: navigate   ·   tab/enter: open detail   ·   x: kill   ·   /: filter   ·   ctrl+g / esc: close"
 		if m.nodes.filterQuery != "" {
@@ -157,10 +153,10 @@ func (m *Model) renderNodeList(nodes []*runtimeSlot, selIdx int, lay nodesLayout
 
 	innerW := lay.listInnerW
 
-	// Title: "Nodes" + count.
-	title := gradientText("Nodes", [3]uint8{0, 200, 200}, [3]uint8{50, 130, 255})
+	// Title: "Fleet" + count — matches the main screen's Fleet pane header.
+	title := gradientText("Fleet", [3]uint8{50, 130, 255}, [3]uint8{0, 200, 200})
 	if focused {
-		title = rainbowText("Nodes", m.spinnerFrame)
+		title = rainbowText("Fleet", m.spinnerFrame)
 	}
 	count := DimStyle.Render(fmt.Sprintf("%d", len(nodes)))
 	gap := innerW - lipgloss.Width(title) - lipgloss.Width(count)
@@ -294,11 +290,12 @@ func (m *Model) updateNodesDetail(msg tea.KeyPressMsg, nodes []*runtimeSlot) (te
 	switch msg.String() {
 	case "ctrl+g":
 		m.nodes.show = false
-	case "esc":
+	case "esc", "shift+tab":
+		// Both return focus to the list; only left/right cycle tabs.
 		m.nodes.focusDetail = false
-	case "tab", "right", "l":
+	case "right", "l":
 		m.nodes.tab = (tab + 1) % cockpitTabCount
-	case "shift+tab", "left", "h":
+	case "left", "h":
 		m.nodes.tab = (tab + cockpitTabCount - 1) % cockpitTabCount
 	case "1":
 		m.nodes.tab = cockpitTabOutput

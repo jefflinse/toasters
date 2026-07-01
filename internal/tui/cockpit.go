@@ -136,7 +136,7 @@ func detailTitle(slot *runtimeSlot) string {
 func (m *Model) renderDetailFooter(tab cockpitTab, scroll, total int, focused bool, innerW int) string {
 	keys := "Tab: focus detail"
 	if focused {
-		keys = "←→ tabs · ↑↓ scroll · x kill · Esc list"
+		keys = "←→ tabs · ↑↓ scroll · x kill · Esc/shift+tab: list"
 	}
 	pos := fmt.Sprintf("%d/%d", scroll+1, maxInt(total, 1))
 	if focused && tab == cockpitTabOutput && !m.nodes.userScrolled {

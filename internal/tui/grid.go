@@ -75,14 +75,16 @@ func renderWorkerCard(rs *runtimeSlot, innerW, innerH, ctxMax int, focused bool,
 	right += elapsed.String()
 	rightStyled := DimStyle.Render(right)
 
-	// Fit the headline into whatever the right-hand meta leaves, keeping at least
-	// a few chars. The prefix (icon + space) is measured with lipgloss.Width so a
-	// double-width glyph doesn't shove the text past the column.
+	// Fit the headline into whatever the right-hand meta leaves. The prefix
+	// (icon + space) is measured with lipgloss.Width so a double-width glyph
+	// doesn't shove the text past the column. When the column is narrow enough
+	// that co-locating the job·elapsed meta would starve the headline (the
+	// primary identifier), drop the meta and give the headline the whole line —
+	// the timestamp is still on the detail pane's Stats tab.
+	const minHeadline = 14
 	prefix := icon + " "
 	headlineMax := innerW - lipgloss.Width(prefix) - lipgloss.Width(rightStyled) - 1
-	if headlineMax < 6 {
-		// Too tight to co-locate — drop the right-hand meta and give the
-		// headline the whole line.
+	if headlineMax < minHeadline {
 		rightStyled = ""
 		headlineMax = innerW - lipgloss.Width(prefix)
 	}

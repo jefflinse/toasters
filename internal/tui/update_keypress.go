@@ -87,20 +87,20 @@ func (m *Model) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 
 	case "tab":
-		// Cycle focus: chat → jobs → blockers → workers → chat.
+		// Cycle focus in visual order: jobs → fleet → blockers → chat → jobs.
 		// Skip hidden panels.
 		// (Tab inside the slash command popup is handled above and returns early.)
 		next := m.focused
 		for {
 			switch next {
-			case focusChat:
-				next = focusJobs
 			case focusJobs:
-				next = focusBlockers
-			case focusBlockers:
 				next = focusFleet
 			case focusFleet:
+				next = focusBlockers
+			case focusBlockers:
 				next = focusChat
+			case focusChat:
+				next = focusJobs
 			default:
 				next = focusChat
 			}
@@ -118,18 +118,18 @@ func (m *Model) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, focusCmd
 
 	case "shift+tab":
-		// Reverse cycle: chat → workers → blockers → jobs → chat.
+		// Reverse of the visual order: jobs → chat → blockers → fleet → jobs.
 		next := m.focused
 		for {
 			switch next {
-			case focusChat:
-				next = focusFleet
-			case focusFleet:
-				next = focusBlockers
-			case focusBlockers:
-				next = focusJobs
 			case focusJobs:
 				next = focusChat
+			case focusChat:
+				next = focusBlockers
+			case focusBlockers:
+				next = focusFleet
+			case focusFleet:
+				next = focusJobs
 			default:
 				next = focusChat
 			}
