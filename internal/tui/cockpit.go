@@ -28,6 +28,7 @@ func (m *Model) openCockpit(sessionID string, tab cockpitTab) {
 	m.cockpit.sessionID = sessionID
 	m.cockpit.tab = tab
 	m.cockpit.userScrolled = false
+	m.cockpit.confirmKill = false
 	m.cockpit.scroll = [cockpitTabCount]int{}
 	if tab == cockpitTabOutput {
 		m.cockpit.scroll[cockpitTabOutput] = scrollBottom
@@ -39,11 +40,29 @@ func (m *Model) openCockpit(sessionID string, tab cockpitTab) {
 // movement on the Output tab sets userScrolled so live events stop auto-tailing.
 func (m *Model) updateCockpit(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	tab := m.cockpit.tab
+
+	// A pending kill confirmation intercepts everything: Enter kills, any other
+	// key (Esc included) cancels. Mirrors the grid's confirm-cancel behavior.
+	if m.cockpit.confirmKill {
+		m.cockpit.confirmKill = false
+		if msg.String() == "enter" {
+			return m, m.killWorkerSession(m.cockpit.sessionID)
+		}
+		return m, nil
+	}
+
 	switch msg.String() {
 	case "esc", "q", "ctrl+g":
 		m.cockpit.show = false
 		m.cockpit.sessionID = ""
 		m.cockpit.userScrolled = false
+	case "x":
+		// Arm the kill confirmation, but only for a live, real worker session.
+		// Graph nodes are stateless pseudo-sessions with no runtime.Session.
+		if slot := m.runtimeSessions[m.cockpit.sessionID]; slot != nil &&
+			slot.status == "active" && !strings.HasPrefix(m.cockpit.sessionID, "graph:") {
+			m.cockpit.confirmKill = true
+		}
 	case "tab", "right", "l":
 		m.cockpit.tab = (tab + 1) % cockpitTabCount
 	case "shift+tab", "left", "h":
@@ -177,7 +196,12 @@ func (m *Model) renderCockpit() (string, int) {
 	}
 	body := strings.Join(truncated, "\n")
 
-	footer := fitLine(m.renderCockpitFooter(tab, scroll, len(bodyLines), innerW), innerW)
+	var footer string
+	if m.cockpit.confirmKill {
+		footer = fitLine(ModalWarningStyle.Render("⚠ Kill this worker?  [Enter] confirm   [Esc] cancel"), innerW)
+	} else {
+		footer = fitLine(m.renderCockpitFooter(tab, scroll, len(bodyLines), innerW), innerW)
+	}
 
 	modalContent := tabBar + "\n\n" + body + "\n\n" + footer
 	modal := modalStyle.Render(modalContent)
@@ -229,7 +253,7 @@ func cockpitTitle(slot *runtimeSlot) string {
 
 // renderCockpitFooter renders the key hints and the scroll position indicator.
 func (m *Model) renderCockpitFooter(tab cockpitTab, scroll, total, innerW int) string {
-	keys := "↑↓ scroll · Tab tabs · Esc close"
+	keys := "↑↓ scroll · Tab tabs · x kill · Esc close"
 	pos := fmt.Sprintf("%d/%d", scroll+1, maxInt(total, 1))
 	if tab == cockpitTabOutput && !m.cockpit.userScrolled {
 		pos = "tailing · " + pos

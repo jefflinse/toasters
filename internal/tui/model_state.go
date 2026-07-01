@@ -93,6 +93,9 @@ type cockpitState struct {
 	// userScrolled suppresses the Output tab's auto-tail once the user scrolls
 	// up, so live events don't yank the view back to the bottom.
 	userScrolled bool
+	// confirmKill gates the destructive "kill worker" action behind an
+	// Enter/Esc confirmation, mirroring the grid's own kill flow.
+	confirmKill bool
 }
 
 // cmdPopupState holds all state for the slash command autocomplete popup.

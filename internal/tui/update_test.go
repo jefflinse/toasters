@@ -190,6 +190,83 @@ func TestUpdateCockpit_UnhandledKey(t *testing.T) {
 	}
 }
 
+func TestUpdateCockpit_Kill(t *testing.T) {
+	t.Parallel()
+
+	setup := func(sessionID, status string) *Model {
+		m := newMinimalModel(t)
+		m.cockpit.show = true
+		m.cockpit.sessionID = sessionID
+		m.runtimeSessions[sessionID] = &runtimeSlot{sessionID: sessionID, status: status}
+		return &m
+	}
+
+	t.Run("x arms confirm for a live worker", func(t *testing.T) {
+		t.Parallel()
+		m := setup("s1", "active")
+		res, cmd := m.updateCockpit(keyPress('x'))
+		got := res.(*Model)
+		if !got.cockpit.confirmKill {
+			t.Error("expected confirmKill to be armed")
+		}
+		if cmd != nil {
+			t.Error("arming should not issue a command")
+		}
+	})
+
+	t.Run("x is a no-op for a graph pseudo-session", func(t *testing.T) {
+		t.Parallel()
+		m := setup("graph:s1:node", "active")
+		res, _ := m.updateCockpit(keyPress('x'))
+		if res.(*Model).cockpit.confirmKill {
+			t.Error("graph node should not arm a kill confirmation")
+		}
+	})
+
+	t.Run("x is a no-op for a finished worker", func(t *testing.T) {
+		t.Parallel()
+		m := setup("s1", "completed")
+		res, _ := m.updateCockpit(keyPress('x'))
+		if res.(*Model).cockpit.confirmKill {
+			t.Error("finished worker should not arm a kill confirmation")
+		}
+	})
+
+	t.Run("enter confirms the kill and disarms", func(t *testing.T) {
+		t.Parallel()
+		m := setup("s1", "active")
+		m.cockpit.confirmKill = true
+		res, cmd := m.updateCockpit(specialKey(tea.KeyEnter))
+		got := res.(*Model)
+		if got.cockpit.confirmKill {
+			t.Error("confirmKill should be cleared after confirming")
+		}
+		if cmd == nil {
+			t.Error("expected a kill command after confirming")
+		}
+		if !got.cockpit.show {
+			t.Error("cockpit should stay open after issuing the kill")
+		}
+	})
+
+	t.Run("any other key cancels the confirm", func(t *testing.T) {
+		t.Parallel()
+		m := setup("s1", "active")
+		m.cockpit.confirmKill = true
+		res, cmd := m.updateCockpit(specialKey(tea.KeyEscape))
+		got := res.(*Model)
+		if got.cockpit.confirmKill {
+			t.Error("confirmKill should be cleared after cancel")
+		}
+		if cmd != nil {
+			t.Error("cancel should not issue a command")
+		}
+		if !got.cockpit.show {
+			t.Error("cancel should not close the cockpit")
+		}
+	})
+}
+
 // --------------------------------------------------------------------------
 // updateGrid tests
 // --------------------------------------------------------------------------
