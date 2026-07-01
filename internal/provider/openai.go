@@ -404,16 +404,20 @@ func (p *OpenAIProvider) emitToolCalls(ctx context.Context, accumulated map[int]
 // Real network errors and non-listing failures (auth, 5xx, etc.) still
 // propagate so the caller can surface them.
 func (p *OpenAIProvider) Models(ctx context.Context) ([]ModelInfo, error) {
-	// Try the standard OpenAI-compatible /v1/models endpoint first. This
-	// works for most providers including LM Studio, Ollama, and vLLM.
-	if models, err := p.fetchOpenAIModels(ctx); err == nil {
+	// Prefer LM Studio's proprietary /api/v0/models endpoint: it's a superset
+	// of the standard listing that also reports each model's context window
+	// (max/loaded), which the fleet UI needs for context bars and which plain
+	// /v1/models omits entirely. Non-LM-Studio providers 404 (or return an
+	// error body → empty list) here and fall through to the standard endpoint.
+	if models, err := p.fetchLMStudioModels(ctx); err == nil && len(models) > 0 {
 		return models, nil
-	} else if !isMissingModelsEndpoint(err) {
+	} else if err != nil && !isMissingModelsEndpoint(err) {
 		return nil, err
 	}
 
-	// Fall back to LM Studio's proprietary /api/v0/models endpoint.
-	if models, err := p.fetchLMStudioModels(ctx); err == nil {
+	// Standard OpenAI-compatible /v1/models. Works for OpenAI, Ollama, vLLM,
+	// and LM Studio (without context lengths).
+	if models, err := p.fetchOpenAIModels(ctx); err == nil {
 		return models, nil
 	} else if !isMissingModelsEndpoint(err) {
 		return nil, err
@@ -422,6 +426,16 @@ func (p *OpenAIProvider) Models(ctx context.Context) ([]ModelInfo, error) {
 	// Neither endpoint exists on this provider — that's fine, the provider
 	// just doesn't expose model listing. Return an empty list.
 	return []ModelInfo{}, nil
+}
+
+// lmStudioModelsURL builds LM Studio's native models URL. Its native API lives
+// at /api/v0 as a SIBLING of the OpenAI-compatible /v1 base (e.g. the configured
+// endpoint http://host:1234/v1 → http://host:1234/api/v0/models), so any
+// trailing version segment must be stripped rather than appended to.
+func lmStudioModelsURL(endpoint string) string {
+	base := strings.TrimRight(endpoint, "/")
+	base = versionPathSuffix.ReplaceAllString(base, "")
+	return base + "/api/v0/models"
 }
 
 // isMissingModelsEndpoint reports whether err indicates the provider simply
@@ -438,7 +452,7 @@ func isMissingModelsEndpoint(err error) bool {
 }
 
 func (p *OpenAIProvider) fetchLMStudioModels(ctx context.Context) ([]ModelInfo, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, p.endpoint+"/api/v0/models", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, lmStudioModelsURL(p.endpoint), nil)
 	if err != nil {
 		return nil, fmt.Errorf("creating request: %w", err)
 	}
@@ -456,9 +470,14 @@ func (p *OpenAIProvider) fetchLMStudioModels(ctx context.Context) ([]ModelInfo, 
 		return nil, fmt.Errorf("unexpected status %d", resp.StatusCode)
 	}
 
+	// LM Studio returns HTTP 200 with an {"error": ...} body for unknown paths,
+	// so a decoded response with no data is treated as "not an LM Studio native
+	// endpoint" — the caller then falls back to the standard listing.
 	var result struct {
 		Data []struct {
-			ID string `json:"id"`
+			ID                  string `json:"id"`
+			MaxContextLength    int    `json:"max_context_length"`
+			LoadedContextLength int    `json:"loaded_context_length"`
 		} `json:"data"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
@@ -468,9 +487,11 @@ func (p *OpenAIProvider) fetchLMStudioModels(ctx context.Context) ([]ModelInfo, 
 	models := make([]ModelInfo, 0, len(result.Data))
 	for _, m := range result.Data {
 		models = append(models, ModelInfo{
-			ID:       m.ID,
-			Name:     m.ID,
-			Provider: p.name,
+			ID:                  m.ID,
+			Name:                m.ID,
+			Provider:            p.name,
+			MaxContextLength:    m.MaxContextLength,
+			LoadedContextLength: m.LoadedContextLength,
 		})
 	}
 	return models, nil
