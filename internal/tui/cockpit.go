@@ -97,7 +97,9 @@ func (m *Model) renderDetailTabBar(slot *runtimeSlot, innerW int) string {
 	segs := make([]string, 0, cockpitTabCount)
 	for i, name := range cockpitTabNames {
 		if cockpitTab(i) == m.nodes.tab {
-			segs = append(segs, HeaderStyle.Render(name))
+			// Active tab uses the cycling rainbow, matching selected section
+			// headers elsewhere, rather than the purple HeaderStyle.
+			segs = append(segs, rainbowText(name, m.spinnerFrame))
 		} else {
 			segs = append(segs, DimStyle.Render(name))
 		}
