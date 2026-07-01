@@ -45,27 +45,50 @@ func TestUpdateNodes_ListNavigation(t *testing.T) {
 	t.Parallel()
 
 	m := nodesModel(t, 3)
-	// sortedRuntimeSessions is deterministic (active, then startTime, then id).
-	if m.nodes.sel != 0 {
-		t.Fatalf("initial sel = %d, want 0", m.nodes.sel)
+	// sortedRuntimeSessions is deterministic (active, then startTime, then id):
+	// alpha, beta, gamma.
+	if got := m.selectedNodeSessionID(); got != "alpha" {
+		t.Fatalf("initial selection = %q, want alpha", got)
 	}
 
 	res, _ := m.updateNodes(keyPress('j'))
 	m = res.(*Model)
-	if m.nodes.sel != 1 {
-		t.Errorf("after down, sel = %d, want 1", m.nodes.sel)
+	if got := m.selectedNodeSessionID(); got != "beta" {
+		t.Errorf("after down, selection = %q, want beta", got)
 	}
 
 	res, _ = m.updateNodes(keyPress('k'))
 	m = res.(*Model)
-	if m.nodes.sel != 0 {
-		t.Errorf("after up, sel = %d, want 0", m.nodes.sel)
+	if got := m.selectedNodeSessionID(); got != "alpha" {
+		t.Errorf("after up, selection = %q, want alpha", got)
 	}
 
 	// Up at the top clamps.
 	res, _ = m.updateNodes(keyPress('k'))
-	if res.(*Model).nodes.sel != 0 {
-		t.Errorf("up at top should clamp to 0")
+	if got := res.(*Model).selectedNodeSessionID(); got != "alpha" {
+		t.Errorf("up at top should stay on alpha, got %q", got)
+	}
+}
+
+// TestUpdateNodes_SelectionSurvivesReorder verifies the selection stays pinned
+// to the same node when the list reorders (the watched node finishes and moves
+// from the active group to the finished group).
+func TestUpdateNodes_SelectionSurvivesReorder(t *testing.T) {
+	t.Parallel()
+
+	m := nodesModel(t, 3) // alpha, beta, gamma — all active
+	// Select beta.
+	res, _ := m.updateNodes(keyPress('j'))
+	m = res.(*Model)
+	if m.selectedNodeSessionID() != "beta" {
+		t.Fatalf("precondition: expected beta selected")
+	}
+	// alpha finishes → it sorts after the still-active beta/gamma, so the list
+	// reorders. Selection must still resolve to beta, not to whatever slid into
+	// index 1.
+	m.runtimeSessions["alpha"].status = "completed"
+	if got := m.selectedNodeSessionID(); got != "beta" {
+		t.Errorf("after reorder, selection = %q, want beta (pinned by id)", got)
 	}
 }
 

@@ -105,11 +105,13 @@ func (m *Model) ensureMarkdownRenderer() {
 		m.mdRender = r
 	}
 
-	// Cockpit renderer: sized for the fullscreen overlay's inner width.
-	// Modal is m.width-4 wide; inner width after border+padding is m.width-8.
-	outputW := m.width - 8
-	if outputW < 40 {
-		outputW = 40
+	// Detail-pane renderer: sized for the nodes screen's right pane inner width
+	// so markdown wraps within the pane instead of at full screen width (which
+	// would then be hard-truncated, losing the right edge of every long line).
+	lay := nodesLayoutFor(m.width, m.height)
+	outputW := lay.detailW - 4 // rounded border (2) + padding (2)
+	if outputW < 20 {
+		outputW = 20
 	}
 	or, oerr := glamour.NewTermRenderer(
 		glamour.WithStyles(toastersStyle()),

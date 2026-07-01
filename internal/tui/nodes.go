@@ -103,12 +103,17 @@ func (m *Model) renderNodes() string {
 
 	bar := m.renderNodesBar()
 
+	// Resolve the selection by id and keep it visible even if the list reordered
+	// since the last key press (a node finishing shuffles the groups).
+	idx := m.currentNodeIndex(nodes)
+	m.clampListScroll(idx, lay.visibleRows)
+
 	listFocused := !m.nodes.focusDetail
-	listPane := m.renderNodeList(nodes, lay, listFocused)
+	listPane := m.renderNodeList(nodes, idx, lay, listFocused)
 
 	var sel *runtimeSlot
-	if m.nodes.sel >= 0 && m.nodes.sel < len(nodes) {
-		sel = nodes[m.nodes.sel]
+	if len(nodes) > 0 {
+		sel = nodes[idx]
 	}
 	detailPane, clamped := m.renderDetailPane(sel, lay.detailW, lay.paneH, m.nodes.focusDetail)
 	m.nodes.tabScroll[m.nodes.tab] = clamped
@@ -138,7 +143,7 @@ func (m *Model) renderNodesBar() string {
 // renderNodeList renders the left pane: a bordered, scrollable list of node
 // rows. The selected row is marked with a cyan gutter; the border is cyan when
 // the list has focus, dim otherwise.
-func (m *Model) renderNodeList(nodes []*runtimeSlot, lay nodesLayout, focused bool) string {
+func (m *Model) renderNodeList(nodes []*runtimeSlot, selIdx int, lay nodesLayout, focused bool) string {
 	borderColor := ColorBorder
 	if focused {
 		borderColor = ColorAccent
@@ -188,7 +193,7 @@ func (m *Model) renderNodeList(nodes []*runtimeSlot, lay nodesLayout, focused bo
 		if i > start {
 			lines = append(lines, "")
 		}
-		lines = append(lines, m.renderNodeRow(nodes[i], innerW, i == m.nodes.sel, focused)...)
+		lines = append(lines, m.renderNodeRow(nodes[i], innerW, i == selIdx, focused)...)
 	}
 
 	// Overflow hint when there are rows off-screen.
@@ -264,14 +269,12 @@ func (m *Model) updateNodesList(msg tea.KeyPressMsg, nodes []*runtimeSlot) (tea.
 	case "ctrl+g", "esc":
 		m.nodes.show = false
 	case "up", "k":
-		if m.nodes.sel > 0 {
-			m.nodes.sel--
-			m.onNodeSelectionChanged()
+		if idx := m.currentNodeIndex(nodes); idx > 0 {
+			m.selectNode(nodes[idx-1].sessionID)
 		}
 	case "down", "j":
-		if m.nodes.sel < len(nodes)-1 {
-			m.nodes.sel++
-			m.onNodeSelectionChanged()
+		if idx := m.currentNodeIndex(nodes); idx < len(nodes)-1 {
+			m.selectNode(nodes[idx+1].sessionID)
 		}
 	case "enter", "tab", "right", "l":
 		if len(nodes) > 0 {
@@ -355,41 +358,64 @@ func (m *Model) updateNodesFilter(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// armNodeKill arms the kill confirmation for the selected node, but only for a
-// live, real worker session (graph pseudo-sessions have no runtime.Session).
-func (m *Model) armNodeKill(nodes []*runtimeSlot) {
-	if m.nodes.sel < 0 || m.nodes.sel >= len(nodes) {
-		return
+// currentNodeIndex resolves the selected node's index in the given list by its
+// session id, so live reordering (a worker finishing moves to the finished
+// group, a new one spawning shifts positions) keeps the selection pinned to the
+// same node. Falls back to a clamped 0 when the selection is gone or unset.
+func (m *Model) currentNodeIndex(nodes []*runtimeSlot) int {
+	for i, rs := range nodes {
+		if rs.sessionID == m.nodes.selID {
+			return i
+		}
 	}
-	rs := nodes[m.nodes.sel]
-	if rs.status == "active" && !strings.HasPrefix(rs.sessionID, "graph:") {
-		m.nodes.confirmKill = true
-	}
+	return 0
 }
 
-// onNodeSelectionChanged keeps the selected row visible and resets the detail
-// pane to a fresh, tailed view of the newly-selected node.
-func (m *Model) onNodeSelectionChanged() {
-	lay := nodesLayoutFor(m.width, m.height)
-	if m.nodes.sel < m.nodes.listScroll {
-		m.nodes.listScroll = m.nodes.sel
+// clampListScroll shifts the list viewport so the selected row (at idx) stays
+// visible, given how many rows fit.
+func (m *Model) clampListScroll(idx, visibleRows int) {
+	if idx < m.nodes.listScroll {
+		m.nodes.listScroll = idx
 	}
-	if m.nodes.sel >= m.nodes.listScroll+lay.visibleRows {
-		m.nodes.listScroll = m.nodes.sel - lay.visibleRows + 1
+	if idx >= m.nodes.listScroll+visibleRows {
+		m.nodes.listScroll = idx - visibleRows + 1
 	}
 	if m.nodes.listScroll < 0 {
 		m.nodes.listScroll = 0
 	}
+}
+
+// selectNode moves the selection to the given session id and resets the detail
+// pane to a fresh, tailed view of it. The row is kept visible on next render.
+func (m *Model) selectNode(sessionID string) {
+	m.nodes.selID = sessionID
 	m.nodes.tabScroll = [cockpitTabCount]int{}
 	m.nodes.tabScroll[cockpitTabOutput] = scrollBottom
 	m.nodes.userScrolled = false
 }
 
-// resetNodeSelection returns the list to the top after a filter change.
+// armNodeKill arms the kill confirmation for the selected node, but only for a
+// live, real worker session (graph pseudo-sessions have no runtime.Session).
+func (m *Model) armNodeKill(nodes []*runtimeSlot) {
+	if len(nodes) == 0 {
+		return
+	}
+	rs := nodes[m.currentNodeIndex(nodes)]
+	if rs.status == "active" && !strings.HasPrefix(rs.sessionID, "graph:") {
+		m.nodes.confirmKill = true
+	}
+}
+
+// resetNodeSelection selects the first node (top of the list) after a filter
+// change or when the screen opens.
 func (m *Model) resetNodeSelection() {
-	m.nodes.sel = 0
 	m.nodes.listScroll = 0
-	m.onNodeSelectionChanged()
+	nodes := m.filteredNodeSessions()
+	if len(nodes) > 0 {
+		m.selectNode(nodes[0].sessionID)
+	} else {
+		m.selectNode("")
+	}
 }
 
 // markNodeScrolled records a manual upward scroll on the Output tab so incoming
@@ -414,10 +440,10 @@ func (m *Model) refreshNodesAutoTail(sessionID string) {
 // selectedNode returns the currently-selected runtime slot, or nil.
 func (m *Model) selectedNode() *runtimeSlot {
 	nodes := m.filteredNodeSessions()
-	if m.nodes.sel < 0 || m.nodes.sel >= len(nodes) {
+	if len(nodes) == 0 {
 		return nil
 	}
-	return nodes[m.nodes.sel]
+	return nodes[m.currentNodeIndex(nodes)]
 }
 
 // selectedNodeSessionID returns the selected node's session ID, or "".

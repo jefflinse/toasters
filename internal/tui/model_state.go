@@ -20,9 +20,11 @@ type streamingState struct {
 type nodesState struct {
 	show bool
 
-	// List (master) state.
-	sel        int // selected index into the filtered node list
-	listScroll int // row offset of the list viewport (rows, not items)
+	// List (master) state. Selection is keyed by session ID, not list index, so
+	// it stays pinned to the same node when the list reorders live (a worker
+	// finishing moves it from the active group to the finished group).
+	selID      string // session ID of the selected node ("" = none/first)
+	listScroll int    // item offset of the list viewport
 
 	// focusDetail moves keyboard focus between the list (false) and the detail
 	// pane (true). Selection still tracks in the list while the detail is
