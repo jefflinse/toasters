@@ -1276,6 +1276,108 @@ func TestPathAlias_RemapsCanonicalWorkspace(t *testing.T) {
 	}
 }
 
+// TestShell_RejectsCanonicalPathUnderAlias covers issue #41: the shell tool
+// used to hand the command string to /bin/sh verbatim, so a fan-out branch
+// worker that pasted the canonical absolute workspace path into a shell
+// command (e.g. `go build -o <canonical>/app .`) wrote straight into the
+// real workspace, bypassing the branch's isolated copy that the file tools
+// enforce via resolvePath's alias rewrite. This must be rejected as a tool
+// error the worker can act on, not a fatal error that kills the session.
+func TestShell_RejectsCanonicalPathUnderAlias(t *testing.T) {
+	base := t.TempDir() // canonical task workspace (leaked into prompts)
+	iso := t.TempDir()  // this branch's isolated copy
+	ct := NewCoreTools(iso, WithPathAlias(base), WithShell(true))
+
+	_, err := ct.Execute(context.Background(), "shell", mustJSON(t, map[string]any{
+		"command": fmt.Sprintf("go build -o %s/app .", base),
+	}))
+	if err == nil {
+		t.Fatal("shell command embedding the canonical workspace path was accepted; want rejection")
+	}
+
+	msg := err.Error()
+	if !strings.Contains(msg, base) {
+		t.Errorf("error message should name the canonical path so the worker can recognize what to avoid; got %q", msg)
+	}
+	if !strings.Contains(msg, "relative") {
+		t.Errorf("error message should be actionable (tell the worker to use relative paths); got %q", msg)
+	}
+	if strings.Contains(msg, iso) {
+		t.Errorf("error message leaked the isolated branch's temp dir path: %q", msg)
+	}
+
+	// No process ran: the canonical workspace was never touched.
+	if _, statErr := os.Stat(base + "/app"); !os.IsNotExist(statErr) {
+		t.Errorf("canonical workspace was touched despite rejection")
+	}
+}
+
+// TestShell_AllowsCanonicalPathWithoutAlias proves the guard is scoped to
+// fan-out branches: a task with no alias (aliasFrom empty, the common case)
+// must not have its shell commands restricted at all.
+func TestShell_AllowsCanonicalPathWithoutAlias(t *testing.T) {
+	dir := t.TempDir()
+	ct := NewCoreTools(dir, WithShell(true))
+
+	result, err := ct.Execute(context.Background(), "shell", mustJSON(t, map[string]any{
+		"command": fmt.Sprintf("echo %s", dir),
+	}))
+	if err != nil {
+		t.Fatalf("shell command referencing its own workspace path rejected with no alias set: %v", err)
+	}
+	assertContains(t, result, dir)
+}
+
+// TestShell_RelativeCommandsUnaffectedByAlias proves the guard only fires on
+// commands that embed the canonical absolute root — ordinary relative shell
+// work in a fan-out branch (the overwhelming common case) must keep working
+// exactly as it did before #41.
+func TestShell_RelativeCommandsUnaffectedByAlias(t *testing.T) {
+	base := t.TempDir()
+	iso := t.TempDir()
+	ct := NewCoreTools(iso, WithPathAlias(base), WithShell(true))
+
+	result, err := ct.Execute(context.Background(), "shell", mustJSON(t, map[string]any{
+		"command": "echo hello > out.txt && cat out.txt",
+	}))
+	if err != nil {
+		t.Fatalf("relative shell command rejected under alias: %v", err)
+	}
+	assertContains(t, result, "hello")
+	if _, statErr := os.Stat(filepath.Join(iso, "out.txt")); statErr != nil {
+		t.Errorf("relative shell command did not land in the isolated branch dir: %v", statErr)
+	}
+}
+
+// TestReferencesCanonicalPath unit-tests the substring detection directly,
+// including the "~/..." shorthand a worker may paste when the canonical
+// path sits under its home directory.
+func TestReferencesCanonicalPath(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	alias := filepath.Join(home, "toasters", "job-123")
+
+	tests := []struct {
+		name    string
+		command string
+		want    bool
+	}{
+		{"absolute path present", fmt.Sprintf("ls %s/backend", alias), true},
+		{"exact alias present", alias, true},
+		{"tilde-shortened path present", "ls ~/toasters/job-123/backend", true},
+		{"relative command", "go build ./...", false},
+		{"unrelated absolute path", "ls /tmp/other", false},
+		{"empty command", "", false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := referencesCanonicalPath(tc.command, alias); got != tc.want {
+				t.Errorf("referencesCanonicalPath(%q, %q) = %v, want %v", tc.command, alias, got, tc.want)
+			}
+		})
+	}
+}
+
 // A timed-out command must take its WHOLE process tree with it and return
 // promptly. Pre-fix, the context killed only /bin/sh: a backgrounded
 // grandchild survived holding the output pipe, CombinedOutput blocked
