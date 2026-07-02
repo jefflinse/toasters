@@ -2017,3 +2017,48 @@ func TestSweepUnresolvedBlockers(t *testing.T) {
 		}
 	}
 }
+
+func TestListPendingBlockers(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t)
+	ctx := context.Background()
+
+	older := &BlockerRecord{
+		RequestID: "req-old", Source: "graph:plan",
+		Questions: `[{"question":"first?"}]`,
+		CreatedAt: time.Now().Add(-2 * time.Hour),
+	}
+	newer := &BlockerRecord{
+		RequestID: "req-new",
+		Questions: `[{"question":"second?"}]`,
+		CreatedAt: time.Now().Add(-time.Minute),
+	}
+	resolved := &BlockerRecord{
+		RequestID: "req-done",
+		Questions: `[{"question":"answered?"}]`,
+		CreatedAt: time.Now().Add(-time.Hour),
+	}
+	for _, r := range []*BlockerRecord{older, newer, resolved} {
+		if err := store.CreateBlocker(ctx, r); err != nil {
+			t.Fatalf("CreateBlocker(%s): %v", r.RequestID, err)
+		}
+	}
+	if err := store.ResolveBlockerRecord(ctx, "req-done", "answered", "yes", time.Now()); err != nil {
+		t.Fatalf("ResolveBlockerRecord: %v", err)
+	}
+
+	pending, err := store.ListPendingBlockers(ctx)
+	if err != nil {
+		t.Fatalf("ListPendingBlockers: %v", err)
+	}
+	if len(pending) != 2 {
+		t.Fatalf("pending = %d, want 2 (resolved row excluded)", len(pending))
+	}
+	// Oldest first.
+	if pending[0].RequestID != "req-old" || pending[1].RequestID != "req-new" {
+		t.Errorf("order = %s, %s, want req-old, req-new", pending[0].RequestID, pending[1].RequestID)
+	}
+	if pending[0].CreatedAt.IsZero() {
+		t.Error("CreatedAt not restored")
+	}
+}

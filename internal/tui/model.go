@@ -159,6 +159,12 @@ type Model struct {
 	// operator threshold, worker rows use the worker threshold.
 	opCompactionThreshold     int
 	workerCompactionThreshold int
+	// Operator compaction trace, driven by OperatorCompactionMsg: how many
+	// digest handoffs this client has observed (renders as ↺n on the fleet
+	// row) and a one-line description of the most recent one (the row's
+	// activity line). Client-session-scoped by design.
+	opCompactionCount int
+	opLastCompaction  string
 
 	// Shared spinner animation frame counter.
 	spinnerFrame   int
@@ -761,6 +767,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case OperatorDoneMsg:
 		return m.handleOperatorDone(msg)
+
+	case OperatorCompactionMsg:
+		return m.handleOperatorCompaction(msg)
 
 	case BlockerAddedMsg:
 		return m.handleBlockerAdded(msg)

@@ -288,18 +288,19 @@ func (m Model) buildFleetLines(contentWidth, maxH int) []string {
 // renders so buildFleet can source it from different places (operator stats vs.
 // runtime slots) without the render code caring which.
 type fleetMember struct {
-	label     string // "operator" or "<job>:<role>"
-	icon      string // glyph prefix (⬡ operator, ⚡ worker)
-	model     string
-	active    bool    // currently streaming (operator) / running (worker)
-	ctxUsed   int     // live context-window occupancy in tokens
-	ctxMax    int     // model context length (0 if unknown)
-	threshold float64 // compaction threshold as a fraction (0 = disabled/no tick)
-	tokensOut int64
-	costUSD   float64
-	tps       float64 // tokens/sec (valid only when hasTPS)
-	hasTPS    bool
-	activity  string // most-recent tool-call label (workers only; empty for operator/none)
+	label       string // "operator" or "<job>:<role>"
+	icon        string // glyph prefix (⬡ operator, ⚡ worker)
+	model       string
+	active      bool    // currently streaming (operator) / running (worker)
+	ctxUsed     int     // live context-window occupancy in tokens
+	ctxMax      int     // model context length (0 if unknown)
+	threshold   float64 // compaction threshold as a fraction (0 = disabled/no tick)
+	compactions int     // digest handoffs observed (operator row; renders as ↺n)
+	tokensOut   int64
+	costUSD     float64
+	tps         float64 // tokens/sec (valid only when hasTPS)
+	hasTPS      bool
+	activity    string // most-recent activity (worker tool call, or operator compaction trace)
 }
 
 // buildFleet assembles the ordered list of LLMs to display: the operator first
@@ -311,14 +312,18 @@ func (m Model) buildFleet() []fleetMember {
 
 	// Operator, pinned first.
 	op := fleetMember{
-		label:     "operator",
-		icon:      "⬡",
-		model:     m.stats.ModelName,
-		active:    m.stream.streaming,
-		ctxUsed:   m.stats.PromptTokens,
-		ctxMax:    m.stats.ContextLength,
-		threshold: float64(m.opCompactionThreshold) / 100,
-		tokensOut: int64(m.stats.CompletionTokens),
+		label:       "operator",
+		icon:        "⬡",
+		model:       m.stats.ModelName,
+		active:      m.stream.streaming,
+		ctxUsed:     m.stats.PromptTokens,
+		ctxMax:      m.stats.ContextLength,
+		threshold:   float64(m.opCompactionThreshold) / 100,
+		compactions: m.opCompactionCount,
+		tokensOut:   int64(m.stats.CompletionTokens),
+	}
+	if m.opLastCompaction != "" {
+		op.activity = m.opLastCompaction
 	}
 	if m.stats.TotalResponses > 0 && m.stats.TotalResponseTime > 0 {
 		op.tps = float64(m.stats.CompletionTokens) / m.stats.TotalResponseTime.Seconds()
@@ -446,8 +451,15 @@ func (m Model) renderFleetMemberFull(mem fleetMember, contentWidth int) string {
 	b.WriteString("  " + DimStyle.Render(truncateStr(model, contentWidth-2)))
 	b.WriteString("\n")
 
-	// Line 3: context-window bar.
-	b.WriteString("  " + renderMiniContextBar(mem.ctxUsed, mem.ctxMax, contentWidth-2, false, mem.threshold))
+	// Line 3: context-window bar (+ compaction count when the member has
+	// handed off at least once this client session).
+	barW := contentWidth - 2
+	suffix := ""
+	if mem.compactions > 0 {
+		suffix = fmt.Sprintf(" ↺%d", mem.compactions)
+		barW -= lipgloss.Width(suffix)
+	}
+	b.WriteString("  " + renderMiniContextBar(mem.ctxUsed, mem.ctxMax, barW, false, mem.threshold) + DimStyle.Render(suffix))
 	b.WriteString("\n")
 
 	// Line 4: throughput · cost · tokens.
@@ -492,6 +504,9 @@ func (m Model) renderFleetMemberCompact(mem fleetMember, contentWidth int) strin
 	}
 	if mem.tokensOut > 0 {
 		tail = append(tail, formatTokenCount(mem.tokensOut)+"↓")
+	}
+	if mem.compactions > 0 {
+		tail = append(tail, fmt.Sprintf("↺%d", mem.compactions))
 	}
 	barW := contentWidth - 2
 	tailStr := ""

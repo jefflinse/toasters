@@ -96,6 +96,13 @@ func ChatCompletion(ctx context.Context, p Provider, msgs []Message) (string, er
 		req.System = strings.Join(systemParts, "\n\n")
 	}
 
+	return Complete(ctx, p, req)
+}
+
+// Complete sends an arbitrary non-streaming request by collecting the full
+// stream into a string. Unlike ChatCompletion it passes the request through
+// untouched, so callers control Model, MaxTokens, System, and Temperature.
+func Complete(ctx context.Context, p Provider, req ChatRequest) (string, error) {
 	eventCh, err := p.ChatStream(ctx, req)
 	if err != nil {
 		return "", err

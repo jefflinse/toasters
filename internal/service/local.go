@@ -122,16 +122,20 @@ type LocalService struct {
 	// corresponding LocalConfig fields are initial values only — runtime
 	// reads must use the accessors (currentOperator, currentProvider,
 	// operatorInfo, currentGraphExecutor, currentDefaults).
-	opMu            sync.Mutex
-	opCancel        context.CancelFunc // cancels the running operator; nil if no operator
-	op              *operator.Operator
-	opProvider      provider.Provider
-	opProviderID    string
-	opModel         string
-	opEndpoint      string
-	graphExec       operator.GraphTaskExecutor
-	defaultProvider string
-	defaultModel    string
+	opMu         sync.Mutex
+	opCancel     context.CancelFunc // cancels the running operator; nil if no operator
+	op           *operator.Operator
+	opProvider   provider.Provider
+	opProviderID string
+	opModel      string
+	opEndpoint   string
+	// opCompactionThreshold mirrors the persisted setting under opMu so
+	// startOperator (which holds opMu) can seed a live-activated operator
+	// without racing UpdateSettings' unsynchronized AppConfig writes.
+	opCompactionThreshold int
+	graphExec             operator.GraphTaskExecutor
+	defaultProvider       string
+	defaultModel          string
 
 	// broker coordinates HITL prompt/response for both the operator's
 	// ask_user tool and any graph node that calls rhizome.Interrupt.
@@ -197,6 +201,11 @@ func NewLocal(cfg LocalConfig) *LocalService {
 		cfg.StartTime = time.Now()
 	}
 	ctx, cancel := context.WithCancel(context.Background())
+	opThreshold := config.DefaultOperatorCompactionThreshold
+	if cfg.AppConfig != nil {
+		opThreshold = config.ValidCompactionThreshold(
+			cfg.AppConfig.OperatorCompactionThreshold, config.DefaultOperatorCompactionThreshold)
+	}
 	return &LocalService{
 		cfg:              cfg,
 		ctx:              ctx,
@@ -215,6 +224,8 @@ func NewLocal(cfg LocalConfig) *LocalService {
 		graphExec:        cfg.GraphExecutor,
 		defaultProvider:  cfg.DefaultProvider,
 		defaultModel:     cfg.DefaultModel,
+
+		opCompactionThreshold: opThreshold,
 	}
 }
 

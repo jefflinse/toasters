@@ -1,6 +1,8 @@
 package provider
 
 import (
+	"context"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -425,5 +427,64 @@ func TestNewFromConfig_LocalWithModel(t *testing.T) {
 	}
 	if openai.defaultModel != "llama-3.2" {
 		t.Errorf("defaultModel = %q, want llama-3.2", openai.defaultModel)
+	}
+}
+
+// completeTestProvider returns canned stream events and captures the request.
+type completeTestProvider struct {
+	req    ChatRequest
+	events []StreamEvent
+}
+
+func (p *completeTestProvider) Name() string { return "complete-test" }
+func (p *completeTestProvider) Models(context.Context) ([]ModelInfo, error) {
+	return nil, nil
+}
+func (p *completeTestProvider) ChatStream(_ context.Context, req ChatRequest) (<-chan StreamEvent, error) {
+	p.req = req
+	ch := make(chan StreamEvent, len(p.events))
+	for _, ev := range p.events {
+		ch <- ev
+	}
+	close(ch)
+	return ch, nil
+}
+
+// TestComplete_PassesRequestThrough verifies Complete forwards Model,
+// MaxTokens, and System untouched — unlike ChatCompletion, which builds its
+// own request. The operator's handoff narrative depends on this.
+func TestComplete_PassesRequestThrough(t *testing.T) {
+	t.Parallel()
+
+	p := &completeTestProvider{events: []StreamEvent{
+		{Type: EventText, Text: "  a short note  "},
+		{Type: EventDone},
+	}}
+	got, err := Complete(context.Background(), p, ChatRequest{
+		Model:     "gemma",
+		System:    "write a note",
+		MaxTokens: 500,
+		Messages:  []Message{{Role: "user", Content: "transcript"}},
+	})
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if got != "a short note" {
+		t.Errorf("Complete = %q, want trimmed text", got)
+	}
+	if p.req.Model != "gemma" || p.req.MaxTokens != 500 || p.req.System != "write a note" {
+		t.Errorf("request not passed through: %+v", p.req)
+	}
+}
+
+// TestComplete_PropagatesStreamError verifies an EventError fails the call.
+func TestComplete_PropagatesStreamError(t *testing.T) {
+	t.Parallel()
+
+	p := &completeTestProvider{events: []StreamEvent{
+		{Type: EventError, Error: fmt.Errorf("boom")},
+	}}
+	if _, err := Complete(context.Background(), p, ChatRequest{Model: "m"}); err == nil {
+		t.Fatal("want error from EventError, got nil")
 	}
 }

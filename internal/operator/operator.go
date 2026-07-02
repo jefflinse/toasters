@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/jefflinse/toasters/internal/db"
@@ -36,10 +37,20 @@ const (
 	defaultAskUserTimeout = 10 * time.Minute
 )
 
+// ContextWindowSource resolves the effective context window for a
+// provider/model pair; 0 means unknown. *contextwindow.Resolver satisfies it
+// (the interface is local so the operator doesn't import the resolver
+// package). Implementations must never block — Window is called on the
+// event-loop goroutine at turn boundaries.
+type ContextWindowSource interface {
+	Window(providerName, modelID string) int
+}
+
 // Operator manages the event loop and long-lived operator LLM session.
 type Operator struct {
 	rt          *runtime.Runtime
 	prov        provider.Provider
+	providerID  string // provider registry key, for context-window resolution
 	model       string
 	tools       *operatorTools
 	store       db.Store
@@ -47,12 +58,36 @@ type Operator struct {
 	workDir     string
 	sessionFile string // path for persisting the operator conversation (may be empty)
 
+	promptEngine *prompt.Engine      // optional; composes the handoff narrative prompt
+	ctxWindows   ContextWindowSource // optional; nil disables compaction
+	// compactionThreshold is the percent of the context window at which a
+	// digest handoff triggers; 0 disables. Atomic because UpdateSettings
+	// applies changes from HTTP-handler goroutines while the event loop
+	// reads it at turn boundaries.
+	compactionThreshold atomic.Int32
+	// now is the clock, injectable for deterministic archive names and
+	// digest ages in tests.
+	now func() time.Time
+
 	// Long-lived conversation state. Protected by mu for concurrent access
 	// from the event loop goroutine and external callers (e.g. MessageCount).
 	mu           sync.Mutex
 	systemPrompt string
 	messages     []provider.Message
 	provTools    []provider.Tool
+	// lastContextTokens is the prompt size of the most recent LLM
+	// round-trip — the live context-window occupancy that compaction
+	// thresholds are measured against. Persisted with the session so a
+	// restored operator can trigger a handoff before its first turn.
+	lastContextTokens int
+
+	// compactionSuppressed disarms the handoff trigger after a handoff
+	// whose seeded digest still exceeded the threshold budget — repeating
+	// would burn a digest + narrative + archive per turn with no forward
+	// progress. Cleared when occupancy drops below threshold. Touched only
+	// on the event-loop goroutine (maybeCompact/compact), so it needs no
+	// lock — it lives outside the mu-guarded block to make that explicit.
+	compactionSuppressed bool
 	// turnID is the service-assigned ID of the user turn currently being
 	// processed; empty between turns and for system-initiated turns. Threaded
 	// into the OnText/OnReasoning/OnTurnDone callbacks so the service can
@@ -120,6 +155,18 @@ type Config struct {
 	// SystemTools so detached graph dispatch goroutines are cancelled on
 	// service Shutdown rather than living forever.
 	LifetimeCtx context.Context
+	// ProviderID is the provider registry key ("lmstudio") for
+	// context-window resolution. Distinct from Provider.Name(), which is
+	// the display name.
+	ProviderID string
+	// ContextWindows resolves the operator's context window for the
+	// compaction trigger. Optional — nil disables compaction.
+	ContextWindows ContextWindowSource
+	// CompactionThreshold is the initial percent of the context window at
+	// which a digest handoff triggers; 0 disables. Callers pass validated
+	// values (config.ValidCompactionThreshold); live updates arrive via
+	// SetCompactionThreshold.
+	CompactionThreshold int
 	// AskUserTimeout bounds how long an ask_user prompt waits for an answer
 	// before resolving with a no-response message so the event loop can
 	// keep processing. Zero means defaultAskUserTimeout.
@@ -158,6 +205,7 @@ func New(cfg Config) (*Operator, error) {
 	op := &Operator{
 		rt:           cfg.Runtime,
 		prov:         cfg.Provider,
+		providerID:   cfg.ProviderID,
 		model:        cfg.Model,
 		tools:        tools,
 		store:        cfg.Store,
@@ -167,6 +215,9 @@ func New(cfg Config) (*Operator, error) {
 		systemPrompt: cfg.SystemPrompt,
 		provTools:    provTools,
 		broker:       cfg.Broker,
+		promptEngine: cfg.PromptEngine,
+		ctxWindows:   cfg.ContextWindows,
+		now:          time.Now,
 		onText:       cfg.OnText,
 		onReasoning:  cfg.OnReasoning,
 		onEvent:      cfg.OnEvent,
@@ -179,6 +230,7 @@ func New(cfg Config) (*Operator, error) {
 	if op.askUserTimeout <= 0 {
 		op.askUserTimeout = defaultAskUserTimeout
 	}
+	op.compactionThreshold.Store(int32(cfg.CompactionThreshold))
 
 	// Wire the ask_user prompt function into the tool executor.
 	tools.promptUser = op.promptUser
@@ -230,11 +282,47 @@ func (o *Operator) loadSession() {
 		return
 	}
 
+	// Restore the persisted occupancy so the compaction check works before
+	// the first round-trip. Old-format files (no context_tokens) get a
+	// rough bytes/4 estimate — good enough for a threshold comparison.
+	ctxTokens := sess.ContextTokens
+	if ctxTokens == 0 {
+		ctxTokens = estimateTokens(msgs)
+	}
+
 	o.mu.Lock()
 	o.messages = msgs
+	o.lastContextTokens = ctxTokens
 	o.mu.Unlock()
 	slog.Info("restored operator conversation",
 		"messages", len(msgs), "persisted_at", sess.UpdatedAt)
+}
+
+// estimateTokens roughly estimates the token footprint of a message history
+// (bytes/4). Used only when a provider-reported count isn't available; the
+// next round-trip replaces it with the real value.
+func estimateTokens(msgs []provider.Message) int {
+	var bytes int
+	for _, m := range msgs {
+		bytes += len(m.Content) + len(m.ToolCallID)
+		for _, tc := range m.ToolCalls {
+			bytes += len(tc.Name) + len(tc.Arguments)
+		}
+	}
+	return bytes / 4
+}
+
+// SetCompactionThreshold updates the compaction threshold live (percent of
+// the context window; 0 disables). Called from UpdateSettings on HTTP-handler
+// goroutines; takes effect at the next turn boundary. Callers pass validated
+// values.
+func (o *Operator) SetCompactionThreshold(pct int) {
+	o.compactionThreshold.Store(int32(pct))
+}
+
+// CompactionThreshold returns the current compaction threshold percent.
+func (o *Operator) CompactionThreshold() int {
+	return int(o.compactionThreshold.Load())
 }
 
 // trimIncompleteTail drops trailing messages left by a crash mid-turn so the
@@ -278,6 +366,9 @@ func (o *Operator) run(ctx context.Context) {
 	// serialized with all later event handling — no races on assignNextTask.
 	o.recoverInterrupted(ctx)
 
+	// A restored session may already be over the compaction threshold.
+	o.maybeCompact(ctx)
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -286,6 +377,9 @@ func (o *Operator) run(ctx context.Context) {
 
 		case ev := <-o.eventCh:
 			o.handleEvent(ctx, ev)
+			// Compaction runs only here, between events on the loop
+			// goroutine, so it can never interleave a tool round.
+			o.maybeCompact(ctx)
 		}
 	}
 }
@@ -755,6 +849,11 @@ func (o *Operator) handleUserMessage(ctx context.Context, payload UserMessagePay
 		totalIn += usage.InputTokens
 		totalOut += usage.OutputTokens
 		lastIn = usage.InputTokens
+		if usage.InputTokens > 0 {
+			o.mu.Lock()
+			o.lastContextTokens = usage.InputTokens
+			o.mu.Unlock()
+		}
 
 		// Small local models sometimes emit tool calls with empty or malformed
 		// JSON arguments. Left as-is, that invalid JSON poisons the message
@@ -943,6 +1042,10 @@ type operatorSession struct {
 	Tools        []string          `json:"tools"`
 	Messages     []operatorMessage `json:"messages"`
 	UpdatedAt    time.Time         `json:"updated_at"`
+	// ContextTokens is the live context occupancy at persist time, so a
+	// restored operator can evaluate the compaction threshold before its
+	// first round-trip reports a fresh value.
+	ContextTokens int `json:"context_tokens,omitempty"`
 }
 
 type operatorMessage struct {
@@ -959,9 +1062,18 @@ func (o *Operator) persistSession() {
 		return
 	}
 
+	if err := o.writeSessionFile(o.sessionFile); err != nil {
+		slog.Warn("failed to persist operator session", "path", o.sessionFile, "error", err)
+	}
+}
+
+// writeSessionFile atomically writes the current session snapshot to path.
+// Shared by persistSession and archiveSession.
+func (o *Operator) writeSessionFile(path string) error {
 	o.mu.Lock()
 	msgs := make([]provider.Message, len(o.messages))
 	copy(msgs, o.messages)
+	ctxTokens := o.lastContextTokens
 	o.mu.Unlock()
 
 	var toolNames []string
@@ -970,11 +1082,12 @@ func (o *Operator) persistSession() {
 	}
 
 	session := operatorSession{
-		SystemPrompt: o.systemPrompt,
-		Model:        o.model,
-		Provider:     o.prov.Name(),
-		Tools:        toolNames,
-		UpdatedAt:    time.Now(),
+		SystemPrompt:  o.systemPrompt,
+		Model:         o.model,
+		Provider:      o.prov.Name(),
+		Tools:         toolNames,
+		UpdatedAt:     o.now(),
+		ContextTokens: ctxTokens,
 	}
 	for _, m := range msgs {
 		session.Messages = append(session.Messages, operatorMessage{
@@ -987,27 +1100,25 @@ func (o *Operator) persistSession() {
 
 	data, err := json.MarshalIndent(session, "", "  ")
 	if err != nil {
-		slog.Warn("failed to marshal operator session", "error", err)
-		return
+		return fmt.Errorf("marshaling session: %w", err)
 	}
 
 	// Atomic write: write to temp file, then rename.
-	dir := filepath.Dir(o.sessionFile)
+	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		slog.Warn("failed to create session directory", "dir", dir, "error", err)
-		return
+		return fmt.Errorf("creating session directory: %w", err)
 	}
-	tmp := o.sessionFile + ".tmp"
+	tmp := path + ".tmp"
 	// 0o600: the session file holds the full operator conversation
 	// (instructions, tool results, anything pasted in) and must not be
 	// world-readable on a multi-user or shared host.
 	if err := os.WriteFile(tmp, data, 0o600); err != nil {
-		slog.Warn("failed to write operator session", "path", tmp, "error", err)
-		return
+		return fmt.Errorf("writing session: %w", err)
 	}
-	if err := os.Rename(tmp, o.sessionFile); err != nil {
-		slog.Warn("failed to rename operator session file", "error", err)
+	if err := os.Rename(tmp, path); err != nil {
+		return fmt.Errorf("renaming session file: %w", err)
 	}
+	return nil
 }
 
 // truncateMessages trims the conversation history to at most maxMessages,

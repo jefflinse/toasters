@@ -54,68 +54,26 @@ func TestOperatorDoneMsg_CompletionTokensAccumulated(t *testing.T) {
 	}
 }
 
-// TestContextBarTokenCalculation verifies that the context bar total uses
-// PromptTokens (assigned, not cumulative) plus live in-progress tokens.
-// This is a unit-level check of the formula used in panels.go:
-//
-//	totalTokens = PromptTokens + CompletionTokensLive + ReasoningTokensLive
-func TestContextBarTokenCalculation(t *testing.T) {
+// TestBuildFleet_OperatorContextOccupancy pins what actually feeds the
+// operator row's context bar: the provider-reported PromptTokens, verbatim.
+// (An earlier test here asserted a PromptTokens+live-tokens formula that
+// never existed in panels.go — it recomputed its own expectation inline and
+// pinned nothing.)
+func TestBuildFleet_OperatorContextOccupancy(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
-		name              string
-		promptTokens      int
-		completionLive    int
-		reasoningLive     int
-		wantContextTokens int
-	}{
-		{
-			name:              "idle after one turn",
-			promptTokens:      1000,
-			completionLive:    0,
-			reasoningLive:     0,
-			wantContextTokens: 1000,
-		},
-		{
-			name:              "mid-stream with live tokens",
-			promptTokens:      1000,
-			completionLive:    250,
-			reasoningLive:     75,
-			wantContextTokens: 1325,
-		},
-		{
-			name:              "zero prompt tokens",
-			promptTokens:      0,
-			completionLive:    100,
-			reasoningLive:     50,
-			wantContextTokens: 150,
-		},
-		{
-			name:              "all zeros",
-			promptTokens:      0,
-			completionLive:    0,
-			reasoningLive:     0,
-			wantContextTokens: 0,
-		},
-		{
-			name:              "large context near limit",
-			promptTokens:      120000,
-			completionLive:    3000,
-			reasoningLive:     1000,
-			wantContextTokens: 124000,
-		},
+	m := Model{runtimeSessions: map[string]*runtimeSlot{}}
+	m.stats.ModelName = "gemma"
+	m.stats.PromptTokens = 1234
+	m.stats.ContextLength = 8192
+
+	fleet := m.buildFleet()
+	if len(fleet) == 0 {
+		t.Fatal("fleet empty")
 	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			// Replicate the formula from panels.go line 355.
-			totalTokens := tt.promptTokens + tt.completionLive + tt.reasoningLive
-			if totalTokens != tt.wantContextTokens {
-				t.Errorf("totalTokens = %d, want %d", totalTokens, tt.wantContextTokens)
-			}
-		})
+	if fleet[0].ctxUsed != 1234 || fleet[0].ctxMax != 8192 {
+		t.Errorf("operator ctx = %d/%d, want 1234/8192 (PromptTokens/ContextLength verbatim)",
+			fleet[0].ctxUsed, fleet[0].ctxMax)
 	}
 }
 
@@ -249,5 +207,73 @@ func TestApplySettings_CompactionThresholds(t *testing.T) {
 	m.applySettings(service.Settings{})
 	if m.opCompactionThreshold != 0 || m.workerCompactionThreshold != 0 {
 		t.Errorf("disabled thresholds = %d/%d, want 0/0", m.opCompactionThreshold, m.workerCompactionThreshold)
+	}
+}
+
+// TestHandleOperatorCompaction verifies the compaction trace: count
+// increments, the activity line describes the drop, and the bar's occupancy
+// falls to the estimate immediately.
+func TestHandleOperatorCompaction(t *testing.T) {
+	t.Parallel()
+
+	m := newMinimalModel(t)
+	m.stats.ContextLength = 10000
+	m.stats.PromptTokens = 5200
+
+	res, _ := m.Update(OperatorCompactionMsg{
+		BeforeTokens:         5200,
+		EstimatedAfterTokens: 1800,
+		ArchiveFile:          "operator-2026-07-02T12-00-00Z.json",
+	})
+	got := res.(*Model)
+
+	if got.opCompactionCount != 1 {
+		t.Errorf("opCompactionCount = %d, want 1", got.opCompactionCount)
+	}
+	if got.opLastCompaction != "compacted 52% → ~18%" {
+		t.Errorf("opLastCompaction = %q, want %q", got.opLastCompaction, "compacted 52% → ~18%")
+	}
+	if got.stats.PromptTokens != 1800 {
+		t.Errorf("PromptTokens = %d, want 1800 (bar drops immediately)", got.stats.PromptTokens)
+	}
+
+	// Unknown window falls back to raw token counts.
+	m2 := newMinimalModel(t)
+	res2, _ := m2.Update(OperatorCompactionMsg{BeforeTokens: 5200, EstimatedAfterTokens: 1800})
+	got2 := res2.(*Model)
+	if got2.opLastCompaction != "compacted 5.2k → ~1.8k" {
+		t.Errorf("opLastCompaction (no window) = %q, want token counts", got2.opLastCompaction)
+	}
+}
+
+// TestBuildFleet_OperatorCompactionTrace verifies the fleet operator row
+// carries the compaction activity line and count.
+func TestBuildFleet_OperatorCompactionTrace(t *testing.T) {
+	t.Parallel()
+
+	m := Model{runtimeSessions: map[string]*runtimeSlot{}}
+	m.stats.ModelName = "gemma"
+	m.opCompactionCount = 2
+	m.opLastCompaction = "compacted 52% → ~18%"
+
+	fleet := m.buildFleet()
+	if len(fleet) == 0 || fleet[0].label != "operator" {
+		t.Fatalf("fleet = %+v, want operator first", fleet)
+	}
+	if fleet[0].compactions != 2 {
+		t.Errorf("compactions = %d, want 2", fleet[0].compactions)
+	}
+	if fleet[0].activity != "compacted 52% → ~18%" {
+		t.Errorf("activity = %q, want the compaction trace", fleet[0].activity)
+	}
+
+	// The rendered row shows the ↺ badge.
+	full := m.renderFleetMemberFull(fleet[0], 40)
+	if !strings.Contains(full, "↺2") {
+		t.Errorf("full render missing ↺2:\n%s", full)
+	}
+	compact := m.renderFleetMemberCompact(fleet[0], 40)
+	if !strings.Contains(compact, "↺2") {
+		t.Errorf("compact render missing ↺2:\n%s", compact)
 	}
 }

@@ -37,6 +37,10 @@ const (
 	EventJobComplete    EventType = "job_complete"
 	EventNewTaskRequest EventType = "new_task_request"
 	EventUserResponse   EventType = "user_response" // response to an ask_user prompt
+
+	// EventCompaction is emitted (outbound, via OnEvent) when the operator
+	// performs a digest handoff — it never arrives on the inbound channel.
+	EventCompaction EventType = "compaction"
 )
 
 // Event is a typed message sent to the operator event loop.
@@ -107,4 +111,16 @@ type NewTaskRequestPayload struct {
 type UserResponsePayload struct {
 	Text      string
 	RequestID string // correlates with the ask_user request
+}
+
+// CompactionPayload describes a completed digest handoff.
+type CompactionPayload struct {
+	// BeforeTokens is the live context occupancy that triggered the handoff.
+	BeforeTokens int
+	// EstimatedAfterTokens is the bytes/4 estimate of the seeded handoff
+	// message; the next round-trip replaces it with a provider-reported
+	// value.
+	EstimatedAfterTokens int
+	// ArchiveFile is the basename of the archived pre-handoff session.
+	ArchiveFile string
 }

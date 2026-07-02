@@ -359,6 +359,29 @@ func (m *Model) handleOperatorToolCall(msg OperatorToolCallMsg) (tea.Model, tea.
 	return m, nil
 }
 
+// handleOperatorCompaction records a digest handoff so the fleet row explains
+// the context bar's sudden drop instead of leaving it looking like a glitch.
+func (m *Model) handleOperatorCompaction(msg OperatorCompactionMsg) (tea.Model, tea.Cmd) {
+	m.opCompactionCount++
+	m.opLastCompaction = fmt.Sprintf("compacted %s → ~%s",
+		m.contextAmount(msg.BeforeTokens), m.contextAmount(msg.EstimatedAfterTokens))
+	// Drop the bar immediately; the next turn's provider-reported occupancy
+	// replaces the estimate (handleOperatorDone only overwrites on > 0).
+	if msg.EstimatedAfterTokens > 0 {
+		m.stats.PromptTokens = msg.EstimatedAfterTokens
+	}
+	return m, m.addToast("↺ operator compacted its session", toastInfo)
+}
+
+// contextAmount renders a token count as a percentage of the operator's
+// context window when the window is known, else as a raw count.
+func (m *Model) contextAmount(tokens int) string {
+	if m.stats.ContextLength > 0 {
+		return fmt.Sprintf("%.0f%%", float64(tokens)/float64(m.stats.ContextLength)*100)
+	}
+	return formatTokenCount(int64(tokens))
+}
+
 func (m *Model) handleOperatorDone(msg OperatorDoneMsg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 	slog.Debug("operator turn done", "err", msg.Err)

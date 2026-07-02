@@ -115,6 +115,20 @@ func (s *LocalService) BroadcastOperatorEvent(ev operator.Event) {
 			Type:    EventTypeJobCompleted,
 			Payload: s.buildJobCompletedPayload(payload),
 		})
+
+	case operator.EventCompaction:
+		payload, ok := ev.Payload.(operator.CompactionPayload)
+		if !ok {
+			return
+		}
+		s.broadcast(Event{
+			Type: EventTypeOperatorCompaction,
+			Payload: OperatorCompactionPayload{
+				BeforeTokens:         payload.BeforeTokens,
+				EstimatedAfterTokens: payload.EstimatedAfterTokens,
+				ArchiveFile:          payload.ArchiveFile,
+			},
+		})
 	}
 }
 

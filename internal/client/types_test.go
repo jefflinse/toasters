@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jefflinse/toasters/internal/server"
 	"github.com/jefflinse/toasters/internal/service"
 )
 
@@ -1566,5 +1567,56 @@ func typeString(v any) string {
 		return "service.HeartbeatPayload"
 	default:
 		return "unknown"
+	}
+}
+
+// TestParseSSEPayload_OperatorCompaction verifies the compaction payload
+// survives the wire round trip (server encode shape → client decode).
+func TestParseSSEPayload_OperatorCompaction(t *testing.T) {
+	t.Parallel()
+
+	raw := `{"before_tokens":5200,"estimated_after_tokens":1800,"archive_file":"operator-2026-07-02T12-00-00Z.json"}`
+	got, err := ParseSSEPayload(string(service.EventTypeOperatorCompaction), []byte(raw))
+	if err != nil {
+		t.Fatalf("ParseSSEPayload: %v", err)
+	}
+	p, ok := got.(service.OperatorCompactionPayload)
+	if !ok {
+		t.Fatalf("payload type = %T, want OperatorCompactionPayload", got)
+	}
+	if p.BeforeTokens != 5200 || p.EstimatedAfterTokens != 1800 {
+		t.Errorf("tokens = %d/%d, want 5200/1800", p.BeforeTokens, p.EstimatedAfterTokens)
+	}
+	if p.ArchiveFile != "operator-2026-07-02T12-00-00Z.json" {
+		t.Errorf("ArchiveFile = %q", p.ArchiveFile)
+	}
+}
+
+// TestOperatorCompaction_WireRoundTrip runs the compaction payload through
+// the REAL server-side encoder (server.EventPayloadToWire) and back through
+// the client decoder, so a struct-tag typo on either side fails here rather
+// than shipping as a silently dropped field.
+func TestOperatorCompaction_WireRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	in := service.OperatorCompactionPayload{
+		BeforeTokens:         5200,
+		EstimatedAfterTokens: 1800,
+		ArchiveFile:          "operator-2026-07-02T12-00-00Z.json",
+	}
+	wire := server.EventPayloadToWire(service.Event{
+		Type:    service.EventTypeOperatorCompaction,
+		Payload: in,
+	})
+	data, err := json.Marshal(wire)
+	if err != nil {
+		t.Fatalf("marshal wire payload: %v", err)
+	}
+	got, err := ParseSSEPayload(string(service.EventTypeOperatorCompaction), data)
+	if err != nil {
+		t.Fatalf("ParseSSEPayload: %v", err)
+	}
+	if got != in {
+		t.Errorf("round trip = %+v, want %+v", got, in)
 	}
 }
