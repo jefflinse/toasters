@@ -241,8 +241,12 @@ func setMappingValue(node *yaml.Node, key, value string) {
 	)
 }
 
-// UpdateProvider overwrites an existing provider YAML file.
-// If the file doesn't exist, it creates it (upsert behavior).
+// UpdateProvider updates an existing provider YAML file in place, setting the
+// entry's fields and preserving any keys the entry doesn't carry (model,
+// concurrency, context_window, ...) so hand-edited values survive API-driven
+// edits. Empty Endpoint/APIKey remove those keys, matching the previous
+// whole-file-overwrite semantics. If the file doesn't exist, it is created
+// (upsert behavior).
 func UpdateProvider(configDir string, entry ProviderEntry) error {
 	if err := ValidateProviderID(entry.ID); err != nil {
 		return err
@@ -255,14 +259,53 @@ func UpdateProvider(configDir string, entry ProviderEntry) error {
 	filename := entry.ID + ".yaml"
 	path := filepath.Join(providersDir, filename)
 
-	data, err := yaml.Marshal(&entry)
+	root := &yaml.Node{
+		Kind:    yaml.DocumentNode,
+		Content: []*yaml.Node{{Kind: yaml.MappingNode, Tag: "!!map"}},
+	}
+	if data, err := os.ReadFile(path); err == nil {
+		var existing yaml.Node
+		if err := yaml.Unmarshal(data, &existing); err != nil {
+			return fmt.Errorf("parsing provider file: %w", err)
+		}
+		if existing.Kind == yaml.DocumentNode && len(existing.Content) > 0 &&
+			existing.Content[0].Kind == yaml.MappingNode {
+			root = &existing
+		}
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("reading provider file: %w", err)
+	}
+	rootMap := root.Content[0]
+
+	setMappingValue(rootMap, "id", entry.ID)
+	setMappingValue(rootMap, "name", entry.Name)
+	setMappingValue(rootMap, "type", entry.Type)
+	for key, val := range map[string]string{"endpoint": entry.Endpoint, "api_key": entry.APIKey} {
+		if val == "" {
+			removeMappingKey(rootMap, key)
+		} else {
+			setMappingValue(rootMap, key, val)
+		}
+	}
+
+	out, err := yaml.Marshal(root)
 	if err != nil {
 		return fmt.Errorf("marshaling provider: %w", err)
 	}
 
-	if err := os.WriteFile(path, data, 0o600); err != nil {
+	if err := os.WriteFile(path, out, 0o600); err != nil {
 		return fmt.Errorf("writing provider file: %w", err)
 	}
 
 	return nil
+}
+
+// removeMappingKey deletes a key-value pair from a mapping node if present.
+func removeMappingKey(node *yaml.Node, key string) {
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		if node.Content[i].Value == key {
+			node.Content = append(node.Content[:i], node.Content[i+2:]...)
+			return
+		}
+	}
 }

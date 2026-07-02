@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
 
 	"github.com/jefflinse/toasters/internal/db"
@@ -103,6 +104,30 @@ func runtimeSnapshotToService(snap runtime.SessionSnapshot) SessionSnapshot {
 		TokensOut:            snap.TokensOut,
 		CurrentContextTokens: snap.CurrentContextTokens,
 	}
+}
+
+// sessionSnapshotsToService maps runtime snapshots to service DTOs and fills
+// in each one's resolved context window. The window is resolved once per
+// provider/model pair, not per session — snapshot builds run on a 500ms
+// broadcast cadence and a fleet typically shares one model.
+func (s *LocalService) sessionSnapshotsToService(ctx context.Context, snaps []runtime.SessionSnapshot) []SessionSnapshot {
+	type provModel struct{ provider, model string }
+	memo := make(map[provModel]int)
+	out := make([]SessionSnapshot, 0, len(snaps))
+	for _, snap := range snaps {
+		dto := runtimeSnapshotToService(snap)
+		if s.cfg.ContextWindows != nil {
+			key := provModel{snap.Provider, snap.Model}
+			w, ok := memo[key]
+			if !ok {
+				w = s.cfg.ContextWindows.Window(ctx, snap.Provider, snap.Model)
+				memo[key] = w
+			}
+			dto.ContextWindow = w
+		}
+		out = append(out, dto)
+	}
+	return out
 }
 
 func dbFeedEntryToService(fe *db.FeedEntry) FeedEntry {

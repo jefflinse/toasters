@@ -210,16 +210,17 @@ func TestWireSessionSnapshotToService(t *testing.T) {
 	t.Parallel()
 
 	w := wireSessionSnapshot{
-		ID:        "sess-1",
-		WorkerID:  "agent-1",
-		JobID:     "job-1",
-		TaskID:    "task-1",
-		Status:    "active",
-		Model:     "claude-sonnet-4-6",
-		Provider:  "anthropic",
-		StartTime: testTime,
-		TokensIn:  1500,
-		TokensOut: 3200,
+		ID:            "sess-1",
+		WorkerID:      "agent-1",
+		JobID:         "job-1",
+		TaskID:        "task-1",
+		Status:        "active",
+		Model:         "claude-sonnet-4-6",
+		Provider:      "anthropic",
+		StartTime:     testTime,
+		TokensIn:      1500,
+		TokensOut:     3200,
+		ContextWindow: 200000,
 	}
 
 	data, err := json.Marshal(w)
@@ -251,6 +252,26 @@ func TestWireSessionSnapshotToService(t *testing.T) {
 	}
 	if !got.StartTime.Equal(testTime) {
 		t.Errorf("StartTime = %v, want %v", got.StartTime, testTime)
+	}
+	if got.ContextWindow != 200000 {
+		t.Errorf("ContextWindow = %d, want 200000", got.ContextWindow)
+	}
+}
+
+// TestWireSessionSnapshot_OldPayload verifies a payload from a server that
+// predates context_window decodes with the field at 0 ("unknown"), which is
+// the pre-existing behavior.
+func TestWireSessionSnapshot_OldPayload(t *testing.T) {
+	t.Parallel()
+
+	old := `{"id":"sess-1","worker_id":"w1","status":"active","start_time":"2025-01-01T00:00:00Z","tokens_in":1,"tokens_out":2}`
+	var decoded wireSessionSnapshot
+	if err := json.Unmarshal([]byte(old), &decoded); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	got := wireSessionSnapshotToService(decoded)
+	if got.ContextWindow != 0 {
+		t.Errorf("ContextWindow = %d, want 0 for old payload", got.ContextWindow)
 	}
 }
 

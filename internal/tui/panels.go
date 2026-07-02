@@ -346,7 +346,7 @@ func (m Model) buildFleet() []fleetMember {
 			model:     rs.model,
 			active:    true,
 			ctxUsed:   int(rs.contextTokens),
-			ctxMax:    m.modelContext[rs.model],
+			ctxMax:    m.slotCtxMax(rs),
 			tokensOut: rs.tokensOut,
 			costUSD:   rs.costUSD,
 		}

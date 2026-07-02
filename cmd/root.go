@@ -140,10 +140,12 @@ func sendInitialAppReady(svc service.Service, p *atomic.Pointer[tea.Program], se
 	// endpoint URL from the server config (rather than whatever ListModels
 	// happens to return first).
 	var modelName, endpoint string
+	var contextWindow int
 	var operatorDisabled bool
 	if status, err := svc.Operator().Status(ctx); err == nil {
 		modelName = status.ModelName
 		endpoint = status.Endpoint
+		contextWindow = status.ContextWindow
 		operatorDisabled = status.State == service.OperatorStateDisabled
 	} else {
 		slog.Warn("failed to fetch operator status during startup", "error", err)
@@ -181,6 +183,7 @@ func sendInitialAppReady(svc service.Service, p *atomic.Pointer[tea.Program], se
 			Greeting:         greeting,
 			ModelName:        modelName,
 			Endpoint:         endpoint,
+			ContextWindow:    contextWindow,
 			History:          history,
 			Blockers:         blockers,
 			OperatorDisabled: operatorDisabled,

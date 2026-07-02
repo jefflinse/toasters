@@ -68,6 +68,23 @@ type LocalConfig struct {
 	PromptEngine     *prompt.Engine             // optional; for role-based prompt composition
 	GraphExecutor    operator.GraphTaskExecutor // optional; rhizome graph-based task execution
 	GraphCatalog     operator.GraphCatalog      // optional; backs query_graphs on the live-activated operator
+
+	// OperatorProviderID is the operator's provider registry key ("lmstudio"),
+	// distinct from OperatorModel/OperatorEndpoint. Live activation
+	// (startOperator) replaces it like the other operator fields.
+	OperatorProviderID string
+
+	// ContextWindows resolves effective context windows for provider/model
+	// pairs. Optional — nil leaves DTO ContextWindow fields at 0 ("unknown").
+	ContextWindows ContextWindowSource
+}
+
+// ContextWindowSource resolves effective context windows and ingests
+// provider-reported model lists. *contextwindow.Resolver satisfies it; the
+// interface lives here so the service doesn't depend on the resolver package.
+type ContextWindowSource interface {
+	Window(ctx context.Context, providerName, modelID string) int
+	ObserveModels(providerKey string, models []provider.ModelInfo)
 }
 
 // LocalService is the in-process implementation of Service. It delegates to
@@ -107,6 +124,7 @@ type LocalService struct {
 	opCancel        context.CancelFunc // cancels the running operator; nil if no operator
 	op              *operator.Operator
 	opProvider      provider.Provider
+	opProviderID    string
 	opModel         string
 	opEndpoint      string
 	graphExec       operator.GraphTaskExecutor
@@ -189,6 +207,7 @@ func NewLocal(cfg LocalConfig) *LocalService {
 		activeGraphNodes: make(map[string]GraphNodeSnapshot),
 		op:               cfg.Operator,
 		opProvider:       cfg.Provider,
+		opProviderID:     cfg.OperatorProviderID,
 		opModel:          cfg.OperatorModel,
 		opEndpoint:       cfg.OperatorEndpoint,
 		graphExec:        cfg.GraphExecutor,

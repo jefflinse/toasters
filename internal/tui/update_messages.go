@@ -40,14 +40,18 @@ func (m *Model) handleModels(msg ModelsMsg) (tea.Model, tea.Cmd) {
 		if len(msg.Models) > 0 {
 			if m.stats.ModelName != "" {
 				// We already have a configured model name from
-				// AppReadyMsg. Try to find its context length from the
-				// list, but never overwrite the name itself — provider
-				// IDs (e.g. LM Studio filenames) often don't match the
-				// canonical config value.
-				for _, mi := range msg.Models {
-					if mi.ID == m.stats.ModelName {
-						m.stats.ContextLength = mi.ContextLength()
-						break
+				// AppReadyMsg. If the server didn't resolve a context
+				// window for it, try to find one from the list — but never
+				// overwrite the name itself (provider IDs, e.g. LM Studio
+				// filenames, often don't match the canonical config value)
+				// or a server-resolved window (it factors in overrides and
+				// the catalog, which this lookup doesn't).
+				if m.stats.ContextLength == 0 {
+					for _, mi := range msg.Models {
+						if mi.ID == m.stats.ModelName {
+							m.stats.ContextLength = mi.ContextLength()
+							break
+						}
 					}
 				}
 			} else {
@@ -97,6 +101,9 @@ func (m *Model) handleAppReady(msg AppReadyMsg) (tea.Model, tea.Cmd) {
 	}
 	if msg.Endpoint != "" {
 		m.stats.Endpoint = msg.Endpoint
+	}
+	if msg.ContextWindow > 0 {
+		m.stats.ContextLength = msg.ContextWindow
 	}
 	// Hydrate persisted chat history from the server. This survives
 	// server restarts so the user picks up where they left off.
@@ -552,6 +559,9 @@ func (m *Model) handleProgressPoll(msg progressPollMsg) (tea.Model, tea.Cmd) {
 			slot.tokensIn = snap.TokensIn
 			slot.tokensOut = snap.TokensOut
 			slot.contextTokens = snap.CurrentContextTokens
+			if snap.ContextWindow > 0 {
+				slot.ctxWindow = snap.ContextWindow
+			}
 			continue
 		}
 		m.runtimeSessions[snap.ID] = &runtimeSlot{
@@ -566,6 +576,7 @@ func (m *Model) handleProgressPoll(msg progressPollMsg) (tea.Model, tea.Cmd) {
 			tokensIn:      snap.TokensIn,
 			tokensOut:     snap.TokensOut,
 			contextTokens: snap.CurrentContextTokens,
+			ctxWindow:     snap.ContextWindow,
 		}
 	}
 	// Reconcile slots whose terminal events were lost during an SSE

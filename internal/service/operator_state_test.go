@@ -35,7 +35,7 @@ func TestOperatorStateConcurrentSwap(t *testing.T) {
 				_ = svc.currentProvider()
 				_ = svc.currentGraphExecutor()
 				_, _ = svc.currentDefaults()
-				_, _ = svc.operatorInfo()
+				_, _, _ = svc.operatorInfo()
 			}
 		}()
 	}

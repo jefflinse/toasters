@@ -118,6 +118,7 @@ func (s *Server) operatorStatus(w http.ResponseWriter, r *http.Request) {
 		CurrentTurnID: st.CurrentTurnID,
 		ModelName:     st.ModelName,
 		Endpoint:      st.Endpoint,
+		ContextWindow: st.ContextWindow,
 	})
 }
 

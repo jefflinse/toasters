@@ -64,6 +64,12 @@ func (s *LocalService) ListModels(ctx context.Context) ([]ModelInfo, error) {
 	if err != nil {
 		return nil, fmt.Errorf("listing models: %w", err)
 	}
+	if s.cfg.ContextWindows != nil {
+		providerID, _, _ := s.operatorInfo()
+		if providerID != "" {
+			s.cfg.ContextWindows.ObserveModels(providerID, provModels)
+		}
+	}
 	models := make([]ModelInfo, 0, len(provModels))
 	for _, m := range provModels {
 		models = append(models, providerModelInfoToService(m))
@@ -264,6 +270,9 @@ func (s *LocalService) ListProviderModels(ctx context.Context, providerID string
 	provModels, err := p.Models(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("listing models for %q: %w", providerID, err)
+	}
+	if s.cfg.ContextWindows != nil {
+		s.cfg.ContextWindows.ObserveModels(providerID, provModels)
 	}
 	models := make([]ModelInfo, 0, len(provModels))
 	for _, m := range provModels {

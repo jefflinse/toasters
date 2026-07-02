@@ -189,6 +189,9 @@ type SessionSnapshot struct {
 	// CurrentContextTokens is the live context-window occupancy (prompt size of
 	// the most recent round-trip); 0 if not yet reported.
 	CurrentContextTokens int64
+	// ContextWindow is the resolved context window for the session's
+	// provider/model in tokens; 0 if unknown.
+	ContextWindow int
 }
 
 // GraphNodeSnapshot describes a graph node that is currently executing. Graph
@@ -718,6 +721,7 @@ type OperatorStatus struct {
 	CurrentTurnID string // non-empty while a turn is in progress
 	ModelName     string // the model the operator is using (canonical, from server config)
 	Endpoint      string // the LLM provider endpoint URL the operator is using
+	ContextWindow int    // resolved context window in tokens (0 if unknown)
 }
 
 // ---------------------------------------------------------------------------

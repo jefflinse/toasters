@@ -268,7 +268,7 @@ func (m *Model) detailStatsLines(slot *runtimeSlot, innerW int) []string {
 	}
 
 	header("Context window")
-	ctxMax := m.modelContext[slot.model]
+	ctxMax := m.slotCtxMax(slot)
 	barW := innerW - 20
 	if barW < 8 {
 		barW = 8

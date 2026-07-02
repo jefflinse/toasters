@@ -53,6 +53,10 @@ type runtimeSlot struct {
 	// contextTokens is the live context-window occupancy (most recent
 	// round-trip's prompt size), sourced from the runtime live snapshot.
 	contextTokens int64
+	// ctxWindow is the server-resolved context window for this session's
+	// provider/model (0 if unknown). Preferred over the client-side
+	// modelContext lookup, which only knows the operator provider's models.
+	ctxWindow int
 
 	// diffAdded/diffRemoved are session-cumulative line counts accumulated
 	// from session.file_change events (see SessionFileChangeMsg), driving
@@ -66,6 +70,16 @@ type runtimeSlot struct {
 	temperature float64
 	hasTemp     bool
 	thinking    bool
+}
+
+// slotCtxMax returns the context window to render a slot's occupancy bar
+// against: the server-resolved window when known, else the client-side
+// model-list lookup (which only covers the operator provider's models).
+func (m Model) slotCtxMax(rs *runtimeSlot) int {
+	if rs.ctxWindow > 0 {
+		return rs.ctxWindow
+	}
+	return m.modelContext[rs.model]
 }
 
 // extractFrontmatterName extracts the name: field from a YAML frontmatter block.

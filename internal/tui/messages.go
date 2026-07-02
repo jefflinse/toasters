@@ -285,6 +285,7 @@ type AppReadyMsg struct {
 	Greeting         string              // pre-fetched operator greeting; injected immediately on render
 	ModelName        string              // canonical operator model name from the server config
 	Endpoint         string              // operator's LLM provider endpoint URL
+	ContextWindow    int                 // server-resolved operator context window (0 if unknown)
 	History          []service.ChatEntry // persisted chat history from server (oldest first)
 	Blockers         []service.Blocker   // pending ask_user blockers to rehydrate the panel
 	OperatorDisabled bool                // true if no operator provider is configured

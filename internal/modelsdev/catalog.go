@@ -146,6 +146,35 @@ func (c *Client) ProvidersSorted(ctx context.Context) ([]*Provider, error) {
 	return sorted, nil
 }
 
+// ModelContextLimit returns the catalog's context limit for a model, fetching
+// the catalog if needed. It prefers an exact match under providerID, then
+// falls back to scanning all providers (in sorted-ID order, so collisions
+// resolve deterministically) — local provider IDs like "lmstudio" don't match
+// catalog provider IDs, but the model IDs they serve often do. Returns
+// (0, false) when the model is unknown or the catalog is unavailable.
+func (c *Client) ModelContextLimit(ctx context.Context, providerID, modelID string) (int, bool) {
+	provs, err := c.Providers(ctx)
+	if err != nil {
+		return 0, false
+	}
+	if p, ok := provs[providerID]; ok {
+		if m, ok := p.Models[modelID]; ok && m.Limit.Context > 0 {
+			return m.Limit.Context, true
+		}
+	}
+	ids := make([]string, 0, len(provs))
+	for id := range provs {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		if m, ok := provs[id].Models[modelID]; ok && m.Limit.Context > 0 {
+			return m.Limit.Context, true
+		}
+	}
+	return 0, false
+}
+
 // ModelsSorted returns a provider's models sorted by name.
 func (p *Provider) ModelsSorted() []*Model {
 	sorted := make([]*Model, 0, len(p.Models))

@@ -122,6 +122,7 @@ type OperatorStatusResponse struct {
 	CurrentTurnID string `json:"current_turn_id"`
 	ModelName     string `json:"model_name"`
 	Endpoint      string `json:"endpoint"`
+	ContextWindow int    `json:"context_window,omitempty"`
 }
 
 // ---------------------------------------------------------------------------
@@ -321,6 +322,7 @@ type wireSessionSnapshot struct {
 	TokensIn             int64     `json:"tokens_in"`
 	TokensOut            int64     `json:"tokens_out"`
 	CurrentContextTokens int64     `json:"current_context_tokens,omitempty"`
+	ContextWindow        int       `json:"context_window,omitempty"`
 }
 
 func sessionSnapshotToWire(s service.SessionSnapshot) wireSessionSnapshot {
@@ -336,6 +338,7 @@ func sessionSnapshotToWire(s service.SessionSnapshot) wireSessionSnapshot {
 		TokensIn:             s.TokensIn,
 		TokensOut:            s.TokensOut,
 		CurrentContextTokens: s.CurrentContextTokens,
+		ContextWindow:        s.ContextWindow,
 	}
 }
 

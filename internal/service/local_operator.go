@@ -41,12 +41,12 @@ func (s *LocalService) currentProvider() provider.Provider {
 	return s.opProvider
 }
 
-// operatorInfo returns the active operator's model name and endpoint for
-// status display.
-func (s *LocalService) operatorInfo() (model, endpoint string) {
+// operatorInfo returns the active operator's provider ID, model name, and
+// endpoint for status display and context-window resolution.
+func (s *LocalService) operatorInfo() (providerID, model, endpoint string) {
 	s.opMu.Lock()
 	defer s.opMu.Unlock()
-	return s.opModel, s.opEndpoint
+	return s.opProviderID, s.opModel, s.opEndpoint
 }
 
 // currentGraphExecutor returns the graph executor, honoring post-construction
@@ -148,7 +148,7 @@ func (s *LocalService) DismissPrompt(_ context.Context, requestID string) error 
 }
 
 // Status returns the current state of the operator.
-func (s *LocalService) Status(_ context.Context) (OperatorStatus, error) {
+func (s *LocalService) Status(ctx context.Context) (OperatorStatus, error) {
 	if s.currentOperator() == nil {
 		return OperatorStatus{
 			State: OperatorStateDisabled,
@@ -164,13 +164,17 @@ func (s *LocalService) Status(_ context.Context) (OperatorStatus, error) {
 		state = OperatorStateStreaming
 	}
 
-	model, endpoint := s.operatorInfo()
-	return OperatorStatus{
+	providerID, model, endpoint := s.operatorInfo()
+	status := OperatorStatus{
 		State:         state,
 		CurrentTurnID: turnID,
 		ModelName:     model,
 		Endpoint:      endpoint,
-	}, nil
+	}
+	if s.cfg.ContextWindows != nil {
+		status.ContextWindow = s.cfg.ContextWindows.Window(ctx, providerID, model)
+	}
+	return status, nil
 }
 
 // appendHistory persists a ChatEntry to the chat_entries table so that the
@@ -329,6 +333,7 @@ func (s *LocalService) startOperator(p provider.Provider, providerID, model stri
 	s.op = op
 	s.opModel = model
 	s.opProvider = p
+	s.opProviderID = providerID
 
 	// Look up endpoint for sidebar display.
 	if s.cfg.Loader != nil {
