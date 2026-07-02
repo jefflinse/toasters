@@ -283,3 +283,44 @@ Custom orchestration instructions.
 		t.Errorf("skill prompt = %q, want %q", skills[0].Prompt, "Custom orchestration instructions.")
 	}
 }
+
+func TestLoadProviders_ContextWindow(t *testing.T) {
+	dir := t.TempDir()
+	providersDir := filepath.Join(dir, "providers")
+	if err := os.MkdirAll(providersDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	withWindow := `id: llamacpp
+name: LlamaCPP
+type: local
+endpoint: http://localhost:8080/v1
+context_window: 16384
+`
+	withoutWindow := `id: lmstudio
+name: LMStudio
+type: local
+endpoint: http://localhost:1234/v1
+`
+	if err := os.WriteFile(filepath.Join(providersDir, "llamacpp.yaml"), []byte(withWindow), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(providersDir, "lmstudio.yaml"), []byte(withoutWindow), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	l := New(nil, dir)
+	configs := l.loadProviders()
+	if len(configs) != 2 {
+		t.Fatalf("loaded %d providers, want 2", len(configs))
+	}
+	byID := map[string]int{}
+	for _, pc := range configs {
+		byID[pc.ID] = pc.ContextWindow
+	}
+	if got := byID["llamacpp"]; got != 16384 {
+		t.Errorf("llamacpp ContextWindow = %d, want 16384", got)
+	}
+	if got := byID["lmstudio"]; got != 0 {
+		t.Errorf("lmstudio ContextWindow = %d, want 0 (unset)", got)
+	}
+}

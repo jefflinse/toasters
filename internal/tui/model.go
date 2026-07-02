@@ -327,6 +327,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case OperatorStatusRefreshedMsg:
 		if msg.ModelName != "" {
 			m.stats.ModelName = msg.ModelName
+			// The resolved window belongs to the reported model, so set it
+			// even when 0 — a stale window from the previous provider is
+			// worse than falling back to the ListModels lookup.
+			m.stats.ContextLength = msg.ContextWindow
 		}
 		if msg.Endpoint != "" {
 			m.stats.Endpoint = msg.Endpoint

@@ -22,6 +22,12 @@ type ProviderConfig struct {
 	// separate ProviderConfig with a distinct ID (so it gets its own
 	// scheduler) rather than sharing this one.
 	Concurrency int `yaml:"concurrency" mapstructure:"concurrency"`
+
+	// ContextWindow pins the context window (in tokens) for models served
+	// by this provider, for servers that don't report one (llama.cpp,
+	// Anthropic). Zero means "not set" — resolution falls through to
+	// provider-reported values and the models.dev catalog.
+	ContextWindow int `yaml:"context_window" mapstructure:"context_window"`
 }
 
 // Registry maps provider names to Provider instances.

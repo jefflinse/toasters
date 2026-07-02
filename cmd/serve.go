@@ -21,6 +21,7 @@ import (
 	"github.com/jefflinse/toasters/internal/auth"
 	"github.com/jefflinse/toasters/internal/bootstrap"
 	"github.com/jefflinse/toasters/internal/config"
+	"github.com/jefflinse/toasters/internal/contextwindow"
 	"github.com/jefflinse/toasters/internal/db"
 	"github.com/jefflinse/toasters/internal/graphexec"
 	"github.com/jefflinse/toasters/internal/loader"
@@ -267,8 +268,19 @@ func runServe(cmd *cobra.Command, args []string) error {
 		operatorPrompt = composed
 	}
 
-	// Initialize the models.dev catalog client for the provider/model browser.
-	catalog := modelsdev.NewCatalogSource(modelsdev.NewClient())
+	// Initialize the models.dev catalog client for the provider/model browser
+	// and the context-window resolver (which uses the raw client for lookups).
+	mdClient := modelsdev.NewClient()
+	catalog := modelsdev.NewCatalogSource(mdClient)
+
+	// Context-window resolver: provider-reported loaded context, then the
+	// provider definition's context_window override, then the models.dev
+	// catalog. Shared by DTO mapping now; compaction triggers later.
+	var cwConfigs contextwindow.ConfigSource
+	if ldr != nil {
+		cwConfigs = ldr
+	}
+	ctxWindows := contextwindow.NewResolver(registry, cwConfigs, mdClient)
 
 	// Create the LocalService first (without graphExec — it needs svc as EventSink).
 	svc := service.NewLocal(service.LocalConfig{
@@ -289,6 +301,9 @@ func runServe(cmd *cobra.Command, args []string) error {
 		DefaultProvider:  defaultProvider,
 		DefaultModel:     defaultModel,
 		GraphCatalog:     ldr,
+
+		OperatorProviderID: cfg.Operator.Provider,
+		ContextWindows:     ctxWindows,
 	})
 	defer svc.Shutdown()
 

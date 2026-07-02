@@ -41,12 +41,23 @@ func (s *LocalService) currentProvider() provider.Provider {
 	return s.opProvider
 }
 
-// operatorInfo returns the active operator's model name and endpoint for
-// status display.
-func (s *LocalService) operatorInfo() (model, endpoint string) {
+// operatorInfo returns the active operator's provider ID, model name, and
+// endpoint for status display and context-window resolution.
+func (s *LocalService) operatorInfo() (providerID, model, endpoint string) {
 	s.opMu.Lock()
 	defer s.opMu.Unlock()
-	return s.opModel, s.opEndpoint
+	return s.opProviderID, s.opModel, s.opEndpoint
+}
+
+// currentProviderAndID returns the operator's provider together with its
+// registry ID under a single lock acquisition. Callers that fetch from the
+// provider and then attribute the result to an ID (ListModels →
+// ObserveModels) must use this — two separate accessor calls can straddle a
+// live provider swap and attribute one provider's models to another's ID.
+func (s *LocalService) currentProviderAndID() (provider.Provider, string) {
+	s.opMu.Lock()
+	defer s.opMu.Unlock()
+	return s.opProvider, s.opProviderID
 }
 
 // currentGraphExecutor returns the graph executor, honoring post-construction
@@ -164,13 +175,17 @@ func (s *LocalService) Status(_ context.Context) (OperatorStatus, error) {
 		state = OperatorStateStreaming
 	}
 
-	model, endpoint := s.operatorInfo()
-	return OperatorStatus{
+	providerID, model, endpoint := s.operatorInfo()
+	status := OperatorStatus{
 		State:         state,
 		CurrentTurnID: turnID,
 		ModelName:     model,
 		Endpoint:      endpoint,
-	}, nil
+	}
+	if s.cfg.ContextWindows != nil {
+		status.ContextWindow = s.cfg.ContextWindows.Window(providerID, model)
+	}
+	return status, nil
 }
 
 // appendHistory persists a ChatEntry to the chat_entries table so that the
@@ -329,6 +344,7 @@ func (s *LocalService) startOperator(p provider.Provider, providerID, model stri
 	s.op = op
 	s.opModel = model
 	s.opProvider = p
+	s.opProviderID = providerID
 
 	// Look up endpoint for sidebar display.
 	if s.cfg.Loader != nil {

@@ -88,8 +88,9 @@ func (m *Model) flushOperatorStream() {
 
 // OperatorStatusRefreshedMsg carries updated operator status after live activation.
 type OperatorStatusRefreshedMsg struct {
-	ModelName string
-	Endpoint  string
+	ModelName     string
+	Endpoint      string
+	ContextWindow int // server-resolved context window (0 if unknown)
 }
 
 // refreshOperatorStatus fetches the current operator status from the server.
@@ -103,8 +104,9 @@ func (m Model) refreshOperatorStatus() tea.Cmd {
 			return nil
 		}
 		return OperatorStatusRefreshedMsg{
-			ModelName: status.ModelName,
-			Endpoint:  status.Endpoint,
+			ModelName:     status.ModelName,
+			Endpoint:      status.Endpoint,
+			ContextWindow: status.ContextWindow,
 		}
 	}
 }

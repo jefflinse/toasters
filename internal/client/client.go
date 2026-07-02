@@ -194,6 +194,7 @@ func (s *remoteOperatorService) Status(ctx context.Context) (service.OperatorSta
 		CurrentTurnID: w.CurrentTurnID,
 		ModelName:     w.ModelName,
 		Endpoint:      w.Endpoint,
+		ContextWindow: w.ContextWindow,
 	}, nil
 }
 

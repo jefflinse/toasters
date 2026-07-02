@@ -3,6 +3,8 @@ package service
 import (
 	"context"
 	"fmt"
+
+	"github.com/jefflinse/toasters/internal/runtime"
 )
 
 // List returns all currently active worker sessions as snapshots.
@@ -10,12 +12,7 @@ func (s *localSessionService) List(_ context.Context) ([]SessionSnapshot, error)
 	if s.svc.cfg.Runtime == nil {
 		return nil, nil
 	}
-	runtimeSnaps := s.svc.cfg.Runtime.ActiveSessions()
-	snaps := make([]SessionSnapshot, 0, len(runtimeSnaps))
-	for _, rs := range runtimeSnaps {
-		snaps = append(snaps, runtimeSnapshotToService(rs))
-	}
-	return snaps, nil
+	return s.svc.sessionSnapshotsToService(s.svc.cfg.Runtime.ActiveSessions()), nil
 }
 
 // Get returns a full SessionDetail for the given session ID.
@@ -30,7 +27,7 @@ func (s *localSessionService) Get(_ context.Context, id string) (SessionDetail, 
 
 	snap := sess.Snapshot()
 	return SessionDetail{
-		Snapshot:       runtimeSnapshotToService(snap),
+		Snapshot:       s.svc.sessionSnapshotsToService([]runtime.SessionSnapshot{snap})[0],
 		SystemPrompt:   sess.SystemPrompt(),
 		InitialMessage: sess.InitialMessage(),
 		Output:         sess.FinalText(),
