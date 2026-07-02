@@ -1349,6 +1349,122 @@ func TestShell_RelativeCommandsUnaffectedByAlias(t *testing.T) {
 	}
 }
 
+// TestShell_RejectsForeignSiblingWorkspacePath reproduces the phantom-
+// directory incident: a model re-typed the workspace UUID with a group
+// missing, and /bin/sh happily mkdir'd the mangled sibling — file tools
+// are confined by resolvePath, but the shell command string was not. The
+// near-miss guard must reject any path beside the session's workspace
+// before anything runs.
+func TestShell_RejectsForeignSiblingWorkspacePath(t *testing.T) {
+	root := t.TempDir()
+	ws := filepath.Join(root, "e132a546-4366-4bf0-8622-99718751e765")
+	if err := os.MkdirAll(ws, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ct := NewCoreTools(ws, WithShell(true))
+
+	mangled := filepath.Join(root, "e132a546-4bf0-8622-99718751e765")
+	_, err := ct.Execute(context.Background(), "shell", mustJSON(t, map[string]any{
+		"command": fmt.Sprintf("mkdir -p %s/backend", mangled),
+	}))
+	if err == nil {
+		t.Fatal("shell command with mangled sibling workspace path was accepted; want rejection")
+	}
+	assertContains(t, err.Error(), mangled)
+	assertContains(t, err.Error(), "relative")
+
+	// No process ran: the phantom directory was never created.
+	if _, statErr := os.Stat(mangled); !os.IsNotExist(statErr) {
+		t.Errorf("phantom sibling directory was created despite rejection")
+	}
+}
+
+// A session may reference its own workspace by absolute path (outside
+// fan-out isolation); the sibling guard must not fire on it.
+func TestShell_AllowsOwnWorkspaceAbsolutePath(t *testing.T) {
+	root := t.TempDir()
+	ws := filepath.Join(root, "job-1")
+	if err := os.MkdirAll(ws, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ct := NewCoreTools(ws, WithShell(true))
+
+	_, err := ct.Execute(context.Background(), "shell", mustJSON(t, map[string]any{
+		"command": fmt.Sprintf("ls %s", ws),
+	}))
+	if err != nil {
+		t.Fatalf("own-workspace absolute path rejected: %v", err)
+	}
+}
+
+// Inside a fan-out branch the sibling guard keys off the canonical
+// workspace (aliasFrom), not the physical temp dir: a sibling of the
+// canonical path is rejected even though workDir lives elsewhere entirely.
+func TestShell_RejectsForeignSiblingUnderAlias(t *testing.T) {
+	root := t.TempDir()
+	base := filepath.Join(root, "job-aaaa")
+	if err := os.MkdirAll(base, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	iso := t.TempDir()
+	ct := NewCoreTools(iso, WithPathAlias(base), WithShell(true))
+
+	other := filepath.Join(root, "job-bbbb")
+	_, err := ct.Execute(context.Background(), "shell", mustJSON(t, map[string]any{
+		"command": "cat " + other + "/notes.txt",
+	}))
+	if err == nil {
+		t.Fatal("sibling-of-canonical path accepted inside fan-out branch; want rejection")
+	}
+	assertContains(t, err.Error(), other)
+}
+
+// TestForeignSiblingPath unit-tests the near-miss detection, including the
+// "~/..." shorthand form.
+func TestForeignSiblingPath(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	root := filepath.Join(home, "toasters")
+	canonical := filepath.Join(root, "e132a546-4366-4bf0-8622-99718751e765")
+	mangled := filepath.Join(root, "e132a546-4bf0-8622-99718751e765")
+
+	tests := []struct {
+		name    string
+		command string
+		want    string
+	}{
+		{"mangled sibling absolute", "mkdir -p " + mangled + "/backend", mangled + "/backend"},
+		{"mangled sibling tilde", "ls ~/toasters/e132a546-4bf0-8622-99718751e765", "~/toasters/e132a546-4bf0-8622-99718751e765"},
+		{"own workspace absolute", "ls " + canonical + "/backend", ""},
+		{"own workspace tilde", "cat ~/toasters/e132a546-4366-4bf0-8622-99718751e765/go.mod", ""},
+		{"workspace root itself", "ls " + root + "/", root + "/"},
+		{"relative paths only", "go build ./... && ls backend/", ""},
+		{"unrelated absolute path", "cat /etc/hosts", ""},
+		{"brace expansion truncates token", "mkdir -p " + mangled + "/x/{a,b}", mangled + "/x/"},
+		{"empty command", "", ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := foreignSiblingPath(tc.command, canonical); got != tc.want {
+				t.Errorf("foreignSiblingPath(%q) = %q, want %q", tc.command, got, tc.want)
+			}
+		})
+	}
+}
+
+// The guard is skipped when the workspace sits directly under the home
+// directory: there "siblings" would be every dotfile and project dir, far
+// too broad for a substring heuristic.
+func TestForeignSiblingPath_SkippedForHomeLevelWorkspace(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	canonical := filepath.Join(home, "workspace")
+
+	if got := foreignSiblingPath("ls "+filepath.Join(home, "other"), canonical); got != "" {
+		t.Errorf("guard fired for home-level workspace: %q", got)
+	}
+}
+
 // TestReferencesCanonicalPath unit-tests the substring detection directly,
 // including the "~/..." shorthand a worker may paste when the canonical
 // path sits under its home directory.

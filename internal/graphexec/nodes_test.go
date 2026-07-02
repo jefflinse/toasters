@@ -899,9 +899,12 @@ func TestBuildInitialMessage_FiltersJobAndTaskScopedArtifacts(t *testing.T) {
 	if !strings.Contains(got, "Task: Implement the Go backend") {
 		t.Errorf("missing task description: %q", got)
 	}
-	// Workspace must be present.
-	if !strings.Contains(got, "Workspace: /workspace") {
-		t.Errorf("missing workspace dir: %q", got)
+	// Workspace guidance must be present — but positionally, never as a path.
+	if !strings.Contains(got, "Workspace: your working directory") {
+		t.Errorf("missing workspace guidance: %q", got)
+	}
+	if strings.Contains(got, "/workspace") {
+		t.Errorf("workspace path leaked into initial message: %q", got)
 	}
 	// Predecessor node outputs must flow through.
 	if !strings.Contains(got, "plan.summary") || !strings.Contains(got, "Step 1: routes") {
@@ -924,49 +927,42 @@ func TestBuildInitialMessage_FiltersJobAndTaskScopedArtifacts(t *testing.T) {
 	}
 }
 
-// buildInitialMessage must show the task's canonical workspace, not the
-// physical directory tools execute in. Inside a fan-out write branch those
-// differ: WorkspaceDir is the branch's isolated temp copy, WorkspaceBase is
-// the job's real workspace that upstream artifacts (plan output, task
-// descriptions) already reference. Showing WorkspaceDir there handed the
-// worker two roots for the same tree — see issue #32.
-func TestBuildInitialMessage_ShowsCanonicalWorkspaceInFanoutBranch(t *testing.T) {
+// buildInitialMessage must never surface a workspace path in any form.
+// Paths that round-trip through model output get re-typed and mangled — a
+// plan node once dropped a UUID group from the workspace path and the
+// implement branches shelled half the job's output into the phantom
+// sibling directory. The workspace is described positionally instead;
+// every tool already resolves relative paths against it. (This supersedes
+// the issue-#32 behavior of showing the canonical WorkspaceBase.)
+func TestBuildInitialMessage_NeverContainsWorkspacePath(t *testing.T) {
 	state := NewTaskState("job-1", "task-1", "/home/user/toasters/job-1", "mock", "test-model")
 	state.SetArtifact("task.description", "Implement the backend")
 
-	// Simulate what fanout_node.go's split() does: clone the state, then
-	// point the fork's WorkspaceDir at the branch's isolated temp dir while
-	// WorkspaceBase stays untouched.
+	// Fan-out fork: WorkspaceDir moves to the branch's isolated temp copy
+	// while WorkspaceBase keeps the canonical path; neither may leak.
 	fork := state.clone()
 	fork.WorkspaceDir = "/var/folders/xyz/T/toasters-fanout-12345/0"
 
-	got := buildInitialMessage(fork)
-
-	if !strings.Contains(got, "Workspace: /home/user/toasters/job-1") {
-		t.Errorf("expected canonical workspace (WorkspaceBase) in initial message, got: %q", got)
-	}
-	if strings.Contains(got, "toasters-fanout-12345") {
-		t.Errorf("isolated temp dir (WorkspaceDir) leaked into initial message: %q", got)
-	}
-}
-
-// Outside fan-out, WorkspaceBase and WorkspaceDir are always equal
-// (NewTaskState sets both to the same value), so the fix is a no-op there.
-func TestBuildInitialMessage_NonFanoutUnaffected(t *testing.T) {
-	state := NewTaskState("job-1", "task-1", "/home/user/toasters/job-1", "mock", "test-model")
-	state.SetArtifact("task.description", "Implement the backend")
-
-	got := buildInitialMessage(state)
-
-	if !strings.Contains(got, "Workspace: /home/user/toasters/job-1") {
-		t.Errorf("expected workspace dir in initial message, got: %q", got)
+	for name, s := range map[string]*TaskState{"plain": state, "fanout fork": fork} {
+		got := buildInitialMessage(s)
+		if strings.Contains(got, "/home/user/toasters/job-1") {
+			t.Errorf("%s: canonical workspace path leaked into initial message: %q", name, got)
+		}
+		if strings.Contains(got, "toasters-fanout-12345") {
+			t.Errorf("%s: isolated temp dir leaked into initial message: %q", name, got)
+		}
+		if !strings.Contains(got, "Workspace: your working directory") {
+			t.Errorf("%s: missing positional workspace guidance: %q", name, got)
+		}
+		if !strings.Contains(got, "relative paths") {
+			t.Errorf("%s: missing relative-path directive: %q", name, got)
+		}
 	}
 }
 
-// Defensive: if a caller ever constructs TaskState without going through
-// NewTaskState and leaves WorkspaceBase unset, buildInitialMessage must
-// still show a usable path rather than dropping the Workspace line.
-func TestBuildInitialMessage_FallsBackToWorkspaceDirWhenBaseUnset(t *testing.T) {
+// Defensive: a TaskState constructed without going through NewTaskState
+// (WorkspaceBase unset) must still get the workspace guidance line.
+func TestBuildInitialMessage_GuidanceWithOnlyWorkspaceDirSet(t *testing.T) {
 	state := &TaskState{
 		JobID:        "job-1",
 		TaskID:       "task-1",
@@ -976,8 +972,11 @@ func TestBuildInitialMessage_FallsBackToWorkspaceDirWhenBaseUnset(t *testing.T) 
 
 	got := buildInitialMessage(state)
 
-	if !strings.Contains(got, "Workspace: /home/user/toasters/job-1") {
-		t.Errorf("expected fallback to WorkspaceDir when WorkspaceBase is unset, got: %q", got)
+	if !strings.Contains(got, "Workspace: your working directory") {
+		t.Errorf("expected workspace guidance when only WorkspaceDir is set, got: %q", got)
+	}
+	if strings.Contains(got, "/home/user/toasters/job-1") {
+		t.Errorf("workspace path leaked into initial message: %q", got)
 	}
 }
 

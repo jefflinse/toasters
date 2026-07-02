@@ -111,7 +111,7 @@ func (st *SystemTools) Definitions() []runtime.ToolDef {
 	return []runtime.ToolDef{
 		{
 			Name:        "create_job",
-			Description: "Create a new job. A job is a top-level unit of work that contains tasks. A per-job workspace directory is automatically created.",
+			Description: "Create a new job. A job is a top-level unit of work that contains tasks. A per-job workspace directory is automatically created unless workspace_of_job is set.",
 			Parameters: json.RawMessage(`{
 				"type": "object",
 				"properties": {
@@ -122,6 +122,10 @@ func (st *SystemTools) Definitions() []runtime.ToolDef {
 					"description": {
 						"type": "string",
 						"description": "Detailed description of what the job entails"
+					},
+					"workspace_of_job": {
+						"type": "string",
+						"description": "Optional ID of an existing job whose workspace this job should share. Use this when the work is a follow-up on a previous job's files (fixing, extending, or reviewing its output). Find the ID with list_jobs. Omit to create a fresh workspace."
 					}
 				},
 				"required": ["title", "description"]
@@ -293,8 +297,9 @@ func (st *SystemTools) createJob(ctx context.Context, args json.RawMessage) (str
 	}
 
 	var params struct {
-		Title       string `json:"title"`
-		Description string `json:"description"`
+		Title          string `json:"title"`
+		Description    string `json:"description"`
+		WorkspaceOfJob string `json:"workspace_of_job"`
 	}
 	if err := json.Unmarshal(args, &params); err != nil {
 		return "", fmt.Errorf("parsing create_job args: %w", err)
@@ -312,8 +317,25 @@ func (st *SystemTools) createJob(ctx context.Context, args json.RawMessage) (str
 		return "", fmt.Errorf("generating job ID: %w", err)
 	}
 
-	// Create per-job workspace subdirectory under the global workspace.
-	jobDir := filepath.Join(st.workDir, jobID.String())
+	// The workspace is either shared with an existing job (follow-up work on
+	// that job's files) or a fresh per-job subdirectory under the global
+	// workspace. Reuse is keyed by job ID, never by path: a job ID is
+	// something the model demonstrably handles correctly, while a re-typed
+	// path is how a mangled UUID once split a job across two directories.
+	var jobDir string
+	reusedWorkspace := params.WorkspaceOfJob != ""
+	if reusedWorkspace {
+		src, err := st.store.GetJob(ctx, params.WorkspaceOfJob)
+		if err != nil {
+			return "", fmt.Errorf("workspace_of_job: looking up job %q: %w", params.WorkspaceOfJob, err)
+		}
+		if src.WorkspaceDir == "" {
+			return "", fmt.Errorf("workspace_of_job: job %q has no workspace directory", params.WorkspaceOfJob)
+		}
+		jobDir = src.WorkspaceDir
+	} else {
+		jobDir = filepath.Join(st.workDir, jobID.String())
+	}
 	if err := os.MkdirAll(jobDir, 0o755); err != nil {
 		return "", fmt.Errorf("creating job workspace directory: %w", err)
 	}
@@ -327,7 +349,9 @@ func (st *SystemTools) createJob(ctx context.Context, args json.RawMessage) (str
 	}
 
 	if err := st.store.CreateJob(ctx, job); err != nil {
-		_ = os.Remove(jobDir) // best-effort cleanup of orphaned directory
+		if !reusedWorkspace {
+			_ = os.Remove(jobDir) // best-effort cleanup of orphaned directory
+		}
 		return "", fmt.Errorf("creating job: %w", err)
 	}
 

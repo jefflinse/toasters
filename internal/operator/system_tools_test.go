@@ -195,6 +195,76 @@ func TestCreateJob_MissingParams(t *testing.T) {
 	assertContains(t, err.Error(), "description is required")
 }
 
+// A follow-up job created with workspace_of_job shares the referenced job's
+// workspace directory instead of minting a fresh one. Reuse is keyed by job
+// ID — never by path — so the model never round-trips a workspace path.
+func TestCreateJob_ReusesWorkspaceOfExistingJob(t *testing.T) {
+	st, store, _, _, _ := newTestSystemTools(t)
+	ctx := context.Background()
+
+	args, _ := json.Marshal(map[string]string{
+		"title":       "Build web app",
+		"description": "Create a new web application",
+	})
+	result, err := st.Execute(ctx, "create_job", args)
+	assertNoError(t, err)
+	var res map[string]string
+	if err := json.Unmarshal([]byte(result), &res); err != nil {
+		t.Fatalf("parsing result: %v", err)
+	}
+	original, err := store.GetJob(ctx, res["job_id"])
+	assertNoError(t, err)
+
+	args, _ = json.Marshal(map[string]string{
+		"title":            "Fix Docker build",
+		"description":      "Fix the failing Docker build in the To-Do app",
+		"workspace_of_job": original.ID,
+	})
+	result, err = st.Execute(ctx, "create_job", args)
+	assertNoError(t, err)
+	if err := json.Unmarshal([]byte(result), &res); err != nil {
+		t.Fatalf("parsing result: %v", err)
+	}
+	followUp, err := store.GetJob(ctx, res["job_id"])
+	assertNoError(t, err)
+
+	if followUp.ID == original.ID {
+		t.Fatal("follow-up job must get its own ID")
+	}
+	assertEqual(t, original.WorkspaceDir, followUp.WorkspaceDir)
+
+	// No fresh directory was minted for the follow-up job's own ID.
+	stray := filepath.Join(filepath.Dir(original.WorkspaceDir), followUp.ID)
+	if _, statErr := os.Stat(stray); !os.IsNotExist(statErr) {
+		t.Errorf("fresh workspace directory %q created despite workspace_of_job", stray)
+	}
+}
+
+func TestCreateJob_WorkspaceOfUnknownJobErrors(t *testing.T) {
+	st, _, _, _, workDir := newTestSystemTools(t)
+	ctx := context.Background()
+
+	args, _ := json.Marshal(map[string]string{
+		"title":            "Fix Docker build",
+		"description":      "Fix it",
+		"workspace_of_job": "not-a-real-job-id",
+	})
+	_, err := st.Execute(ctx, "create_job", args)
+	assertError(t, err)
+	assertContains(t, err.Error(), "workspace_of_job")
+
+	// The failed call must not leave a stray workspace directory behind.
+	entries, readErr := os.ReadDir(workDir)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			t.Errorf("unexpected directory %q left by failed create_job", e.Name())
+		}
+	}
+}
+
 func TestAssignTask(t *testing.T) {
 	st, store, gExec, eventCh, _ := newTestSystemTools(t)
 	ctx := context.Background()

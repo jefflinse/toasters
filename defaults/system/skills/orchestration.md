@@ -21,7 +21,7 @@ Tasks move through these statuses:
 
 System workers use these tools to coordinate work:
 
-- **create_job**: Create a new top-level job with a description and workspace directory. Decomposition into tasks happens automatically after this.
+- **create_job**: Create a new top-level job with a description and workspace directory. Decomposition into tasks happens automatically after this. Pass `workspace_of_job` with an existing job's ID to share that job's workspace for follow-up work on its files.
 - **create_task**: Add a follow-up task to an existing job. The framework selects a graph for it automatically unless one is given.
 - **retry_task**: Re-run a failed task in place on its graph instead of recreating work in a new job.
 - **query_job**: Get the full current state of a job including every task's status, graph, and result summary.

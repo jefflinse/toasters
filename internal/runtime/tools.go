@@ -601,6 +601,89 @@ func referencesCanonicalPath(command, aliasFrom string) bool {
 	return false
 }
 
+// canonicalWorkspace is the workspace path the model was told about: the
+// canonical task workspace (aliasFrom) inside a fan-out branch, otherwise
+// the working directory itself.
+func (ct *CoreTools) canonicalWorkspace() string {
+	if ct.aliasFrom != "" {
+		return ct.aliasFrom
+	}
+	return ct.workDir
+}
+
+// foreignSiblingPath returns the first path in command (absolute or
+// ~-prefixed) that resolves under canonical's parent directory but outside
+// canonical itself, or "" when there is none. The parent of a job workspace
+// is the shared workspace root, so a hit is either a mistyped workspace
+// path or another job's workspace — both are rejected by the shell tool.
+//
+// The check is skipped when canonical sits directly under the user's home
+// directory: there "siblings" would be every dotfile and project dir, far
+// too broad for a substring heuristic.
+func foreignSiblingPath(command, canonical string) string {
+	canonical = filepath.Clean(canonical)
+	parent := filepath.Dir(canonical)
+	if command == "" || parent == string(filepath.Separator) || parent == "." || parent == canonical {
+		return ""
+	}
+	home, _ := os.UserHomeDir()
+	if home != "" && filepath.Clean(home) == parent {
+		return ""
+	}
+
+	// Match both the absolute form and the ~/ shorthand of the parent dir.
+	prefixes := []string{parent + string(filepath.Separator)}
+	if home != "" {
+		if rel, err := filepath.Rel(home, parent); err == nil && rel != "." &&
+			!strings.HasPrefix(rel, ".."+string(filepath.Separator)) && rel != ".." {
+			prefixes = append(prefixes, "~/"+filepath.ToSlash(rel)+"/")
+		}
+	}
+
+	for _, prefix := range prefixes {
+		for start := 0; ; {
+			i := strings.Index(command[start:], prefix)
+			if i < 0 {
+				break
+			}
+			i += start
+			token := pathToken(command[i:])
+			start = i + len(prefix)
+
+			abs := token
+			if strings.HasPrefix(token, "~/") && home != "" {
+				abs = filepath.Join(home, token[2:])
+			}
+			abs = filepath.Clean(abs)
+			if abs != canonical && !strings.HasPrefix(abs, canonical+string(filepath.Separator)) {
+				return token
+			}
+		}
+	}
+	return ""
+}
+
+// pathToken returns the leading run of s that plausibly forms one shell
+// path argument: everything up to whitespace, a quote, or a shell
+// metacharacter. Truncating at a glob/brace character can shorten a path
+// mid-segment; foreignSiblingPath still classifies the truncated prefix
+// correctly because containment in the canonical workspace is decided by
+// path prefix, and over-rejecting an exotic glob beats under-rejecting a
+// mistyped workspace.
+func pathToken(s string) string {
+	end := strings.IndexFunc(s, func(r rune) bool {
+		switch r {
+		case ' ', '\t', '\n', '\r', '"', '\'', '`', ';', '&', '|', '(', ')', '<', '>', '*', '?', '{', '}', '[', ']', '$', '\\', '=', ',', ':':
+			return true
+		}
+		return false
+	})
+	if end < 0 {
+		return s
+	}
+	return s[:end]
+}
+
 // --- Tool implementations ---
 
 // maxScanLineBytes is the longest single line read_file and grep accept.
@@ -1113,6 +1196,21 @@ func (ct *CoreTools) shell(ctx context.Context, args json.RawMessage) (string, e
 		return "", fmt.Errorf("this task runs in an isolated branch and the shell tool cannot reference the "+
 			"workspace path %q by absolute path here; re-run the command using paths relative to the working "+
 			"directory instead (e.g. `go build ./...` rather than an absolute path)", ct.aliasFrom)
+	}
+
+	// Near-miss guard: reject paths that live beside this session's workspace
+	// (under the same parent — the root holding every job's workspace) but
+	// outside it. This is the transcription-error trap: a model that re-types
+	// a workspace UUID and drops a group produces a sibling path no other
+	// guard catches — file tools are confined by resolvePath, but /bin/sh
+	// would happily mkdir the phantom directory and split the job's output
+	// across two trees. It also blocks reaching into other jobs' workspaces.
+	// Same substring spirit as referencesCanonicalPath: over-reject unusual
+	// quoting rather than risk under-rejecting a real escape.
+	if p := foreignSiblingPath(params.Command, ct.canonicalWorkspace()); p != "" {
+		return "", fmt.Errorf("the command references %q, which is outside this session's workspace — likely a "+
+			"mistyped workspace path or another job's directory; use paths relative to the working directory "+
+			"instead (e.g. `ls backend/` rather than an absolute path)", p)
 	}
 
 	timeout := time.Duration(params.Timeout) * time.Second
