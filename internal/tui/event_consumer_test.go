@@ -32,3 +32,29 @@ func TestTranslateEvent_OperatorCompaction(t *testing.T) {
 		t.Errorf("bad payload translated to %T, want nil", m)
 	}
 }
+
+// TestTranslateEvent_SessionCompaction verifies the worker compaction event
+// becomes the Bubble Tea message the fleet row trace consumes.
+func TestTranslateEvent_SessionCompaction(t *testing.T) {
+	t.Parallel()
+
+	msg := translateEvent(service.Event{
+		Type: service.EventTypeSessionCompaction,
+		Payload: service.SessionCompactionPayload{
+			SessionID:            "sess-1",
+			Tier:                 2,
+			BeforeTokens:         41000,
+			EstimatedAfterTokens: 9000,
+		},
+	})
+	got, ok := msg.(SessionCompactionMsg)
+	if !ok {
+		t.Fatalf("translated msg = %T, want SessionCompactionMsg", msg)
+	}
+	if got.SessionID != "sess-1" || got.Tier != 2 || got.BeforeTokens != 41000 || got.EstimatedAfterTokens != 9000 {
+		t.Errorf("msg = %+v", got)
+	}
+	if m := translateEvent(service.Event{Type: service.EventTypeSessionCompaction, Payload: "junk"}); m != nil {
+		t.Errorf("bad payload translated to %T, want nil", m)
+	}
+}

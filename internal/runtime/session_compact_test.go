@@ -190,6 +190,10 @@ func TestOverflowBackstop_CompactsAndRetriesOnce(t *testing.T) {
 		finalResponse("recovered"),
 	}}
 	sess, events := newCompactionSession(t, mp, 0, 0)
+	// MaxTurns exactly matches the real turns consumed (2 tool turns + the
+	// final turn) — the overflow retry must re-use its turn's budget slot,
+	// not burn an extra one.
+	sess.maxTurns = 3
 
 	if err := sess.Run(context.Background()); err != nil {
 		t.Fatalf("Run after overflow retry: %v", err)
@@ -201,10 +205,67 @@ func TestOverflowBackstop_CompactsAndRetriesOnce(t *testing.T) {
 	if len(compactions) != 1 {
 		t.Fatalf("compactions = %d, want 1 (the backstop)", len(compactions))
 	}
-	// 5 provider calls: 2 turns + overflow + tier-2 summary + retry.
-	if n := len(mp.getRequests()); n != 5 {
-		t.Errorf("requests = %d, want 5", n)
+	// With nothing elidable (2 turns, all protected), the backstop must
+	// escalate to tier 2.
+	if compactions[0].Tier != 2 {
+		t.Errorf("Tier = %d, want 2 on the backstop path", compactions[0].Tier)
 	}
+	// 5 provider calls: 2 turns + overflow + tier-2 summary + retry.
+	reqs := mp.getRequests()
+	if len(reqs) != 5 {
+		t.Fatalf("requests = %d, want 5", len(reqs))
+	}
+	// The retried request must carry the COMPACTED history: the summary
+	// message (which can only exist post-compaction) and the original task.
+	retry := reqs[4].Messages
+	if retry[0].Content != "dig until done" {
+		t.Errorf("retry first message = %q, want the original task", retry[0].Content)
+	}
+	foundSummary := false
+	for _, msg := range retry {
+		if strings.Contains(msg.Content, "progress summary") {
+			foundSummary = true
+		}
+	}
+	if !foundSummary {
+		t.Error("retried request does not contain the compaction summary — the retry did not use the compacted history")
+	}
+	assertToolPairing(t, retry)
+}
+
+func TestOverflowBackstop_SummaryFailureDegradesToTaskAndTail(t *testing.T) {
+	overflow := mockResponse{events: []provider.StreamEvent{
+		{Type: provider.EventError, Error: &provider.APIError{
+			Provider: "test", StatusCode: 400, Body: "prompt is too long",
+		}},
+	}}
+	summaryFails := mockResponse{err: fmt.Errorf("provider exploded")}
+	mp := &mockProvider{name: "test", responses: []mockResponse{
+		toolTurnResponse("c1", 100),
+		toolTurnResponse("c2", 200),
+		overflow,
+		summaryFails, // tier-2 one-shot fails → degrade to task + tail
+		finalResponse("recovered"),
+	}}
+	sess, events := newCompactionSession(t, mp, 0, 0)
+
+	if err := sess.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if n := len(drainCompactions(events)); n != 1 {
+		t.Fatalf("compactions = %d, want 1", n)
+	}
+	reqs := mp.getRequests()
+	retry := reqs[len(reqs)-1].Messages
+	if retry[0].Content != "dig until done" {
+		t.Errorf("retry first message = %q, want the original task", retry[0].Content)
+	}
+	for _, msg := range retry {
+		if strings.Contains(msg.Content, "[Compaction summary") {
+			t.Error("retry contains a summary message despite the summary call failing")
+		}
+	}
+	assertToolPairing(t, retry)
 }
 
 func TestOverflowBackstop_SecondOverflowFails(t *testing.T) {
@@ -308,32 +369,60 @@ func TestTier2_SummarizeAndContinue(t *testing.T) {
 			summaryReq.MaxTokens, len(summaryReq.Tools), summaryMaxTokens)
 	}
 
-	// Transcript rows before the compaction are flagged superseded; the
-	// summary and marker rows are not.
+	// Every pre-compaction row is flagged superseded, and the live
+	// (non-superseded) set mirrors exactly what the model sees: the marker,
+	// then the re-persisted task + summary + tail, then post-compaction
+	// turns.
 	rows, err := store.ListSessionMessages(context.Background(), sess.id)
 	if err != nil {
 		t.Fatalf("ListSessionMessages: %v", err)
 	}
-	var superseded, live int
+	var live []*db.SessionMessage
 	sawMarker := false
+	supersededCount := 0
 	for _, r := range rows {
+		if r.Superseded {
+			supersededCount++
+			continue
+		}
+		live = append(live, r)
 		if strings.HasPrefix(r.Content, "[compacted (tier 2)") {
 			sawMarker = true
 		}
-		if r.Superseded {
-			superseded++
-		} else {
-			live++
-		}
 	}
-	if superseded == 0 {
+	if supersededCount == 0 {
 		t.Error("no transcript rows flagged superseded after tier-2 compaction")
 	}
 	if !sawMarker {
-		t.Error("no compaction marker row in the transcript")
+		t.Error("compaction marker row missing or flagged superseded")
 	}
-	if live == 0 {
-		t.Error("all rows superseded — the marker/summary/final rows should be live")
+	// The live set must contain the re-persisted task and summary — the
+	// exact conversation the model still sees — with no superseded flag.
+	var liveTask, liveSummary bool
+	for _, r := range live {
+		if r.Content == "dig until done" {
+			liveTask = true
+		}
+		if strings.Contains(r.Content, "Dug three holes") {
+			liveSummary = true
+		}
+	}
+	if !liveTask {
+		t.Error("live transcript rows missing the re-persisted task message")
+	}
+	if !liveSummary {
+		t.Error("live transcript rows missing the re-persisted summary")
+	}
+	// And the pre-compaction original of the task is flagged: the same
+	// content exists on both sides of the boundary.
+	var supersededTask bool
+	for _, r := range rows {
+		if r.Superseded && r.Content == "dig until done" {
+			supersededTask = true
+		}
+	}
+	if !supersededTask {
+		t.Error("original task row not flagged superseded (live set would be ambiguous)")
 	}
 }
 

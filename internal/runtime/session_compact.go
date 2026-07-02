@@ -146,21 +146,29 @@ func (s *Session) compact(ctx context.Context, beforeTokens, window, threshold i
 			"session", s.id, "estimated_tokens", estimate, "window", window, "threshold_pct", threshold)
 	}
 
-	if tier == 2 {
-		if summaryMsg := summaryMessage(newHistory); summaryMsg != "" {
-			s.persistMessage(provider.Message{Role: "user", Content: summaryMsg})
-		}
-		if s.store != nil && supersededSeq > 0 {
-			if err := s.store.MarkSessionMessagesSuperseded(context.Background(), s.id, supersededSeq); err != nil {
-				slog.Warn("failed to flag superseded transcript rows", "session", s.id, "error", err)
-			}
-		}
-	}
 	s.persistMessage(provider.Message{
 		Role: "system",
 		Content: fmt.Sprintf("[compacted (tier %d): %s → ~%s tokens; %d tool result(s) elided]",
 			tier, formatTokens(beforeTokens), formatTokens(estimate), elidedCount),
 	})
+	if tier == 2 {
+		// Flag every pre-compaction row as superseded, then re-persist the
+		// rebuilt live history as fresh rows. Marking only a prefix would
+		// require mapping message indices to transcript seqs — which drift
+		// once markers/summaries are persisted without being appended to
+		// the conversation — and mismarking the still-live protected tail
+		// would corrupt exactly the debugging view this flag exists for.
+		// Duplicating the tail rows costs a little storage and keeps the
+		// non-superseded set an exact mirror of what the model sees.
+		if s.store != nil && supersededSeq > 0 {
+			if err := s.store.MarkSessionMessagesSuperseded(context.Background(), s.id, supersededSeq); err != nil {
+				slog.Warn("failed to flag superseded transcript rows", "session", s.id, "error", err)
+			}
+		}
+		for _, msg := range newHistory {
+			s.persistMessage(msg)
+		}
+	}
 
 	slog.Info("worker session compacted history",
 		"session", s.id, "tier", tier, "before_tokens", beforeTokens,
@@ -321,17 +329,6 @@ func renderTranscript(msgs []provider.Message, maxBytes int) string {
 		total += len(lines[start]) + 1
 	}
 	return strings.TrimSpace(strings.Join(lines[start:], "\n"))
-}
-
-// summaryMessage extracts the compaction-summary message from a rebuilt
-// history for transcript persistence, if present.
-func summaryMessage(msgs []provider.Message) string {
-	for _, m := range msgs {
-		if m.Role == "user" && strings.HasPrefix(m.Content, "[Compaction summary") {
-			return m.Content
-		}
-	}
-	return ""
 }
 
 // formatTokens renders a token count compactly (e.g. "41.2k").
