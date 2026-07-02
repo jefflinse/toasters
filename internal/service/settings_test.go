@@ -286,3 +286,70 @@ func TestUpdateSettings_RejectedWhenNoAppConfig(t *testing.T) {
 		t.Fatal("expected error when no AppConfig is wired")
 	}
 }
+
+// TestUpdateSettings_PersistsCompactionThresholds verifies both compaction
+// thresholds are written to config.yaml as native ints, applied to the live
+// AppConfig, and normalized (clamped) rather than rejected.
+func TestUpdateSettings_PersistsCompactionThresholds(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(configPath,
+		[]byte("coarse_granularity: medium\nfine_granularity: medium\n"), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	appCfg := &config.Config{CoarseGranularity: "medium", FineGranularity: "medium"}
+	svc := NewLocal(LocalConfig{ConfigDir: dir, AppConfig: appCfg})
+
+	err := svc.UpdateSettings(context.Background(), Settings{
+		CoarseGranularity:           "medium",
+		FineGranularity:             "medium",
+		OperatorCompactionThreshold: 40,
+		WorkerCompactionThreshold:   80,
+	})
+	if err != nil {
+		t.Fatalf("UpdateSettings: %v", err)
+	}
+
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("re-read config: %v", err)
+	}
+	for _, want := range []string{"operator_compaction_threshold: 40", "worker_compaction_threshold: 80"} {
+		if !strings.Contains(string(data), want) {
+			t.Errorf("config.yaml missing %q, got:\n%s", want, data)
+		}
+	}
+	if appCfg.OperatorCompactionThreshold != 40 || appCfg.WorkerCompactionThreshold != 80 {
+		t.Errorf("AppConfig thresholds = %d/%d, want 40/80",
+			appCfg.OperatorCompactionThreshold, appCfg.WorkerCompactionThreshold)
+	}
+
+	got, err := svc.GetSettings(context.Background())
+	if err != nil {
+		t.Fatalf("GetSettings: %v", err)
+	}
+	if got.OperatorCompactionThreshold != 40 || got.WorkerCompactionThreshold != 80 {
+		t.Errorf("GetSettings thresholds = %d/%d, want 40/80",
+			got.OperatorCompactionThreshold, got.WorkerCompactionThreshold)
+	}
+
+	// 0 disables and persists as 0; out-of-range clamps instead of failing.
+	err = svc.UpdateSettings(context.Background(), Settings{
+		CoarseGranularity:           "medium",
+		FineGranularity:             "medium",
+		OperatorCompactionThreshold: 0,
+		WorkerCompactionThreshold:   99,
+	})
+	if err != nil {
+		t.Fatalf("UpdateSettings (disable/clamp): %v", err)
+	}
+	if appCfg.OperatorCompactionThreshold != 0 {
+		t.Errorf("AppConfig.OperatorCompactionThreshold = %d, want 0 (disabled)", appCfg.OperatorCompactionThreshold)
+	}
+	if appCfg.WorkerCompactionThreshold != 90 {
+		t.Errorf("AppConfig.WorkerCompactionThreshold = %d, want 90 (clamped)", appCfg.WorkerCompactionThreshold)
+	}
+}

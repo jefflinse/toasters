@@ -783,3 +783,46 @@ func TestEnsureConfigFilePermissions_NoConfigFile_NoError(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
+
+func TestValidCompactionThreshold(t *testing.T) {
+	tests := []struct {
+		name     string
+		value    int
+		fallback int
+		want     int
+	}{
+		{"zero is disabled and passes through", 0, 50, 0},
+		{"in-range value passes through", 50, 50, 50},
+		{"off-preset in-range value passes through", 42, 50, 42},
+		{"below range clamps to 30", 10, 50, 30},
+		{"above range clamps to 90", 95, 50, 90},
+		{"negative normalizes to fallback", -5, 70, 70},
+		{"boundaries pass through", 30, 50, 30},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := ValidCompactionThreshold(tt.value, tt.fallback); got != tt.want {
+				t.Errorf("ValidCompactionThreshold(%d, %d) = %d, want %d", tt.value, tt.fallback, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCompactionThresholdOptions_IncludesOffAndDefaults(t *testing.T) {
+	opts := CompactionThresholdOptions()
+	has := func(v int) bool {
+		for _, o := range opts {
+			if o == v {
+				return true
+			}
+		}
+		return false
+	}
+	// "off", and both shipped defaults (operator 50, worker 70) must be
+	// selectable in the settings UI.
+	for _, v := range []int{0, 50, 70} {
+		if !has(v) {
+			t.Errorf("CompactionThresholdOptions() missing %d: %v", v, opts)
+		}
+	}
+}

@@ -1,7 +1,11 @@
 package tui
 
 import (
+	"strings"
 	"testing"
+
+	"charm.land/lipgloss/v2"
+	"github.com/jefflinse/toasters/internal/service"
 )
 
 // TestOperatorDoneMsg_LiveTokensResetOnDone verifies that CompletionTokensLive
@@ -112,5 +116,118 @@ func TestContextBarTokenCalculation(t *testing.T) {
 				t.Errorf("totalTokens = %d, want %d", totalTokens, tt.wantContextTokens)
 			}
 		})
+	}
+}
+
+// TestRenderMiniContextBar_ThresholdTick verifies the compaction-threshold
+// tick renders at the right cell and only when it's meaningful.
+func TestRenderMiniContextBar_ThresholdTick(t *testing.T) {
+	t.Parallel()
+
+	t.Run("tick at threshold position", func(t *testing.T) {
+		t.Parallel()
+		// width 24, label " 25%" (4 cells) → barW 20; threshold 0.5 → cell 10.
+		got := stripANSI(renderMiniContextBar(250, 1000, 24, false, 0.5))
+		runes := []rune(got)
+		tickAt := -1
+		for i, r := range runes {
+			if r == '│' {
+				tickAt = i
+				break
+			}
+		}
+		if tickAt != 10 {
+			t.Errorf("tick at cell %d, want 10 (bar %q)", tickAt, got)
+		}
+	})
+
+	t.Run("tick survives fill passing it", func(t *testing.T) {
+		t.Parallel()
+		got := stripANSI(renderMiniContextBar(800, 1000, 24, false, 0.5))
+		if !strings.ContainsRune(got, '│') {
+			t.Errorf("tick missing once fill passed threshold: %q", got)
+		}
+	})
+
+	t.Run("no tick without threshold", func(t *testing.T) {
+		t.Parallel()
+		got := stripANSI(renderMiniContextBar(250, 1000, 24, false, 0))
+		if strings.ContainsRune(got, '│') {
+			t.Errorf("unexpected tick with threshold 0: %q", got)
+		}
+	})
+
+	t.Run("no tick when total unknown", func(t *testing.T) {
+		t.Parallel()
+		got := stripANSI(renderMiniContextBar(1500, 0, 24, false, 0.5))
+		if strings.ContainsRune(got, '│') {
+			t.Errorf("unexpected tick with unknown total: %q", got)
+		}
+	})
+
+	t.Run("threshold at bar edge clamps inside", func(t *testing.T) {
+		t.Parallel()
+		// threshold 0.9 with a narrow bar must not index past the end.
+		got := stripANSI(renderMiniContextBar(100, 1000, 8, false, 0.9))
+		if !strings.ContainsRune(got, '│') {
+			t.Errorf("tick missing on narrow bar: %q", got)
+		}
+	})
+}
+
+// TestContextBarFillColor pins the threshold-relative coloring semantics:
+// crossing the threshold means "compaction pending" (yellow), 15 points past
+// means "compaction overdue" (red); with no threshold the legacy fixed
+// breakpoints apply.
+func TestContextBarFillColor(t *testing.T) {
+	t.Parallel()
+
+	green, yellow, red, dimGreen := "#52c41a", "#faad14", "#f5222d", "#3f6b3f"
+	tests := []struct {
+		name      string
+		pct       float64
+		threshold float64
+		dim       bool
+		want      string
+	}{
+		{"below threshold is green", 0.49, 0.5, false, green},
+		{"at threshold is yellow", 0.5, 0.5, false, yellow},
+		{"legacy yellow zone stays green below threshold", 0.65, 0.7, false, green},
+		{"threshold+15 is red", 0.65, 0.5, false, red},
+		{"high threshold red zone clamps to 100%", 1.0, 0.9, false, red},
+		{"just under threshold+15 is yellow", 0.64, 0.5, false, yellow},
+		{"no threshold uses legacy 60%", 0.6, 0, false, yellow},
+		{"no threshold uses legacy 85%", 0.85, 0, false, red},
+		{"no threshold low is green", 0.3, 0, false, green},
+		{"dim wins over everything", 0.99, 0.5, true, dimGreen},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := contextBarFillColor(tt.pct, tt.threshold, tt.dim); got != lipgloss.Color(tt.want) {
+				t.Errorf("contextBarFillColor(%v, %v, %v) = %v, want %v", tt.pct, tt.threshold, tt.dim, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestApplySettings_CompactionThresholds verifies the settings round-trip
+// into the model fields that position the bar ticks.
+func TestApplySettings_CompactionThresholds(t *testing.T) {
+	t.Parallel()
+
+	m := newMinimalModel(t)
+	m.applySettings(service.Settings{
+		OperatorCompactionThreshold: 40,
+		WorkerCompactionThreshold:   80,
+	})
+	if m.opCompactionThreshold != 40 || m.workerCompactionThreshold != 80 {
+		t.Errorf("thresholds = %d/%d, want 40/80", m.opCompactionThreshold, m.workerCompactionThreshold)
+	}
+
+	// 0 means disabled — must pass through, not fall back to defaults.
+	m.applySettings(service.Settings{})
+	if m.opCompactionThreshold != 0 || m.workerCompactionThreshold != 0 {
+		t.Errorf("disabled thresholds = %d/%d, want 0/0", m.opCompactionThreshold, m.workerCompactionThreshold)
 	}
 }

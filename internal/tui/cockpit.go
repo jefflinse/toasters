@@ -273,7 +273,7 @@ func (m *Model) detailStatsLines(slot *runtimeSlot, innerW int) []string {
 	if barW < 8 {
 		barW = 8
 	}
-	lines = append(lines, "  "+renderMiniContextBar(int(slot.contextTokens), ctxMax, barW, slot.status != "active"))
+	lines = append(lines, "  "+renderMiniContextBar(int(slot.contextTokens), ctxMax, barW, slot.status != "active", float64(m.workerCompactionThreshold)/100))
 	if slot.contextTokens > 0 {
 		detail := fmt.Sprintf("%s tokens", commaInt(int(slot.contextTokens)))
 		if ctxMax > 0 {

@@ -284,25 +284,29 @@ func (s *LocalService) ListProviderModels(ctx context.Context, providerID string
 func (s *LocalService) GetSettings(_ context.Context) (Settings, error) {
 	if s.cfg.AppConfig == nil {
 		return Settings{
-			CoarseGranularity:          config.ValidGranularity("coarse", ""),
-			FineGranularity:            config.ValidGranularity("fine", ""),
-			WorkerThinkingEnabled:      false,
-			WorkerTemperature:          0.1,
-			ShowJobsPanelByDefault:     false,
-			ShowOperatorPanelByDefault: true,
-			FleetRowDensity:            config.ValidFleetDensity(""),
-			SidebarSide:                config.ValidSidebarSide(""),
+			CoarseGranularity:           config.ValidGranularity("coarse", ""),
+			FineGranularity:             config.ValidGranularity("fine", ""),
+			WorkerThinkingEnabled:       false,
+			WorkerTemperature:           0.1,
+			ShowJobsPanelByDefault:      false,
+			ShowOperatorPanelByDefault:  true,
+			FleetRowDensity:             config.ValidFleetDensity(""),
+			SidebarSide:                 config.ValidSidebarSide(""),
+			OperatorCompactionThreshold: 50,
+			WorkerCompactionThreshold:   70,
 		}, nil
 	}
 	return Settings{
-		CoarseGranularity:          config.ValidGranularity("coarse", s.cfg.AppConfig.CoarseGranularity),
-		FineGranularity:            config.ValidGranularity("fine", s.cfg.AppConfig.FineGranularity),
-		WorkerThinkingEnabled:      s.cfg.AppConfig.WorkerThinkingEnabled,
-		WorkerTemperature:          s.cfg.AppConfig.WorkerTemperature,
-		ShowJobsPanelByDefault:     s.cfg.AppConfig.ShowJobsPanelByDefault,
-		ShowOperatorPanelByDefault: s.cfg.AppConfig.ShowOperatorPanelByDefault,
-		FleetRowDensity:            config.ValidFleetDensity(s.cfg.AppConfig.FleetRowDensity),
-		SidebarSide:                config.ValidSidebarSide(s.cfg.AppConfig.SidebarSide),
+		CoarseGranularity:           config.ValidGranularity("coarse", s.cfg.AppConfig.CoarseGranularity),
+		FineGranularity:             config.ValidGranularity("fine", s.cfg.AppConfig.FineGranularity),
+		WorkerThinkingEnabled:       s.cfg.AppConfig.WorkerThinkingEnabled,
+		WorkerTemperature:           s.cfg.AppConfig.WorkerTemperature,
+		ShowJobsPanelByDefault:      s.cfg.AppConfig.ShowJobsPanelByDefault,
+		ShowOperatorPanelByDefault:  s.cfg.AppConfig.ShowOperatorPanelByDefault,
+		FleetRowDensity:             config.ValidFleetDensity(s.cfg.AppConfig.FleetRowDensity),
+		SidebarSide:                 config.ValidSidebarSide(s.cfg.AppConfig.SidebarSide),
+		OperatorCompactionThreshold: config.ValidCompactionThreshold(s.cfg.AppConfig.OperatorCompactionThreshold, 50),
+		WorkerCompactionThreshold:   config.ValidCompactionThreshold(s.cfg.AppConfig.WorkerCompactionThreshold, 70),
 	}, nil
 }
 
@@ -395,6 +399,21 @@ func (s *LocalService) UpdateSettings(_ context.Context, next Settings) error {
 		return fmt.Errorf("persisting sidebar_side: %w", err)
 	}
 	s.cfg.AppConfig.SidebarSide = side
+
+	// Compaction thresholds: normalized rather than rejected (0 = disabled,
+	// otherwise clamped to [30, 90]). No live subsystem to refresh yet — the
+	// operator and runtime read these at turn boundaries via AppConfig.
+	opThreshold := config.ValidCompactionThreshold(next.OperatorCompactionThreshold, 50)
+	if err := config.SetTopLevelValue(s.cfg.ConfigDir, "operator_compaction_threshold", opThreshold); err != nil {
+		return fmt.Errorf("persisting operator_compaction_threshold: %w", err)
+	}
+	s.cfg.AppConfig.OperatorCompactionThreshold = opThreshold
+
+	workerThreshold := config.ValidCompactionThreshold(next.WorkerCompactionThreshold, 70)
+	if err := config.SetTopLevelValue(s.cfg.ConfigDir, "worker_compaction_threshold", workerThreshold); err != nil {
+		return fmt.Errorf("persisting worker_compaction_threshold: %w", err)
+	}
+	s.cfg.AppConfig.WorkerCompactionThreshold = workerThreshold
 
 	return nil
 }

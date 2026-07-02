@@ -452,7 +452,7 @@ func TestRenderWorkerCard(t *testing.T) {
 			startTime:  base,
 		}
 
-		result := renderWorkerCard(rs, 40, 8, 0, false, 0)
+		result := renderWorkerCard(rs, 40, 8, 0, 0, false, 0)
 
 		if result == "" {
 			t.Error("expected non-empty result for active session")
@@ -472,7 +472,7 @@ func TestRenderWorkerCard(t *testing.T) {
 			endTime:    base.Add(5 * time.Minute),
 		}
 
-		result := renderWorkerCard(rs, 40, 8, 0, false, 0)
+		result := renderWorkerCard(rs, 40, 8, 0, 0, false, 0)
 
 		if result == "" {
 			t.Error("expected non-empty result for completed session")
@@ -492,7 +492,7 @@ func TestRenderWorkerCard(t *testing.T) {
 		// Should not panic for any small innerH, and never exceed the budget.
 		for _, h := range []int{0, 1, 2, 3} {
 			t.Run(fmt.Sprintf("innerH=%d", h), func(t *testing.T) {
-				result := renderWorkerCard(rs, 40, h, 0, false, 0)
+				result := renderWorkerCard(rs, 40, h, 0, 0, false, 0)
 				lines := strings.Split(result, "\n")
 				if h > 0 && len(lines) > h {
 					t.Errorf("innerH=%d: got %d lines, expected at most %d", h, len(lines), h)
@@ -512,7 +512,7 @@ func TestRenderWorkerCard(t *testing.T) {
 		}
 
 		// Must not panic.
-		_ = renderWorkerCard(rs, 0, 8, 0, false, 0)
+		_ = renderWorkerCard(rs, 0, 8, 0, 0, false, 0)
 	})
 
 	t.Run("uses worker label as headline when task is empty", func(t *testing.T) {
@@ -525,7 +525,7 @@ func TestRenderWorkerCard(t *testing.T) {
 			startTime:  base,
 		}
 
-		result := stripANSI(renderWorkerCard(rs, 60, 10, 0, false, 0))
+		result := stripANSI(renderWorkerCard(rs, 60, 10, 0, 0, false, 0))
 
 		if !strings.Contains(result, "my-special-worker") {
 			t.Errorf("expected worker name 'my-special-worker' in output, got:\n%s", result)
@@ -543,7 +543,7 @@ func TestRenderWorkerCard(t *testing.T) {
 			startTime:  base,
 		}
 
-		result := stripANSI(renderWorkerCard(rs, 60, 10, 0, false, 0))
+		result := stripANSI(renderWorkerCard(rs, 60, 10, 0, 0, false, 0))
 
 		// Should contain "backend/builder" (team-scoped label).
 		if !strings.Contains(result, "backend/builder") {
@@ -562,7 +562,7 @@ func TestRenderWorkerCard(t *testing.T) {
 			startTime:  base,
 		}
 
-		result := stripANSI(renderWorkerCard(rs, 60, 10, 0, false, 0))
+		result := stripANSI(renderWorkerCard(rs, 60, 10, 0, 0, false, 0))
 
 		// Should contain "myteam/orchestrator" exactly once, not "myteam/myteam/orchestrator".
 		if strings.Contains(result, "myteam/myteam/orchestrator") {
@@ -584,7 +584,7 @@ func TestRenderWorkerCard(t *testing.T) {
 			startTime:  base,
 		}
 
-		result := stripANSI(renderWorkerCard(rs, 60, 10, 0, false, 0))
+		result := stripANSI(renderWorkerCard(rs, 60, 10, 0, 0, false, 0))
 
 		if !strings.Contains(result, "implement auth module") {
 			t.Errorf("expected task description in output, got:\n%s", result)
@@ -602,7 +602,7 @@ func TestRenderWorkerCard(t *testing.T) {
 			startTime:  base,
 		}
 
-		result := stripANSI(renderWorkerCard(rs, 60, 10, 0, false, 0))
+		result := stripANSI(renderWorkerCard(rs, 60, 10, 0, 0, false, 0))
 
 		if !strings.Contains(result, "waiting for activity") {
 			t.Errorf("expected 'waiting for activity' placeholder for active session with no activities, got:\n%s", result)
@@ -621,7 +621,7 @@ func TestRenderWorkerCard(t *testing.T) {
 			endTime:    base.Add(time.Minute),
 		}
 
-		result := stripANSI(renderWorkerCard(rs, 60, 10, 0, false, 0))
+		result := stripANSI(renderWorkerCard(rs, 60, 10, 0, 0, false, 0))
 
 		if strings.Contains(result, "waiting for activity") {
 			t.Errorf("completed session should not show 'waiting for activity', got:\n%s", result)
@@ -643,7 +643,7 @@ func TestRenderWorkerCard(t *testing.T) {
 			},
 		}
 
-		result := stripANSI(renderWorkerCard(rs, 60, 12, 0, false, 0))
+		result := stripANSI(renderWorkerCard(rs, 60, 12, 0, 0, false, 0))
 
 		// Activities are shown newest-first; "read: config.yaml" is the newest.
 		if !strings.Contains(result, "read: config.yaml") {
@@ -672,7 +672,7 @@ func TestRenderWorkerCard(t *testing.T) {
 			},
 		}
 
-		result := renderWorkerCard(rs, 60, 6, 0, false, 0)
+		result := renderWorkerCard(rs, 60, 6, 0, 0, false, 0)
 		lines := strings.Split(result, "\n")
 
 		if len(lines) > 6 {
@@ -690,7 +690,7 @@ func TestRenderWorkerCard(t *testing.T) {
 			startTime:  base,
 		}
 
-		result := stripANSI(renderWorkerCard(rs, 60, 8, 0, false, 0))
+		result := stripANSI(renderWorkerCard(rs, 60, 8, 0, 0, false, 0))
 
 		// Only the first 8 chars of the job ID should appear.
 		if !strings.Contains(result, "abcdef12") {
@@ -711,7 +711,7 @@ func TestRenderWorkerCard(t *testing.T) {
 			startTime:  base,
 		}
 
-		result := stripANSI(renderWorkerCard(rs, 60, 8, 0, false, 0))
+		result := stripANSI(renderWorkerCard(rs, 60, 8, 0, 0, false, 0))
 
 		if !strings.Contains(result, "🍞") {
 			t.Errorf("expected '🍞' status glyph for active session, got:\n%s", result)
@@ -729,7 +729,7 @@ func TestRenderWorkerCard(t *testing.T) {
 			endTime:    base.Add(time.Minute),
 		}
 
-		result := stripANSI(renderWorkerCard(rs, 60, 8, 0, false, 0))
+		result := stripANSI(renderWorkerCard(rs, 60, 8, 0, 0, false, 0))
 
 		if !strings.Contains(result, "✓") {
 			t.Errorf("expected '✓' status mark for completed session, got:\n%s", result)
@@ -747,7 +747,7 @@ func TestRenderWorkerCard(t *testing.T) {
 			endTime:    base.Add(time.Minute),
 		}
 
-		result := stripANSI(renderWorkerCard(rs, 60, 8, 0, false, 0))
+		result := stripANSI(renderWorkerCard(rs, 60, 8, 0, 0, false, 0))
 
 		if !strings.Contains(result, "✗") {
 			t.Errorf("expected '✗' status mark for failed session, got:\n%s", result)
@@ -766,7 +766,7 @@ func TestRenderWorkerCard(t *testing.T) {
 			endTime:    base.Add(2 * time.Minute),
 		}
 
-		result := stripANSI(renderWorkerCard(rs, 60, 8, 0, false, 0))
+		result := stripANSI(renderWorkerCard(rs, 60, 8, 0, 0, false, 0))
 
 		// Duration should be "2m0s".
 		if !strings.Contains(result, "2m0s") {
@@ -784,7 +784,7 @@ func TestRenderWorkerCard(t *testing.T) {
 			startTime:  base,
 		}
 
-		result := stripANSI(renderWorkerCard(rs, 60, 8, 0, false, 0))
+		result := stripANSI(renderWorkerCard(rs, 60, 8, 0, 0, false, 0))
 
 		if !strings.Contains(result, "runtime") {
 			t.Errorf("expected 'runtime' fallback label when workerName is empty, got:\n%s", result)
@@ -803,7 +803,7 @@ func TestRenderWorkerCard(t *testing.T) {
 		}
 
 		// ctxMax = 200000 → 40000/200000 = 20%.
-		result := stripANSI(renderWorkerCard(rs, 60, 8, 200000, false, 0))
+		result := stripANSI(renderWorkerCard(rs, 60, 8, 200000, 0, false, 0))
 
 		if !strings.Contains(result, "20%") {
 			t.Errorf("expected context bar to show '20%%', got:\n%s", result)

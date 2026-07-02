@@ -321,6 +321,8 @@ func (m *Model) applySettings(s service.Settings) {
 		m.fleetDensity = "full"
 	}
 	m.sidebarSide = config.ValidSidebarSide(s.SidebarSide)
+	m.opCompactionThreshold = config.ValidCompactionThreshold(s.OperatorCompactionThreshold, 50)
+	m.workerCompactionThreshold = config.ValidCompactionThreshold(s.WorkerCompactionThreshold, 70)
 	if m.settingsModal.show {
 		// Heuristic for "this came from a save, not the initial load":
 		// the modal is open. Clear the override so the new default wins.
