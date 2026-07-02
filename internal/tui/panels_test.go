@@ -112,7 +112,7 @@ func TestRenderMiniContextBar(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			got := renderMiniContextBar(tt.used, tt.tot, tt.width, false)
+			got := renderMiniContextBar(tt.used, tt.tot, tt.width, false, 0)
 			if !strings.Contains(got, tt.wantSub) {
 				t.Errorf("renderMiniContextBar(%d,%d,%d) = %q, want substring %q",
 					tt.used, tt.tot, tt.width, got, tt.wantSub)
@@ -164,6 +164,9 @@ func TestBuildFleet(t *testing.T) {
 	m.stats.ModelName = "claude-opus"
 	m.stats.ContextLength = 200000
 	m.stats.PromptTokens = 5000
+	// Distinct values so an operator/worker threshold swap can't hide.
+	m.opCompactionThreshold = 40
+	m.workerCompactionThreshold = 80
 
 	fleet := m.buildFleet()
 	if len(fleet) != 2 {
@@ -174,6 +177,12 @@ func TestBuildFleet(t *testing.T) {
 	}
 	if fleet[0].ctxUsed != 5000 || fleet[0].ctxMax != 200000 {
 		t.Errorf("operator ctx = %d/%d, want 5000/200000", fleet[0].ctxUsed, fleet[0].ctxMax)
+	}
+	if fleet[0].threshold != 0.4 {
+		t.Errorf("operator threshold = %v, want 0.4 (operator setting, as a fraction)", fleet[0].threshold)
+	}
+	if fleet[1].threshold != 0.8 {
+		t.Errorf("worker threshold = %v, want 0.8 (worker setting, as a fraction)", fleet[1].threshold)
 	}
 	w := fleet[1]
 	if w.label != "abcdef12:plan" {

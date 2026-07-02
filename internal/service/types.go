@@ -655,6 +655,16 @@ type Settings struct {
 	// (Jobs / Fleet / Blockers) renders on: "left" or "right". Empty is
 	// treated as "left".
 	SidebarSide string `json:"sidebar_side"`
+
+	// OperatorCompactionThreshold is the percentage of the operator's
+	// context window at which a compaction/handoff triggers. 0 disables
+	// compaction; positive values are clamped to [30, 90].
+	OperatorCompactionThreshold int `json:"operator_compaction_threshold"`
+
+	// WorkerCompactionThreshold is the percentage of a worker session's
+	// context window at which history compaction triggers. Same semantics
+	// as OperatorCompactionThreshold.
+	WorkerCompactionThreshold int `json:"worker_compaction_threshold"`
 }
 
 // ---------------------------------------------------------------------------

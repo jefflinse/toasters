@@ -16,6 +16,7 @@ import (
 	"github.com/charmbracelet/glamour"
 	xansi "github.com/charmbracelet/x/ansi"
 
+	"github.com/jefflinse/toasters/internal/config"
 	"github.com/jefflinse/toasters/internal/service"
 )
 
@@ -152,6 +153,12 @@ type Model struct {
 	// or saved.
 	sidebarSide          string
 	sidebarWidthOverride int // 0 = use default computed width; >0 = user-resized width
+	// Settings-driven compaction thresholds (percent of context window;
+	// 0 = disabled), refreshed whenever /settings is loaded or saved. They
+	// position the tick mark on context bars: the operator row uses the
+	// operator threshold, worker rows use the worker threshold.
+	opCompactionThreshold     int
+	workerCompactionThreshold int
 
 	// Shared spinner animation frame counter.
 	spinnerFrame   int
@@ -239,6 +246,10 @@ func NewModel(cfg ModelConfig) Model {
 	m.showJobsPanelDefault = false
 	m.fleetDensity = "full"
 	m.sidebarSide = "left"
+	// Seed the config defaults so bars render sensible ticks before the
+	// first settings round-trip completes.
+	m.opCompactionThreshold = config.DefaultOperatorCompactionThreshold
+	m.workerCompactionThreshold = config.DefaultWorkerCompactionThreshold
 
 	return m
 }

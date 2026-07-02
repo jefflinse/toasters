@@ -39,9 +39,10 @@ func nodeStatusColor(rs *runtimeSlot) color.Color {
 //	  ⚙ shell (go test ./...)
 //
 // innerW and innerH are the available content dimensions; ctxMax is the model's
-// context length (0 if unknown). Sections drop out from the bottom up as height
+// context length (0 if unknown); threshold is the worker compaction threshold
+// as a fraction (0 = no tick). Sections drop out from the bottom up as height
 // shrinks so a short cell still shows the headline.
-func renderWorkerCard(rs *runtimeSlot, innerW, innerH, ctxMax int, focused bool, spinnerFrame int) string {
+func renderWorkerCard(rs *runtimeSlot, innerW, innerH, ctxMax int, threshold float64, focused bool, spinnerFrame int) string {
 	if innerW < 1 {
 		innerW = 1
 	}
@@ -117,7 +118,7 @@ func renderWorkerCard(rs *runtimeSlot, innerW, innerH, ctxMax int, focused bool,
 
 	// --- Live context-window bar ---
 	if innerH >= 3 {
-		lines = append(lines, indent+renderMiniContextBar(int(rs.contextTokens), ctxMax, innerW-len(indent), !active))
+		lines = append(lines, indent+renderMiniContextBar(int(rs.contextTokens), ctxMax, innerW-len(indent), !active, threshold))
 	}
 
 	// --- Activity items (newest first), styled like the chat's tool blocks ---

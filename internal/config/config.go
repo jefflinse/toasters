@@ -45,10 +45,18 @@ type Config struct {
 	// SidebarSide controls which side of the chat window the sidebar
 	// (Jobs / Fleet / Blockers) renders on: "left" or "right". Empty
 	// defaults to "left".
-	SidebarSide string         `mapstructure:"sidebar_side"`
-	Operator    OperatorConfig `mapstructure:"operator"`
-	Workers     WorkersConfig  `mapstructure:"agents"` // config key "agents" kept for backward compatibility
-	MCP         MCPConfig      `mapstructure:"mcp"`
+	SidebarSide string `mapstructure:"sidebar_side"`
+	// OperatorCompactionThreshold is the percentage of the operator's
+	// context window at which a compaction/handoff triggers. 0 disables
+	// compaction. See docs/compaction-design.md.
+	OperatorCompactionThreshold int `mapstructure:"operator_compaction_threshold"`
+	// WorkerCompactionThreshold is the percentage of a worker session's
+	// context window at which history compaction triggers. 0 disables
+	// compaction.
+	WorkerCompactionThreshold int            `mapstructure:"worker_compaction_threshold"`
+	Operator                  OperatorConfig `mapstructure:"operator"`
+	Workers                   WorkersConfig  `mapstructure:"agents"` // config key "agents" kept for backward compatibility
+	MCP                       MCPConfig      `mapstructure:"mcp"`
 }
 
 // MCPServerConfig holds configuration for a single MCP server.
@@ -111,6 +119,8 @@ func Load() (*Config, error) {
 	viper.SetDefault("fleet_row_density", "full")
 	viper.SetDefault("sidebar_side", "left")
 	viper.SetDefault("show_operator_panel_by_default", true)
+	viper.SetDefault("operator_compaction_threshold", DefaultOperatorCompactionThreshold)
+	viper.SetDefault("worker_compaction_threshold", DefaultWorkerCompactionThreshold)
 	viper.SetDefault("agents.defaults.provider", "")
 	viper.SetDefault("agents.defaults.model", "")
 
@@ -200,6 +210,41 @@ func ValidSidebarSide(value string) string {
 		return value
 	default:
 		return "left"
+	}
+}
+
+// Default compaction thresholds (percent of the resolved context window).
+// The operator compacts earlier than workers: its session is long-lived and
+// a digest handoff is cheap, while worker sessions are task-scoped and
+// usually finish before filling their window.
+const (
+	DefaultOperatorCompactionThreshold = 50
+	DefaultWorkerCompactionThreshold   = 70
+)
+
+// CompactionThresholdOptions returns the compaction-threshold values the
+// settings UI cycles through: 0 disables compaction; otherwise a percentage
+// of the resolved context window.
+func CompactionThresholdOptions() []int {
+	return []int{0, 30, 40, 50, 60, 70, 80, 90}
+}
+
+// ValidCompactionThreshold normalizes a compaction threshold percentage.
+// 0 means "disabled" and passes through; positive values clamp to [30, 90]
+// (below 30 compaction would thrash, above 90 it can't fire before
+// overflow); negative values are nonsense and normalize to fallback.
+func ValidCompactionThreshold(value, fallback int) int {
+	switch {
+	case value == 0:
+		return 0
+	case value < 0:
+		return fallback
+	case value < 30:
+		return 30
+	case value > 90:
+		return 90
+	default:
+		return value
 	}
 }
 

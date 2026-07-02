@@ -210,7 +210,7 @@ func (m *Model) renderNodeRow(rs *runtimeSlot, innerW int, selected, listFocused
 		cardW = 1
 	}
 	ctxMax := m.slotCtxMax(rs)
-	card := renderWorkerCard(rs, cardW, nodeRowContentH, ctxMax, selected, m.spinnerFrame)
+	card := renderWorkerCard(rs, cardW, nodeRowContentH, ctxMax, float64(m.workerCompactionThreshold)/100, selected, m.spinnerFrame)
 	cardLines := strings.Split(card, "\n")
 	for len(cardLines) < nodeRowContentH {
 		cardLines = append(cardLines, "")

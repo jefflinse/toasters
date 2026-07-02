@@ -139,6 +139,50 @@ var settingsRows = []settingsRow{
 		set:     func(s *service.Settings, v string) { s.SidebarSide = v },
 		options: config.SidebarSideOptions,
 	},
+	{
+		label:   "Operator Compaction Threshold",
+		desc:    "Context-window occupancy (%) at which the operator compacts via digest handoff. off disables.",
+		get:     func(s *service.Settings) string { return formatThreshold(s.OperatorCompactionThreshold) },
+		set:     func(s *service.Settings, v string) { s.OperatorCompactionThreshold = parseThreshold(v) },
+		options: thresholdOptions,
+	},
+	{
+		label:   "Worker Compaction Threshold",
+		desc:    "Context-window occupancy (%) at which worker sessions compact their history. off disables.",
+		get:     func(s *service.Settings) string { return formatThreshold(s.WorkerCompactionThreshold) },
+		set:     func(s *service.Settings, v string) { s.WorkerCompactionThreshold = parseThreshold(v) },
+		options: thresholdOptions,
+	},
+}
+
+// thresholdOptions renders the compaction-threshold presets as row option
+// strings ("off", "30%", ... "90%").
+func thresholdOptions() []string {
+	vals := config.CompactionThresholdOptions()
+	out := make([]string, 0, len(vals))
+	for _, v := range vals {
+		out = append(out, formatThreshold(v))
+	}
+	return out
+}
+
+// formatThreshold renders a compaction threshold percentage as its option
+// string; 0 displays as "off".
+func formatThreshold(v int) string {
+	if v == 0 {
+		return "off"
+	}
+	return fmt.Sprintf("%d%%", v)
+}
+
+// parseThreshold parses a threshold option string back to its percentage;
+// "off" (or anything unparseable) maps to 0.
+func parseThreshold(s string) int {
+	var v int
+	if _, err := fmt.Sscanf(s, "%d%%", &v); err != nil {
+		return 0
+	}
+	return v
 }
 
 // formatTemperature renders a float as one of the preset option strings so

@@ -3,6 +3,7 @@ package tui
 
 import (
 	"fmt"
+	"image/color"
 	"strings"
 	"time"
 
@@ -290,9 +291,10 @@ type fleetMember struct {
 	label     string // "operator" or "<job>:<role>"
 	icon      string // glyph prefix (⬡ operator, ⚡ worker)
 	model     string
-	active    bool // currently streaming (operator) / running (worker)
-	ctxUsed   int  // live context-window occupancy in tokens
-	ctxMax    int  // model context length (0 if unknown)
+	active    bool    // currently streaming (operator) / running (worker)
+	ctxUsed   int     // live context-window occupancy in tokens
+	ctxMax    int     // model context length (0 if unknown)
+	threshold float64 // compaction threshold as a fraction (0 = disabled/no tick)
 	tokensOut int64
 	costUSD   float64
 	tps       float64 // tokens/sec (valid only when hasTPS)
@@ -315,6 +317,7 @@ func (m Model) buildFleet() []fleetMember {
 		active:    m.stream.streaming,
 		ctxUsed:   m.stats.PromptTokens,
 		ctxMax:    m.stats.ContextLength,
+		threshold: float64(m.opCompactionThreshold) / 100,
 		tokensOut: int64(m.stats.CompletionTokens),
 	}
 	if m.stats.TotalResponses > 0 && m.stats.TotalResponseTime > 0 {
@@ -347,6 +350,7 @@ func (m Model) buildFleet() []fleetMember {
 			active:    true,
 			ctxUsed:   int(rs.contextTokens),
 			ctxMax:    m.slotCtxMax(rs),
+			threshold: float64(m.workerCompactionThreshold) / 100,
 			tokensOut: rs.tokensOut,
 			costUSD:   rs.costUSD,
 		}
@@ -443,7 +447,7 @@ func (m Model) renderFleetMemberFull(mem fleetMember, contentWidth int) string {
 	b.WriteString("\n")
 
 	// Line 3: context-window bar.
-	b.WriteString("  " + renderMiniContextBar(mem.ctxUsed, mem.ctxMax, contentWidth-2, false))
+	b.WriteString("  " + renderMiniContextBar(mem.ctxUsed, mem.ctxMax, contentWidth-2, false, mem.threshold))
 	b.WriteString("\n")
 
 	// Line 4: throughput · cost · tokens.
@@ -498,7 +502,7 @@ func (m Model) renderFleetMemberCompact(mem fleetMember, contentWidth int) strin
 	if barW < 6 {
 		barW = 6
 	}
-	b.WriteString("  " + renderMiniContextBar(mem.ctxUsed, mem.ctxMax, barW, false) + DimStyle.Render(tailStr))
+	b.WriteString("  " + renderMiniContextBar(mem.ctxUsed, mem.ctxMax, barW, false, mem.threshold) + DimStyle.Render(tailStr))
 	b.WriteString("\n")
 
 	// Line 3: most-recent activity (workers only).
@@ -511,11 +515,17 @@ func (m Model) renderFleetMemberCompact(mem fleetMember, contentWidth int) strin
 
 // renderMiniContextBar renders a single-line context-window occupancy bar with a
 // trailing percentage (or a raw token count when the model's context length is
-// unknown). Fill color goes green → yellow → red as the window fills, so a
-// worker about to blow its context reads at a glance. When dim is set (a
-// finished node), the fill is a muted green regardless of occupancy, so
-// completed rows read as quiet history distinct from live workers.
-func renderMiniContextBar(used, total, width int, dim bool) string {
+// unknown). When dim is set (a finished node), the fill is a muted green
+// regardless of occupancy, so completed rows read as quiet history distinct
+// from live workers.
+//
+// threshold is the compaction threshold as a fraction (0.5 = 50%); 0 means
+// compaction is disabled. When set, a tick mark renders at the threshold
+// position and the fill colors relative to it: green below (comfortable),
+// yellow at or past it (compaction pending), red well past it (compaction
+// overdue — disabled at runtime, failing, or not keeping up). Without a
+// threshold, the legacy fixed 60%/85% color breakpoints apply.
+func renderMiniContextBar(used, total, width int, dim bool, threshold float64) string {
 	if width < 4 {
 		width = 4
 	}
@@ -546,23 +556,74 @@ func renderMiniContextBar(used, total, width int, dim bool) string {
 		filled = barW
 	}
 
-	// Threshold coloring: comfortable / warming / near-limit. A finished node
-	// uses a muted green regardless of occupancy so it reads as quiet history.
-	fillColor := lipgloss.Color("#52c41a") // green
-	switch {
-	case dim:
-		fillColor = lipgloss.Color("#3f6b3f") // dim green
-	case pct >= 0.85:
-		fillColor = lipgloss.Color("#f5222d") // red
-	case pct >= 0.6:
-		fillColor = lipgloss.Color("#faad14") // yellow
-	}
+	fillStyle := lipgloss.NewStyle().Foreground(contextBarFillColor(pct, threshold, dim))
 	emptyStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("237"))
 
-	bar := lipgloss.NewStyle().Foreground(fillColor).Render(strings.Repeat("█", filled)) +
-		emptyStyle.Render(strings.Repeat("░", barW-filled))
+	// Tick position: only meaningful when the total is known. Rendering is
+	// segment-based (fill | tick | empty) so the bar stays a handful of
+	// styled runs rather than per-cell escapes.
+	tickIdx := -1
+	if threshold > 0 && total > 0 {
+		tickIdx = int(threshold * float64(barW))
+		if tickIdx >= barW {
+			tickIdx = barW - 1
+		}
+	}
+	segment := func(from, to int) string {
+		if from >= to {
+			return ""
+		}
+		f := min(max(filled-from, 0), to-from)
+		return fillStyle.Render(strings.Repeat("█", f)) +
+			emptyStyle.Render(strings.Repeat("░", to-from-f))
+	}
+
+	var bar string
+	if tickIdx < 0 {
+		bar = segment(0, barW)
+	} else {
+		tick := contextBarTickStyle.Render("│")
+		if tickIdx < filled {
+			tick = contextBarTickEngulfedStyle.Render("│")
+		}
+		bar = segment(0, tickIdx) + tick + segment(tickIdx+1, barW)
+	}
 	return bar + DimStyle.Render(label)
 }
+
+// contextBarFillColor picks the fill color for a context bar. With a
+// compaction threshold, colors are threshold-relative: green below it,
+// yellow at or past it (compaction pending), red 15 points past it
+// (compaction overdue — disabled at runtime, failing, or not keeping up).
+// Without one, the legacy fixed 60%/85% breakpoints apply. A finished node
+// (dim) always uses a muted green so it reads as quiet history.
+func contextBarFillColor(pct, threshold float64, dim bool) color.Color {
+	switch {
+	case dim:
+		return lipgloss.Color("#3f6b3f") // dim green
+	case threshold > 0 && pct >= min(threshold+0.15, 1):
+		return lipgloss.Color("#f5222d") // red: compaction overdue
+	case threshold > 0 && pct >= threshold:
+		return lipgloss.Color("#faad14") // yellow: compaction pending
+	case threshold > 0:
+		return lipgloss.Color("#52c41a") // green: below threshold
+	case pct >= 0.85:
+		return lipgloss.Color("#f5222d") // red (legacy breakpoints)
+	case pct >= 0.6:
+		return lipgloss.Color("#faad14") // yellow (legacy breakpoints)
+	default:
+		return lipgloss.Color("#52c41a") // green
+	}
+}
+
+// contextBarTickStyle renders the compaction-threshold tick over the empty
+// region of a context bar — brighter than the empty cells so it reads as a
+// marker, dimmer than fill so it doesn't shout.
+var contextBarTickStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+
+// contextBarTickEngulfedStyle renders the tick once the fill has passed it —
+// a pale notch in the fill so the threshold stays visible.
+var contextBarTickEngulfedStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("255"))
 
 // taskStatusIndicator returns the status indicator rune and style for a service task status.
 func taskStatusIndicator(status service.TaskStatus) (string, lipgloss.Style) {
