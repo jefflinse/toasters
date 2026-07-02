@@ -384,6 +384,14 @@ type OperatorDoneMsg struct {
 	Err             error // non-nil if the turn failed (e.g. SendMessage error)
 }
 
+// OperatorCompactionMsg is sent when the operator performs a digest handoff,
+// so the fleet row can explain the context bar's sudden drop.
+type OperatorCompactionMsg struct {
+	BeforeTokens         int
+	EstimatedAfterTokens int
+	ArchiveFile          string
+}
+
 // OperatorEventMsg carries an operator event for TUI display.
 type OperatorEventMsg struct {
 	Event service.Event

@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/jefflinse/toasters/internal/config"
+	"github.com/jefflinse/toasters/internal/operator"
 	"github.com/jefflinse/toasters/internal/prompt"
 )
 
@@ -351,5 +352,52 @@ func TestUpdateSettings_PersistsCompactionThresholds(t *testing.T) {
 	}
 	if appCfg.WorkerCompactionThreshold != 90 {
 		t.Errorf("AppConfig.WorkerCompactionThreshold = %d, want 90 (clamped)", appCfg.WorkerCompactionThreshold)
+	}
+}
+
+// TestUpdateSettings_AppliesCompactionThresholdToOperator verifies a saved
+// operator threshold reaches the live operator (which reads it at its next
+// turn boundary) rather than requiring a restart.
+func TestUpdateSettings_AppliesCompactionThresholdToOperator(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"),
+		[]byte("coarse_granularity: medium\nfine_granularity: medium\n"), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	op, err := operator.New(operator.Config{SystemPrompt: "test", CompactionThreshold: 50})
+	if err != nil {
+		t.Fatalf("operator.New: %v", err)
+	}
+	appCfg := &config.Config{CoarseGranularity: "medium", FineGranularity: "medium"}
+	svc := NewLocal(LocalConfig{ConfigDir: dir, AppConfig: appCfg, Operator: op})
+
+	err = svc.UpdateSettings(context.Background(), Settings{
+		CoarseGranularity:           "medium",
+		FineGranularity:             "medium",
+		OperatorCompactionThreshold: 40,
+		WorkerCompactionThreshold:   70,
+	})
+	if err != nil {
+		t.Fatalf("UpdateSettings: %v", err)
+	}
+	if got := op.CompactionThreshold(); got != 40 {
+		t.Errorf("operator threshold = %d, want 40 applied live", got)
+	}
+
+	// Disabling reaches the operator as 0.
+	err = svc.UpdateSettings(context.Background(), Settings{
+		CoarseGranularity:           "medium",
+		FineGranularity:             "medium",
+		OperatorCompactionThreshold: 0,
+		WorkerCompactionThreshold:   70,
+	})
+	if err != nil {
+		t.Fatalf("UpdateSettings (disable): %v", err)
+	}
+	if got := op.CompactionThreshold(); got != 0 {
+		t.Errorf("operator threshold = %d, want 0 (disabled)", got)
 	}
 }

@@ -107,6 +107,17 @@ func translateEvent(ev service.Event) tea.Msg {
 			ContextTokens:   p.ContextTokens,
 		}
 
+	case service.EventTypeOperatorCompaction:
+		p, ok := ev.Payload.(service.OperatorCompactionPayload)
+		if !ok {
+			return nil
+		}
+		return OperatorCompactionMsg{
+			BeforeTokens:         p.BeforeTokens,
+			EstimatedAfterTokens: p.EstimatedAfterTokens,
+			ArchiveFile:          p.ArchiveFile,
+		}
+
 	case service.EventTypeProgressUpdate:
 		p, ok := ev.Payload.(service.ProgressUpdatePayload)
 		if !ok {

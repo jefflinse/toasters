@@ -146,6 +146,9 @@ func (s *noopStore) ResolveBlockerRecord(_ context.Context, _, _, _ string, _ ti
 func (s *noopStore) ListBlockerHistory(_ context.Context, _ int) ([]*db.BlockerRecord, error) {
 	return nil, nil
 }
+func (s *noopStore) ListPendingBlockers(_ context.Context) ([]*db.BlockerRecord, error) {
+	return nil, nil
+}
 func (s *noopStore) SweepUnresolvedBlockers(_ context.Context) (int, error) { return 0, nil }
 func (s *noopStore) AppendSessionMessage(_ context.Context, _ *db.SessionMessage) error {
 	return nil

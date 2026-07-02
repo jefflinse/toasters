@@ -326,6 +326,12 @@ type wireOperatorDonePayload struct {
 	ContextTokens   int    `json:"context_tokens,omitempty"`
 }
 
+type wireOperatorCompactionPayload struct {
+	BeforeTokens         int    `json:"before_tokens"`
+	EstimatedAfterTokens int    `json:"estimated_after_tokens"`
+	ArchiveFile          string `json:"archive_file,omitempty"`
+}
+
 type wireOperatorToolCallPayload struct {
 	Name    string          `json:"name"`
 	Args    json.RawMessage `json:"args,omitempty"`
@@ -923,6 +929,17 @@ func ParseSSEPayload(eventType string, raw json.RawMessage) (any, error) {
 			TokensOut:       w.TokensOut,
 			ReasoningTokens: w.ReasoningTokens,
 			ContextTokens:   w.ContextTokens,
+		}, nil
+
+	case service.EventTypeOperatorCompaction:
+		var w wireOperatorCompactionPayload
+		if err := json.Unmarshal(raw, &w); err != nil {
+			return nil, fmt.Errorf("decoding operator.compaction payload: %w", err)
+		}
+		return service.OperatorCompactionPayload{
+			BeforeTokens:         w.BeforeTokens,
+			EstimatedAfterTokens: w.EstimatedAfterTokens,
+			ArchiveFile:          w.ArchiveFile,
 		}, nil
 
 	case service.EventTypeBlockerAdded:

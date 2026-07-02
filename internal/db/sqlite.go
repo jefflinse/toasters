@@ -763,6 +763,36 @@ func (s *SQLiteStore) ListBlockerHistory(ctx context.Context, limit int) ([]*Blo
 	return out, nil
 }
 
+func (s *SQLiteStore) ListPendingBlockers(ctx context.Context) ([]*BlockerRecord, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT request_id, source, job_id, task_id, questions, created_at, resolved_at, disposition, answer
+		 FROM blockers
+		 WHERE resolved_at = ''
+		 ORDER BY created_at ASC`)
+	if err != nil {
+		return nil, fmt.Errorf("listing pending blockers: %w", err)
+	}
+	defer rows.Close() //nolint:errcheck
+
+	var out []*BlockerRecord
+	for rows.Next() {
+		var (
+			r                     BlockerRecord
+			createdAt, resolvedAt string
+		)
+		if err := rows.Scan(&r.RequestID, &r.Source, &r.JobID, &r.TaskID, &r.Questions,
+			&createdAt, &resolvedAt, &r.Disposition, &r.Answer); err != nil {
+			return nil, fmt.Errorf("scanning pending blocker: %w", err)
+		}
+		r.CreatedAt = parseTime(createdAt)
+		out = append(out, &r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating pending blockers: %w", err)
+	}
+	return out, nil
+}
+
 func (s *SQLiteStore) SweepUnresolvedBlockers(ctx context.Context) (int, error) {
 	result, err := s.db.ExecContext(ctx,
 		`UPDATE blockers SET resolved_at = ?, disposition = 'cancelled'

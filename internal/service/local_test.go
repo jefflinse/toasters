@@ -157,6 +157,9 @@ func (m *mockStore) ResolveBlockerRecord(_ context.Context, _, _, _ string, _ ti
 func (m *mockStore) ListBlockerHistory(_ context.Context, _ int) ([]*db.BlockerRecord, error) {
 	return nil, nil
 }
+func (m *mockStore) ListPendingBlockers(_ context.Context) ([]*db.BlockerRecord, error) {
+	return nil, nil
+}
 func (m *mockStore) SweepUnresolvedBlockers(_ context.Context) (int, error) { return 0, nil }
 func (m *mockStore) AppendSessionMessage(_ context.Context, _ *db.SessionMessage) error {
 	return fmt.Errorf("not implemented")

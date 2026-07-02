@@ -391,6 +391,9 @@ func runServe(cmd *cobra.Command, args []string) error {
 			DefaultProvider:        defaultProvider,
 			DefaultModel:           defaultModel,
 			LifetimeCtx:            svc.Ctx(),
+			ProviderID:             cfg.Operator.Provider,
+			ContextWindows:         ctxWindows,
+			CompactionThreshold:    config.ValidCompactionThreshold(cfg.OperatorCompactionThreshold, config.DefaultOperatorCompactionThreshold),
 			OnText: func(turnID, text string) {
 				activeTurn.Store(turnID)
 				batcher.Add(text)

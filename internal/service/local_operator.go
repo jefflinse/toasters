@@ -315,6 +315,10 @@ func (s *LocalService) startOperator(p provider.Provider, providerID, model stri
 		DefaultProvider: s.defaultProvider,
 		DefaultModel:    s.defaultModel,
 		LifetimeCtx:     s.ctx,
+		ProviderID:      providerID,
+		ContextWindows:  s.cfg.ContextWindows,
+		// Direct field read — opMu is held for the whole of startOperator.
+		CompactionThreshold: s.opCompactionThreshold,
 		OnText: func(turnID, text string) {
 			activeTurn.Store(turnID)
 			batcher.Add(text)

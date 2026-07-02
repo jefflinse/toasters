@@ -401,13 +401,20 @@ func (s *LocalService) UpdateSettings(_ context.Context, next Settings) error {
 	s.cfg.AppConfig.SidebarSide = side
 
 	// Compaction thresholds: normalized rather than rejected (0 = disabled,
-	// otherwise clamped to [30, 90]). No live subsystem to refresh yet — the
-	// operator and runtime read these at turn boundaries via AppConfig.
+	// otherwise clamped to [30, 90]).
 	opThreshold := config.ValidCompactionThreshold(next.OperatorCompactionThreshold, config.DefaultOperatorCompactionThreshold)
 	if err := config.SetTopLevelValue(s.cfg.ConfigDir, "operator_compaction_threshold", opThreshold); err != nil {
 		return fmt.Errorf("persisting operator_compaction_threshold: %w", err)
 	}
 	s.cfg.AppConfig.OperatorCompactionThreshold = opThreshold
+	// Mirror under opMu (for live-activation seeding) and apply to the
+	// running operator, which picks it up at its next turn boundary.
+	s.opMu.Lock()
+	s.opCompactionThreshold = opThreshold
+	s.opMu.Unlock()
+	if op := s.currentOperator(); op != nil {
+		op.SetCompactionThreshold(opThreshold)
+	}
 
 	workerThreshold := config.ValidCompactionThreshold(next.WorkerCompactionThreshold, config.DefaultWorkerCompactionThreshold)
 	if err := config.SetTopLevelValue(s.cfg.ConfigDir, "worker_compaction_threshold", workerThreshold); err != nil {

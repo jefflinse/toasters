@@ -85,6 +85,10 @@ type Store interface {
 	ResolveBlockerRecord(ctx context.Context, requestID, disposition, answer string, resolvedAt time.Time) error
 	// ListBlockerHistory returns resolved blockers, newest-first.
 	ListBlockerHistory(ctx context.Context, limit int) ([]*BlockerRecord, error)
+	// ListPendingBlockers returns unresolved blockers, oldest-first — the
+	// questions still waiting on a human. Used by the operator's handoff
+	// digest.
+	ListPendingBlockers(ctx context.Context) ([]*BlockerRecord, error)
 	// SweepUnresolvedBlockers marks still-pending rows cancelled. Called at
 	// startup: a pending row from a previous process has no waiting caller
 	// anymore, so it can never be answered. Returns the number swept.

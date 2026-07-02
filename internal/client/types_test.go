@@ -1568,3 +1568,25 @@ func typeString(v any) string {
 		return "unknown"
 	}
 }
+
+// TestParseSSEPayload_OperatorCompaction verifies the compaction payload
+// survives the wire round trip (server encode shape → client decode).
+func TestParseSSEPayload_OperatorCompaction(t *testing.T) {
+	t.Parallel()
+
+	raw := `{"before_tokens":5200,"estimated_after_tokens":1800,"archive_file":"operator-2026-07-02T12-00-00Z.json"}`
+	got, err := ParseSSEPayload(string(service.EventTypeOperatorCompaction), []byte(raw))
+	if err != nil {
+		t.Fatalf("ParseSSEPayload: %v", err)
+	}
+	p, ok := got.(service.OperatorCompactionPayload)
+	if !ok {
+		t.Fatalf("payload type = %T, want OperatorCompactionPayload", got)
+	}
+	if p.BeforeTokens != 5200 || p.EstimatedAfterTokens != 1800 {
+		t.Errorf("tokens = %d/%d, want 5200/1800", p.BeforeTokens, p.EstimatedAfterTokens)
+	}
+	if p.ArchiveFile != "operator-2026-07-02T12-00-00Z.json" {
+		t.Errorf("ArchiveFile = %q", p.ArchiveFile)
+	}
+}

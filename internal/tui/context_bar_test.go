@@ -251,3 +251,71 @@ func TestApplySettings_CompactionThresholds(t *testing.T) {
 		t.Errorf("disabled thresholds = %d/%d, want 0/0", m.opCompactionThreshold, m.workerCompactionThreshold)
 	}
 }
+
+// TestHandleOperatorCompaction verifies the compaction trace: count
+// increments, the activity line describes the drop, and the bar's occupancy
+// falls to the estimate immediately.
+func TestHandleOperatorCompaction(t *testing.T) {
+	t.Parallel()
+
+	m := newMinimalModel(t)
+	m.stats.ContextLength = 10000
+	m.stats.PromptTokens = 5200
+
+	res, _ := m.Update(OperatorCompactionMsg{
+		BeforeTokens:         5200,
+		EstimatedAfterTokens: 1800,
+		ArchiveFile:          "operator-2026-07-02T12-00-00Z.json",
+	})
+	got := res.(*Model)
+
+	if got.opCompactionCount != 1 {
+		t.Errorf("opCompactionCount = %d, want 1", got.opCompactionCount)
+	}
+	if got.opLastCompaction != "compacted 52% → ~18%" {
+		t.Errorf("opLastCompaction = %q, want %q", got.opLastCompaction, "compacted 52% → ~18%")
+	}
+	if got.stats.PromptTokens != 1800 {
+		t.Errorf("PromptTokens = %d, want 1800 (bar drops immediately)", got.stats.PromptTokens)
+	}
+
+	// Unknown window falls back to raw token counts.
+	m2 := newMinimalModel(t)
+	res2, _ := m2.Update(OperatorCompactionMsg{BeforeTokens: 5200, EstimatedAfterTokens: 1800})
+	got2 := res2.(*Model)
+	if got2.opLastCompaction != "compacted 5.2k → ~1.8k" {
+		t.Errorf("opLastCompaction (no window) = %q, want token counts", got2.opLastCompaction)
+	}
+}
+
+// TestBuildFleet_OperatorCompactionTrace verifies the fleet operator row
+// carries the compaction activity line and count.
+func TestBuildFleet_OperatorCompactionTrace(t *testing.T) {
+	t.Parallel()
+
+	m := Model{runtimeSessions: map[string]*runtimeSlot{}}
+	m.stats.ModelName = "gemma"
+	m.opCompactionCount = 2
+	m.opLastCompaction = "compacted 52% → ~18%"
+
+	fleet := m.buildFleet()
+	if len(fleet) == 0 || fleet[0].label != "operator" {
+		t.Fatalf("fleet = %+v, want operator first", fleet)
+	}
+	if fleet[0].compactions != 2 {
+		t.Errorf("compactions = %d, want 2", fleet[0].compactions)
+	}
+	if fleet[0].activity != "compacted 52% → ~18%" {
+		t.Errorf("activity = %q, want the compaction trace", fleet[0].activity)
+	}
+
+	// The rendered row shows the ↺ badge.
+	full := m.renderFleetMemberFull(fleet[0], 40)
+	if !strings.Contains(full, "↺2") {
+		t.Errorf("full render missing ↺2:\n%s", full)
+	}
+	compact := m.renderFleetMemberCompact(fleet[0], 40)
+	if !strings.Contains(compact, "↺2") {
+		t.Errorf("compact render missing ↺2:\n%s", compact)
+	}
+}

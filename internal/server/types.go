@@ -700,6 +700,12 @@ type wireOperatorToolCallPayload struct {
 	IsError bool            `json:"is_error,omitempty"`
 }
 
+type wireOperatorCompactionPayload struct {
+	BeforeTokens         int    `json:"before_tokens"`
+	EstimatedAfterTokens int    `json:"estimated_after_tokens"`
+	ArchiveFile          string `json:"archive_file,omitempty"`
+}
+
 type wireBlockerPayload struct {
 	RequestID string               `json:"request_id"`
 	Source    string               `json:"source,omitempty"`
@@ -935,6 +941,12 @@ func EventPayloadToWire(ev service.Event) any {
 			ModelName: p.ModelName, TokensIn: p.TokensIn,
 			TokensOut: p.TokensOut, ReasoningTokens: p.ReasoningTokens,
 			ContextTokens: p.ContextTokens,
+		}
+	case service.OperatorCompactionPayload:
+		return wireOperatorCompactionPayload{
+			BeforeTokens:         p.BeforeTokens,
+			EstimatedAfterTokens: p.EstimatedAfterTokens,
+			ArchiveFile:          p.ArchiveFile,
 		}
 	case service.Blocker:
 		w := wireBlockerPayload{

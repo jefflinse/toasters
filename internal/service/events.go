@@ -29,6 +29,14 @@ const (
 	// between text segments is visible rather than a silent pause.
 	EventTypeOperatorToolCall EventType = "operator.tool_call"
 
+	// EventTypeOperatorCompaction is sent when the operator performs a digest
+	// handoff: its context occupancy crossed the compaction threshold, the
+	// old conversation was archived, and a successor history was seeded.
+	// Payload: OperatorCompactionPayload. The TUI shows it as an activity
+	// trace on the operator's fleet row so the context bar's sudden drop
+	// reads as intentional.
+	EventTypeOperatorCompaction EventType = "operator.compaction"
+
 	// EventTypeBlockerAdded is sent when something on the server calls ask_user
 	// (the operator directly, or a graph node via rhizome.Interrupt) and is
 	// waiting on a human response. Payload: Blocker. Rather than prompt the
@@ -264,6 +272,20 @@ type OperatorDonePayload struct {
 	// ContextTokens is the operator's live context-window occupancy — the prompt
 	// size of the most recent round-trip (not the per-turn sum in TokensIn).
 	ContextTokens int
+}
+
+// OperatorCompactionPayload is the payload for EventTypeOperatorCompaction
+// events.
+type OperatorCompactionPayload struct {
+	// BeforeTokens is the context occupancy that triggered the handoff.
+	BeforeTokens int
+	// EstimatedAfterTokens is the estimated occupancy of the seeded handoff
+	// message; the next operator turn reports the exact value.
+	EstimatedAfterTokens int
+	// ArchiveFile is the basename of the archived pre-handoff session under
+	// the server's sessions/archive directory (basename only — clients must
+	// not learn server filesystem layout).
+	ArchiveFile string
 }
 
 // Blocker is the payload for EventTypeBlockerAdded events and the element type
