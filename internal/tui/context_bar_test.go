@@ -277,3 +277,44 @@ func TestBuildFleet_OperatorCompactionTrace(t *testing.T) {
 		t.Errorf("compact render missing ↺2:\n%s", compact)
 	}
 }
+
+// TestHandleSessionCompaction verifies a worker compaction lands on its slot:
+// count bumps, activity line explains the drop, occupancy falls immediately,
+// and buildFleet surfaces the ↺ badge on the worker row.
+func TestHandleSessionCompaction(t *testing.T) {
+	t.Parallel()
+
+	m := newMinimalModel(t)
+	m.runtimeSessions = map[string]*runtimeSlot{
+		"s1": {sessionID: "s1", workerName: "graph:plan", status: "active",
+			model: "gemma", contextTokens: 8200, ctxWindow: 10000},
+	}
+
+	res, _ := m.Update(SessionCompactionMsg{
+		SessionID: "s1", Tier: 1, BeforeTokens: 8200, EstimatedAfterTokens: 3000,
+	})
+	got := res.(*Model)
+	slot := got.runtimeSessions["s1"]
+	if slot.compactions != 1 {
+		t.Errorf("compactions = %d, want 1", slot.compactions)
+	}
+	if slot.contextTokens != 3000 {
+		t.Errorf("contextTokens = %d, want 3000 (bar drops immediately)", slot.contextTokens)
+	}
+	if n := len(slot.activities); n == 0 || slot.activities[n-1].label != "compacted 82% → ~30%" {
+		t.Errorf("activity = %v, want compaction trace", slot.activities)
+	}
+
+	fleet := got.buildFleet()
+	if len(fleet) < 2 {
+		t.Fatalf("fleet = %d members, want operator + worker", len(fleet))
+	}
+	if fleet[1].compactions != 1 {
+		t.Errorf("worker fleet compactions = %d, want 1", fleet[1].compactions)
+	}
+
+	// An unknown session must not panic.
+	if res, _ := got.Update(SessionCompactionMsg{SessionID: "nope"}); res == nil {
+		t.Error("unknown session should be a no-op, not nil model")
+	}
+}

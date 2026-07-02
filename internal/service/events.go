@@ -37,6 +37,12 @@ const (
 	// reads as intentional.
 	EventTypeOperatorCompaction EventType = "operator.compaction"
 
+	// EventTypeSessionCompaction is sent when a worker session compacts its
+	// history (tier 1 tool-result elision or tier 2 summarize-and-continue).
+	// Payload: SessionCompactionPayload. The TUI shows it as an activity
+	// trace on the worker's fleet row.
+	EventTypeSessionCompaction EventType = "session.compaction"
+
 	// EventTypeBlockerAdded is sent when something on the server calls ask_user
 	// (the operator directly, or a graph node via rhizome.Interrupt) and is
 	// waiting on a human response. Payload: Blocker. Rather than prompt the
@@ -286,6 +292,19 @@ type OperatorCompactionPayload struct {
 	// the server's sessions/archive directory (basename only — clients must
 	// not learn server filesystem layout).
 	ArchiveFile string
+}
+
+// SessionCompactionPayload is the payload for EventTypeSessionCompaction
+// events.
+type SessionCompactionPayload struct {
+	SessionID string
+	// Tier is 1 (tool-result elision) or 2 (summarize-and-continue).
+	Tier int
+	// BeforeTokens is the occupancy that triggered the compaction.
+	BeforeTokens int
+	// EstimatedAfterTokens is the estimated occupancy of the compacted
+	// history; the next round-trip reports the exact value.
+	EstimatedAfterTokens int
 }
 
 // Blocker is the payload for EventTypeBlockerAdded events and the element type

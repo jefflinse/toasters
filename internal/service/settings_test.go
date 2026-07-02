@@ -11,6 +11,8 @@ import (
 	"github.com/jefflinse/toasters/internal/config"
 	"github.com/jefflinse/toasters/internal/operator"
 	"github.com/jefflinse/toasters/internal/prompt"
+	"github.com/jefflinse/toasters/internal/provider"
+	"github.com/jefflinse/toasters/internal/runtime"
 )
 
 // TestGetSettings_DefaultWhenNoConfig confirms the service returns valid
@@ -399,5 +401,35 @@ func TestUpdateSettings_AppliesCompactionThresholdToOperator(t *testing.T) {
 	}
 	if got := op.CompactionThreshold(); got != 0 {
 		t.Errorf("operator threshold = %d, want 0 (disabled)", got)
+	}
+}
+
+// TestUpdateSettings_AppliesWorkerThresholdToRuntime verifies a saved worker
+// threshold reaches the live runtime (whose sessions read it at their next
+// turn boundary).
+func TestUpdateSettings_AppliesWorkerThresholdToRuntime(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"),
+		[]byte("coarse_granularity: medium\nfine_granularity: medium\n"), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	rt := runtime.New(nil, provider.NewRegistry())
+	appCfg := &config.Config{CoarseGranularity: "medium", FineGranularity: "medium"}
+	svc := NewLocal(LocalConfig{ConfigDir: dir, AppConfig: appCfg, Runtime: rt})
+
+	err := svc.UpdateSettings(context.Background(), Settings{
+		CoarseGranularity:           "medium",
+		FineGranularity:             "medium",
+		OperatorCompactionThreshold: 50,
+		WorkerCompactionThreshold:   40,
+	})
+	if err != nil {
+		t.Fatalf("UpdateSettings: %v", err)
+	}
+	if got := rt.CompactionThreshold(); got != 40 {
+		t.Errorf("runtime threshold = %d, want 40 applied live", got)
 	}
 }

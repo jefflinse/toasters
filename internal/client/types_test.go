@@ -1620,3 +1620,31 @@ func TestOperatorCompaction_WireRoundTrip(t *testing.T) {
 		t.Errorf("round trip = %+v, want %+v", got, in)
 	}
 }
+
+// TestSessionCompaction_WireRoundTrip runs the worker compaction payload
+// through the real server-side encoder and back through the client decoder.
+func TestSessionCompaction_WireRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	in := service.SessionCompactionPayload{
+		SessionID:            "sess-1",
+		Tier:                 2,
+		BeforeTokens:         41000,
+		EstimatedAfterTokens: 9000,
+	}
+	wire := server.EventPayloadToWire(service.Event{
+		Type:    service.EventTypeSessionCompaction,
+		Payload: in,
+	})
+	data, err := json.Marshal(wire)
+	if err != nil {
+		t.Fatalf("marshal wire payload: %v", err)
+	}
+	got, err := ParseSSEPayload(string(service.EventTypeSessionCompaction), data)
+	if err != nil {
+		t.Fatalf("ParseSSEPayload: %v", err)
+	}
+	if got != in {
+		t.Errorf("round trip = %+v, want %+v", got, in)
+	}
+}

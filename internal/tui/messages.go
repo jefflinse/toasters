@@ -392,6 +392,15 @@ type OperatorCompactionMsg struct {
 	ArchiveFile          string
 }
 
+// SessionCompactionMsg is sent when a worker session compacts its history,
+// so its fleet row can explain the context bar's sudden drop.
+type SessionCompactionMsg struct {
+	SessionID            string
+	Tier                 int
+	BeforeTokens         int
+	EstimatedAfterTokens int
+}
+
 // OperatorEventMsg carries an operator event for TUI display.
 type OperatorEventMsg struct {
 	Event service.Event

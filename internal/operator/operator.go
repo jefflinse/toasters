@@ -18,6 +18,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/jefflinse/toasters/internal/contextwindow"
 	"github.com/jefflinse/toasters/internal/db"
 	"github.com/jefflinse/toasters/internal/graphexec"
 	"github.com/jefflinse/toasters/internal/hitl"
@@ -298,18 +299,10 @@ func (o *Operator) loadSession() {
 		"messages", len(msgs), "persisted_at", sess.UpdatedAt)
 }
 
-// estimateTokens roughly estimates the token footprint of a message history
-// (bytes/4). Used only when a provider-reported count isn't available; the
-// next round-trip replaces it with the real value.
+// estimateTokens is a thin alias over the shared implementation in
+// internal/contextwindow.
 func estimateTokens(msgs []provider.Message) int {
-	var bytes int
-	for _, m := range msgs {
-		bytes += len(m.Content) + len(m.ToolCallID)
-		for _, tc := range m.ToolCalls {
-			bytes += len(tc.Name) + len(tc.Arguments)
-		}
-	}
-	return bytes / 4
+	return contextwindow.EstimateTokens(msgs)
 }
 
 // SetCompactionThreshold updates the compaction threshold live (percent of
@@ -1121,50 +1114,12 @@ func (o *Operator) writeSessionFile(path string) error {
 	return nil
 }
 
-// truncateMessages trims the conversation history to at most maxMessages,
-// ensuring the window never starts in the middle of a tool-call/result
-// exchange. Naive truncation (messages[len-max:]) can split a tool-call from
-// its tool-result, corrupting the LLM conversation. This function walks
-// forward from the start of the tail window to find the first safe boundary:
-// a user message or an assistant message with no tool calls.
+// truncateMessages trims the conversation history to at most maxMessages at
+// a tool-pair-safe boundary. Thin alias over the shared implementation in
+// internal/contextwindow, kept so the operator's many call sites read
+// naturally.
 func truncateMessages(messages []provider.Message, maxMessages int) []provider.Message {
-	if len(messages) <= maxMessages {
-		return messages
-	}
-
-	tail := messages[len(messages)-maxMessages:]
-
-	// Walk forward to find the first complete exchange boundary.
-	// A safe start is:
-	// - A user message
-	// - An assistant message with no tool calls
-	// Skip orphaned tool results (role=tool) and assistant messages with
-	// tool calls whose results might be before the window.
-	for i, msg := range tail {
-		if msg.Role == "user" {
-			return tail[i:]
-		}
-		if msg.Role == "assistant" && len(msg.ToolCalls) == 0 {
-			return tail[i:]
-		}
-	}
-
-	// No safe boundary anywhere in the window — plausible during tool-heavy
-	// autonomous stretches where every assistant message carries tool calls.
-	// Without a fallback the window would start with orphaned tool results,
-	// the provider would reject every request, and (because this runs on
-	// every append) the conversation would never self-heal. Drop leading
-	// orphaned tool results so the window starts at an
-	// assistant-with-tool-calls message whose results immediately follow —
-	// the pairing stays intact even though the window opens mid-turn.
-	for i, msg := range tail {
-		if msg.Role != "tool" {
-			return tail[i:]
-		}
-	}
-
-	// Degenerate: the entire window is tool results. Nothing salvageable.
-	return nil
+	return contextwindow.TruncateMessages(messages, maxMessages)
 }
 
 // collectResponse reads from the event channel, accumulates text and tool

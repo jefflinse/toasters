@@ -323,6 +323,7 @@ type wireSessionSnapshot struct {
 	TokensOut            int64     `json:"tokens_out"`
 	CurrentContextTokens int64     `json:"current_context_tokens,omitempty"`
 	ContextWindow        int       `json:"context_window,omitempty"`
+	Compactions          int       `json:"compactions,omitempty"`
 }
 
 func sessionSnapshotToWire(s service.SessionSnapshot) wireSessionSnapshot {
@@ -339,6 +340,7 @@ func sessionSnapshotToWire(s service.SessionSnapshot) wireSessionSnapshot {
 		TokensOut:            s.TokensOut,
 		CurrentContextTokens: s.CurrentContextTokens,
 		ContextWindow:        s.ContextWindow,
+		Compactions:          s.Compactions,
 	}
 }
 
@@ -706,6 +708,13 @@ type wireOperatorCompactionPayload struct {
 	ArchiveFile          string `json:"archive_file,omitempty"`
 }
 
+type wireSessionCompactionPayload struct {
+	SessionID            string `json:"session_id"`
+	Tier                 int    `json:"tier"`
+	BeforeTokens         int    `json:"before_tokens"`
+	EstimatedAfterTokens int    `json:"estimated_after_tokens"`
+}
+
 type wireBlockerPayload struct {
 	RequestID string               `json:"request_id"`
 	Source    string               `json:"source,omitempty"`
@@ -947,6 +956,13 @@ func EventPayloadToWire(ev service.Event) any {
 			BeforeTokens:         p.BeforeTokens,
 			EstimatedAfterTokens: p.EstimatedAfterTokens,
 			ArchiveFile:          p.ArchiveFile,
+		}
+	case service.SessionCompactionPayload:
+		return wireSessionCompactionPayload{
+			SessionID:            p.SessionID,
+			Tier:                 p.Tier,
+			BeforeTokens:         p.BeforeTokens,
+			EstimatedAfterTokens: p.EstimatedAfterTokens,
 		}
 	case service.Blocker:
 		w := wireBlockerPayload{

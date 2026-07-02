@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -244,7 +245,16 @@ func (p *OpenAIProvider) streamResponse(ctx context.Context, req *http.Request, 
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		sendEvent(ctx, ch, StreamEvent{Type: EventError, Error: fmt.Errorf("unexpected status %d: %s", resp.StatusCode, resp.Status)})
+		// Read a bounded error body: OpenAI-compatible servers put the
+		// failure detail there (e.g. context_length_exceeded), and without
+		// it callers can't classify the failure.
+		var buf bytes.Buffer
+		_, _ = buf.ReadFrom(io.LimitReader(resp.Body, 1<<20))
+		sendEvent(ctx, ch, StreamEvent{Type: EventError, Error: &APIError{
+			Provider:   p.name,
+			StatusCode: resp.StatusCode,
+			Body:       strings.TrimSpace(buf.String()),
+		}})
 		return
 	}
 

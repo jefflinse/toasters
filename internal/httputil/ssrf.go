@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"sync/atomic"
 	"time"
 )
 
@@ -45,10 +46,29 @@ func IsPrivateIP(ip net.IP) bool {
 	return false
 }
 
-// lookupIPAddr resolves a hostname to IP addresses. Package-level so tests
-// can stub DNS resolution.
-var lookupIPAddr = func(ctx context.Context, host string) ([]net.IPAddr, error) {
-	return net.DefaultResolver.LookupIPAddr(ctx, host)
+// lookupIPAddrFn resolves a hostname to IP addresses. Held in an atomic so
+// tests can stub DNS resolution without racing in-flight dial goroutines —
+// an http.Client's dial can outlive Do() after a timeout, and a plain var
+// raced the test's deferred restore against that goroutine's read.
+var lookupIPAddrFn atomic.Pointer[func(ctx context.Context, host string) ([]net.IPAddr, error)]
+
+func init() {
+	defaultLookup := func(ctx context.Context, host string) ([]net.IPAddr, error) {
+		return net.DefaultResolver.LookupIPAddr(ctx, host)
+	}
+	lookupIPAddrFn.Store(&defaultLookup)
+}
+
+// lookupIPAddr invokes the current resolver hook.
+func lookupIPAddr(ctx context.Context, host string) ([]net.IPAddr, error) {
+	return (*lookupIPAddrFn.Load())(ctx, host)
+}
+
+// setLookupIPAddr swaps the resolver hook and returns a restore function.
+// Test-only seam.
+func setLookupIPAddr(fn func(ctx context.Context, host string) ([]net.IPAddr, error)) (restore func()) {
+	old := lookupIPAddrFn.Swap(&fn)
+	return func() { lookupIPAddrFn.Store(old) }
 }
 
 // NewSafeClient returns an [http.Client] with SSRF protection. The client

@@ -1041,7 +1041,7 @@ func (s *SQLiteStore) AppendSessionMessage(ctx context.Context, msg *SessionMess
 
 func (s *SQLiteStore) ListSessionMessages(ctx context.Context, sessionID string) ([]*SessionMessage, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, session_id, seq, role, content, tool_calls, tool_call_id, created_at
+		`SELECT id, session_id, seq, role, content, tool_calls, tool_call_id, superseded, created_at
 		 FROM session_messages
 		 WHERE session_id = ?
 		 ORDER BY seq`,
@@ -1057,13 +1057,27 @@ func (s *SQLiteStore) ListSessionMessages(ctx context.Context, sessionID string)
 		var m SessionMessage
 		var createdAt string
 		if err := rows.Scan(&m.ID, &m.SessionID, &m.Seq, &m.Role, &m.Content,
-			&m.ToolCalls, &m.ToolCallID, &createdAt); err != nil {
+			&m.ToolCalls, &m.ToolCallID, &m.Superseded, &createdAt); err != nil {
 			return nil, fmt.Errorf("scanning session message: %w", err)
 		}
 		m.CreatedAt = parseTime(createdAt)
 		msgs = append(msgs, &m)
 	}
 	return msgs, rows.Err()
+}
+
+// MarkSessionMessagesSuperseded flags every transcript row of a session at
+// or below maxSeq as superseded — removed from the live conversation by a
+// tier-2 compaction, kept for debugging.
+func (s *SQLiteStore) MarkSessionMessagesSuperseded(ctx context.Context, sessionID string, maxSeq int) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE session_messages SET superseded = 1 WHERE session_id = ? AND seq <= ?`,
+		sessionID, maxSeq,
+	)
+	if err != nil {
+		return fmt.Errorf("marking session messages superseded: %w", err)
+	}
+	return nil
 }
 
 // --- Artifacts ---

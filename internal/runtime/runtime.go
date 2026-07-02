@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gofrs/uuid/v5"
@@ -17,6 +18,13 @@ import (
 
 // ErrShutdown is returned by SpawnWorker once Shutdown has begun.
 var ErrShutdown = errors.New("runtime is shut down")
+
+// ContextWindowSource resolves the effective context window for a
+// provider/model pair; 0 means unknown. *contextwindow.Resolver satisfies it.
+// Implementations must never block — sessions call Window at turn boundaries.
+type ContextWindowSource interface {
+	Window(providerName, modelID string) int
+}
 
 // Runtime manages worker sessions.
 type Runtime struct {
@@ -29,7 +37,15 @@ type Runtime struct {
 	promptEngine     *prompt.Engine // may be nil; for spawn_worker role-based composition
 	mcpCaller        MCPCaller      // may be nil
 	mcpDefs          []ToolDef      // pre-converted MCP tool definitions
+	ctxWindows       ContextWindowSource
 	OnSessionStarted func(*Session) // called after each SpawnWorker; may be nil
+
+	// compactionThreshold is the percent of the context window at which
+	// worker sessions compact their history; 0 disables the pre-flight
+	// check (the overflow backstop still applies). Atomic: sessions hold a
+	// pointer and read it live at turn boundaries, so a /settings change
+	// applies to in-flight sessions without respawning them.
+	compactionThreshold atomic.Int32
 }
 
 // New creates a new Runtime. store may be nil for in-memory only operation.
@@ -57,6 +73,27 @@ func (r *Runtime) SetMCPCaller(caller MCPCaller, defs []ToolDef) {
 	defer r.mu.Unlock()
 	r.mcpCaller = caller
 	r.mcpDefs = defs
+}
+
+// SetContextWindows wires the context-window resolver used by session
+// compaction. Safe to call concurrently with SpawnWorker.
+func (r *Runtime) SetContextWindows(src ContextWindowSource) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.ctxWindows = src
+}
+
+// SetCompactionThreshold updates the worker compaction threshold live
+// (percent of the context window; 0 disables the pre-flight check). Applies
+// to in-flight sessions at their next turn boundary. Callers pass validated
+// values.
+func (r *Runtime) SetCompactionThreshold(pct int) {
+	r.compactionThreshold.Store(int32(pct))
+}
+
+// CompactionThreshold returns the current worker compaction threshold percent.
+func (r *Runtime) CompactionThreshold() int {
+	return int(r.compactionThreshold.Load())
 }
 
 // SpawnWorker creates and starts a new worker session.
@@ -90,6 +127,7 @@ func (r *Runtime) SpawnWorker(ctx context.Context, opts SpawnOpts) (*Session, er
 	promptEng := r.promptEngine
 	mcpCaller := r.mcpCaller
 	mcpDefs := r.mcpDefs
+	ctxWindows := r.ctxWindows
 	r.mu.Unlock()
 
 	// Create tool executor. If the caller provided a custom ToolExecutor, use
@@ -137,6 +175,13 @@ func (r *Runtime) SpawnWorker(ctx context.Context, opts SpawnOpts) (*Session, er
 
 	sess := newSession(id, p, opts, tools)
 	sess.store = r.store // may be nil; enables message persistence in Run()
+	// Compaction wiring: the registry key (not the display name) for exact
+	// window lookups, the shared resolver, a pointer to the runtime's live
+	// threshold, and the prompt engine for the tier-2 summary role.
+	sess.providerName = opts.ProviderName
+	sess.ctxWindows = ctxWindows
+	sess.compactionThreshold = &r.compactionThreshold
+	sess.promptEngine = promptEng
 
 	if core != nil {
 		core.SetFileChangeNotifier(func(_ context.Context, fc FileChange) {

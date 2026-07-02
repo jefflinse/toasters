@@ -187,10 +187,14 @@ type SessionMessage struct {
 	ID         int64
 	SessionID  string
 	Seq        int
-	Role       string // "user", "assistant", "tool"
+	Role       string // "user", "assistant", "tool", "system" (compaction markers)
 	Content    string
 	ToolCalls  string // JSON-serialized []ToolCall for assistant messages
 	ToolCallID string // for tool result messages
+	// Superseded marks rows removed from the live conversation by a tier-2
+	// compaction. The transcript keeps them for debugging; the model no
+	// longer sees them.
+	Superseded bool
 	CreatedAt  time.Time
 }
 

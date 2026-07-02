@@ -69,6 +69,9 @@ type Store interface {
 	// Session transcripts
 	AppendSessionMessage(ctx context.Context, msg *SessionMessage) error
 	ListSessionMessages(ctx context.Context, sessionID string) ([]*SessionMessage, error)
+	// MarkSessionMessagesSuperseded flags rows at or below maxSeq as removed
+	// from the live conversation by a compaction (kept for debugging).
+	MarkSessionMessagesSuperseded(ctx context.Context, sessionID string, maxSeq int) error
 
 	// Artifacts
 	LogArtifact(ctx context.Context, artifact *Artifact) error

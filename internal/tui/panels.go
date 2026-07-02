@@ -349,15 +349,16 @@ func (m Model) buildFleet() []fleetMember {
 			label = shortJobID + ":" + role
 		}
 		mem := fleetMember{
-			label:     label,
-			icon:      "⚡",
-			model:     rs.model,
-			active:    true,
-			ctxUsed:   int(rs.contextTokens),
-			ctxMax:    m.slotCtxMax(rs),
-			threshold: float64(m.workerCompactionThreshold) / 100,
-			tokensOut: rs.tokensOut,
-			costUSD:   rs.costUSD,
+			label:       label,
+			icon:        "⚡",
+			model:       rs.model,
+			active:      true,
+			ctxUsed:     int(rs.contextTokens),
+			ctxMax:      m.slotCtxMax(rs),
+			threshold:   float64(m.workerCompactionThreshold) / 100,
+			compactions: rs.compactions,
+			tokensOut:   rs.tokensOut,
+			costUSD:     rs.costUSD,
 		}
 		if n := len(rs.activities); n > 0 {
 			mem.activity = rs.activities[n-1].label

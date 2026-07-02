@@ -382,6 +382,33 @@ func (m *Model) contextAmount(tokens int) string {
 	return formatTokenCount(int64(tokens))
 }
 
+// handleSessionCompaction records a worker history compaction on its slot so
+// the fleet row explains the context bar's sudden drop.
+func (m *Model) handleSessionCompaction(msg SessionCompactionMsg) (tea.Model, tea.Cmd) {
+	slot, ok := m.runtimeSessions[msg.SessionID]
+	if !ok {
+		return m, nil
+	}
+	slot.compactions++
+	amount := func(tokens int) string {
+		if w := m.slotCtxMax(slot); w > 0 {
+			return fmt.Sprintf("%.0f%%", float64(tokens)/float64(w)*100)
+		}
+		return formatTokenCount(int64(tokens))
+	}
+	slot.activities = append(slot.activities, activityItem{
+		label: fmt.Sprintf("compacted %s → ~%s", amount(msg.BeforeTokens), amount(msg.EstimatedAfterTokens)),
+	})
+	if len(slot.activities) > 6 {
+		slot.activities = slot.activities[len(slot.activities)-6:]
+	}
+	// Drop the bar immediately; the next snapshot carries the real value.
+	if msg.EstimatedAfterTokens > 0 {
+		slot.contextTokens = int64(msg.EstimatedAfterTokens)
+	}
+	return m, nil
+}
+
 func (m *Model) handleOperatorDone(msg OperatorDoneMsg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 	slog.Debug("operator turn done", "err", msg.Err)
@@ -585,6 +612,7 @@ func (m *Model) handleProgressPoll(msg progressPollMsg) (tea.Model, tea.Cmd) {
 			if snap.ContextWindow > 0 {
 				slot.ctxWindow = snap.ContextWindow
 			}
+			slot.compactions = max(slot.compactions, snap.Compactions)
 			continue
 		}
 		m.runtimeSessions[snap.ID] = &runtimeSlot{
@@ -600,6 +628,7 @@ func (m *Model) handleProgressPoll(msg progressPollMsg) (tea.Model, tea.Cmd) {
 			tokensOut:     snap.TokensOut,
 			contextTokens: snap.CurrentContextTokens,
 			ctxWindow:     snap.ContextWindow,
+			compactions:   snap.Compactions,
 		}
 	}
 	// Reconcile slots whose terminal events were lost during an SSE
