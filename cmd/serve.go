@@ -220,6 +220,8 @@ func runServe(cmd *cobra.Command, args []string) error {
 	// Create the runtime for worker session management.
 	rt := runtime.New(store, registry)
 	rt.SetPromptEngine(promptEngine)
+	rt.SetCompactionThreshold(config.ValidCompactionThreshold(
+		cfg.WorkerCompactionThreshold, config.DefaultWorkerCompactionThreshold))
 	defer rt.Shutdown()
 
 	// Initialize MCP manager and connect to configured servers.
@@ -281,6 +283,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 		cwConfigs = ldr
 	}
 	ctxWindows := contextwindow.NewResolver(registry, cwConfigs, mdClient)
+	rt.SetContextWindows(ctxWindows)
 
 	// Create the LocalService first (without graphExec — it needs svc as EventSink).
 	svc := service.NewLocal(service.LocalConfig{

@@ -271,7 +271,11 @@ func (p *AnthropicProvider) streamResponse(ctx context.Context, req *http.Reques
 	if resp.StatusCode != http.StatusOK {
 		var buf bytes.Buffer
 		_, _ = buf.ReadFrom(io.LimitReader(resp.Body, 1<<20))
-		sendEvent(ctx, ch, StreamEvent{Type: EventError, Error: fmt.Errorf("anthropic API error (%d): %s", resp.StatusCode, buf.String())})
+		sendEvent(ctx, ch, StreamEvent{Type: EventError, Error: &APIError{
+			Provider:   p.name,
+			StatusCode: resp.StatusCode,
+			Body:       strings.TrimSpace(buf.String()),
+		}})
 		return
 	}
 

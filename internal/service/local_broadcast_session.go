@@ -299,6 +299,21 @@ func (s *LocalService) BroadcastSessionStarted(sess *runtime.Session) {
 					}
 					flushText()
 					s.BroadcastSessionFileChange(sessionID, *ev.FileChange)
+				case runtime.SessionEventCompaction:
+					if ev.Compaction == nil {
+						continue
+					}
+					flushText()
+					s.broadcast(Event{
+						Type:      EventTypeSessionCompaction,
+						SessionID: sessionID,
+						Payload: SessionCompactionPayload{
+							SessionID:            sessionID,
+							Tier:                 ev.Compaction.Tier,
+							BeforeTokens:         ev.Compaction.BeforeTokens,
+							EstimatedAfterTokens: ev.Compaction.EstimatedAfterTokens,
+						},
+					})
 				}
 
 			case <-textTimerCh:

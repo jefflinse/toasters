@@ -2062,3 +2062,45 @@ func TestListPendingBlockers(t *testing.T) {
 		t.Error("CreatedAt not restored")
 	}
 }
+
+func TestMarkSessionMessagesSuperseded(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t)
+	ctx := context.Background()
+
+	for seq := 1; seq <= 5; seq++ {
+		if err := store.AppendSessionMessage(ctx, &SessionMessage{
+			SessionID: "sess-1", Seq: seq, Role: "user", Content: "m",
+		}); err != nil {
+			t.Fatalf("AppendSessionMessage(%d): %v", seq, err)
+		}
+	}
+	// Another session's rows must be untouched.
+	if err := store.AppendSessionMessage(ctx, &SessionMessage{
+		SessionID: "sess-2", Seq: 1, Role: "user", Content: "other",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := store.MarkSessionMessagesSuperseded(ctx, "sess-1", 3); err != nil {
+		t.Fatalf("MarkSessionMessagesSuperseded: %v", err)
+	}
+
+	rows, err := store.ListSessionMessages(ctx, "sess-1")
+	if err != nil {
+		t.Fatalf("ListSessionMessages: %v", err)
+	}
+	for _, r := range rows {
+		want := r.Seq <= 3
+		if r.Superseded != want {
+			t.Errorf("seq %d Superseded = %v, want %v", r.Seq, r.Superseded, want)
+		}
+	}
+	other, err := store.ListSessionMessages(ctx, "sess-2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(other) != 1 || other[0].Superseded {
+		t.Errorf("other session's rows affected: %+v", other)
+	}
+}

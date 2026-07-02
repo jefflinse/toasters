@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -392,8 +393,19 @@ func TestOpenAI_ChatStream_ErrorStatus(t *testing.T) {
 			if events[0].Type != EventError {
 				t.Fatalf("expected EventError, got %v", events[0].Type)
 			}
-			if !strings.Contains(events[0].Error.Error(), fmt.Sprintf("unexpected status %d", tt.status)) {
-				t.Errorf("error = %q, want it to contain status %d", events[0].Error, tt.status)
+			var apiErr *APIError
+			if !errors.As(events[0].Error, &apiErr) {
+				t.Fatalf("error = %T, want *APIError", events[0].Error)
+			}
+			if apiErr.StatusCode != tt.status {
+				t.Errorf("StatusCode = %d, want %d", apiErr.StatusCode, tt.status)
+			}
+			if !strings.Contains(events[0].Error.Error(), fmt.Sprintf("(%d)", tt.status)) {
+				t.Errorf("error = %q, want it to name status %d", events[0].Error, tt.status)
+			}
+			// The body must survive into the error so failures are classifiable.
+			if !strings.Contains(apiErr.Body, "error body") {
+				t.Errorf("Body = %q, want the response body preserved", apiErr.Body)
 			}
 		})
 	}

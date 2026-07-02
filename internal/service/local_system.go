@@ -421,6 +421,11 @@ func (s *LocalService) UpdateSettings(_ context.Context, next Settings) error {
 		return fmt.Errorf("persisting worker_compaction_threshold: %w", err)
 	}
 	s.cfg.AppConfig.WorkerCompactionThreshold = workerThreshold
+	// Live-apply: in-flight sessions read the runtime's atomic at their
+	// next turn boundary.
+	if s.cfg.Runtime != nil {
+		s.cfg.Runtime.SetCompactionThreshold(workerThreshold)
+	}
 
 	return nil
 }

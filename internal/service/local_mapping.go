@@ -102,6 +102,7 @@ func runtimeSnapshotToService(snap runtime.SessionSnapshot) SessionSnapshot {
 		TokensIn:             snap.TokensIn,
 		TokensOut:            snap.TokensOut,
 		CurrentContextTokens: snap.CurrentContextTokens,
+		Compactions:          snap.Compactions,
 	}
 }
 

@@ -18,6 +18,16 @@ type mockProvider struct {
 	responses []mockResponse // one per ChatStream call, consumed in order
 	mu        sync.Mutex
 	callIdx   int
+	requests  []provider.ChatRequest // captured for inspection
+}
+
+// getRequests returns a copy of the captured ChatStream requests.
+func (m *mockProvider) getRequests() []provider.ChatRequest {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	cp := make([]provider.ChatRequest, len(m.requests))
+	copy(cp, m.requests)
+	return cp
 }
 
 type mockResponse struct {
@@ -28,9 +38,11 @@ type mockResponse struct {
 
 func (m *mockProvider) Name() string { return m.name }
 
-func (m *mockProvider) ChatStream(ctx context.Context, _ provider.ChatRequest) (<-chan provider.StreamEvent, error) {
+func (m *mockProvider) ChatStream(ctx context.Context, req provider.ChatRequest) (<-chan provider.StreamEvent, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	m.requests = append(m.requests, req)
 
 	if m.callIdx >= len(m.responses) {
 		return nil, errors.New("no more mock responses")

@@ -12,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/jefflinse/toasters/internal/db"
+	"github.com/jefflinse/toasters/internal/prompt"
 	"github.com/jefflinse/toasters/internal/provider"
 )
 
@@ -45,6 +46,23 @@ type Session struct {
 	// Transcript persistence — store may be nil (no persistence).
 	store db.Store
 	seq   int // message sequence counter for session_messages
+
+	// Compaction wiring, set by SpawnWorker after newSession. providerName
+	// is the registry key ("lmstudio") for exact window lookups; the
+	// threshold pointer aliases the Runtime's atomic so /settings changes
+	// apply to in-flight sessions at their next turn boundary. All optional
+	// (nil disables the pre-flight check; the overflow backstop degrades to
+	// estimate-based sizing).
+	providerName        string
+	ctxWindows          ContextWindowSource
+	compactionThreshold *atomic.Int32
+	promptEngine        *prompt.Engine
+	// compactions counts this session's history compactions; read by
+	// Snapshot under mu. compactionSuppressed disarms the pre-flight check
+	// when even a compacted history exceeds the budget (floor guard);
+	// touched only by Run()'s goroutine.
+	compactions          int
+	compactionSuppressed bool
 
 	// State — tokensIn/tokensOut use atomic for lock-free reads.
 	status    string // "active", "completed", "failed", "cancelled"
@@ -150,12 +168,21 @@ func (s *Session) Run(ctx context.Context) (retErr error) {
 		s.persistMessage(s.messages[0])
 	}
 
+	// retriedOverflow arms the context-overflow backstop: on the first
+	// classified overflow of a turn, the history is force-compacted and the
+	// same turn retried once. Reset after any successful round-trip.
+	retriedOverflow := false
+
 	for turn := 0; turn < s.maxTurns; turn++ {
 		if ctx.Err() != nil {
 			s.setStatus("cancelled")
 			s.emit(SessionEvent{SessionID: s.id, Type: SessionEventError, Error: ctx.Err()})
 			return ctx.Err()
 		}
+
+		// 0. Pre-flight compaction: shrink the history before it can
+		// overflow. No-op until the first round-trip reports occupancy.
+		s.maybeCompact(ctx)
 
 		// 1. Send messages to LLM.
 		eventCh, err := s.prov.ChatStream(ctx, provider.ChatRequest{
@@ -165,6 +192,12 @@ func (s *Session) Run(ctx context.Context) (retErr error) {
 			System:   s.systemPrompt,
 		})
 		if err != nil {
+			if !retriedOverflow && provider.IsContextOverflow(err) {
+				retriedOverflow = true
+				s.forceCompact(ctx)
+				turn-- // the retry re-uses this turn's budget slot
+				continue
+			}
 			s.setStatus("failed")
 			s.emit(SessionEvent{SessionID: s.id, Type: SessionEventError, Error: err})
 			return fmt.Errorf("starting stream: %w", err)
@@ -173,6 +206,15 @@ func (s *Session) Run(ctx context.Context) (retErr error) {
 		// 2. Collect response, emitting events to subscribers.
 		assistantMsg, toolCalls, err := s.collectResponse(ctx, eventCh)
 		if err != nil {
+			if ctx.Err() == nil && !retriedOverflow && provider.IsContextOverflow(err) {
+				// Providers deliver HTTP errors as stream events, so the
+				// overflow backstop lives on this path too: compact once
+				// and retry the turn instead of failing terminally.
+				retriedOverflow = true
+				s.forceCompact(ctx)
+				turn--
+				continue
+			}
 			if ctx.Err() != nil {
 				s.setStatus("cancelled")
 			} else {
@@ -181,6 +223,7 @@ func (s *Session) Run(ctx context.Context) (retErr error) {
 			s.emit(SessionEvent{SessionID: s.id, Type: SessionEventError, Error: err})
 			return fmt.Errorf("collecting response: %w", err)
 		}
+		retriedOverflow = false
 		// Repair malformed tool-call args (empty/truncated JSON from small
 		// local models) before they enter the history — one bad call would
 		// otherwise 400 every subsequent request and the session never
@@ -367,6 +410,7 @@ func (s *Session) Subscribe() <-chan SessionEvent {
 func (s *Session) Snapshot() SessionSnapshot {
 	s.mu.Lock()
 	status := s.status
+	compactions := s.compactions
 	s.mu.Unlock()
 
 	return SessionSnapshot{
@@ -382,6 +426,7 @@ func (s *Session) Snapshot() SessionSnapshot {
 		TokensIn:             s.tokensIn.Load(),
 		TokensOut:            s.tokensOut.Load(),
 		CurrentContextTokens: s.lastInputTokens.Load(),
+		Compactions:          compactions,
 	}
 }
 

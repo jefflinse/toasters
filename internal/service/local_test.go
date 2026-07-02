@@ -160,6 +160,9 @@ func (m *mockStore) ListBlockerHistory(_ context.Context, _ int) ([]*db.BlockerR
 func (m *mockStore) ListPendingBlockers(_ context.Context) ([]*db.BlockerRecord, error) {
 	return nil, nil
 }
+func (m *mockStore) MarkSessionMessagesSuperseded(_ context.Context, _ string, _ int) error {
+	return nil
+}
 func (m *mockStore) SweepUnresolvedBlockers(_ context.Context) (int, error) { return 0, nil }
 func (m *mockStore) AppendSessionMessage(_ context.Context, _ *db.SessionMessage) error {
 	return fmt.Errorf("not implemented")

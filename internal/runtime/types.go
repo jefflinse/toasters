@@ -57,6 +57,9 @@ type SessionSnapshot struct {
 	// CurrentContextTokens is the prompt size of the most recent round-trip —
 	// the session's live context-window occupancy (0 if none reported yet).
 	CurrentContextTokens int64
+	// Compactions is how many history compactions this session has
+	// performed (drives the fleet row's ↺n badge, reconnect-safe).
+	Compactions int
 }
 
 // SessionEvent is emitted by a session for observers.
@@ -67,6 +70,7 @@ type SessionEvent struct {
 	ToolCall   *ToolCallEvent
 	ToolResult *ToolResultEvent
 	FileChange *FileChange
+	Compaction *CompactionEvent
 	Error      error
 }
 
@@ -78,9 +82,23 @@ const (
 	SessionEventToolCall   SessionEventType = "tool_call"
 	SessionEventToolResult SessionEventType = "tool_result"
 	SessionEventFileChange SessionEventType = "file_change"
+	SessionEventCompaction SessionEventType = "compaction"
 	SessionEventDone       SessionEventType = "done"
 	SessionEventError      SessionEventType = "error"
 )
+
+// CompactionEvent describes a history compaction performed by a session.
+type CompactionEvent struct {
+	// Tier is 1 (tool-result elision) or 2 (summarize-and-continue).
+	Tier int
+	// BeforeTokens is the occupancy that triggered the compaction (the
+	// provider-reported value for pre-flight, or the estimate for the
+	// overflow backstop).
+	BeforeTokens int
+	// EstimatedAfterTokens is the bytes/4 estimate of the compacted
+	// history; the next round-trip reports the exact value.
+	EstimatedAfterTokens int
+}
 
 // ToolCallEvent describes a tool invocation by the LLM.
 type ToolCallEvent struct {

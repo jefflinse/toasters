@@ -57,6 +57,10 @@ type runtimeSlot struct {
 	// provider/model (0 if unknown). Preferred over the client-side
 	// modelContext lookup, which only knows the operator provider's models.
 	ctxWindow int
+	// compactions is how many history compactions this session has
+	// performed — the max of live events seen and the snapshot value, so
+	// the ↺n badge survives reconnects.
+	compactions int
 
 	// diffAdded/diffRemoved are session-cumulative line counts accumulated
 	// from session.file_change events (see SessionFileChangeMsg), driving

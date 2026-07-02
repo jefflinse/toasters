@@ -118,6 +118,18 @@ func translateEvent(ev service.Event) tea.Msg {
 			ArchiveFile:          p.ArchiveFile,
 		}
 
+	case service.EventTypeSessionCompaction:
+		p, ok := ev.Payload.(service.SessionCompactionPayload)
+		if !ok {
+			return nil
+		}
+		return SessionCompactionMsg{
+			SessionID:            p.SessionID,
+			Tier:                 p.Tier,
+			BeforeTokens:         p.BeforeTokens,
+			EstimatedAfterTokens: p.EstimatedAfterTokens,
+		}
+
 	case service.EventTypeProgressUpdate:
 		p, ok := ev.Payload.(service.ProgressUpdatePayload)
 		if !ok {

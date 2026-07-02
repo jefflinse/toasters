@@ -771,6 +771,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case OperatorCompactionMsg:
 		return m.handleOperatorCompaction(msg)
 
+	case SessionCompactionMsg:
+		return m.handleSessionCompaction(msg)
+
 	case BlockerAddedMsg:
 		return m.handleBlockerAdded(msg)
 

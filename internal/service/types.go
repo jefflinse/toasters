@@ -192,6 +192,9 @@ type SessionSnapshot struct {
 	// ContextWindow is the resolved context window for the session's
 	// provider/model in tokens; 0 if unknown.
 	ContextWindow int
+	// Compactions is how many history compactions this session has
+	// performed (drives the fleet row's ↺n badge, reconnect-safe).
+	Compactions int
 }
 
 // GraphNodeSnapshot describes a graph node that is currently executing. Graph

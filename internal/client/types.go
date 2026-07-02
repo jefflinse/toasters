@@ -105,6 +105,7 @@ type wireSessionSnapshot struct {
 	TokensOut            int64     `json:"tokens_out"`
 	CurrentContextTokens int64     `json:"current_context_tokens,omitempty"`
 	ContextWindow        int       `json:"context_window,omitempty"`
+	Compactions          int       `json:"compactions,omitempty"`
 }
 
 type wireActivityItem struct {
@@ -330,6 +331,13 @@ type wireOperatorCompactionPayload struct {
 	BeforeTokens         int    `json:"before_tokens"`
 	EstimatedAfterTokens int    `json:"estimated_after_tokens"`
 	ArchiveFile          string `json:"archive_file,omitempty"`
+}
+
+type wireSessionCompactionPayload struct {
+	SessionID            string `json:"session_id"`
+	Tier                 int    `json:"tier"`
+	BeforeTokens         int    `json:"before_tokens"`
+	EstimatedAfterTokens int    `json:"estimated_after_tokens"`
 }
 
 type wireOperatorToolCallPayload struct {
@@ -665,6 +673,7 @@ func wireSessionSnapshotToService(w wireSessionSnapshot) service.SessionSnapshot
 		TokensOut:            w.TokensOut,
 		CurrentContextTokens: w.CurrentContextTokens,
 		ContextWindow:        w.ContextWindow,
+		Compactions:          w.Compactions,
 	}
 }
 
@@ -940,6 +949,18 @@ func ParseSSEPayload(eventType string, raw json.RawMessage) (any, error) {
 			BeforeTokens:         w.BeforeTokens,
 			EstimatedAfterTokens: w.EstimatedAfterTokens,
 			ArchiveFile:          w.ArchiveFile,
+		}, nil
+
+	case service.EventTypeSessionCompaction:
+		var w wireSessionCompactionPayload
+		if err := json.Unmarshal(raw, &w); err != nil {
+			return nil, fmt.Errorf("decoding session.compaction payload: %w", err)
+		}
+		return service.SessionCompactionPayload{
+			SessionID:            w.SessionID,
+			Tier:                 w.Tier,
+			BeforeTokens:         w.BeforeTokens,
+			EstimatedAfterTokens: w.EstimatedAfterTokens,
 		}, nil
 
 	case service.EventTypeBlockerAdded:
