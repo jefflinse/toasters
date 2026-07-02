@@ -80,9 +80,14 @@ type Operator struct {
 	// thresholds are measured against. Persisted with the session so a
 	// restored operator can trigger a handoff before its first turn.
 	lastContextTokens int
-	// compactionCount is how many digest handoffs this operator has
-	// performed since construction (restored sessions start at 0).
-	compactionCount int
+
+	// compactionSuppressed disarms the handoff trigger after a handoff
+	// whose seeded digest still exceeded the threshold budget — repeating
+	// would burn a digest + narrative + archive per turn with no forward
+	// progress. Cleared when occupancy drops below threshold. Touched only
+	// on the event-loop goroutine (maybeCompact/compact), so it needs no
+	// lock — it lives outside the mu-guarded block to make that explicit.
+	compactionSuppressed bool
 	// turnID is the service-assigned ID of the user turn currently being
 	// processed; empty between turns and for system-initiated turns. Threaded
 	// into the OnText/OnReasoning/OnTurnDone callbacks so the service can

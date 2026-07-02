@@ -81,12 +81,27 @@ func sendUserTurn(t *testing.T, ctx context.Context, op *Operator, text string) 
 	}
 }
 
+// awaitLoopIdle proves the operator has finished processing every prior
+// event — including the post-event compaction check — by pushing one more
+// user turn through the strictly serial loop and waiting for its provider
+// call. Deterministic, unlike sleeping: request N+1 being recorded means
+// event N's maybeCompact already returned.
+func awaitLoopIdle(t *testing.T, ctx context.Context, op *Operator, mp *mockProvider, wantRequests int) {
+	t.Helper()
+	sendUserTurn(t, ctx, op, "barrier")
+	waitFor(t, func() bool { return len(mp.getRequests()) >= wantRequests }, 2*time.Second)
+}
+
 func TestHandoff_TriggersAtThreshold(t *testing.T) {
 	mp := &mockProvider{name: "test", responses: []mockResponse{
 		bigTurnResponse("working on it"),
 		bigTurnResponse("second turn"),
 	}}
 	op, compactions := newHandoffOperator(t, mp, nil)
+	// Freeze the clock so the second handoff's archive name deterministically
+	// collides with the first, exercising the uniquification path.
+	fixed := time.Date(2026, 7, 2, 12, 0, 0, 0, time.UTC)
+	op.now = func() time.Time { return fixed }
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -141,6 +156,24 @@ func TestHandoff_TriggersAtThreshold(t *testing.T) {
 	req := mp.getRequests()[1]
 	if len(req.Messages) == 0 || !strings.Contains(req.Messages[0].Content, "Operator handoff") {
 		t.Errorf("second request does not start from the handoff message")
+	}
+
+	// That second turn also reported 900/1000 tokens, so a SECOND handoff
+	// fires — with the clock frozen, its archive name collides with the
+	// first and must be uniquified rather than silently overwriting it.
+	waitFor(t, func() bool { return len(compactions()) == 2 }, 2*time.Second)
+	first, second := compactions()[0], compactions()[1]
+	if first.ArchiveFile == second.ArchiveFile {
+		t.Fatalf("second handoff reused archive name %q — the first archive was overwritten", first.ArchiveFile)
+	}
+
+	// The first archive must still hold the original conversation.
+	data, err = os.ReadFile(filepath.Join(filepath.Dir(op.sessionFile), "archive", first.ArchiveFile))
+	if err != nil {
+		t.Fatalf("re-reading first archive after second handoff: %v", err)
+	}
+	if !strings.Contains(string(data), "do a thing") {
+		t.Errorf("first archive no longer contains the original conversation")
 	}
 }
 
@@ -237,9 +270,7 @@ func TestHandoff_DisabledCases(t *testing.T) {
 			defer cancel()
 			op.Start(ctx)
 			sendUserTurn(t, ctx, op, "do a thing")
-			waitFor(t, func() bool { return len(mp.getRequests()) == 1 }, 2*time.Second)
-			// Give the post-event check a beat to (not) fire.
-			time.Sleep(50 * time.Millisecond)
+			awaitLoopIdle(t, ctx, op, mp, 2)
 
 			if n := len(compactions()); n != 0 {
 				t.Errorf("compactions = %d, want 0", n)
@@ -268,8 +299,7 @@ func TestHandoff_BelowThresholdDoesNotTrigger(t *testing.T) {
 	defer cancel()
 	op.Start(ctx)
 	sendUserTurn(t, ctx, op, "small thing")
-	waitFor(t, func() bool { return len(mp.getRequests()) == 1 }, 2*time.Second)
-	time.Sleep(50 * time.Millisecond)
+	awaitLoopIdle(t, ctx, op, mp, 2)
 
 	if n := len(compactions()); n != 0 {
 		t.Errorf("compactions = %d, want 0 at 400/1000 against a 50%% threshold", n)
@@ -327,8 +357,7 @@ func TestHandoff_ArchiveFailureAborts(t *testing.T) {
 	defer cancel()
 	op.Start(ctx)
 	sendUserTurn(t, ctx, op, "do a thing")
-	waitFor(t, func() bool { return len(mp.getRequests()) == 1 }, 2*time.Second)
-	time.Sleep(50 * time.Millisecond)
+	awaitLoopIdle(t, ctx, op, mp, 2)
 
 	if n := len(compactions()); n != 0 {
 		t.Errorf("compactions = %d, want 0 when archiving fails", n)
@@ -394,7 +423,7 @@ func TestStripTranscript(t *testing.T) {
 		{Role: "tool", Content: `{"job_id":"j-1","secret":"tool result contents"}`, ToolCallID: "tc-1"},
 		{Role: "assistant", Content: "created the job"},
 	}
-	got := stripTranscript(msgs, 10)
+	got := stripTranscript(msgs, 10, stripMaxBytes)
 
 	assertContains(t, got, "USER: build me a thing")
 	assertContains(t, got, "[called create_job]")
@@ -403,15 +432,39 @@ func TestStripTranscript(t *testing.T) {
 		t.Errorf("tool result content leaked into stripped transcript:\n%s", got)
 	}
 
-	// The cap keeps only the most recent messages.
+	// The message cap keeps only the most recent messages.
 	var long []provider.Message
 	for i := range 50 {
 		long = append(long, provider.Message{Role: "user", Content: fmt.Sprintf("msg-%d", i)})
 	}
-	capped := stripTranscript(long, 10)
+	capped := stripTranscript(long, 10, stripMaxBytes)
 	if strings.Contains(capped, "msg-39") || !strings.Contains(capped, "msg-40") {
-		t.Errorf("cap kept the wrong window:\n%s", capped)
+		t.Errorf("message cap kept the wrong window:\n%s", capped)
 	}
+
+	// The byte cap keeps the newest lines when messages are huge.
+	big := []provider.Message{
+		{Role: "user", Content: "old " + strings.Repeat("x", 2000)},
+		{Role: "user", Content: "new " + strings.Repeat("y", 2000)},
+	}
+	bounded := stripTranscript(big, 10, 2100)
+	if len(bounded) > 2100 {
+		t.Errorf("byte cap exceeded: %d bytes", len(bounded))
+	}
+	if !strings.Contains(bounded, "new ") || strings.Contains(bounded, "old ") {
+		t.Errorf("byte cap kept the wrong end of the transcript")
+	}
+
+	// A synthetic handoff seed must never feed the narrative.
+	seeded := []provider.Message{
+		{Role: "user", Content: handoffHeader + "\n\nprevious digest contents"},
+		{Role: "user", Content: "real user request"},
+	}
+	noSeed := stripTranscript(seeded, 10, stripMaxBytes)
+	if strings.Contains(noSeed, "previous digest contents") {
+		t.Errorf("synthetic seed leaked into stripped transcript:\n%s", noSeed)
+	}
+	assertContains(t, noSeed, "real user request")
 }
 
 func TestSessionFile_RoundTripsContextTokens(t *testing.T) {
@@ -516,4 +569,67 @@ func TestBuildDigest_NilStore(t *testing.T) {
 	t.Parallel()
 	got := buildDigest(context.Background(), nil, time.Now)
 	assertContains(t, got, "state store unavailable")
+}
+
+// TestHandoff_TriggersOnMechanicalEvent verifies compaction runs at every
+// event boundary, not only after user turns — a mechanical event arriving
+// while occupancy is over threshold must trigger the handoff.
+func TestHandoff_TriggersOnMechanicalEvent(t *testing.T) {
+	mp := &mockProvider{name: "test"}
+	op, compactions := newHandoffOperator(t, mp, nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	op.Start(ctx)
+
+	// Occupancy crosses the threshold between events (as if a prior turn
+	// reported it); the next event — any event — must trigger the check.
+	op.mu.Lock()
+	op.messages = []provider.Message{
+		{Role: "user", Content: "earlier request"},
+		{Role: "assistant", Content: "earlier reply"},
+	}
+	op.lastContextTokens = 900
+	op.mu.Unlock()
+
+	if err := op.Send(ctx, Event{Type: EventType("test-noop")}); err != nil {
+		t.Fatalf("sending noop event: %v", err)
+	}
+	waitFor(t, func() bool { return len(compactions()) == 1 }, 2*time.Second)
+}
+
+// TestHandoff_SuppressedWhenDigestExceedsBudget verifies the floor guard:
+// when even the seeded handoff message exceeds the threshold budget (tiny
+// window), the operator hands off once, then suppresses further handoffs
+// instead of thrashing on every subsequent turn.
+func TestHandoff_SuppressedWhenDigestExceedsBudget(t *testing.T) {
+	overBudgetTurn := func(text string) mockResponse {
+		return mockResponse{events: []provider.StreamEvent{
+			{Type: provider.EventText, Text: text},
+			{Type: provider.EventUsage, Usage: &provider.Usage{InputTokens: 9, OutputTokens: 1}},
+			{Type: provider.EventDone},
+		}}
+	}
+	mp := &mockProvider{name: "test", responses: []mockResponse{
+		overBudgetTurn("first"),
+		overBudgetTurn("second"),
+	}}
+	op, compactions := newHandoffOperator(t, mp, func(cfg *Config) {
+		// 10-token window, 50% threshold → 5-token budget: no digest fits.
+		cfg.ContextWindows = fixedWindow(10)
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	op.Start(ctx)
+
+	sendUserTurn(t, ctx, op, "do a thing")
+	waitFor(t, func() bool { return len(compactions()) == 1 }, 2*time.Second)
+
+	// The next over-budget turn must NOT trigger a second handoff.
+	sendUserTurn(t, ctx, op, "another thing")
+	awaitLoopIdle(t, ctx, op, mp, 3)
+	if n := len(compactions()); n != 1 {
+		t.Errorf("compactions = %d, want 1 (suppressed after the digest couldn't fit)", n)
+	}
 }

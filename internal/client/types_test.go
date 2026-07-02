@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jefflinse/toasters/internal/server"
 	"github.com/jefflinse/toasters/internal/service"
 )
 
@@ -1588,5 +1589,34 @@ func TestParseSSEPayload_OperatorCompaction(t *testing.T) {
 	}
 	if p.ArchiveFile != "operator-2026-07-02T12-00-00Z.json" {
 		t.Errorf("ArchiveFile = %q", p.ArchiveFile)
+	}
+}
+
+// TestOperatorCompaction_WireRoundTrip runs the compaction payload through
+// the REAL server-side encoder (server.EventPayloadToWire) and back through
+// the client decoder, so a struct-tag typo on either side fails here rather
+// than shipping as a silently dropped field.
+func TestOperatorCompaction_WireRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	in := service.OperatorCompactionPayload{
+		BeforeTokens:         5200,
+		EstimatedAfterTokens: 1800,
+		ArchiveFile:          "operator-2026-07-02T12-00-00Z.json",
+	}
+	wire := server.EventPayloadToWire(service.Event{
+		Type:    service.EventTypeOperatorCompaction,
+		Payload: in,
+	})
+	data, err := json.Marshal(wire)
+	if err != nil {
+		t.Fatalf("marshal wire payload: %v", err)
+	}
+	got, err := ParseSSEPayload(string(service.EventTypeOperatorCompaction), data)
+	if err != nil {
+		t.Fatalf("ParseSSEPayload: %v", err)
+	}
+	if got != in {
+		t.Errorf("round trip = %+v, want %+v", got, in)
 	}
 }

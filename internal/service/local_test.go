@@ -1410,3 +1410,40 @@ func TestGetLogs_EmptyLogFile(t *testing.T) {
 		t.Errorf("GetLogs() = %q, want empty string for empty log file", got)
 	}
 }
+
+func TestBroadcastOperatorEvent_Compaction(t *testing.T) {
+	t.Parallel()
+
+	svc := newTestService(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ch := svc.subscribe(ctx)
+
+	svc.BroadcastOperatorEvent(operator.Event{
+		Type: operator.EventCompaction,
+		Payload: operator.CompactionPayload{
+			BeforeTokens:         5200,
+			EstimatedAfterTokens: 1800,
+			ArchiveFile:          "operator-x.json",
+		},
+	})
+
+	select {
+	case ev := <-ch:
+		if ev.Type != EventTypeOperatorCompaction {
+			t.Errorf("Type = %q, want %q", ev.Type, EventTypeOperatorCompaction)
+		}
+		payload, ok := ev.Payload.(OperatorCompactionPayload)
+		if !ok {
+			t.Fatalf("Payload type = %T, want OperatorCompactionPayload", ev.Payload)
+		}
+		if payload.BeforeTokens != 5200 || payload.EstimatedAfterTokens != 1800 {
+			t.Errorf("tokens = %d/%d, want 5200/1800", payload.BeforeTokens, payload.EstimatedAfterTokens)
+		}
+		if payload.ArchiveFile != "operator-x.json" {
+			t.Errorf("ArchiveFile = %q", payload.ArchiveFile)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out")
+	}
+}

@@ -113,10 +113,11 @@ func writeActiveSessions(ctx context.Context, b *strings.Builder, store db.Store
 	}
 }
 
-// writeRecentJobs renders the most recently finished jobs for continuity.
+// writeRecentJobs renders the most recently finished jobs — including
+// cancelled ones, so a successor knows about work a human just stopped.
 func writeRecentJobs(ctx context.Context, b *strings.Builder, store db.Store) {
 	var recent []*db.Job
-	for _, status := range []db.JobStatus{db.JobStatusCompleted, db.JobStatusFailed} {
+	for _, status := range []db.JobStatus{db.JobStatusCompleted, db.JobStatusFailed, db.JobStatusCancelled} {
 		jobs, err := store.ListJobs(ctx, db.JobFilter{Status: &status, Limit: digestRecentJobs})
 		if err != nil {
 			slog.Warn("handoff digest: listing recent jobs failed", "status", status, "error", err)
