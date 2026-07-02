@@ -119,8 +119,8 @@ func Load() (*Config, error) {
 	viper.SetDefault("fleet_row_density", "full")
 	viper.SetDefault("sidebar_side", "left")
 	viper.SetDefault("show_operator_panel_by_default", true)
-	viper.SetDefault("operator_compaction_threshold", 50)
-	viper.SetDefault("worker_compaction_threshold", 70)
+	viper.SetDefault("operator_compaction_threshold", DefaultOperatorCompactionThreshold)
+	viper.SetDefault("worker_compaction_threshold", DefaultWorkerCompactionThreshold)
 	viper.SetDefault("agents.defaults.provider", "")
 	viper.SetDefault("agents.defaults.model", "")
 
@@ -212,6 +212,15 @@ func ValidSidebarSide(value string) string {
 		return "left"
 	}
 }
+
+// Default compaction thresholds (percent of the resolved context window).
+// The operator compacts earlier than workers: its session is long-lived and
+// a digest handoff is cheap, while worker sessions are task-scoped and
+// usually finish before filling their window.
+const (
+	DefaultOperatorCompactionThreshold = 50
+	DefaultWorkerCompactionThreshold   = 70
+)
 
 // CompactionThresholdOptions returns the compaction-threshold values the
 // settings UI cycles through: 0 disables compaction; otherwise a percentage

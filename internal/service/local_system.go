@@ -292,8 +292,8 @@ func (s *LocalService) GetSettings(_ context.Context) (Settings, error) {
 			ShowOperatorPanelByDefault:  true,
 			FleetRowDensity:             config.ValidFleetDensity(""),
 			SidebarSide:                 config.ValidSidebarSide(""),
-			OperatorCompactionThreshold: 50,
-			WorkerCompactionThreshold:   70,
+			OperatorCompactionThreshold: config.DefaultOperatorCompactionThreshold,
+			WorkerCompactionThreshold:   config.DefaultWorkerCompactionThreshold,
 		}, nil
 	}
 	return Settings{
@@ -305,8 +305,8 @@ func (s *LocalService) GetSettings(_ context.Context) (Settings, error) {
 		ShowOperatorPanelByDefault:  s.cfg.AppConfig.ShowOperatorPanelByDefault,
 		FleetRowDensity:             config.ValidFleetDensity(s.cfg.AppConfig.FleetRowDensity),
 		SidebarSide:                 config.ValidSidebarSide(s.cfg.AppConfig.SidebarSide),
-		OperatorCompactionThreshold: config.ValidCompactionThreshold(s.cfg.AppConfig.OperatorCompactionThreshold, 50),
-		WorkerCompactionThreshold:   config.ValidCompactionThreshold(s.cfg.AppConfig.WorkerCompactionThreshold, 70),
+		OperatorCompactionThreshold: config.ValidCompactionThreshold(s.cfg.AppConfig.OperatorCompactionThreshold, config.DefaultOperatorCompactionThreshold),
+		WorkerCompactionThreshold:   config.ValidCompactionThreshold(s.cfg.AppConfig.WorkerCompactionThreshold, config.DefaultWorkerCompactionThreshold),
 	}, nil
 }
 
@@ -403,13 +403,13 @@ func (s *LocalService) UpdateSettings(_ context.Context, next Settings) error {
 	// Compaction thresholds: normalized rather than rejected (0 = disabled,
 	// otherwise clamped to [30, 90]). No live subsystem to refresh yet — the
 	// operator and runtime read these at turn boundaries via AppConfig.
-	opThreshold := config.ValidCompactionThreshold(next.OperatorCompactionThreshold, 50)
+	opThreshold := config.ValidCompactionThreshold(next.OperatorCompactionThreshold, config.DefaultOperatorCompactionThreshold)
 	if err := config.SetTopLevelValue(s.cfg.ConfigDir, "operator_compaction_threshold", opThreshold); err != nil {
 		return fmt.Errorf("persisting operator_compaction_threshold: %w", err)
 	}
 	s.cfg.AppConfig.OperatorCompactionThreshold = opThreshold
 
-	workerThreshold := config.ValidCompactionThreshold(next.WorkerCompactionThreshold, 70)
+	workerThreshold := config.ValidCompactionThreshold(next.WorkerCompactionThreshold, config.DefaultWorkerCompactionThreshold)
 	if err := config.SetTopLevelValue(s.cfg.ConfigDir, "worker_compaction_threshold", workerThreshold); err != nil {
 		return fmt.Errorf("persisting worker_compaction_threshold: %w", err)
 	}

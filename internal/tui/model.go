@@ -16,6 +16,7 @@ import (
 	"github.com/charmbracelet/glamour"
 	xansi "github.com/charmbracelet/x/ansi"
 
+	"github.com/jefflinse/toasters/internal/config"
 	"github.com/jefflinse/toasters/internal/service"
 )
 
@@ -247,8 +248,8 @@ func NewModel(cfg ModelConfig) Model {
 	m.sidebarSide = "left"
 	// Seed the config defaults so bars render sensible ticks before the
 	// first settings round-trip completes.
-	m.opCompactionThreshold = 50
-	m.workerCompactionThreshold = 70
+	m.opCompactionThreshold = config.DefaultOperatorCompactionThreshold
+	m.workerCompactionThreshold = config.DefaultWorkerCompactionThreshold
 
 	return m
 }

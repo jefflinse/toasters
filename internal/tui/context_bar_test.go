@@ -167,10 +167,30 @@ func TestRenderMiniContextBar_ThresholdTick(t *testing.T) {
 
 	t.Run("threshold at bar edge clamps inside", func(t *testing.T) {
 		t.Parallel()
-		// threshold 0.9 with a narrow bar must not index past the end.
-		got := stripANSI(renderMiniContextBar(100, 1000, 8, false, 0.9))
+		// threshold 1.0 makes tickIdx == barW, forcing the clamp to the last
+		// cell. Not reachable via config (which caps at 90%), but the
+		// function must tolerate the full [0,1] range defensively.
+		got := stripANSI(renderMiniContextBar(100, 1000, 8, false, 1.0))
 		if !strings.ContainsRune(got, '│') {
-			t.Errorf("tick missing on narrow bar: %q", got)
+			t.Errorf("tick missing when threshold clamps to last cell: %q", got)
+		}
+	})
+
+	t.Run("fill reaching exactly the tick cell keeps the tick", func(t *testing.T) {
+		t.Parallel()
+		// barW 20, threshold 0.5 → tickIdx 10; used 500/1000 → filled 10.
+		// The tick cell is the first unfilled cell — it must render as a
+		// tick, with exactly 10 fill cells before it.
+		got := stripANSI(renderMiniContextBar(500, 1000, 24, false, 0.5))
+		runes := []rune(got)
+		if len(runes) < 12 || runes[10] != '│' {
+			t.Fatalf("tick not at cell 10 when fill meets threshold: %q", got)
+		}
+		for i := range 10 {
+			if runes[i] != '█' {
+				t.Errorf("cell %d = %q, want fill before the tick (%q)", i, runes[i], got)
+				break
+			}
 		}
 	})
 }
