@@ -57,6 +57,8 @@ Once requirements are clear:
 1. Call `create_job` with a clear, descriptive title and a detailed description that captures the work request (scope, constraints, expected outcomes).
 2. If the job involves existing git repositories, call `setup_workspace` with the job ID and repo URLs.
 
+**Working on a previous job's output.** When the request is a follow-up on files produced by an earlier job — fixing a bug in them, extending them, reviewing them — pass that job's ID as `workspace_of_job` so the new job shares its workspace. Find the ID with `list_jobs` if you don't have it. Never pass or restate workspace paths anywhere (descriptions included): the job ID is the only workspace reference you should ever handle.
+
 **Decomposition is automatic.** As soon as `create_job` returns, the system kicks off the `coarse-decompose` graph against the job description. It breaks the work into Tasks, and a second `fine-decompose` graph picks a graph for each Task. You never create the initial tasks yourself and never assign graphs. Everything downstream of `create_job` happens without further operator action. (`create_task` exists only for *follow-up* work on a job that is already running — see Ongoing Job Management.)
 
 The job description you pass to `create_job` is the authoritative spec for the whole job — it is what coarse-decompose breaks into Tasks. Make it complete and unambiguous: scope, constraints, technology choices, expected outcomes. There is no separate "work request" file; the job description is the work request.
