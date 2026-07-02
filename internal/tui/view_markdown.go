@@ -2,6 +2,7 @@ package tui
 
 import (
 	"strings"
+	"sync"
 
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/glamour/ansi"
@@ -74,7 +75,13 @@ func (m *Model) renderMarkdown(content string) string {
 
 // toastersStyle returns a Glamour style config based on Dracula with
 // code block colors adjusted to match the toasters dark palette.
-func toastersStyle() ansi.StyleConfig {
+//
+// Computed once: StyleConfig's CodeBlock.Chroma is a *pointer*, so the
+// naive copy-and-mutate shared (and raced on) the library's global
+// DraculaStyleConfig — concurrent renderer rebuilds wrote the same Chroma
+// struct. The Chroma is deep-copied before mutation so the global stays
+// pristine, and sync.OnceValue makes the computation race-free.
+var toastersStyle = sync.OnceValue(func() ansi.StyleConfig {
 	s := glamourstyles.DraculaStyleConfig
 
 	// Tighten document margin — the chat area already provides padding.
@@ -82,13 +89,17 @@ func toastersStyle() ansi.StyleConfig {
 	s.Document.Margin = &zero
 
 	// Darken code block background to blend with the toasters dark chrome.
+	// s.CodeBlock.Chroma points at the shared Dracula Chroma — copy it
+	// before touching it.
+	chroma := *s.CodeBlock.Chroma
 	bg := "#1e1e2e"
-	s.CodeBlock.Chroma.Background = ansi.StylePrimitive{
+	chroma.Background = ansi.StylePrimitive{
 		BackgroundColor: &bg,
 	}
+	s.CodeBlock.Chroma = &chroma
 
 	return s
-}
+})
 
 // ensureMarkdownRenderer creates or recreates the glamour renderer for the current width.
 // It also recreates outputMdRender sized for the node detail pane.
