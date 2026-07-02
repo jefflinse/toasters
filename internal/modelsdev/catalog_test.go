@@ -98,3 +98,62 @@ func TestModelContextLimit_CatalogUnavailable(t *testing.T) {
 		t.Errorf("= (%d, %v), want (0, false) when catalog unreachable", got, ok)
 	}
 }
+
+func TestClient_ServesStaleCatalogOnFetchError(t *testing.T) {
+	t.Parallel()
+
+	// First request succeeds; every later one fails. With a zero TTL each
+	// lookup re-fetches, so the second lookup exercises the warm-cache
+	// error path — it must serve the stale catalog, not fail.
+	var served bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if served {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		served = true
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(testCatalogJSON))
+	}))
+	t.Cleanup(srv.Close)
+	c := NewClient(WithURL(srv.URL), WithTTL(0))
+
+	ctx := context.Background()
+	if got, ok := c.ModelContextLimit(ctx, "anthropic", "claude-opus-4-6"); !ok || got != 200000 {
+		t.Fatalf("first lookup = (%d, %v), want (200000, true)", got, ok)
+	}
+	if got, ok := c.ModelContextLimit(ctx, "anthropic", "claude-opus-4-6"); !ok || got != 200000 {
+		t.Errorf("lookup after fetch failure = (%d, %v), want stale (200000, true)", got, ok)
+	}
+}
+
+func TestClient_RefetchesAfterTTL(t *testing.T) {
+	t.Parallel()
+
+	var fetches int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fetches++
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(testCatalogJSON))
+	}))
+	t.Cleanup(srv.Close)
+
+	ctx := context.Background()
+
+	// Long TTL: repeated lookups hit the cache.
+	cached := NewClient(WithURL(srv.URL))
+	_, _ = cached.ModelContextLimit(ctx, "anthropic", "claude-opus-4-6")
+	_, _ = cached.ModelContextLimit(ctx, "anthropic", "claude-opus-4-6")
+	if fetches != 1 {
+		t.Errorf("fetches with fresh cache = %d, want 1", fetches)
+	}
+
+	// Zero TTL: every lookup re-fetches.
+	fetches = 0
+	expiring := NewClient(WithURL(srv.URL), WithTTL(0))
+	_, _ = expiring.ModelContextLimit(ctx, "anthropic", "claude-opus-4-6")
+	_, _ = expiring.ModelContextLimit(ctx, "anthropic", "claude-opus-4-6")
+	if fetches != 2 {
+		t.Errorf("fetches with expired TTL = %d, want 2", fetches)
+	}
+}

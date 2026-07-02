@@ -82,8 +82,10 @@ type LocalConfig struct {
 // ContextWindowSource resolves effective context windows and ingests
 // provider-reported model lists. *contextwindow.Resolver satisfies it; the
 // interface lives here so the service doesn't depend on the resolver package.
+// Window never blocks (it is called on the progress-broadcast hot path) — a
+// cold cache resolves to 0 and converges on later calls.
 type ContextWindowSource interface {
-	Window(ctx context.Context, providerName, modelID string) int
+	Window(providerName, modelID string) int
 	ObserveModels(providerKey string, models []provider.ModelInfo)
 }
 

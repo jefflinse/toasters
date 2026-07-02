@@ -20,7 +20,7 @@ type fakeWindowSource struct {
 	observed    map[string][]provider.ModelInfo
 }
 
-func (f *fakeWindowSource) Window(_ context.Context, providerName, modelID string) int {
+func (f *fakeWindowSource) Window(providerName, modelID string) int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.windowCalls++
@@ -47,7 +47,7 @@ func TestSessionSnapshotsToService_FillsContextWindow(t *testing.T) {
 		{ID: "s2", Provider: "LMStudio", Model: "gemma", CurrentContextTokens: 2000},
 		{ID: "s3", Provider: "LMStudio", Model: "other", CurrentContextTokens: 500},
 	}
-	out := svc.sessionSnapshotsToService(context.Background(), snaps)
+	out := svc.sessionSnapshotsToService(snaps)
 
 	if len(out) != 3 {
 		t.Fatalf("mapped %d snapshots, want 3", len(out))
@@ -68,7 +68,7 @@ func TestSessionSnapshotsToService_NilResolver(t *testing.T) {
 	t.Parallel()
 
 	svc := NewLocal(LocalConfig{ConfigDir: t.TempDir()})
-	out := svc.sessionSnapshotsToService(context.Background(), []runtime.SessionSnapshot{
+	out := svc.sessionSnapshotsToService([]runtime.SessionSnapshot{
 		{ID: "s1", Provider: "LMStudio", Model: "gemma"},
 	})
 	if len(out) != 1 || out[0].ContextWindow != 0 {

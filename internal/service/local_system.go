@@ -56,7 +56,7 @@ func (s *LocalService) Health(_ context.Context) (HealthStatus, error) {
 
 // ListModels returns all models available from the configured LLM provider.
 func (s *LocalService) ListModels(ctx context.Context) ([]ModelInfo, error) {
-	prov := s.currentProvider()
+	prov, providerID := s.currentProviderAndID()
 	if prov == nil {
 		return nil, Unavailablef("LLM provider not configured")
 	}
@@ -64,11 +64,8 @@ func (s *LocalService) ListModels(ctx context.Context) ([]ModelInfo, error) {
 	if err != nil {
 		return nil, fmt.Errorf("listing models: %w", err)
 	}
-	if s.cfg.ContextWindows != nil {
-		providerID, _, _ := s.operatorInfo()
-		if providerID != "" {
-			s.cfg.ContextWindows.ObserveModels(providerID, provModels)
-		}
+	if s.cfg.ContextWindows != nil && providerID != "" {
+		s.cfg.ContextWindows.ObserveModels(providerID, provModels)
 	}
 	models := make([]ModelInfo, 0, len(provModels))
 	for _, m := range provModels {

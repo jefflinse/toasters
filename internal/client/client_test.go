@@ -378,6 +378,7 @@ func TestOperator_Status(t *testing.T) {
 				State:         service.OperatorStateIdle,
 				CurrentTurnID: "",
 				ModelName:     "test-model",
+				ContextWindow: 200000,
 			}, nil
 		},
 	}
@@ -394,6 +395,11 @@ func TestOperator_Status(t *testing.T) {
 	}
 	if st.ModelName != "test-model" {
 		t.Errorf("got model %q, want %q", st.ModelName, "test-model")
+	}
+	// ContextWindow must survive the real server-encode → client-decode
+	// round-trip; it drives the operator's context bar.
+	if st.ContextWindow != 200000 {
+		t.Errorf("got context window %d, want 200000", st.ContextWindow)
 	}
 }
 
@@ -880,7 +886,7 @@ func TestSystem_GetProgressState(t *testing.T) {
 					{ID: "sess-1", WorkerID: "agent-a", Status: service.SessionStatusActive},
 				},
 				LiveSnapshots: []service.SessionSnapshot{
-					{ID: "sess-1", WorkerID: "agent-a", Status: "active", TokensIn: 42, CurrentContextTokens: 4096},
+					{ID: "sess-1", WorkerID: "agent-a", Status: "active", TokensIn: 42, CurrentContextTokens: 4096, ContextWindow: 8192},
 				},
 				FeedEntries: []service.FeedEntry{
 					{ID: 1, EntryType: service.FeedEntryTypeTaskStarted, Content: "Task started"},
@@ -927,11 +933,16 @@ func TestSystem_GetProgressState(t *testing.T) {
 	if len(ps.LiveSnapshots) != 1 || ps.LiveSnapshots[0].TokensIn != 42 {
 		t.Errorf("live_snapshots = %v, want [{TokensIn: 42}]", ps.LiveSnapshots)
 	}
-	// CurrentContextTokens must survive the full server-encode → client-decode
-	// round-trip; it drives the fleet pane's per-worker context bar.
+	// CurrentContextTokens and ContextWindow must survive the full
+	// server-encode → client-decode round-trip; they drive the fleet pane's
+	// per-worker context bar.
 	if len(ps.LiveSnapshots) == 1 && ps.LiveSnapshots[0].CurrentContextTokens != 4096 {
 		t.Errorf("live_snapshots[0].CurrentContextTokens = %d, want 4096",
 			ps.LiveSnapshots[0].CurrentContextTokens)
+	}
+	if len(ps.LiveSnapshots) == 1 && ps.LiveSnapshots[0].ContextWindow != 8192 {
+		t.Errorf("live_snapshots[0].ContextWindow = %d, want 8192",
+			ps.LiveSnapshots[0].ContextWindow)
 	}
 
 	if len(ps.FeedEntries) != 1 || ps.FeedEntries[0].EntryType != service.FeedEntryTypeTaskStarted {

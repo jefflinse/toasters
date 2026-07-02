@@ -197,7 +197,7 @@ func (s *LocalService) buildProgressState(ctx context.Context) (state ProgressSt
 	// Live snapshots from runtime.
 	if s.cfg.Runtime != nil {
 		state.LiveSnapshots = append(state.LiveSnapshots,
-			s.sessionSnapshotsToService(ctx, s.cfg.Runtime.ActiveSessions())...)
+			s.sessionSnapshotsToService(s.cfg.Runtime.ActiveSessions())...)
 	}
 
 	// Active graph nodes (not runtime sessions — tracked here for reconnect).

@@ -51,6 +51,41 @@ func TestHandleModels_DoesNotClobberServerResolvedWindow(t *testing.T) {
 	}
 }
 
+func TestAppReady_ZeroWindowPreservesExisting(t *testing.T) {
+	t.Parallel()
+
+	// AppReadyMsg with no resolved window must not blank a value some other
+	// path already filled — 0 means "server doesn't know", not "reset".
+	m := newMinimalModel(t)
+	m.stats.ContextLength = 8192
+	m.handleAppReady(AppReadyMsg{ModelName: "gemma"})
+	if m.stats.ContextLength != 8192 {
+		t.Errorf("ContextLength = %d, want 8192 preserved", m.stats.ContextLength)
+	}
+	m.handleAppReady(AppReadyMsg{ModelName: "gemma", ContextWindow: 16384})
+	if m.stats.ContextLength != 16384 {
+		t.Errorf("ContextLength = %d, want 16384 from AppReadyMsg", m.stats.ContextLength)
+	}
+}
+
+func TestOperatorStatusRefreshed_ResetsWindowWithModel(t *testing.T) {
+	t.Parallel()
+
+	// A status refresh that names a model owns the window outright — even a
+	// 0 must land, or a provider switch leaves the old provider's window on
+	// the bar.
+	m := newMinimalModel(t)
+	m.stats.ContextLength = 8192
+	res, _ := m.Update(OperatorStatusRefreshedMsg{ModelName: "new-model", ContextWindow: 0})
+	got := res.(*Model)
+	if got.stats.ContextLength != 0 {
+		t.Errorf("ContextLength = %d, want 0 after provider switch with unknown window", got.stats.ContextLength)
+	}
+	if got.stats.ModelName != "new-model" {
+		t.Errorf("ModelName = %q, want %q", got.stats.ModelName, "new-model")
+	}
+}
+
 func TestProgressPoll_PopulatesSlotContextWindow(t *testing.T) {
 	t.Parallel()
 

@@ -11,6 +11,14 @@
 //  3. the models.dev catalog
 //  4. 0 — unknown; callers treat this as "feature unavailable"
 //
+// Window never blocks: it reads caches and returns the best currently-known
+// value, kicking background fetches (bounded by their own timeout, detached
+// from any caller context) to fill misses and refresh stale entries. A cold
+// provider therefore resolves to 0 for the first call and converges once
+// the fetch lands — callers on hot paths (the 500ms progress broadcast, and
+// later the per-turn compaction checks) must never be coupled to a slow or
+// down provider endpoint.
+//
 // The package sits below runtime/operator/service in the dependency graph
 // (it imports only internal/provider) so all three can share one resolver
 // without import cycles.
@@ -29,8 +37,22 @@ const (
 	modelListTTL = time.Minute
 
 	// errorTTL is how long a failed model-list fetch suppresses retries, so
-	// an unreachable provider can't stall every snapshot build.
+	// an unreachable provider doesn't spawn a fetch per lookup.
 	errorTTL = 15 * time.Second
+
+	// catalogTTL is how long a successful catalog answer stays fresh. The
+	// catalog client caches the whole dataset for an hour; match it.
+	catalogTTL = time.Hour
+
+	// catalogMissTTL is how long a catalog miss (model unknown, or catalog
+	// unreachable) suppresses retries. Short: once the catalog client has
+	// its data cached, a retry is a cheap in-memory lookup.
+	catalogMissTTL = time.Minute
+
+	// fetchTimeout bounds each background fetch. Deliberately independent
+	// of any caller's context so a caller's tight deadline can't be
+	// misread as a provider failure (poisoning the negative cache).
+	fetchTimeout = 15 * time.Second
 )
 
 // ConfigSource supplies live provider definitions. *loader.Loader satisfies
@@ -58,57 +80,96 @@ type providerCache struct {
 	failedAt  time.Time
 }
 
-// Resolver resolves and caches context windows. All fields are optional
-// (nil-tolerant); a zero Resolver resolves everything to 0. Safe for
-// concurrent use.
+// catalogEntry caches one catalog lookup result.
+type catalogEntry struct {
+	window    int
+	found     bool
+	checkedAt time.Time
+}
+
+// Resolver resolves and caches context windows. All dependencies are
+// optional (nil-tolerant); a zero-dependency Resolver resolves everything to
+// 0. Safe for concurrent use.
 type Resolver struct {
 	providers ProviderSource
 	configs   ConfigSource
 	catalog   Catalog
 	now       func() time.Time
 
-	mu    sync.Mutex
-	cache map[string]*providerCache
-	// fetching serializes on-demand fetches per provider so concurrent
-	// Window calls can't stampede an endpoint. Entries are never removed;
-	// the set of providers is small and stable.
-	fetching map[string]*sync.Mutex
+	mu          sync.Mutex
+	reported    map[string]*providerCache // provider-reported windows by registry key
+	catalogHits map[string]catalogEntry   // catalog answers by key+"\x00"+model
+	inflight    map[string]bool           // background fetch dedup
+	wg          sync.WaitGroup            // tracks background fetches (tests wait on it)
 }
 
 // NewResolver creates a Resolver. Any argument may be nil, disabling that
 // resolution tier.
 func NewResolver(providers ProviderSource, configs ConfigSource, catalog Catalog) *Resolver {
 	return &Resolver{
-		providers: providers,
-		configs:   configs,
-		catalog:   catalog,
-		now:       time.Now,
-		cache:     make(map[string]*providerCache),
-		fetching:  make(map[string]*sync.Mutex),
+		providers:   providers,
+		configs:     configs,
+		catalog:     catalog,
+		now:         time.Now,
+		reported:    make(map[string]*providerCache),
+		catalogHits: make(map[string]catalogEntry),
+		inflight:    make(map[string]bool),
 	}
 }
 
 // Window returns the effective context window for a model served by the
-// named provider, or 0 if unknown. providerName may be a registry key
-// ("lmstudio") or a display name ("LMStudio"); display names are normalized
-// against the config source. Window may fetch the provider's model list on a
-// cache miss; the fetch is bounded by ctx and failures are negative-cached.
-func (r *Resolver) Window(ctx context.Context, providerName, modelID string) int {
+// named provider, or 0 if not (yet) known. providerName may be a registry
+// key ("lmstudio") or a display name ("LMStudio"); display names are
+// normalized against the config source. Window never blocks — cache misses
+// return immediately and converge on later calls once the background fetch
+// completes.
+func (r *Resolver) Window(providerName, modelID string) int {
 	if r == nil || modelID == "" {
 		return 0
 	}
 	key, cfg := r.lookupConfig(providerName)
+	now := r.clock()
 
-	if w := r.reportedWindow(ctx, key, modelID); w > 0 {
-		return w
+	r.mu.Lock()
+	var reportedW int
+	entry := r.reported[key]
+	if entry != nil {
+		reportedW = entry.windows[modelID]
+	}
+	stale := entry == nil ||
+		(now.Sub(entry.fetchedAt) >= modelListTTL && now.Sub(entry.failedAt) >= errorTTL)
+	if stale && r.providers != nil {
+		r.spawnLocked("models:"+key, func(ctx context.Context) { r.fetchModels(ctx, key) })
+	}
+
+	var catalogW int
+	var catalogFound bool
+	if r.catalog != nil {
+		ck := key + "\x00" + modelID
+		ce, ok := r.catalogHits[ck]
+		lookup := func(ctx context.Context) { r.lookupCatalog(ctx, ck, key, modelID) }
+		switch {
+		case ok && ce.found:
+			catalogW, catalogFound = ce.window, true
+			if now.Sub(ce.checkedAt) >= catalogTTL {
+				r.spawnLocked("catalog:"+ck, lookup)
+			}
+		case ok && now.Sub(ce.checkedAt) < catalogMissTTL:
+			// Recent miss; don't retry yet.
+		default:
+			r.spawnLocked("catalog:"+ck, lookup)
+		}
+	}
+	r.mu.Unlock()
+
+	if reportedW > 0 {
+		return reportedW
 	}
 	if cfg != nil && cfg.ContextWindow > 0 {
 		return cfg.ContextWindow
 	}
-	if r.catalog != nil {
-		if w, ok := r.catalog.ModelContextLimit(ctx, key, modelID); ok {
-			return w
-		}
+	if catalogFound {
+		return catalogW
 	}
 	return 0
 }
@@ -126,86 +187,74 @@ func (r *Resolver) ObserveModels(providerKey string, models []provider.ModelInfo
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.cache == nil {
-		r.cache = make(map[string]*providerCache)
+	if r.reported == nil {
+		r.reported = make(map[string]*providerCache)
 	}
-	r.cache[providerKey] = &providerCache{windows: windows, fetchedAt: r.clock()}
+	r.reported[providerKey] = &providerCache{windows: windows, fetchedAt: r.clock()}
 }
 
-// reportedWindow returns the provider-reported context length for the model,
-// fetching the provider's model list if the cache is missing or stale.
-func (r *Resolver) reportedWindow(ctx context.Context, key, modelID string) int {
-	if w, fresh := r.cachedWindow(key, modelID); fresh {
-		return w
+// spawnLocked starts fn on a background goroutine with a bounded, detached
+// context, unless a fetch with the same dedup key is already in flight.
+// Callers must hold r.mu.
+func (r *Resolver) spawnLocked(key string, fn func(context.Context)) {
+	if r.inflight == nil {
+		r.inflight = make(map[string]bool)
 	}
-	if r.providers == nil {
-		return 0
+	if r.inflight[key] {
+		return
 	}
+	r.inflight[key] = true
+	r.wg.Add(1)
+	go func() {
+		defer r.wg.Done()
+		ctx, cancel := context.WithTimeout(context.Background(), fetchTimeout)
+		defer cancel()
+		fn(ctx)
+		r.mu.Lock()
+		delete(r.inflight, key)
+		r.mu.Unlock()
+	}()
+}
+
+// fetchModels fetches a provider's model list and updates the reported
+// cache. Runs on a background goroutine; never called with r.mu held.
+func (r *Resolver) fetchModels(ctx context.Context, key string) {
 	p, ok := r.providers.Get(key)
-	if !ok {
-		return 0
+	var (
+		models []provider.ModelInfo
+		err    error
+	)
+	if ok {
+		models, err = p.Models(ctx)
 	}
 
-	// Serialize fetches per provider; whoever wins re-checks freshness so
-	// waiters reuse the winner's result instead of re-fetching.
-	fetchMu := r.fetchLock(key)
-	fetchMu.Lock()
-	defer fetchMu.Unlock()
-	if w, fresh := r.cachedWindow(key, modelID); fresh {
-		return w
-	}
-
-	models, err := p.Models(ctx)
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if err != nil {
-		entry := r.cache[key]
+	if !ok || err != nil {
+		// Negative-cache the failure (or the unknown key) so lookups don't
+		// spawn a fetch per call; stale windows keep serving meanwhile.
+		entry := r.reported[key]
 		if entry == nil {
 			entry = &providerCache{}
-			r.cache[key] = entry
+			r.reported[key] = entry
 		}
 		entry.failedAt = r.clock()
-		// Serve stale data over nothing.
-		return entry.windows[modelID]
+		return
 	}
 	windows := make(map[string]int, len(models))
 	for _, m := range models {
 		windows[m.ID] = m.ContextLength()
 	}
-	r.cache[key] = &providerCache{windows: windows, fetchedAt: r.clock()}
-	return windows[modelID]
+	r.reported[key] = &providerCache{windows: windows, fetchedAt: r.clock()}
 }
 
-// cachedWindow returns the cached window for the model and whether the cache
-// entry is fresh enough that no fetch is warranted (either recently fetched
-// or recently failed).
-func (r *Resolver) cachedWindow(key, modelID string) (int, bool) {
+// lookupCatalog resolves one catalog answer and caches it. Runs on a
+// background goroutine; never called with r.mu held.
+func (r *Resolver) lookupCatalog(ctx context.Context, ck, key, modelID string) {
+	w, found := r.catalog.ModelContextLimit(ctx, key, modelID)
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	entry, ok := r.cache[key]
-	if !ok {
-		return 0, false
-	}
-	now := r.clock()
-	if now.Sub(entry.fetchedAt) < modelListTTL || now.Sub(entry.failedAt) < errorTTL {
-		return entry.windows[modelID], true
-	}
-	return entry.windows[modelID], false
-}
-
-// fetchLock returns the per-provider fetch mutex, creating it if needed.
-func (r *Resolver) fetchLock(key string) *sync.Mutex {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.fetching == nil {
-		r.fetching = make(map[string]*sync.Mutex)
-	}
-	mu, ok := r.fetching[key]
-	if !ok {
-		mu = &sync.Mutex{}
-		r.fetching[key] = mu
-	}
-	return mu
+	r.catalogHits[ck] = catalogEntry{window: w, found: found, checkedAt: r.clock()}
 }
 
 // lookupConfig normalizes a provider display name or key to the registry key

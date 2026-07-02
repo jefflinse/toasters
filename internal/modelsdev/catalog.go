@@ -80,6 +80,11 @@ type Client struct {
 	ttl        time.Duration
 	httpClient *http.Client
 
+	// fetchMu serializes catalog fetches so concurrent cold readers
+	// coalesce into one HTTP round-trip. It is never held together with mu:
+	// readers of the cached catalog are never blocked behind network I/O.
+	fetchMu sync.Mutex
+
 	mu        sync.RWMutex
 	providers map[string]*Provider // keyed by provider ID
 	fetchedAt time.Time
@@ -188,13 +193,28 @@ func (p *Provider) ModelsSorted() []*Model {
 }
 
 // refresh fetches the catalog from the remote URL and updates the cache.
+// The HTTP round-trip happens without holding mu, so cached readers are
+// never blocked behind network I/O; fetchMu coalesces concurrent cold
+// readers into a single fetch.
 func (c *Client) refresh(ctx context.Context) (map[string]*Provider, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	c.fetchMu.Lock()
+	defer c.fetchMu.Unlock()
 
-	// Double-check after acquiring write lock.
-	if c.providers != nil && time.Since(c.fetchedAt) < c.ttl {
-		return c.providers, nil
+	// Double-check after winning the fetch lock: a concurrent caller may
+	// have refreshed while this one waited.
+	c.mu.RLock()
+	stale, staleAt := c.providers, c.fetchedAt
+	c.mu.RUnlock()
+	if stale != nil && time.Since(staleAt) < c.ttl {
+		return stale, nil
+	}
+
+	// serveStale falls back to the previous catalog on fetch failure.
+	serveStale := func(err error) (map[string]*Provider, error) {
+		if stale != nil {
+			return stale, nil
+		}
+		return nil, err
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.url, nil)
@@ -205,35 +225,22 @@ func (c *Client) refresh(ctx context.Context) (map[string]*Provider, error) {
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		// Return stale cache if available.
-		if c.providers != nil {
-			return c.providers, nil
-		}
-		return nil, fmt.Errorf("modelsdev: fetching catalog: %w", err)
+		return serveStale(fmt.Errorf("modelsdev: fetching catalog: %w", err))
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		if c.providers != nil {
-			return c.providers, nil
-		}
-		return nil, fmt.Errorf("modelsdev: unexpected status %d", resp.StatusCode)
+		return serveStale(fmt.Errorf("modelsdev: unexpected status %d", resp.StatusCode))
 	}
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		if c.providers != nil {
-			return c.providers, nil
-		}
-		return nil, fmt.Errorf("modelsdev: reading body: %w", err)
+		return serveStale(fmt.Errorf("modelsdev: reading body: %w", err))
 	}
 
 	var providers map[string]*Provider
 	if err := json.Unmarshal(body, &providers); err != nil {
-		if c.providers != nil {
-			return c.providers, nil
-		}
-		return nil, fmt.Errorf("modelsdev: parsing catalog: %w", err)
+		return serveStale(fmt.Errorf("modelsdev: parsing catalog: %w", err))
 	}
 
 	// Backfill IDs from map keys (the JSON keys are the IDs).
@@ -244,7 +251,9 @@ func (c *Client) refresh(ctx context.Context) (map[string]*Provider, error) {
 		}
 	}
 
+	c.mu.Lock()
 	c.providers = providers
 	c.fetchedAt = time.Now()
-	return c.providers, nil
+	c.mu.Unlock()
+	return providers, nil
 }

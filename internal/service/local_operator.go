@@ -49,6 +49,17 @@ func (s *LocalService) operatorInfo() (providerID, model, endpoint string) {
 	return s.opProviderID, s.opModel, s.opEndpoint
 }
 
+// currentProviderAndID returns the operator's provider together with its
+// registry ID under a single lock acquisition. Callers that fetch from the
+// provider and then attribute the result to an ID (ListModels →
+// ObserveModels) must use this — two separate accessor calls can straddle a
+// live provider swap and attribute one provider's models to another's ID.
+func (s *LocalService) currentProviderAndID() (provider.Provider, string) {
+	s.opMu.Lock()
+	defer s.opMu.Unlock()
+	return s.opProvider, s.opProviderID
+}
+
 // currentGraphExecutor returns the graph executor, honoring post-construction
 // wiring via SetGraphExecutor.
 func (s *LocalService) currentGraphExecutor() operator.GraphTaskExecutor {
@@ -148,7 +159,7 @@ func (s *LocalService) DismissPrompt(_ context.Context, requestID string) error 
 }
 
 // Status returns the current state of the operator.
-func (s *LocalService) Status(ctx context.Context) (OperatorStatus, error) {
+func (s *LocalService) Status(_ context.Context) (OperatorStatus, error) {
 	if s.currentOperator() == nil {
 		return OperatorStatus{
 			State: OperatorStateDisabled,
@@ -172,7 +183,7 @@ func (s *LocalService) Status(ctx context.Context) (OperatorStatus, error) {
 		Endpoint:      endpoint,
 	}
 	if s.cfg.ContextWindows != nil {
-		status.ContextWindow = s.cfg.ContextWindows.Window(ctx, providerID, model)
+		status.ContextWindow = s.cfg.ContextWindows.Window(providerID, model)
 	}
 	return status, nil
 }
