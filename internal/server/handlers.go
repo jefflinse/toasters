@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/jefflinse/toasters/internal/service"
@@ -88,6 +89,22 @@ func (s *Server) respondToPrompt(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// dismissPrompt handles POST /api/v1/operator/prompts/{requestId}/dismiss.
+func (s *Server) dismissPrompt(w http.ResponseWriter, r *http.Request) {
+	requestID := r.PathValue("requestId")
+	if requestID == "" {
+		writeError(w, http.StatusBadRequest, "bad_request", "requestId is required")
+		return
+	}
+
+	if err := s.svc.Operator().DismissPrompt(r.Context(), requestID); err != nil {
+		handleServiceError(w, r, err)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // operatorStatus handles GET /api/v1/operator/status.
 func (s *Server) operatorStatus(w http.ResponseWriter, r *http.Request) {
 	st, err := s.svc.Operator().Status(r.Context())
@@ -141,6 +158,50 @@ func (s *Server) operatorBlockers(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, PaginatedResponse[wireBlockerPayload]{
+		Items: items,
+		Total: len(items),
+	})
+}
+
+// blockerHistory handles GET /api/v1/operator/blockers/history.
+func (s *Server) blockerHistory(w http.ResponseWriter, r *http.Request) {
+	limit := 0
+	if v := r.URL.Query().Get("limit"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 0 {
+			writeError(w, http.StatusBadRequest, "bad_request", "limit must be a non-negative integer")
+			return
+		}
+		limit = n
+	}
+
+	records, err := s.svc.Operator().BlockerHistory(r.Context(), limit)
+	if err != nil {
+		handleServiceError(w, r, err)
+		return
+	}
+
+	items := make([]wireBlockerRecord, 0, len(records))
+	for _, rec := range records {
+		wr := wireBlockerRecord{
+			wireBlockerPayload: wireBlockerPayload{
+				RequestID: rec.RequestID,
+				Source:    rec.Source,
+				JobID:     rec.JobID,
+				TaskID:    rec.TaskID,
+				CreatedAt: rec.CreatedAt,
+			},
+			ResolvedAt:  rec.ResolvedAt,
+			Disposition: rec.Disposition,
+			Answer:      rec.Answer,
+		}
+		for _, q := range rec.Questions {
+			wr.Questions = append(wr.Questions, wirePromptQuestion{Question: q.Question, Options: q.Options})
+		}
+		items = append(items, wr)
+	}
+
+	writeJSON(w, http.StatusOK, PaginatedResponse[wireBlockerRecord]{
 		Items: items,
 		Total: len(items),
 	})

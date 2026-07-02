@@ -127,15 +127,15 @@ func (m *Model) View() tea.View {
 		return v
 	}
 
-	showLeftPanel := m.shouldShowLeftPanel()
+	showSidebar := m.shouldShowSidebar()
 
-	lpWidth := m.effectiveLeftPanelWidth()
+	sidebarWidth := m.effectiveSidebarWidth()
 
 	const columnGap = 1 // consistent gap between adjacent columns
 
 	var mainWidth int
-	if showLeftPanel {
-		mainWidth = m.width - lpWidth - columnGap
+	if showSidebar {
+		mainWidth = m.width - sidebarWidth - columnGap
 	} else {
 		mainWidth = m.width
 	}
@@ -281,10 +281,10 @@ func (m *Model) View() tea.View {
 		mainColumn = lipgloss.JoinVertical(lipgloss.Left, chatView, inputOrStatus)
 	}
 
-	// Build left panel (if visible).
-	var leftPanelView string
-	if showLeftPanel {
-		leftPanelView = m.renderLeftPanel(lpWidth, m.height)
+	// Build sidebar (if visible).
+	var sidebarView string
+	if showSidebar {
+		sidebarView = m.renderSidebar(sidebarWidth, m.height)
 	}
 
 	// Build a vertical gap spacer (1-column wide, full terminal height) for
@@ -297,9 +297,12 @@ func (m *Model) View() tea.View {
 	gap := strings.Join(gapLines, "\n")
 
 	var content string
-	if showLeftPanel {
-		content = lipgloss.JoinHorizontal(lipgloss.Top, leftPanelView, gap, mainColumn)
-	} else {
+	switch {
+	case showSidebar && m.sidebarOnRight():
+		content = lipgloss.JoinHorizontal(lipgloss.Top, mainColumn, gap, sidebarView)
+	case showSidebar:
+		content = lipgloss.JoinHorizontal(lipgloss.Top, sidebarView, gap, mainColumn)
+	default:
 		content = mainColumn
 	}
 
@@ -307,8 +310,8 @@ func (m *Model) View() tea.View {
 	// edge so they sit inside the chat column rather than over the sidebar.
 	if len(m.toasts) > 0 {
 		chatLeft := 0
-		if showLeftPanel {
-			chatLeft = lpWidth + columnGap
+		if showSidebar && !m.sidebarOnRight() {
+			chatLeft = sidebarWidth + columnGap
 		}
 		chatRight := chatLeft + mainWidth
 		toastBlock := m.renderToasts(mainWidth)
@@ -323,19 +326,19 @@ func (m *Model) View() tea.View {
 
 // resizeComponents recalculates sizes for viewport and textarea after a resize.
 func (m *Model) resizeComponents() {
-	showLeftPanel := m.shouldShowLeftPanel()
-	m.lastLeftPanelShown = showLeftPanel
+	showSidebar := m.shouldShowSidebar()
+	m.lastSidebarShown = showSidebar
 
-	lpWidth := m.effectiveLeftPanelWidth()
+	sidebarWidth := m.effectiveSidebarWidth()
 
 	// Cache for mouse hit-testing.
-	m.lpWidth = lpWidth
+	m.sidebarWidth = sidebarWidth
 
 	const columnGap = 1 // consistent gap between adjacent columns
 
 	var mainWidth int
-	if showLeftPanel {
-		mainWidth = m.width - lpWidth - columnGap
+	if showSidebar {
+		mainWidth = m.width - sidebarWidth - columnGap
 	} else {
 		mainWidth = m.width
 	}

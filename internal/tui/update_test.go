@@ -248,7 +248,7 @@ func TestMainScreenTabOrder(t *testing.T) {
 	mm := newMinimalModel(t)
 	mm.width, mm.height = 120, 40
 	show := true
-	mm.leftPanelOverride = &show // force the left panel visible so no target is skipped
+	mm.sidebarOverride = &show // force the sidebar visible so no target is skipped
 	mm.focused = focusJobs
 	m := &mm
 

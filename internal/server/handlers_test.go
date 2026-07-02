@@ -79,6 +79,12 @@ func (m *mockOperatorService) Blockers(_ context.Context) ([]service.Blocker, er
 	return m.blockers, m.blockersErr
 }
 
+func (m *mockOperatorService) DismissPrompt(_ context.Context, _ string) error { return nil }
+
+func (m *mockOperatorService) BlockerHistory(_ context.Context, _ int) ([]service.BlockerRecord, error) {
+	return nil, nil
+}
+
 type mockDefinitionService struct{}
 type mockJobService struct{}
 type mockSessionService struct{}

@@ -647,6 +647,11 @@ type Settings struct {
 	// FleetRowDensity controls fleet-panel row height: "full" or "compact".
 	// Empty is treated as "full".
 	FleetRowDensity string `json:"fleet_row_density"`
+
+	// SidebarSide controls which side of the chat window the sidebar
+	// (Jobs / Fleet / Blockers) renders on: "left" or "right". Empty is
+	// treated as "left".
+	SidebarSide string `json:"sidebar_side"`
 }
 
 // ---------------------------------------------------------------------------

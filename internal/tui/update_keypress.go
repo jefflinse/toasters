@@ -104,8 +104,8 @@ func (m *Model) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			default:
 				next = focusChat
 			}
-			// Skip left-panel targets when left panel is hidden or empty.
-			if !m.shouldShowLeftPanel() && (next == focusJobs || next == focusBlockers || next == focusFleet) {
+			// Skip sidebar targets when sidebar is hidden or empty.
+			if !m.shouldShowSidebar() && (next == focusJobs || next == focusBlockers || next == focusFleet) {
 				continue
 			}
 			break
@@ -133,8 +133,8 @@ func (m *Model) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			default:
 				next = focusChat
 			}
-			// Skip left-panel targets when left panel is hidden or empty.
-			if !m.shouldShowLeftPanel() && (next == focusJobs || next == focusBlockers || next == focusFleet) {
+			// Skip sidebar targets when sidebar is hidden or empty.
+			if !m.shouldShowSidebar() && (next == focusJobs || next == focusBlockers || next == focusFleet) {
 				continue
 			}
 			break
@@ -348,12 +348,12 @@ func (m *Model) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, cmd
 
 	case "ctrl+j":
-		// Toggle left panel (Jobs + Workers) visibility. Flip from the
+		// Toggle sidebar (Jobs + Workers) visibility. Flip from the
 		// currently *effective* state, not the override field — when no
 		// override is set, the user's mental model is "the panel I see
 		// right now", which may be the auto-hidden empty state.
-		next := !m.shouldShowLeftPanel()
-		m.leftPanelOverride = &next
+		next := !m.shouldShowSidebar()
+		m.sidebarOverride = &next
 		if !next && (m.focused == focusJobs || m.focused == focusFleet) {
 			cmds = append(cmds, m.setFocus(focusChat))
 			cmds = append(cmds, m.input.Focus())
@@ -362,29 +362,29 @@ func (m *Model) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(cmds...)
 
 	case "alt+[":
-		// Decrease left panel width.
-		if m.shouldShowLeftPanel() {
-			if m.leftPanelWidthOverride == 0 {
-				m.leftPanelWidthOverride = leftPanelWidth(m.width)
+		// Decrease sidebar width.
+		if m.shouldShowSidebar() {
+			if m.sidebarWidthOverride == 0 {
+				m.sidebarWidthOverride = defaultSidebarWidth(m.width)
 			}
-			m.leftPanelWidthOverride -= 2
-			if m.leftPanelWidthOverride < minLeftPanelWidth {
-				m.leftPanelWidthOverride = minLeftPanelWidth
+			m.sidebarWidthOverride -= 2
+			if m.sidebarWidthOverride < minSidebarWidth {
+				m.sidebarWidthOverride = minSidebarWidth
 			}
 			m.resizeComponents()
 		}
 		return m, nil
 
 	case "alt+]":
-		// Increase left panel width.
-		if m.shouldShowLeftPanel() {
-			if m.leftPanelWidthOverride == 0 {
-				m.leftPanelWidthOverride = leftPanelWidth(m.width)
+		// Increase sidebar width.
+		if m.shouldShowSidebar() {
+			if m.sidebarWidthOverride == 0 {
+				m.sidebarWidthOverride = defaultSidebarWidth(m.width)
 			}
-			m.leftPanelWidthOverride += 2
+			m.sidebarWidthOverride += 2
 			maxW := m.width / 2
-			if m.leftPanelWidthOverride > maxW {
-				m.leftPanelWidthOverride = maxW
+			if m.sidebarWidthOverride > maxW {
+				m.sidebarWidthOverride = maxW
 			}
 			m.resizeComponents()
 		}
@@ -456,17 +456,10 @@ func (m *Model) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 			return m, tickCmd
 		}
-		// Open the blocker selection modal when the blockers pane is focused.
+		// Open the blockers modal when the blockers pane is focused. Opens
+		// even with an empty queue — the modal doubles as resolved history.
 		if m.focused == focusBlockers {
-			if len(m.blockers) == 0 {
-				return m, nil
-			}
-			sel := m.blockersSel
-			if sel >= len(m.blockers) {
-				sel = 0
-			}
-			m.blockersModal = blockersModalState{show: true, sel: sel}
-			return m, nil
+			return m, m.openBlockersModal()
 		}
 		// Open the nodes screen when the fleet pane is focused.
 		if m.focused == focusFleet {
@@ -514,6 +507,15 @@ func (m *Model) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 					tickCmd = spinnerTick()
 				}
 				return m, tickCmd
+			case "/blockers":
+				m.input.Reset()
+				m.cmdPopup.show = false
+				return m, m.openBlockersModal()
+			case "/fleet":
+				m.input.Reset()
+				m.cmdPopup.show = false
+				m.openNodes()
+				return m, nil
 			case "/graphmap":
 				m.input.Reset()
 				m.cmdPopup.show = false

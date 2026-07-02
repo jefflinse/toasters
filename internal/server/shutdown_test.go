@@ -282,6 +282,12 @@ func (m *shutdownTestOperator) History(ctx context.Context) ([]service.ChatEntry
 func (m *shutdownTestOperator) Blockers(ctx context.Context) ([]service.Blocker, error) {
 	return nil, nil
 }
+func (m *shutdownTestOperator) DismissPrompt(ctx context.Context, requestID string) error {
+	return nil
+}
+func (m *shutdownTestOperator) BlockerHistory(ctx context.Context, limit int) ([]service.BlockerRecord, error) {
+	return nil, nil
+}
 
 // shutdownTestDefinitions implements service.DefinitionService.
 type shutdownTestDefinitions struct{}

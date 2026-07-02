@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"encoding/json"
+	"time"
 )
 
 // Store defines all database operations for the toasters persistence layer.
@@ -76,6 +77,18 @@ type Store interface {
 	// Chat history — survives server restart for reconnect hydration.
 	AppendChatEntry(ctx context.Context, entry *ChatEntry) error
 	ListRecentChatEntries(ctx context.Context, limit int) ([]*ChatEntry, error)
+
+	// Blockers — HITL prompt history. A row is created when a blocker is
+	// raised and updated in place when it resolves; resolved rows remain
+	// as browsable history.
+	CreateBlocker(ctx context.Context, rec *BlockerRecord) error
+	ResolveBlockerRecord(ctx context.Context, requestID, disposition, answer string, resolvedAt time.Time) error
+	// ListBlockerHistory returns resolved blockers, newest-first.
+	ListBlockerHistory(ctx context.Context, limit int) ([]*BlockerRecord, error)
+	// SweepUnresolvedBlockers marks still-pending rows cancelled. Called at
+	// startup: a pending row from a previous process has no waiting caller
+	// anymore, so it can never be answered. Returns the number swept.
+	SweepUnresolvedBlockers(ctx context.Context) (int, error)
 
 	// Recovery
 	//

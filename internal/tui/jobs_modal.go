@@ -415,7 +415,7 @@ func (m *Model) renderJobsModal() string {
 	// Left panel: match the main-screen Jobs pane's outer width so the
 	// job-block list reads at the same scale in both views. Min 18 cols
 	// inner as a safety floor on narrow terminals.
-	leftPanelW := leftPanelWidth(m.width)
+	leftPanelW := defaultSidebarWidth(m.width)
 	leftInnerW := leftPanelW - panelFrameW
 	if leftInnerW < 18 {
 		leftInnerW = 18

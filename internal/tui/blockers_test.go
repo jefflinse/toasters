@@ -196,7 +196,104 @@ func TestRenderPromptModal_RendersWizard(t *testing.T) {
 	}
 }
 
-func TestRenderLeftPanel_BlockerCounts(t *testing.T) {
+func TestRenderBlockersModal_TwoPanel(t *testing.T) {
+	t.Parallel()
+
+	m := newMinimalModel(t)
+	m.width = 140
+	m.height = 40
+	m.blockers = []service.Blocker{
+		{
+			RequestID: "r1",
+			Questions: []service.PromptQuestion{{Question: "What features should the system support?"}},
+			CreatedAt: time.Now().Add(-2 * time.Minute),
+		},
+		{
+			RequestID: "r2",
+			Source:    "graph:plan",
+			Questions: []service.PromptQuestion{
+				{Question: "Which path?", Options: []string{"left", "right"}},
+				{Question: "How deep?"},
+			},
+			CreatedAt: time.Now().Add(-30 * time.Second),
+		},
+	}
+	m.blockersModal = blockersModalState{show: true, sel: 1}
+
+	out := m.renderBlockersModal()
+	for _, want := range []string{
+		"2 waiting",                // count in the queue header
+		"node plan",                // selected blocker's attribution header
+		"Questions (2)",            // multi-question section header
+		"Which path?", "How deep?", // both questions in the detail panel
+		"○ left", "○ right", // options as bullets
+		"[Enter] Answer", "[x] Dismiss", // footer hints
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("modal output missing %q", want)
+		}
+	}
+}
+
+func TestRenderBlockersModal_Empty(t *testing.T) {
+	t.Parallel()
+
+	m := newMinimalModel(t)
+	m.width = 120
+	m.height = 40
+	m.blockersModal = blockersModalState{show: true}
+
+	out := m.renderBlockersModal()
+	if !strings.Contains(out, "No pending blockers") {
+		t.Error("empty modal should render the no-blockers state")
+	}
+}
+
+func TestBuildBlockersLines_CountAndMultiQuestion(t *testing.T) {
+	t.Parallel()
+
+	m := newMinimalModel(t)
+	m.blockers = []service.Blocker{
+		{
+			RequestID: "r1",
+			Questions: []service.PromptQuestion{{Question: "First?"}, {Question: "Second?"}, {Question: "Third?"}},
+			CreatedAt: time.Now().Add(-time.Minute),
+		},
+	}
+
+	joined := strings.Join(m.buildBlockersLines(60), "\n")
+	if !strings.Contains(joined, "1 waiting") {
+		t.Errorf("pane title missing pending count, got:\n%s", joined)
+	}
+	if !strings.Contains(joined, "First?") {
+		t.Errorf("pane missing first question, got:\n%s", joined)
+	}
+	if !strings.Contains(joined, "(+2 more)") {
+		t.Errorf("pane missing extra-question marker, got:\n%s", joined)
+	}
+}
+
+func TestCompactAge(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		ago  time.Duration
+		want string
+	}{
+		{5 * time.Second, "5s"},
+		{90 * time.Second, "1m"},
+		{45 * time.Minute, "45m"},
+		{3 * time.Hour, "3h"},
+		{50 * time.Hour, "2d"},
+	}
+	for _, tt := range tests {
+		if got := compactAge(time.Now().Add(-tt.ago)); got != tt.want {
+			t.Errorf("compactAge(-%v) = %q, want %q", tt.ago, got, tt.want)
+		}
+	}
+}
+
+func TestRenderSidebar_BlockerCounts(t *testing.T) {
 	t.Parallel()
 
 	for _, n := range []int{0, 1, 3} {
@@ -207,13 +304,89 @@ func TestRenderLeftPanel_BlockerCounts(t *testing.T) {
 			m.blockers[i] = service.Blocker{RequestID: string(rune('a' + i)), Questions: []service.PromptQuestion{{Question: "Q"}}}
 		}
 		// Must not panic and must produce output for a reasonable panel size.
-		out := m.renderLeftPanel(40, 30)
+		out := m.renderSidebar(40, 30)
 		if out == "" {
-			t.Errorf("n=%d: renderLeftPanel returned empty", n)
+			t.Errorf("n=%d: renderSidebar returned empty", n)
 		}
-		_, _, blockersH := m.leftPanelHeights(40, 30)
+		_, _, blockersH := m.sidebarPaneHeights(40, 30)
 		if blockersH < 1 {
 			t.Errorf("n=%d: blockers pane height = %d, want >= 1", n, blockersH)
 		}
+	}
+}
+
+func TestRenderBlockersModal_ResolvedHistory(t *testing.T) {
+	t.Parallel()
+
+	m := newMinimalModel(t)
+	m.width = 140
+	m.height = 40
+	m.blockers = []service.Blocker{
+		{RequestID: "p1", Questions: []service.PromptQuestion{{Question: "Pending Q?"}}, CreatedAt: time.Now()},
+	}
+	m.blockersModal = blockersModalState{
+		show: true,
+		sel:  1, // first history row (after the one pending row)
+		history: []service.BlockerRecord{
+			{
+				Blocker: service.Blocker{
+					RequestID: "r1",
+					Source:    "graph:plan",
+					Questions: []service.PromptQuestion{{Question: "Old question?"}},
+					CreatedAt: time.Now().Add(-time.Hour),
+				},
+				ResolvedAt:  time.Now().Add(-30 * time.Minute),
+				Disposition: service.BlockerDispositionAnswered,
+				Answer:      "It was option two.",
+			},
+		},
+	}
+
+	out := m.renderBlockersModal()
+	for _, want := range []string{
+		"Resolved",           // history section header
+		"Old question?",      // resolved blocker's question in detail
+		"answered",           // disposition in detail
+		"It was option two.", // the recorded answer
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("modal output missing %q", want)
+		}
+	}
+	// A resolved row is browse-only: no Answer/Dismiss hints in the footer.
+	if strings.Contains(out, "[Enter] Answer") {
+		t.Error("footer should not offer Enter/answer on a resolved row")
+	}
+}
+
+func TestUpdateBlockersModal_CursorSpansHistory(t *testing.T) {
+	t.Parallel()
+
+	m := newMinimalModel(t)
+	m.blockers = []service.Blocker{{RequestID: "p1", Questions: []service.PromptQuestion{{Question: "Q"}}}}
+	m.blockersModal = blockersModalState{
+		show:    true,
+		sel:     0,
+		history: []service.BlockerRecord{{Blocker: service.Blocker{RequestID: "r1"}}},
+	}
+
+	// Down moves onto the history row; Enter there must NOT open the wizard.
+	res, _ := m.updateBlockersModal(specialKey(tea.KeyDown))
+	got := res.(*Model)
+	if got.blockersModal.sel != 1 {
+		t.Fatalf("sel = %d, want 1 (history row)", got.blockersModal.sel)
+	}
+	res, _ = got.updateBlockersModal(specialKey(tea.KeyEnter))
+	got = res.(*Model)
+	if got.prompt.promptMode {
+		t.Error("Enter on a resolved row must not open the answer wizard")
+	}
+	if !got.blockersModal.show {
+		t.Error("modal should stay open after Enter on a resolved row")
+	}
+	// Down at the end of the combined list stays clamped.
+	res, _ = got.updateBlockersModal(specialKey(tea.KeyDown))
+	if res.(*Model).blockersModal.sel != 1 {
+		t.Errorf("sel = %d, want clamped at 1", res.(*Model).blockersModal.sel)
 	}
 }

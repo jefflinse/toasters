@@ -171,9 +171,11 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	// Operator
 	mux.HandleFunc("POST /api/v1/operator/messages", s.sendMessage)
 	mux.HandleFunc("POST /api/v1/operator/prompts/{requestId}/respond", s.respondToPrompt)
+	mux.HandleFunc("POST /api/v1/operator/prompts/{requestId}/dismiss", s.dismissPrompt)
 	mux.HandleFunc("GET /api/v1/operator/status", s.operatorStatus)
 	mux.HandleFunc("GET /api/v1/operator/history", s.operatorHistory)
 	mux.HandleFunc("GET /api/v1/operator/blockers", s.operatorBlockers)
+	mux.HandleFunc("GET /api/v1/operator/blockers/history", s.blockerHistory)
 
 	// Skills
 	mux.HandleFunc("GET /api/v1/skills", s.listSkills)

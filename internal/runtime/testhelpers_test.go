@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/jefflinse/toasters/internal/db"
 )
@@ -138,6 +139,14 @@ func (s *noopStore) AppendChatEntry(_ context.Context, _ *db.ChatEntry) error { 
 func (s *noopStore) ListRecentChatEntries(_ context.Context, _ int) ([]*db.ChatEntry, error) {
 	return nil, nil
 }
+func (s *noopStore) CreateBlocker(_ context.Context, _ *db.BlockerRecord) error { return nil }
+func (s *noopStore) ResolveBlockerRecord(_ context.Context, _, _, _ string, _ time.Time) error {
+	return nil
+}
+func (s *noopStore) ListBlockerHistory(_ context.Context, _ int) ([]*db.BlockerRecord, error) {
+	return nil, nil
+}
+func (s *noopStore) SweepUnresolvedBlockers(_ context.Context) (int, error) { return 0, nil }
 func (s *noopStore) AppendSessionMessage(_ context.Context, _ *db.SessionMessage) error {
 	return nil
 }

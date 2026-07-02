@@ -66,11 +66,21 @@ type OperatorService interface {
 	// broker.Ask returns, not here.
 	RespondToPrompt(ctx context.Context, requestID string, response string) error
 
+	// DismissPrompt resolves a pending ask_user prompt without a real answer:
+	// the waiting caller receives a cancellation message and the blocker is
+	// recorded as dismissed (vs answered) in history.
+	DismissPrompt(ctx context.Context, requestID string) error
+
 	// Blockers returns the pending ask_user requests waiting for a human
 	// response, oldest-first. Clients call this on connect/reconnect to
 	// hydrate the Blockers panel; live changes arrive via EventTypeBlockerAdded
 	// and EventTypeBlockerResolved.
 	Blockers(ctx context.Context) ([]Blocker, error)
+
+	// BlockerHistory returns resolved blockers (answered, dismissed, or
+	// cancelled), newest-first, up to limit. A non-positive limit applies
+	// the server default. Pending blockers come from Blockers().
+	BlockerHistory(ctx context.Context, limit int) ([]BlockerRecord, error)
 
 	// Status returns the current state of the operator (idle, streaming,
 	// processing) and the model it is using. Used by clients to rebuild state

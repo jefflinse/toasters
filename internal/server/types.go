@@ -707,7 +707,16 @@ type wireBlockerPayload struct {
 }
 
 type wireBlockerResolvedPayload struct {
-	RequestID string `json:"request_id"`
+	RequestID   string `json:"request_id"`
+	Disposition string `json:"disposition,omitempty"`
+}
+
+// wireBlockerRecord is a resolved blocker returned by the history endpoint.
+type wireBlockerRecord struct {
+	wireBlockerPayload
+	ResolvedAt  time.Time `json:"resolved_at"`
+	Disposition string    `json:"disposition"`
+	Answer      string    `json:"answer,omitempty"`
 }
 
 type wirePromptQuestion struct {
@@ -937,7 +946,7 @@ func EventPayloadToWire(ev service.Event) any {
 		}
 		return w
 	case service.BlockerResolvedPayload:
-		return wireBlockerResolvedPayload{RequestID: p.RequestID}
+		return wireBlockerResolvedPayload{RequestID: p.RequestID, Disposition: p.Disposition}
 	case service.JobCreatedPayload:
 		return wireJobCreatedPayload{JobID: p.JobID, Title: p.Title, Description: p.Description}
 	case service.TaskCreatedPayload:

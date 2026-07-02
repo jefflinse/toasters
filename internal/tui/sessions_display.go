@@ -9,6 +9,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/jefflinse/toasters/internal/config"
 	"github.com/jefflinse/toasters/internal/service"
 )
 
@@ -79,7 +80,7 @@ const recentCompletedJobsWindow = 24 * time.Hour
 // Workers pane shows. Active sessions are always shown.
 const maxCompletedWorkersInPane = 3
 
-// displayJobs returns the filtered and sorted list of jobs for display in the left panel.
+// displayJobs returns the filtered and sorted list of jobs for display in the sidebar.
 // Rules:
 //   - Completed, failed, and cancelled jobs updated more than recentCompletedJobsWindow ago are hidden.
 //   - Sort order: Active first, then Paused, then Completed/Failed/Cancelled.
@@ -261,36 +262,36 @@ func (m *Model) displayRuntimeSessions() []*runtimeSlot {
 	return append(active, terminal...)
 }
 
-// syncLeftPanelVisibility re-runs resizeComponents whenever the left-panel
+// syncSidebarVisibility re-runs resizeComponents whenever the sidebar
 // visibility has flipped since the last resize. Called as a defer from
 // Update so state-driven changes (a job arriving, a worker ending) keep
 // the chat viewport width in sync with the rendered layout.
-func (m *Model) syncLeftPanelVisibility() {
+func (m *Model) syncSidebarVisibility() {
 	if m.width == 0 || m.height == 0 {
 		// No initial WindowSizeMsg yet; nothing sensible to resize.
 		return
 	}
-	if m.shouldShowLeftPanel() != m.lastLeftPanelShown {
+	if m.shouldShowSidebar() != m.lastSidebarShown {
 		m.resizeComponents()
 	}
 }
 
-// shouldShowLeftPanel reports whether the left panel (Jobs + Workers) should
+// shouldShowSidebar reports whether the sidebar (Jobs + Workers) should
 // be rendered. Resolution order, outermost gate first:
 //
-//  1. Width gate — terminals narrower than minWidthForLeftPanel never show
+//  1. Width gate — terminals narrower than minWidthForSidebar never show
 //     the panel regardless of preferences (geometry wins).
 //  2. Explicit user override (ctrl+j) — pins the panel until cleared.
 //  3. Settings default — when ShowJobsPanelByDefault is true the panel
 //     stays visible even with no content.
 //  4. Content fallback — show only when there's a job or runtime session
 //     to surface (the original behavior, preserved as the default).
-func (m *Model) shouldShowLeftPanel() bool {
-	if m.width < minWidthForLeftPanel {
+func (m *Model) shouldShowSidebar() bool {
+	if m.width < minWidthForSidebar {
 		return false
 	}
-	if m.leftPanelOverride != nil {
-		return *m.leftPanelOverride
+	if m.sidebarOverride != nil {
+		return *m.sidebarOverride
 	}
 	if m.showJobsPanelDefault {
 		return true
@@ -319,10 +320,11 @@ func (m *Model) applySettings(s service.Settings) {
 	if m.fleetDensity = s.FleetRowDensity; m.fleetDensity == "" {
 		m.fleetDensity = "full"
 	}
+	m.sidebarSide = config.ValidSidebarSide(s.SidebarSide)
 	if m.settingsModal.show {
 		// Heuristic for "this came from a save, not the initial load":
 		// the modal is open. Clear the override so the new default wins.
-		m.leftPanelOverride = nil
+		m.sidebarOverride = nil
 	}
 	if m.width > 0 && m.height > 0 {
 		m.resizeComponents()

@@ -159,11 +159,11 @@ func (m *Model) handleMouseClick(msg tea.MouseClickMsg) (tea.Model, tea.Cmd) {
 	if !m.skillsModal.show &&
 		!m.mcpModal.show && !m.catalogModal.show && !m.operatorModal.show &&
 		!m.nodes.show && !m.loading {
-		if m.shouldShowLeftPanel() && msg.X < m.lpWidth {
-			// Clicked left panel — determine which of the three panes was
+		if m.shouldShowSidebar() && m.pointInSidebar(msg.X) {
+			// Clicked the sidebar — determine which of the three panes was
 			// clicked. Pane order (top to bottom): Jobs, Fleet, Blockers.
 			// Boundaries come from the same height model the renderer uses.
-			jobsH, fleetH, _ := m.leftPanelHeights(m.lpWidth, m.height)
+			jobsH, fleetH, _ := m.sidebarPaneHeights(m.sidebarWidth, m.height)
 			paneFrameV := FocusedPaneStyle.GetVerticalBorderSize()
 			jobsBottom := jobsH + paneFrameV
 			fleetBottom := jobsBottom + fleetH + paneFrameV

@@ -1,4 +1,4 @@
-// Panel rendering: the left panel's three stacked panes — Jobs, Fleet, Blockers.
+// Panel rendering: the sidebar's three stacked panes — Jobs, Fleet, Blockers.
 package tui
 
 import (
@@ -11,20 +11,20 @@ import (
 	"github.com/jefflinse/toasters/internal/service"
 )
 
-func leftPanelWidth(termWidth int) int {
+func defaultSidebarWidth(termWidth int) int {
 	w := termWidth / 4
-	if w < minLeftPanelWidth {
-		return minLeftPanelWidth
+	if w < minSidebarWidth {
+		return minSidebarWidth
 	}
 	return w
 }
 
-// effectiveLeftPanelWidth returns the left panel width, respecting any user override.
-func (m *Model) effectiveLeftPanelWidth() int {
-	if m.leftPanelWidthOverride > 0 {
-		w := m.leftPanelWidthOverride
-		if w < minLeftPanelWidth {
-			w = minLeftPanelWidth
+// effectiveSidebarWidth returns the sidebar width, respecting any user override.
+func (m *Model) effectiveSidebarWidth() int {
+	if m.sidebarWidthOverride > 0 {
+		w := m.sidebarWidthOverride
+		if w < minSidebarWidth {
+			w = minSidebarWidth
 		}
 		maxW := m.width / 2
 		if w > maxW {
@@ -32,12 +32,28 @@ func (m *Model) effectiveLeftPanelWidth() int {
 		}
 		return w
 	}
-	return leftPanelWidth(m.width)
+	return defaultSidebarWidth(m.width)
 }
 
-// leftPanelContentWidth returns the per-pane content width for a given left
+// sidebarOnRight reports whether the sidebar renders to the right of the
+// chat window (settings-driven; the default is left).
+func (m *Model) sidebarOnRight() bool {
+	return m.sidebarSide == "right"
+}
+
+// pointInSidebar reports whether terminal column x falls inside the sidebar,
+// accounting for which side it renders on. Callers must already have checked
+// that the sidebar is visible.
+func (m *Model) pointInSidebar(x int) bool {
+	if m.sidebarOnRight() {
+		return x >= m.width-m.sidebarWidth
+	}
+	return x < m.sidebarWidth
+}
+
+// sidebarContentWidth returns the per-pane content width for a given left
 // panel width (panel width minus one pane's horizontal border+padding frame).
-func leftPanelContentWidth(panelWidth int) int {
+func sidebarContentWidth(panelWidth int) int {
 	paneFrameH := FocusedPaneStyle.GetHorizontalBorderSize() + FocusedPaneStyle.GetHorizontalPadding()
 	cw := panelWidth - paneFrameH
 	if cw < 1 {
@@ -54,13 +70,13 @@ func paneStyleFor(focused bool) lipgloss.Style {
 	return UnfocusedPaneStyle
 }
 
-// renderLeftPanel renders the three stacked panes: Jobs (top) and Blockers
+// renderSidebar renders the three stacked panes: Jobs (top) and Blockers
 // (bottom) are content-driven; Fleet (middle) takes the remaining height so the
-// live-LLM view gets the slack. All height math lives in leftPanelHeights, which
+// live-LLM view gets the slack. All height math lives in sidebarPaneHeights, which
 // mouse hit-testing shares so pane boundaries can never drift out of sync.
-func (m Model) renderLeftPanel(panelWidth, panelHeight int) string {
-	contentWidth := leftPanelContentWidth(panelWidth)
-	jobsH, fleetH, blockersH := m.leftPanelHeights(panelWidth, panelHeight)
+func (m Model) renderSidebar(panelWidth, panelHeight int) string {
+	contentWidth := sidebarContentWidth(panelWidth)
+	jobsH, fleetH, blockersH := m.sidebarPaneHeights(panelWidth, panelHeight)
 
 	jobsContent := lipgloss.NewStyle().Height(jobsH).Render(
 		lipgloss.JoinVertical(lipgloss.Left, m.buildJobsLines(contentWidth)...),
@@ -78,16 +94,16 @@ func (m Model) renderLeftPanel(panelWidth, panelHeight int) string {
 	blockersPane := paneStyleFor(m.focused == focusBlockers).Width(panelWidth).Render(blockersContent)
 
 	inner := lipgloss.JoinVertical(lipgloss.Left, jobsPane, fleetPane, blockersPane)
-	return LeftPanelStyle.Width(panelWidth).Height(panelHeight).Render(inner)
+	return SidebarStyle.Width(panelWidth).Height(panelHeight).Render(inner)
 }
 
-// leftPanelHeights computes the three panes' content heights. Jobs and Blockers
+// sidebarPaneHeights computes the three panes' content heights. Jobs and Blockers
 // are content-driven (measured from their rendered lines); Fleet takes the rest.
 // When Jobs+Blockers would starve Fleet below minFleetH, Jobs is compressed
 // first (its list scrolls; blockers are usually short). Shared by render and
 // mouse hit-testing so the two never disagree.
-func (m *Model) leftPanelHeights(panelWidth, panelHeight int) (jobsH, fleetH, blockersH int) {
-	contentWidth := leftPanelContentWidth(panelWidth)
+func (m *Model) sidebarPaneHeights(panelWidth, panelHeight int) (jobsH, fleetH, blockersH int) {
+	contentWidth := sidebarContentWidth(panelWidth)
 	paneFrameV := FocusedPaneStyle.GetVerticalBorderSize()
 	availableH := panelHeight - 3*paneFrameV
 	if availableH < 9 {
@@ -142,28 +158,43 @@ func (m Model) buildJobsLines(contentWidth int) []string {
 	return lines
 }
 
-// buildBlockersLines builds the Blockers pane content (title, blocker rows, hint).
+// buildBlockersLines builds the Blockers pane content (title with pending
+// count, two-line blocker rows, hint). Each blocker renders as an attribution
+// line (who's asking, about what, how long ago) and a question line so the
+// question isn't crowded out by the attribution.
 func (m Model) buildBlockersLines(contentWidth int) []string {
 	var lines []string
 	blockersTitle := gradientText("Blockers", [3]uint8{255, 175, 0}, [3]uint8{255, 90, 0})
 	if m.focused == focusBlockers {
 		blockersTitle = rainbowText("Blockers", m.spinnerFrame)
 	}
+	if n := len(m.blockers); n > 0 {
+		blockersTitle += BlockerCountStyle.Render(fmt.Sprintf(" · %d waiting", n))
+	}
 	lines = append(lines, blockersTitle)
 	if len(m.blockers) == 0 {
 		lines = append(lines, DimStyle.Italic(true).Render("No blockers"))
 	} else {
 		for i, b := range m.blockers {
+			selected := m.focused == focusBlockers && i == m.blockersSel
 			marker := "  "
-			if m.focused == focusBlockers && i == m.blockersSel {
+			if selected {
 				marker = "▶ "
 			}
-			label := m.blockerLabel(b) + ": " + blockerFirstQuestion(b)
-			line := "⛔ " + truncateStr(label, contentWidth-5)
-			if m.focused == focusBlockers && i == m.blockersSel {
-				lines = append(lines, BlockerSelectedStyle.Render(marker+line))
+			attr := "⛔ " + m.blockerLabel(b) + " · " + compactAge(b.CreatedAt)
+			question := blockerFirstQuestion(b)
+			if extra := len(b.Questions) - 1; extra > 0 {
+				question += fmt.Sprintf(" (+%d more)", extra)
+			}
+			attrLine := marker + truncateStr(attr, contentWidth-3)
+			questionLine := "     " + truncateStr(question, contentWidth-6)
+			if selected {
+				lines = append(lines,
+					BlockerSelectedStyle.Render(attrLine),
+					BlockerSelectedStyle.Render(questionLine),
+				)
 			} else {
-				lines = append(lines, marker+line)
+				lines = append(lines, attrLine, DimStyle.Render(questionLine))
 			}
 		}
 	}

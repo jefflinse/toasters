@@ -206,6 +206,20 @@ type ChatEntry struct {
 	TurnID    string // operator turn correlation
 }
 
+// BlockerRecord persists one HITL prompt round (an ask_user from the operator
+// or a graph-node interrupt) so resolved blockers stay browsable as history.
+type BlockerRecord struct {
+	RequestID   string
+	Source      string // "" = operator; "graph:<node>" = node interrupt
+	JobID       string
+	TaskID      string
+	Questions   string // JSON array of {question, options}
+	CreatedAt   time.Time
+	ResolvedAt  time.Time // zero while pending
+	Disposition string    // "" pending | "answered" | "dismissed" | "cancelled"
+	Answer      string
+}
+
 // Artifact records a file or output produced during a job.
 type Artifact struct {
 	ID        int64

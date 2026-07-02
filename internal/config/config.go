@@ -41,10 +41,14 @@ type Config struct {
 	// FleetRowDensity controls how tall each LLM row in the fleet panel is:
 	// "full" (label / model / bar / stats / activity) or "compact" (folded
 	// onto fewer lines). Empty defaults to "full".
-	FleetRowDensity string         `mapstructure:"fleet_row_density"`
-	Operator        OperatorConfig `mapstructure:"operator"`
-	Workers         WorkersConfig  `mapstructure:"agents"` // config key "agents" kept for backward compatibility
-	MCP             MCPConfig      `mapstructure:"mcp"`
+	FleetRowDensity string `mapstructure:"fleet_row_density"`
+	// SidebarSide controls which side of the chat window the sidebar
+	// (Jobs / Fleet / Blockers) renders on: "left" or "right". Empty
+	// defaults to "left".
+	SidebarSide string         `mapstructure:"sidebar_side"`
+	Operator    OperatorConfig `mapstructure:"operator"`
+	Workers     WorkersConfig  `mapstructure:"agents"` // config key "agents" kept for backward compatibility
+	MCP         MCPConfig      `mapstructure:"mcp"`
 }
 
 // MCPServerConfig holds configuration for a single MCP server.
@@ -105,6 +109,7 @@ func Load() (*Config, error) {
 	viper.SetDefault("worker_temperature", 0.1)
 	viper.SetDefault("show_jobs_panel_by_default", true)
 	viper.SetDefault("fleet_row_density", "full")
+	viper.SetDefault("sidebar_side", "left")
 	viper.SetDefault("show_operator_panel_by_default", true)
 	viper.SetDefault("agents.defaults.provider", "")
 	viper.SetDefault("agents.defaults.model", "")
@@ -179,6 +184,22 @@ func ValidFleetDensity(value string) string {
 		return value
 	default:
 		return "full"
+	}
+}
+
+// SidebarSideOptions returns the allowed sidebar-side values.
+func SidebarSideOptions() []string {
+	return []string{"left", "right"}
+}
+
+// ValidSidebarSide normalizes a sidebar-side value, defaulting an empty or
+// unrecognized value to "left".
+func ValidSidebarSide(value string) string {
+	switch value {
+	case "left", "right":
+		return value
+	default:
+		return "left"
 	}
 }
 

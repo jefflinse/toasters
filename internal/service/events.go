@@ -293,10 +293,38 @@ type Blocker struct {
 	CreatedAt time.Time
 }
 
+// Blocker dispositions — how a blocker left the pending queue.
+const (
+	// BlockerDispositionAnswered means the user answered the question(s).
+	BlockerDispositionAnswered = "answered"
+	// BlockerDispositionDismissed means the user explicitly dismissed the
+	// blocker; the waiting caller received a cancellation answer.
+	BlockerDispositionDismissed = "dismissed"
+	// BlockerDispositionCancelled means the waiting caller went away on its
+	// own (task killed, shutdown, or a restart orphaned the row).
+	BlockerDispositionCancelled = "cancelled"
+)
+
 // BlockerResolvedPayload is the payload for EventTypeBlockerResolved events.
 type BlockerResolvedPayload struct {
 	// RequestID identifies the blocker that was resolved.
 	RequestID string
+	// Disposition records how it resolved: one of the BlockerDisposition*
+	// constants.
+	Disposition string
+}
+
+// BlockerRecord is a blocker plus its resolution, returned by
+// Operator().BlockerHistory() for the resolved-blockers view.
+type BlockerRecord struct {
+	Blocker
+	// ResolvedAt is when the blocker left the pending queue.
+	ResolvedAt time.Time
+	// Disposition is one of the BlockerDisposition* constants.
+	Disposition string
+	// Answer is the combined answer string delivered to the waiting caller.
+	// Empty for cancelled blockers.
+	Answer string
 }
 
 // PromptQuestion is a single question within a multi-question ask_user round.

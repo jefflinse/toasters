@@ -682,6 +682,103 @@ func (s *SQLiteStore) ListRecentChatEntries(ctx context.Context, limit int) ([]*
 	return entries, nil
 }
 
+// --- Blockers ---
+
+func (s *SQLiteStore) CreateBlocker(ctx context.Context, rec *BlockerRecord) error {
+	if rec.CreatedAt.IsZero() {
+		rec.CreatedAt = time.Now().UTC()
+	}
+	questions := rec.Questions
+	if questions == "" {
+		questions = "[]"
+	}
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO blockers (request_id, source, job_id, task_id, questions, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		rec.RequestID,
+		rec.Source,
+		rec.JobID,
+		rec.TaskID,
+		questions,
+		rec.CreatedAt.UTC().Format(time.RFC3339Nano),
+	)
+	if err != nil {
+		return fmt.Errorf("inserting blocker: %w", err)
+	}
+	return nil
+}
+
+func (s *SQLiteStore) ResolveBlockerRecord(ctx context.Context, requestID, disposition, answer string, resolvedAt time.Time) error {
+	if resolvedAt.IsZero() {
+		resolvedAt = time.Now().UTC()
+	}
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE blockers SET resolved_at = ?, disposition = ?, answer = ?
+		 WHERE request_id = ? AND resolved_at = ''`,
+		resolvedAt.UTC().Format(time.RFC3339Nano),
+		disposition,
+		answer,
+		requestID,
+	)
+	if err != nil {
+		return fmt.Errorf("resolving blocker record: %w", err)
+	}
+	return nil
+}
+
+func (s *SQLiteStore) ListBlockerHistory(ctx context.Context, limit int) ([]*BlockerRecord, error) {
+	if limit <= 0 {
+		limit = 200
+	}
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT request_id, source, job_id, task_id, questions, created_at, resolved_at, disposition, answer
+		 FROM blockers
+		 WHERE resolved_at != ''
+		 ORDER BY resolved_at DESC
+		 LIMIT ?`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("listing blocker history: %w", err)
+	}
+	defer rows.Close() //nolint:errcheck
+
+	var out []*BlockerRecord
+	for rows.Next() {
+		var (
+			r                     BlockerRecord
+			createdAt, resolvedAt string
+		)
+		if err := rows.Scan(&r.RequestID, &r.Source, &r.JobID, &r.TaskID, &r.Questions,
+			&createdAt, &resolvedAt, &r.Disposition, &r.Answer); err != nil {
+			return nil, fmt.Errorf("scanning blocker record: %w", err)
+		}
+		r.CreatedAt = parseTime(createdAt)
+		if resolvedAt != "" {
+			r.ResolvedAt = parseTime(resolvedAt)
+		}
+		out = append(out, &r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating blocker history: %w", err)
+	}
+	return out, nil
+}
+
+func (s *SQLiteStore) SweepUnresolvedBlockers(ctx context.Context) (int, error) {
+	result, err := s.db.ExecContext(ctx,
+		`UPDATE blockers SET resolved_at = ?, disposition = 'cancelled'
+		 WHERE resolved_at = ''`,
+		time.Now().UTC().Format(time.RFC3339Nano),
+	)
+	if err != nil {
+		return 0, fmt.Errorf("sweeping unresolved blockers: %w", err)
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("counting swept blockers: %w", err)
+	}
+	return int(n), nil
+}
+
 // --- Rebuild ---
 
 func (s *SQLiteStore) RebuildDefinitions(ctx context.Context, skills []*Skill) error {

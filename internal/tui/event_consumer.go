@@ -312,7 +312,7 @@ func translateEvent(ev service.Event) tea.Msg {
 		if !ok {
 			return nil
 		}
-		return BlockerResolvedMsg{RequestID: p.RequestID}
+		return BlockerResolvedMsg{RequestID: p.RequestID, Disposition: p.Disposition}
 
 	case service.EventTypeJobCreated,
 		service.EventTypeTaskCreated,
