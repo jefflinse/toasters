@@ -130,3 +130,85 @@ func TestAttachFileChange_SynthesizesOnTotalMiss(t *testing.T) {
 		t.Error("synthesized item should be marked complete (no pending call exists to merge with later)")
 	}
 }
+
+// TestAttachShellExec_PendingItemStaysPending mirrors
+// TestAttachFileChange_PendingItemStaysPending: shell_exec fires before the
+// tool_result (session.Run emits ToolResult only after CoreTools.Execute
+// returns), so attaching it must not complete the item — the later
+// completeTool still needs to merge into the same item.
+func TestAttachShellExec_PendingItemStaysPending(t *testing.T) {
+	rs := &runtimeSlot{}
+	args, _ := json.Marshal(map[string]string{"command": "go test ./..."})
+	rs.startTool("call1", "shell", args)
+
+	rs.attachShellExec(1, 500, 4096, false, false)
+
+	if len(rs.items) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(rs.items))
+	}
+	it := rs.items[0]
+	if !it.hasShellExec {
+		t.Fatal("shell exec not attached")
+	}
+	if !it.endedAt.IsZero() {
+		t.Error("attachShellExec must not complete the item — it should stay pending until the tool_result arrives")
+	}
+	if _, ok := rs.toolItemIdx["call1"]; !ok {
+		t.Error("toolItemIdx entry removed — completeTool would synthesize a duplicate")
+	}
+
+	rs.completeTool("call1", "shell", "FAIL\nexit status: exit status 1", false)
+	if len(rs.items) != 1 {
+		t.Fatalf("expected the result to merge into the same item, got %d items", len(rs.items))
+	}
+	if !rs.items[0].hasShellExec {
+		t.Error("shell exec lost after completeTool merged the result")
+	}
+	if rs.items[0].shellExitCode != 1 {
+		t.Errorf("shellExitCode = %d, want 1", rs.items[0].shellExitCode)
+	}
+}
+
+// TestAttachShellExec_OldestPendingFirst verifies name-only matching walks
+// oldest-first: two concurrent shell calls both pending at once (mycelium
+// fires every tool_call event for a turn before executing any of them) must
+// pair with their notifications in execution (= insertion) order, not both
+// landing on the same (e.g. newest) item.
+func TestAttachShellExec_OldestPendingFirst(t *testing.T) {
+	rs := &runtimeSlot{}
+	rs.startTool("call1", "shell", nil)
+	rs.startTool("call2", "shell", nil)
+
+	rs.attachShellExec(0, 100, 10, false, false)
+	rs.attachShellExec(1, 200, 20, false, false)
+
+	if rs.items[0].shellExitCode != 0 {
+		t.Errorf("items[0].shellExitCode = %d, want 0 (first notification -> oldest pending item)", rs.items[0].shellExitCode)
+	}
+	if rs.items[1].shellExitCode != 1 {
+		t.Errorf("items[1].shellExitCode = %d, want 1 (second notification -> second item)", rs.items[1].shellExitCode)
+	}
+}
+
+// TestAttachShellExec_SynthesizesOnTotalMiss mirrors
+// TestAttachFileChange_SynthesizesOnTotalMiss: with no matching tool item,
+// a completed item is synthesized so the status still surfaces.
+func TestAttachShellExec_SynthesizesOnTotalMiss(t *testing.T) {
+	rs := &runtimeSlot{}
+
+	rs.attachShellExec(137, 5000, 0, false, true)
+
+	if len(rs.items) != 1 {
+		t.Fatalf("expected a synthesized item, got %d", len(rs.items))
+	}
+	it := rs.items[0]
+	if it.kind != outputItemTool || it.toolName != "shell" {
+		t.Errorf("synthesized item wrong: %+v", it)
+	}
+	if !it.hasShellExec || it.shellExitCode != 137 || !it.shellTimedOut {
+		t.Errorf("shell exec fields not set on synthesized item: %+v", it)
+	}
+	if it.endedAt.IsZero() {
+		t.Error("synthesized item should be marked complete (no pending call exists to merge with later)")
+	}
+}

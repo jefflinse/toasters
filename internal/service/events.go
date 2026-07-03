@@ -119,6 +119,13 @@ const (
 	// Payload: SessionFileChangePayload. Carries SessionID.
 	EventTypeSessionFileChange EventType = "session.file_change"
 
+	// EventTypeSessionShellExec is sent when a worker's shell tool finishes
+	// running a command. It carries exit code, duration, and output size as a
+	// display side-channel: the model already sees the command's own output
+	// in its tool result and shouldn't pay context for this metadata again.
+	// Payload: SessionShellExecPayload. Carries SessionID.
+	EventTypeSessionShellExec EventType = "session.shell_exec"
+
 	// EventTypeSessionDone is sent when a worker session completes.
 	// Payload: SessionDonePayload. Carries SessionID.
 	EventTypeSessionDone EventType = "session.done"
@@ -529,6 +536,19 @@ type SessionFileChangePayload struct {
 	Removed   int    // total lines removed
 	Created   bool   // write_file created a new file
 	Truncated bool   // Diff was capped server-side
+}
+
+// SessionShellExecPayload is the payload for EventTypeSessionShellExec
+// events. The TUI pairs it with the session's matching in-flight shell tool
+// item by tool name — shell calls carry no path argument to disambiguate
+// concurrent in-flight calls the way SessionFileChangePayload's Path does.
+type SessionShellExecPayload struct {
+	Command     string // command as issued, capped for display
+	ExitCode    int    // process exit code; -1 when unavailable
+	DurationMs  int64  // wall-clock time spent running the command
+	OutputBytes int    // combined stdout+stderr size, before any truncation
+	Truncated   bool   // model-visible result exceeded the standard tool-result cap
+	TimedOut    bool   // command was killed after exceeding its timeout
 }
 
 // SessionDonePayload is the payload for EventTypeSessionDone events.

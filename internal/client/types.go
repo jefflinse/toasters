@@ -485,6 +485,15 @@ type wireSessionFileChangePayload struct {
 	Truncated bool   `json:"truncated,omitempty"`
 }
 
+type wireSessionShellExecPayload struct {
+	Command     string `json:"command"`
+	ExitCode    int    `json:"exit_code"`
+	DurationMs  int64  `json:"duration_ms"`
+	OutputBytes int    `json:"output_bytes"`
+	Truncated   bool   `json:"truncated,omitempty"`
+	TimedOut    bool   `json:"timed_out,omitempty"`
+}
+
 type wireSessionDonePayload struct {
 	WorkerName string `json:"worker_name"`
 	JobID      string `json:"job_id,omitempty"`
@@ -1160,6 +1169,20 @@ func ParseSSEPayload(eventType string, raw json.RawMessage) (any, error) {
 			Removed:   w.Removed,
 			Created:   w.Created,
 			Truncated: w.Truncated,
+		}, nil
+
+	case service.EventTypeSessionShellExec:
+		var w wireSessionShellExecPayload
+		if err := json.Unmarshal(raw, &w); err != nil {
+			return nil, fmt.Errorf("decoding session.shell_exec payload: %w", err)
+		}
+		return service.SessionShellExecPayload{
+			Command:     w.Command,
+			ExitCode:    w.ExitCode,
+			DurationMs:  w.DurationMs,
+			OutputBytes: w.OutputBytes,
+			Truncated:   w.Truncated,
+			TimedOut:    w.TimedOut,
 		}, nil
 
 	case service.EventTypeSessionDone:

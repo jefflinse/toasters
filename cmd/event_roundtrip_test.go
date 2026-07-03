@@ -82,6 +82,10 @@ func TestEventPayloadRoundTrip(t *testing.T) {
 			ToolName: "edit_file", Path: "a.go", Diff: "@@ -1 +1 @@\n-old\n+new\n",
 			Added: 1, Removed: 1, Created: true, Truncated: true,
 		},
+		service.EventTypeSessionShellExec: service.SessionShellExecPayload{
+			Command: "go test ./...", ExitCode: 1, DurationMs: 1234, OutputBytes: 512,
+			Truncated: true, TimedOut: false,
+		},
 		service.EventTypeSessionDone: service.SessionDonePayload{
 			WorkerName: "w", JobID: "j-1", TaskID: "t-1", Status: "completed", FinalText: "bye",
 		},

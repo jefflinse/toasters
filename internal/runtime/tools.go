@@ -60,6 +60,7 @@ type CoreTools struct {
 	model        string
 
 	fileChangeNotifier FileChangeNotifier // display side-channel for write_file/edit_file; may be nil
+	shellExecNotifier  ShellExecNotifier  // display side-channel for shell; may be nil
 }
 
 // GraphCatalog is a read-only view over the loaded graph Definitions,
@@ -168,6 +169,20 @@ func WithFileChangeNotifier(n FileChangeNotifier) CoreToolsOption {
 // built and so can't close over themselves via WithFileChangeNotifier.
 func (ct *CoreTools) SetFileChangeNotifier(n FileChangeNotifier) {
 	ct.fileChangeNotifier = n
+}
+
+// WithShellExecNotifier sets the display side-channel invoked after the
+// shell tool finishes running a command (success, nonzero exit, or
+// timeout). See SetShellExecNotifier for the post-construction equivalent.
+func WithShellExecNotifier(n ShellExecNotifier) CoreToolsOption {
+	return func(ct *CoreTools) { ct.shellExecNotifier = n }
+}
+
+// SetShellExecNotifier sets the shell-exec notifier after construction.
+// Needed by callers (runtime.Session) that don't exist yet when CoreTools is
+// built and so can't close over themselves via WithShellExecNotifier.
+func (ct *CoreTools) SetShellExecNotifier(n ShellExecNotifier) {
+	ct.shellExecNotifier = n
 }
 
 // NewCoreTools creates a CoreTools with the given work directory and options.
@@ -1168,7 +1183,33 @@ const (
 	// process that ignored SIGKILL semantics mid-teardown) costs at most
 	// this much extra, instead of wedging the session forever.
 	shellWaitDelay = 5 * time.Second
+
+	// maxShellExecCommandBytes caps the Command field of a ShellExec
+	// notification. It's a display value (activity labels, status lines),
+	// not the command actually executed — the full command still reaches
+	// /bin/sh untouched.
+	maxShellExecCommandBytes = 300
 )
+
+// displayCommand caps a shell command string for inclusion in a ShellExec
+// display notification, marking the cut so a chopped command doesn't read
+// as the whole thing.
+func displayCommand(command string) string {
+	if len(command) <= maxShellExecCommandBytes {
+		return command
+	}
+	return truncateBytesRuneSafe(command, maxShellExecCommandBytes) + "… (truncated)"
+}
+
+// shellExitCode extracts the process exit code from a completed exec.Cmd, or
+// -1 when unavailable (the process never started, or was killed by a signal
+// without a reportable code — e.g. the timeout/deadline SIGKILL path).
+func shellExitCode(cmd *exec.Cmd) int {
+	if cmd.ProcessState == nil {
+		return -1
+	}
+	return cmd.ProcessState.ExitCode()
+}
 
 func (ct *CoreTools) shell(ctx context.Context, args json.RawMessage) (string, error) {
 	if !ct.allowShell {
@@ -1243,11 +1284,36 @@ func (ct *CoreTools) shell(ctx context.Context, args json.RawMessage) (string, e
 	configureProcessTree(cmd)
 	cmd.WaitDelay = shellWaitDelay
 
+	start := time.Now()
 	output, err := cmd.CombinedOutput()
+	duration := time.Since(start)
 	result := string(output)
+
+	// notify fires the display side-channel, when a listener is attached, for
+	// every completion path below (success, nonzero exit, or timeout) — but
+	// never for the validation errors above, which never ran a command.
+	// truncated must be computed by the caller from the actual model-visible
+	// string for that branch: the timeout/wait-delay branches replace the
+	// result with a short synthesized error (see session.Run), so their
+	// partial output size is irrelevant to whether the LLM saw a truncated
+	// result.
+	notify := func(exitCode int, truncated, timedOut bool) {
+		if ct.shellExecNotifier == nil {
+			return
+		}
+		ct.shellExecNotifier(ctx, ShellExec{
+			Command:     displayCommand(params.Command),
+			ExitCode:    exitCode,
+			DurationMs:  duration.Milliseconds(),
+			OutputBytes: len(output),
+			Truncated:   truncated,
+			TimedOut:    timedOut,
+		})
+	}
 
 	if err != nil {
 		if ctx.Err() == context.DeadlineExceeded {
+			notify(shellExitCode(cmd), false, true)
 			return result, fmt.Errorf("command timed out after %s (the entire process tree was killed); "+
 				"long-running processes must be started, exercised, and stopped within a single command", timeout)
 		}
@@ -1255,12 +1321,17 @@ func (ct *CoreTools) shell(ctx context.Context, args json.RawMessage) (string, e
 			// The command itself exited but left a child holding the output
 			// pipe (e.g. a backgrounded server). Output up to abandonment is
 			// returned; tell the model how to do this correctly.
+			notify(shellExitCode(cmd), false, false)
 			return result, fmt.Errorf("command exited but a background child kept running and held the output stream; " +
 				"start, exercise, and stop background processes within one command (e.g. `srv & sleep 1; curl ...; kill %%1`)")
 		}
 		// Include exit code in result but don't return error — the LLM should see the output.
-		return fmt.Sprintf("%s\nexit status: %s", result, err.Error()), nil
+		folded := fmt.Sprintf("%s\nexit status: %s", result, err.Error())
+		notify(shellExitCode(cmd), len(folded) > maxToolResultBytes, false)
+		return folded, nil
 	}
+
+	notify(0, len(result) > maxToolResultBytes, false)
 
 	return result, nil
 }

@@ -45,6 +45,17 @@ type outputItem struct {
 	diffRemoved   int
 	diffCreated   bool
 	diffTruncated bool
+
+	// Shell execution metadata attached to a shell tool item, delivered by
+	// a session.shell_exec event (display-only; never LLM context).
+	// hasShellExec distinguishes "no event yet" from a legitimate exit code
+	// 0, which isn't representable as a zero-value sentinel.
+	hasShellExec     bool
+	shellExitCode    int
+	shellDurationMs  int64
+	shellOutputBytes int
+	shellTruncated   bool
+	shellTimedOut    bool
 }
 
 // appendText adds streamed text to the slot. Streamed tokens coalesce
@@ -219,6 +230,58 @@ func (rs *runtimeSlot) attachFileChange(toolName, path, diff string, added, remo
 	it := outputItem{
 		kind:      outputItemTool,
 		toolName:  toolName,
+		startedAt: now,
+		endedAt:   now,
+	}
+	set(&it)
+	rs.items = append(rs.items, it)
+}
+
+// attachShellExec pairs a session.shell_exec event with the shell tool item
+// that produced it. Shell calls carry no argument (like write_file/edit_file's
+// path) to disambiguate concurrent in-flight calls, so matching is name-only:
+// the oldest still-pending "shell" item that hasn't already been attached —
+// oldest-first for the same reason as attachFileChange (mycelium fires every
+// tool_call event for a turn before executing any of them sequentially, so
+// notifications arrive in execution/insertion order).
+func (rs *runtimeSlot) attachShellExec(exitCode int, durationMs int64, outputBytes int, truncated, timedOut bool) {
+	set := func(it *outputItem) {
+		it.hasShellExec = true
+		it.shellExitCode = exitCode
+		it.shellDurationMs = durationMs
+		it.shellOutputBytes = outputBytes
+		it.shellTruncated = truncated
+		it.shellTimedOut = timedOut
+	}
+
+	var completed *outputItem
+	for i := 0; i < len(rs.items); i++ {
+		it := &rs.items[i]
+		if it.kind != outputItemTool || it.toolName != "shell" || it.hasShellExec {
+			continue
+		}
+		if it.endedAt.IsZero() {
+			rs.contentVersion++
+			set(it)
+			return
+		}
+		if completed == nil {
+			completed = it
+		}
+	}
+	if completed != nil {
+		rs.contentVersion++
+		set(completed)
+		return
+	}
+
+	// No matching tool item at all — synthesize a completed one so the
+	// status still surfaces instead of being silently dropped.
+	rs.contentVersion++
+	now := time.Now()
+	it := outputItem{
+		kind:      outputItemTool,
+		toolName:  "shell",
 		startedAt: now,
 		endedAt:   now,
 	}

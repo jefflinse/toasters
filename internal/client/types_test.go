@@ -1180,6 +1180,39 @@ func TestParseSSEPayload_SessionFileChange(t *testing.T) {
 	}
 }
 
+func TestParseSSEPayload_SessionShellExec(t *testing.T) {
+	t.Parallel()
+
+	raw := json.RawMessage(`{"command":"go test ./...","exit_code":2,"duration_ms":1234,"output_bytes":9000,"truncated":true,"timed_out":false}`)
+	payload, err := ParseSSEPayload("session.shell_exec", raw)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	p, ok := payload.(service.SessionShellExecPayload)
+	if !ok {
+		t.Fatalf("payload type = %T, want SessionShellExecPayload", payload)
+	}
+	if p.Command != "go test ./..." {
+		t.Errorf("Command = %q, want %q", p.Command, "go test ./...")
+	}
+	if p.ExitCode != 2 {
+		t.Errorf("ExitCode = %d, want 2", p.ExitCode)
+	}
+	if p.DurationMs != 1234 {
+		t.Errorf("DurationMs = %d, want 1234", p.DurationMs)
+	}
+	if p.OutputBytes != 9000 {
+		t.Errorf("OutputBytes = %d, want 9000", p.OutputBytes)
+	}
+	if !p.Truncated {
+		t.Errorf("Truncated = false, want true")
+	}
+	if p.TimedOut {
+		t.Errorf("TimedOut = true, want false")
+	}
+}
+
 func TestParseSSEPayload_SessionDone(t *testing.T) {
 	t.Parallel()
 

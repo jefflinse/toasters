@@ -230,6 +230,21 @@ type SessionFileChangeMsg struct {
 	Truncated bool
 }
 
+// SessionShellExecMsg is sent when a worker's shell tool finishes running a
+// command. Produced by the event consumer in response to a
+// session.shell_exec event; exit code/duration/size are a display
+// side-channel attached to the matching tool-call block, not fed back into
+// LLM context.
+type SessionShellExecMsg struct {
+	SessionID   string
+	Command     string
+	ExitCode    int
+	DurationMs  int64
+	OutputBytes int
+	Truncated   bool
+	TimedOut    bool
+}
+
 // SessionDoneMsg is sent when a worker session terminates.
 // Produced by the event consumer in response to a session.done event.
 type SessionDoneMsg struct {

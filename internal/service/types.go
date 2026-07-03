@@ -475,6 +475,17 @@ type WorkerStreamItem struct {
 	DiffRemoved   int
 	DiffCreated   bool // write_file created a new file
 	DiffTruncated bool // diff was capped server-side
+
+	// Shell execution metadata attached to a shell tool item, delivered by
+	// a session.shell_exec event (display-only; never LLM context).
+	// HasShellExec distinguishes "no event yet" from a legitimate exit code
+	// 0, which isn't representable as a zero-value sentinel.
+	HasShellExec     bool
+	ShellExitCode    int
+	ShellDurationMs  int64
+	ShellOutputBytes int
+	ShellTruncated   bool
+	ShellTimedOut    bool
 }
 
 // WorkerStreamSnapshot is the payload for a ChatEntryKindWorkerStream
