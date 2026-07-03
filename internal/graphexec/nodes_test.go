@@ -408,6 +408,9 @@ func (m *mockEventSink) BroadcastSessionToolResult(sessionID, _, name, _, _ stri
 func (m *mockEventSink) BroadcastSessionFileChange(sessionID string, fc runtime.FileChange) {
 	m.record(fmt.Sprintf("session_file_change:%s:%s:%s", sessionID, fc.ToolName, fc.Path))
 }
+func (m *mockEventSink) BroadcastSessionShellExec(sessionID string, se runtime.ShellExec) {
+	m.record(fmt.Sprintf("session_shell_exec:%s:%d", sessionID, se.ExitCode))
+}
 
 func TestExecutor_Execute(t *testing.T) {
 	cfg, _ := templateConfig(t, [][]provider.StreamEvent{

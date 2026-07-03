@@ -75,6 +75,11 @@ type EventSink interface {
 	// FileChangeNotifier (see buildToolExecutor in executor.go). It's a pure
 	// display side-channel — never part of the tool result the LLM sees.
 	BroadcastSessionFileChange(sessionID string, fc runtime.FileChange)
+	// BroadcastSessionShellExec carries a shell tool execution's exit code,
+	// duration, and output size from a graph node's tool execution, wired via
+	// CoreTools' ShellExecNotifier (see buildToolExecutor in executor.go).
+	// Like BroadcastSessionFileChange, it's a pure display side-channel.
+	BroadcastSessionShellExec(sessionID string, se runtime.ShellExec)
 }
 
 type nodeContextKey struct{}

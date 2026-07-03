@@ -245,6 +245,21 @@ func translateEvent(ev service.Event) tea.Msg {
 			Truncated: p.Truncated,
 		}
 
+	case service.EventTypeSessionShellExec:
+		p, ok := ev.Payload.(service.SessionShellExecPayload)
+		if !ok {
+			return nil
+		}
+		return SessionShellExecMsg{
+			SessionID:   ev.SessionID,
+			Command:     p.Command,
+			ExitCode:    p.ExitCode,
+			DurationMs:  p.DurationMs,
+			OutputBytes: p.OutputBytes,
+			Truncated:   p.Truncated,
+			TimedOut:    p.TimedOut,
+		}
+
 	case service.EventTypeSessionDone:
 		p, ok := ev.Payload.(service.SessionDonePayload)
 		if !ok {

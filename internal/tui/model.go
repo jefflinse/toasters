@@ -569,6 +569,41 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case SessionShellExecMsg:
+		slot, ok := m.runtimeSessions[msg.SessionID]
+		if !ok {
+			return m, nil
+		}
+		slot.attachShellExec(msg.ExitCode, msg.DurationMs, msg.OutputBytes, msg.Truncated, msg.TimedOut)
+		m.attachWorkerStreamShellExec(slot, msg)
+		// Patch the matching activity label with an exit-code/timeout suffix,
+		// mirroring the diff-stat patch above. A clean exit gets no suffix —
+		// unlike a diff (always informative), "· exit 0" on every shell call
+		// would just be noise; only anomalies are worth calling out here.
+		// statted is still set unconditionally on the oldest match: it marks
+		// "this activity has been claimed by a shell_exec event", not "this
+		// activity got a suffix" — leaving it false on a clean exit would let
+		// a later failure's notification wrongly re-target this already
+		// resolved activity instead of its own (oldest-unclaimed-first).
+		stat := formatShellStat(msg.ExitCode, msg.TimedOut)
+		for i := range slot.activities {
+			a := &slot.activities[i]
+			if a.toolName != "shell" || a.statted {
+				continue
+			}
+			if stat != "" {
+				a.label += " · " + stat
+			}
+			a.statted = true
+			break
+		}
+		m.refreshNodesAutoTail(msg.SessionID)
+		m.updateViewportContent()
+		if !m.scroll.userScrolled {
+			m.chatViewport.GotoBottom()
+		}
+		return m, nil
+
 	case SessionDoneMsg:
 		return m.handleSessionDone(msg)
 

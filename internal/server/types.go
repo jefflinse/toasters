@@ -860,6 +860,15 @@ type wireSessionFileChangePayload struct {
 	Truncated bool   `json:"truncated,omitempty"`
 }
 
+type wireSessionShellExecPayload struct {
+	Command     string `json:"command"`
+	ExitCode    int    `json:"exit_code"`
+	DurationMs  int64  `json:"duration_ms"`
+	OutputBytes int    `json:"output_bytes"`
+	Truncated   bool   `json:"truncated,omitempty"`
+	TimedOut    bool   `json:"timed_out,omitempty"`
+}
+
 type wireSessionDonePayload struct {
 	WorkerName string `json:"worker_name"`
 	JobID      string `json:"job_id,omitempty"`
@@ -1043,6 +1052,11 @@ func EventPayloadToWire(ev service.Event) any {
 			ToolName: p.ToolName, Path: p.Path, Diff: p.Diff,
 			Added: p.Added, Removed: p.Removed,
 			Created: p.Created, Truncated: p.Truncated,
+		}
+	case service.SessionShellExecPayload:
+		return wireSessionShellExecPayload{
+			Command: p.Command, ExitCode: p.ExitCode, DurationMs: p.DurationMs,
+			OutputBytes: p.OutputBytes, Truncated: p.Truncated, TimedOut: p.TimedOut,
 		}
 	case service.SessionDonePayload:
 		return wireSessionDonePayload{

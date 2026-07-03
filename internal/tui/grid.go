@@ -242,6 +242,21 @@ func formatDiffStat(added, removed int) string {
 	return strings.Join(segs, " ")
 }
 
+// formatShellStat renders a compact anomaly suffix for a shell activity
+// label ("exit 2", "timeout"). Returns "" for a clean exit (0) — a
+// successful shell call needs no annotation, unlike a diff stat, which is
+// always informative.
+func formatShellStat(exitCode int, timedOut bool) string {
+	switch {
+	case timedOut:
+		return "timeout"
+	case exitCode != 0:
+		return fmt.Sprintf("exit %d", exitCode)
+	default:
+		return ""
+	}
+}
+
 // commaInt formats an integer with comma-separated thousands (e.g. 200000 → "200,000").
 func commaInt(n int) string {
 	s := strconv.Itoa(n)

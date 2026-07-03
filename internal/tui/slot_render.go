@@ -157,17 +157,27 @@ func renderToolBlock(it *outputItem, width int) string {
 		return out
 	}
 
-	dur := it.endedAt.Sub(it.startedAt).Round(time.Millisecond)
-	statusMark := "✓"
-	statusColor := ColorConnected
-	statusWord := "ok"
-	if it.toolError {
-		statusMark = "✗"
-		statusColor = ColorError
-		statusWord = "error"
+	var status string
+	if it.hasShellExec {
+		// CoreTools.shell folds a nonzero exit into the result text with a
+		// nil error (the LLM needs to see the output either way), so
+		// it.toolError is always false for a failed command — the generic
+		// ok/error line below would misreport it as "✓ ok". Only the
+		// shell_exec side-channel knows the real outcome.
+		status = renderShellExecStatusLine(it)
+	} else {
+		dur := it.endedAt.Sub(it.startedAt).Round(time.Millisecond)
+		statusMark := "✓"
+		statusColor := ColorConnected
+		statusWord := "ok"
+		if it.toolError {
+			statusMark = "✗"
+			statusColor = ColorError
+			statusWord = "error"
+		}
+		status = lipgloss.NewStyle().Foreground(statusColor).Render(statusMark+" "+statusWord) +
+			DimStyle.Render(" · "+dur.String())
 	}
-	status := lipgloss.NewStyle().Foreground(statusColor).Render(statusMark+" "+statusWord) +
-		DimStyle.Render(" · "+dur.String())
 
 	out := header + "\n  " + status
 	switch {
@@ -214,6 +224,54 @@ func renderFileDiffSection(it *outputItem, width int) string {
 		out += "\n  " + DimStyle.Render("… diff truncated")
 	}
 	return out
+}
+
+// renderShellExecStatusLine builds a shell tool item's status line from its
+// exec metadata (exit code, duration, output size) instead of the generic
+// toolError flag — see the caller's comment for why toolError can't be
+// trusted here. Unlike renderFileDiffSection, this replaces the status
+// line rather than appending a section: the spec calls for a single compact
+// line, and stacking it under a misleading "✓ ok" would read as
+// self-contradictory for a failed command.
+func renderShellExecStatusLine(it *outputItem) string {
+	if it.shellTimedOut {
+		return lipgloss.NewStyle().Foreground(ColorError).Render("⏱ timed out")
+	}
+	mark, color := "✓", ColorConnected
+	if it.shellExitCode != 0 {
+		mark, color = "✗", ColorError
+	}
+	head := lipgloss.NewStyle().Foreground(color).Render(fmt.Sprintf("%s exit %d", mark, it.shellExitCode))
+	rest := fmt.Sprintf(" · %s · %s", formatShellDuration(it.shellDurationMs), formatBytes(it.shellOutputBytes))
+	if it.shellTruncated {
+		rest += " · truncated"
+	}
+	return head + DimStyle.Render(rest)
+}
+
+// formatShellDuration renders a shell command's wall-clock time compactly:
+// exact milliseconds under a second (small enough that a decimal would be
+// noise), rounded to 100ms above it (matches the precision a human actually
+// cares about for multi-second commands).
+func formatShellDuration(ms int64) string {
+	d := time.Duration(ms) * time.Millisecond
+	if d < time.Second {
+		return d.String()
+	}
+	return d.Round(100 * time.Millisecond).String()
+}
+
+// formatBytes renders a byte count as a short human string (B/KB/MB) for the
+// shell status line's output-size segment.
+func formatBytes(n int) string {
+	switch {
+	case n < 1024:
+		return fmt.Sprintf("%d B", n)
+	case n < 1024*1024:
+		return fmt.Sprintf("%.1f KB", float64(n)/1024)
+	default:
+		return fmt.Sprintf("%.1f MB", float64(n)/(1024*1024))
+	}
 }
 
 // diffHunkHeaderRe matches a unified-diff hunk header, e.g. "@@ -5,3 +5,4 @@".

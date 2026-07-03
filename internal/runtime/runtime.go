@@ -187,6 +187,9 @@ func (r *Runtime) SpawnWorker(ctx context.Context, opts SpawnOpts) (*Session, er
 		core.SetFileChangeNotifier(func(_ context.Context, fc FileChange) {
 			sess.emit(SessionEvent{SessionID: sess.id, Type: SessionEventFileChange, FileChange: &fc})
 		})
+		core.SetShellExecNotifier(func(_ context.Context, se ShellExec) {
+			sess.emit(SessionEvent{SessionID: sess.id, Type: SessionEventShellExec, ShellExec: &se})
+		})
 	}
 
 	// Register in sessions map. The wg.Add happens under the same lock as

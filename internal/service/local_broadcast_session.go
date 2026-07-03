@@ -154,6 +154,24 @@ func (s *LocalService) BroadcastSessionFileChange(sessionID string, fc runtime.F
 	})
 }
 
+// BroadcastSessionShellExec emits a session.shell_exec event for a graph
+// node's shell tool execution. The TUI pairs it with the matching in-flight
+// shell tool item by tool name (shell calls have no path to disambiguate).
+func (s *LocalService) BroadcastSessionShellExec(sessionID string, se runtime.ShellExec) {
+	s.broadcast(Event{
+		Type:      EventTypeSessionShellExec,
+		SessionID: sessionID,
+		Payload: SessionShellExecPayload{
+			Command:     se.Command,
+			ExitCode:    se.ExitCode,
+			DurationMs:  se.DurationMs,
+			OutputBytes: se.OutputBytes,
+			Truncated:   se.Truncated,
+			TimedOut:    se.TimedOut,
+		},
+	})
+}
+
 // BroadcastSessionStarted bridges a runtime session into the unified service
 // event stream. It emits session.started immediately, then spawns a goroutine
 // that subscribes to the session's events and re-emits them as session.text /
@@ -299,6 +317,12 @@ func (s *LocalService) BroadcastSessionStarted(sess *runtime.Session) {
 					}
 					flushText()
 					s.BroadcastSessionFileChange(sessionID, *ev.FileChange)
+				case runtime.SessionEventShellExec:
+					if ev.ShellExec == nil {
+						continue
+					}
+					flushText()
+					s.BroadcastSessionShellExec(sessionID, *ev.ShellExec)
 				case runtime.SessionEventCompaction:
 					if ev.Compaction == nil {
 						continue

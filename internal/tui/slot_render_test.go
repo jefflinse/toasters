@@ -3,6 +3,7 @@ package tui
 import (
 	"strings"
 	"testing"
+	"time"
 
 	xansi "github.com/charmbracelet/x/ansi"
 )
@@ -209,5 +210,115 @@ func TestRenderDiffLines_Empty(t *testing.T) {
 	}
 	if got := renderDiffLines("@@ -1,1 +1,1 @@\n+x", 2); got != "" {
 		t.Errorf("width too small should render empty, got %q", got)
+	}
+}
+
+func TestFormatShellDuration(t *testing.T) {
+	cases := []struct {
+		ms   int64
+		want string
+	}{
+		{0, "0s"},
+		{340, "340ms"},
+		{999, "999ms"},
+		{1200, "1.2s"},
+		{65000, "1m5s"},
+	}
+	for _, c := range cases {
+		if got := formatShellDuration(c.ms); got != c.want {
+			t.Errorf("formatShellDuration(%d) = %q, want %q", c.ms, got, c.want)
+		}
+	}
+}
+
+func TestFormatBytes(t *testing.T) {
+	cases := []struct {
+		n    int
+		want string
+	}{
+		{0, "0 B"},
+		{512, "512 B"},
+		{1024, "1.0 KB"},
+		{4300, "4.2 KB"},
+		{1024 * 1024, "1.0 MB"},
+	}
+	for _, c := range cases {
+		if got := formatBytes(c.n); got != c.want {
+			t.Errorf("formatBytes(%d) = %q, want %q", c.n, got, c.want)
+		}
+	}
+}
+
+// TestRenderShellExecStatusLine_Success verifies a clean exit renders a
+// checkmark with exit code, duration, and size.
+func TestRenderShellExecStatusLine_Success(t *testing.T) {
+	it := &outputItem{shellExitCode: 0, shellDurationMs: 1200, shellOutputBytes: 4300}
+	out := xansi.Strip(renderShellExecStatusLine(it))
+	if !strings.Contains(out, "✓ exit 0") {
+		t.Errorf("expected success mark, got %q", out)
+	}
+	if !strings.Contains(out, "1.2s") || !strings.Contains(out, "4.2 KB") {
+		t.Errorf("expected duration and size, got %q", out)
+	}
+}
+
+// TestRenderShellExecStatusLine_TimedOut verifies the timeout case renders
+// its own marker instead of an exit code (there isn't a meaningful one).
+func TestRenderShellExecStatusLine_TimedOut(t *testing.T) {
+	it := &outputItem{shellTimedOut: true, shellExitCode: -1}
+	out := xansi.Strip(renderShellExecStatusLine(it))
+	if !strings.Contains(out, "timed out") {
+		t.Errorf("expected timeout marker, got %q", out)
+	}
+}
+
+// TestRenderToolBlock_ShellExecFailure_NoContradictoryOkMark is the
+// regression test for the bug where CoreTools.shell folds a nonzero exit
+// into the result with a nil error: it.toolError is always false for a
+// failed shell command, so the generic status line would render "✓ ok"
+// directly above a "✗ exit 2" shell_exec line. renderToolBlock must use the
+// shell_exec status in place of the generic one, not alongside it.
+func TestRenderToolBlock_ShellExecFailure_NoContradictoryOkMark(t *testing.T) {
+	now := time.Now()
+	it := &outputItem{
+		kind:             outputItemTool,
+		toolName:         "shell",
+		toolError:        false, // as CoreTools.shell actually reports it for a nonzero exit
+		toolResult:       "boom\nexit status: exit status 2",
+		startedAt:        now.Add(-1200 * time.Millisecond),
+		endedAt:          now,
+		hasShellExec:     true,
+		shellExitCode:    2,
+		shellDurationMs:  1200,
+		shellOutputBytes: 4,
+	}
+	out := xansi.Strip(renderToolBlock(it, 80))
+
+	if !strings.Contains(out, "✗ exit 2") {
+		t.Errorf("expected the real exit code to be shown, got %q", out)
+	}
+	if strings.Contains(out, "✓ ok") {
+		t.Errorf("rendered block contradicts itself (shows both success and failure): %q", out)
+	}
+}
+
+// TestRenderToolBlock_ShellExecSuccess verifies a clean shell exit renders
+// the exit/duration/size line instead of the generic "✓ ok · dur" line.
+func TestRenderToolBlock_ShellExecSuccess(t *testing.T) {
+	now := time.Now()
+	it := &outputItem{
+		kind:             outputItemTool,
+		toolName:         "shell",
+		startedAt:        now.Add(-100 * time.Millisecond),
+		endedAt:          now,
+		hasShellExec:     true,
+		shellExitCode:    0,
+		shellDurationMs:  100,
+		shellOutputBytes: 5,
+	}
+	out := xansi.Strip(renderToolBlock(it, 80))
+
+	if !strings.Contains(out, "✓ exit 0") {
+		t.Errorf("expected the exit-code status line, got %q", out)
 	}
 }

@@ -18,6 +18,13 @@ import (
 
 const subscriberBufSize = 64
 
+// maxToolResultBytes caps tool results before they enter message history, to
+// prevent context window overflow when workers read large files or directory
+// listings. 8KB per result keeps the conversation manageable while still
+// providing meaningful content to the LLM. Also read by CoreTools.shell (see
+// tools.go) to estimate ShellExec.Truncated ahead of this same cap.
+const maxToolResultBytes = 8 * 1024
+
 // Session represents a running worker conversation.
 type Session struct {
 	id           string
@@ -271,7 +278,6 @@ func (s *Session) Run(ctx context.Context) (retErr error) {
 			// entire child worker session, which is typically a concise summary
 			// but can legitimately exceed 8KB. Truncating it causes the parent
 			// to misinterpret the child's work as incomplete and retry in a loop.
-			const maxToolResultBytes = 8 * 1024
 			if tc.Name != "spawn_worker" && len(result) > maxToolResultBytes {
 				// Walk backward off any multi-byte UTF-8 character so the cut
 				// doesn't leave an invalid sequence the provider rejects.

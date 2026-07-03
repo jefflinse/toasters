@@ -441,6 +441,58 @@ func (m *Model) attachWorkerStreamFileChange(slot *runtimeSlot, msg SessionFileC
 	snap.Items = append(snap.Items, it)
 }
 
+// attachWorkerStreamShellExec pairs a session.shell_exec event with the chat
+// card's matching shell tool item, mirroring attachShellExec in
+// slot_output.go for the worker-stream (chat card) copy of the same
+// lifecycle. Shell calls carry no path-like argument to disambiguate
+// concurrent in-flight calls, so matching is name-only (see attachShellExec).
+func (m *Model) attachWorkerStreamShellExec(slot *runtimeSlot, msg SessionShellExecMsg) {
+	if slot == nil || m.slotHidden(slot) {
+		return
+	}
+	snap := m.ensureWorkerStream(slot)
+	snap.LastActivity = time.Now()
+
+	set := func(it *service.WorkerStreamItem) {
+		it.HasShellExec = true
+		it.ShellExitCode = msg.ExitCode
+		it.ShellDurationMs = msg.DurationMs
+		it.ShellOutputBytes = msg.OutputBytes
+		it.ShellTruncated = msg.Truncated
+		it.ShellTimedOut = msg.TimedOut
+	}
+
+	var completed *service.WorkerStreamItem
+	for i := 0; i < len(snap.Items); i++ {
+		it := &snap.Items[i]
+		if it.Kind != service.WorkerStreamItemTool || it.ToolName != "shell" || it.HasShellExec {
+			continue
+		}
+		if it.EndedAt.IsZero() {
+			set(it)
+			return
+		}
+		if completed == nil {
+			completed = it
+		}
+	}
+	if completed != nil {
+		set(completed)
+		return
+	}
+
+	// No matching tool item — synthesize a completed one.
+	now := time.Now()
+	it := service.WorkerStreamItem{
+		Kind:      service.WorkerStreamItemTool,
+		ToolName:  "shell",
+		StartedAt: now,
+		EndedAt:   now,
+	}
+	set(&it)
+	snap.Items = append(snap.Items, it)
+}
+
 // markWorkerStreamDone flips the Done flag on whichever open worker
 // stream block matches the just-finished session. Called from the
 // SessionDoneMsg handler. The block stays at the top of the stack but
@@ -657,5 +709,12 @@ func workerStreamItemAsOutputItem(it *service.WorkerStreamItem) *outputItem {
 		diffRemoved:   it.DiffRemoved,
 		diffCreated:   it.DiffCreated,
 		diffTruncated: it.DiffTruncated,
+
+		hasShellExec:     it.HasShellExec,
+		shellExitCode:    it.ShellExitCode,
+		shellDurationMs:  it.ShellDurationMs,
+		shellOutputBytes: it.ShellOutputBytes,
+		shellTruncated:   it.ShellTruncated,
+		shellTimedOut:    it.ShellTimedOut,
 	}
 }

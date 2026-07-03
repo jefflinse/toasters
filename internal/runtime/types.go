@@ -70,6 +70,7 @@ type SessionEvent struct {
 	ToolCall   *ToolCallEvent
 	ToolResult *ToolResultEvent
 	FileChange *FileChange
+	ShellExec  *ShellExec
 	Compaction *CompactionEvent
 	Error      error
 }
@@ -82,6 +83,7 @@ const (
 	SessionEventToolCall   SessionEventType = "tool_call"
 	SessionEventToolResult SessionEventType = "tool_result"
 	SessionEventFileChange SessionEventType = "file_change"
+	SessionEventShellExec  SessionEventType = "shell_exec"
 	SessionEventCompaction SessionEventType = "compaction"
 	SessionEventDone       SessionEventType = "done"
 	SessionEventError      SessionEventType = "error"
@@ -134,3 +136,27 @@ type FileChange struct {
 // stash per-invocation identity in ctx (graphexec's NodeContext) can recover
 // it at notification time.
 type FileChangeNotifier func(ctx context.Context, fc FileChange)
+
+// ShellExec describes a command executed by the built-in shell tool. It
+// exists for display, mirroring FileChange: the model already sees the
+// command's output in its own tool result (subject to the session's result
+// cap), so this side-channel carries only the structured metadata — exit
+// code, timing, size — that would otherwise have to be re-parsed out of the
+// result text in the TUI.
+type ShellExec struct {
+	Command     string // command as issued, capped for display (maxShellExecCommandBytes)
+	ExitCode    int    // process exit code; -1 when unavailable (killed by signal, never started)
+	DurationMs  int64  // wall-clock time spent running the command
+	OutputBytes int    // combined stdout+stderr size, before any truncation
+	// Truncated is true when the model-visible result would exceed the
+	// standard tool-result cap (session.go's 8KB limit). For runtime.Session
+	// workers this is exact — same constant, same condition. For graph nodes
+	// (which don't run that truncation loop) it's an approximation: "large
+	// enough that the ordinary path would have truncated it."
+	Truncated bool
+	TimedOut  bool // true when the command was killed after exceeding its timeout
+}
+
+// ShellExecNotifier receives ShellExec notifications from CoreTools as a
+// display side-channel. See FileChangeNotifier for the ctx contract.
+type ShellExecNotifier func(ctx context.Context, se ShellExec)

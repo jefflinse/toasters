@@ -399,6 +399,70 @@ func TestAttachWorkerStreamFileChange_SynthesizesOnTotalMiss(t *testing.T) {
 	}
 }
 
+// TestAttachWorkerStreamShellExec_MergesIntoPendingCall mirrors
+// TestAttachWorkerStreamFileChange_MergesIntoPendingCall: shell_exec fires
+// before the tool_result, so attaching it must not mark the item done — the
+// later result still needs to merge into the same item.
+func TestAttachWorkerStreamShellExec_MergesIntoPendingCall(t *testing.T) {
+	m := newMinimalModel(t)
+	s := &runtimeSlot{sessionID: "s", workerName: "graph:implement", jobID: "j"}
+
+	m.appendWorkerStreamToolCall(s, "call1", "shell", json.RawMessage(`{"command":"go test ./..."}`))
+	m.attachWorkerStreamShellExec(s, SessionShellExecMsg{
+		SessionID: "s", ExitCode: 1, DurationMs: 500, OutputBytes: 100,
+	})
+
+	card := m.findWorkerStream("s")
+	if card == nil || len(card.Items) != 1 {
+		t.Fatalf("expected 1 item, card=%+v", card)
+	}
+	it := card.Items[0]
+	if !it.HasShellExec {
+		t.Fatal("shell exec not attached")
+	}
+	if !it.EndedAt.IsZero() {
+		t.Error("attaching shell exec must not complete the item — tool_result still needs to merge into it")
+	}
+
+	m.appendWorkerStreamToolResult(s, "call1", "shell", "FAIL", true)
+	if len(card.Items) != 1 {
+		t.Fatalf("expected the result to merge into the same item, got %d items", len(card.Items))
+	}
+	if !card.Items[0].HasShellExec {
+		t.Error("shell exec lost after the result merged in")
+	}
+	if card.Items[0].ShellExitCode != 1 {
+		t.Errorf("ShellExitCode = %d, want 1", card.Items[0].ShellExitCode)
+	}
+}
+
+// TestAttachWorkerStreamShellExec_SynthesizesOnTotalMiss mirrors
+// TestAttachWorkerStreamFileChange_SynthesizesOnTotalMiss: with no matching
+// tool item, a completed item is synthesized so the status still surfaces.
+func TestAttachWorkerStreamShellExec_SynthesizesOnTotalMiss(t *testing.T) {
+	m := newMinimalModel(t)
+	s := &runtimeSlot{sessionID: "s", workerName: "graph:implement", jobID: "j"}
+
+	m.attachWorkerStreamShellExec(s, SessionShellExecMsg{
+		SessionID: "s", ExitCode: 137, TimedOut: true,
+	})
+
+	card := m.findWorkerStream("s")
+	if card == nil || len(card.Items) != 1 {
+		t.Fatalf("expected a synthesized item, got %+v", card)
+	}
+	it := card.Items[0]
+	if it.Kind != service.WorkerStreamItemTool || it.ToolName != "shell" {
+		t.Errorf("synthesized item wrong: %+v", it)
+	}
+	if !it.HasShellExec || it.ShellExitCode != 137 || !it.ShellTimedOut {
+		t.Errorf("shell exec fields not set on synthesized item: %+v", it)
+	}
+	if it.EndedAt.IsZero() {
+		t.Error("synthesized item should be marked complete")
+	}
+}
+
 // TestSessionFileChangeMsg_AccumulatesDiffStatAndPatchesActivity verifies
 // that Model.Update accumulates diffAdded/diffRemoved on the runtime slot
 // across successive session.file_change events for a session (grid.go's
@@ -508,6 +572,69 @@ func TestWorkerStreamItemAsOutputItem_CarriesDiffFields(t *testing.T) {
 	}
 	if got.diffCreated != src.DiffCreated || got.diffTruncated != src.DiffTruncated {
 		t.Errorf("diffCreated/diffTruncated = %v/%v, want %v/%v", got.diffCreated, got.diffTruncated, src.DiffCreated, src.DiffTruncated)
+	}
+}
+
+// TestWorkerStreamItemAsOutputItem_CarriesShellExecFields mirrors
+// TestWorkerStreamItemAsOutputItem_CarriesDiffFields for the shell_exec
+// fields.
+func TestWorkerStreamItemAsOutputItem_CarriesShellExecFields(t *testing.T) {
+	src := &service.WorkerStreamItem{
+		Kind:             service.WorkerStreamItemTool,
+		ToolName:         "shell",
+		HasShellExec:     true,
+		ShellExitCode:    2,
+		ShellDurationMs:  1500,
+		ShellOutputBytes: 4096,
+		ShellTruncated:   true,
+		ShellTimedOut:    false,
+	}
+	got := workerStreamItemAsOutputItem(src)
+	if got.hasShellExec != src.HasShellExec {
+		t.Errorf("hasShellExec = %v, want %v", got.hasShellExec, src.HasShellExec)
+	}
+	if got.shellExitCode != src.ShellExitCode {
+		t.Errorf("shellExitCode = %d, want %d", got.shellExitCode, src.ShellExitCode)
+	}
+	if got.shellDurationMs != src.ShellDurationMs || got.shellOutputBytes != src.ShellOutputBytes {
+		t.Errorf("shellDurationMs/shellOutputBytes = %d/%d, want %d/%d",
+			got.shellDurationMs, got.shellOutputBytes, src.ShellDurationMs, src.ShellOutputBytes)
+	}
+	if got.shellTruncated != src.ShellTruncated || got.shellTimedOut != src.ShellTimedOut {
+		t.Errorf("shellTruncated/shellTimedOut = %v/%v, want %v/%v",
+			got.shellTruncated, got.shellTimedOut, src.ShellTruncated, src.ShellTimedOut)
+	}
+}
+
+// TestSessionShellExecMsg_PatchesActivityOnlyOnAnomaly verifies Model.Update
+// only appends a "· exit N"/"· timeout" suffix to the matching shell
+// activity label for a non-clean outcome — a successful command (exit 0)
+// leaves the label untouched, unlike a file-change diff stat which always
+// annotates.
+func TestSessionShellExecMsg_PatchesActivityOnlyOnAnomaly(t *testing.T) {
+	m := newMinimalModel(t)
+	slot := &runtimeSlot{sessionID: "s", workerName: "graph:implement", jobID: "j"}
+	m.runtimeSessions["s"] = slot
+
+	args, _ := json.Marshal(map[string]string{"command": "echo ok"})
+	res, _ := m.Update(SessionToolCallMsg{SessionID: "s", ToolID: "call1", ToolName: "shell", ToolInput: string(args)})
+	got := res.(*Model)
+
+	res, _ = got.Update(SessionShellExecMsg{SessionID: "s", ExitCode: 0})
+	got = res.(*Model)
+
+	if len(slot.activities) != 1 || strings.Contains(slot.activities[0].label, "exit") {
+		t.Fatalf("clean exit should not patch the label, got %+v", slot.activities)
+	}
+
+	args2, _ := json.Marshal(map[string]string{"command": "false"})
+	res, _ = got.Update(SessionToolCallMsg{SessionID: "s", ToolID: "call2", ToolName: "shell", ToolInput: string(args2)})
+	got = res.(*Model)
+	res, _ = got.Update(SessionShellExecMsg{SessionID: "s", ExitCode: 1})
+	_ = res.(*Model)
+
+	if len(slot.activities) != 2 || !strings.HasSuffix(slot.activities[1].label, "· exit 1") {
+		t.Fatalf("failed exit should patch the label with exit code, got %+v", slot.activities)
 	}
 }
 
