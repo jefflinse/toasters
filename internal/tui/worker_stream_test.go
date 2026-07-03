@@ -2,9 +2,12 @@ package tui
 
 import (
 	"encoding/json"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
+
+	xansi "github.com/charmbracelet/x/ansi"
 
 	"github.com/jefflinse/toasters/internal/service"
 )
@@ -824,6 +827,53 @@ func TestWorkerStreamBlock_FinishedCardsCollapse(t *testing.T) {
 				t.Errorf("body present = %v, want %v", got, c.wantBody)
 			}
 		})
+	}
+}
+
+// TestWorkerStreamBlock_HeaderLayout pins the card header shape: the status
+// glyph + elapsed sits at the end of line 1 (after the node name, space-
+// separated — no dot before it), and line 2 is the short job id prefixing
+// the job title.
+func TestWorkerStreamBlock_HeaderLayout(t *testing.T) {
+	m := newMinimalModel(t)
+	m.jobs = []service.Job{{ID: "0123456789abcdef", Title: "Fix Docker Build"}}
+	m.progress.tasks = map[string][]service.Task{
+		"0123456789abcdef": {{ID: "t1", Title: "Replace go-sqlite3"}},
+	}
+
+	snap := &service.WorkerStreamSnapshot{
+		SessionID:  "graph:t1:review#1",
+		WorkerName: "graph:review#1",
+		JobID:      "0123456789abcdef",
+		TaskID:     "t1",
+		StartedAt:  time.Now().Add(-time.Minute),
+		Done:       false,
+	}
+	out := xansi.Strip(m.renderWorkerStreamBlock(snap, 80, false))
+	lines := strings.Split(out, "\n")
+	if len(lines) < 2 {
+		t.Fatalf("card rendered %d lines, want >= 2:\n%s", len(lines), out)
+	}
+
+	// Line 1: headline · node, then the glyph + elapsed at the end, no dot
+	// between the node name and the status.
+	l1 := strings.TrimRight(lines[0], " ")
+	if !strings.Contains(l1, "Replace go-sqlite3") || !strings.Contains(l1, "review#1") {
+		t.Errorf("line 1 = %q, want headline and node name", l1)
+	}
+	if !regexp.MustCompile(`● 1m0s$`).MatchString(l1) {
+		t.Errorf("line 1 = %q, want it to end with the status glyph + elapsed", l1)
+	}
+	if strings.Contains(l1, "· ● ") || strings.Contains(l1, "· ● ") {
+		t.Errorf("line 1 = %q, status must not be preceded by a dot", l1)
+	}
+
+	// Line 2: short job id prefixes the job title.
+	if !strings.Contains(lines[1], "01234567 · Fix Docker Build") {
+		t.Errorf("line 2 = %q, want short job id prefixing the title", lines[1])
+	}
+	if strings.Contains(lines[1], "●") || strings.Contains(lines[1], "1m0s") {
+		t.Errorf("line 2 = %q, status/elapsed must not be on line 2 anymore", lines[1])
 	}
 }
 

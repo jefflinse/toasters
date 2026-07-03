@@ -216,7 +216,7 @@ func (m *Model) slotHidden(slot *runtimeSlot) bool {
 // tail-truncated visually). The Jobs modal still has the full
 // transcript via the runtimeSlot, which is what Enter-to-deep-link
 // surfaces.
-const workerStreamChatMaxLines = 6
+const workerStreamChatMaxLines = 9
 
 // findWorkerStream returns the card for a session, wherever it sits in the
 // chat. Each session has exactly one card that stays put and updates in place,
@@ -590,16 +590,15 @@ func (m *Model) renderWorkerStreamBlock(snap *service.WorkerStreamSnapshot, widt
 	}
 
 	// Job + task context so a card is traceable to what it belongs to. The
-	// short job hash alone is meaningless once more than one job is running.
-	jobTitle := ""
-	if j, ok := m.jobByID(snap.JobID); ok {
-		jobTitle = j.Title
-	}
-	if jobTitle == "" {
-		jobTitle = snap.JobID
-		if len(jobTitle) > 8 {
-			jobTitle = jobTitle[:8]
+	// job title is always prefixed with the short job id: the title alone is
+	// ambiguous across follow-up jobs sharing a workspace, and the id alone
+	// is meaningless once more than one job is running.
+	jobLabel := shortID(snap.JobID)
+	if j, ok := m.jobByID(snap.JobID); ok && j.Title != "" {
+		if jobLabel != "" {
+			jobLabel += " · "
 		}
+		jobLabel += j.Title
 	}
 	taskTitle := m.taskTitleByID(snap.JobID, snap.TaskID)
 
@@ -615,8 +614,9 @@ func (m *Model) renderWorkerStreamBlock(snap *service.WorkerStreamSnapshot, widt
 
 	// Two-line header. The bold headline is the task — the most descriptive,
 	// least-repeated label — with the node id beside it (the per-branch
-	// distinguisher under fan-out). The job title is identical on every card,
-	// so it's demoted to dim context alongside the status on line 2.
+	// distinguisher under fan-out) and the status glyph + elapsed at the end
+	// of the line, space-separated (no dot: the glyph already breaks it off
+	// visually). The job identity is demoted to dim context on line 2.
 	headline := taskTitle
 	if headline == "" {
 		headline = node // graphless or odd cases: fall back to the node id
@@ -629,6 +629,7 @@ func (m *Model) renderWorkerStreamBlock(snap *service.WorkerStreamSnapshot, widt
 	if nodeSuffix != "" {
 		avail -= len(nodeSuffix) + 3 // " · " + node
 	}
+	avail -= lipgloss.Width(status) + 2 // "  " + status at line end
 	if avail < 10 {
 		avail = 10
 	}
@@ -637,14 +638,15 @@ func (m *Model) renderWorkerStreamBlock(snap *service.WorkerStreamSnapshot, widt
 		nodeStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("250"))
 		line1 += DimStyle.Render(" · ") + nodeStyle.Render(nodeSuffix)
 	}
+	line1 += "  " + status
 	if selected {
 		line1 += "  " + DimStyle.Render("[enter to view]")
 	}
-	// Line 2: status, then the job title in dim as traceable context (it repeats
+	// Line 2: the short job id + title in dim as traceable context (it repeats
 	// across every card, so it stays quiet). Indented to align under the icon.
-	line2 := DimStyle.Render("   ") + status
-	if jobTitle != "" {
-		line2 += DimStyle.Render(" · " + truncateStr(jobTitle, innerW/2))
+	line2 := ""
+	if jobLabel != "" {
+		line2 = DimStyle.Render("   ") + DimStyle.Render(truncateStr(jobLabel, innerW-3))
 	}
 
 	// Finished cards collapse to just their two header rows so a completed run
@@ -652,7 +654,10 @@ func (m *Model) renderWorkerStreamBlock(snap *service.WorkerStreamSnapshot, widt
 	// while the card is still streaming, or when the user has selected it
 	// (arrow-navigation peek). Full output is always reachable via [enter to
 	// view] regardless.
-	content := line1 + "\n" + line2
+	content := line1
+	if line2 != "" {
+		content += "\n" + line2
+	}
 	if !snap.Done || selected {
 		// Indent the body to the same column as the title/task text (past the
 		// "🍞 " icon — 3 cells), rendered that much narrower so it doesn't overflow.
