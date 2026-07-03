@@ -630,6 +630,127 @@ func TestCreateTask_Validation(t *testing.T) {
 	}
 }
 
+// create_task must be rejected once a job has reached a terminal status
+// (completed, failed, or cancelled) — the operator must not be able to
+// silently resurrect a finished job by adding a task to it. The error must
+// point the operator at the intended follow-up path: create_job with
+// workspace_of_job.
+func TestCreateTask_RejectsTerminalJob(t *testing.T) {
+	for _, status := range []db.JobStatus{db.JobStatusCompleted, db.JobStatusFailed, db.JobStatusCancelled} {
+		t.Run(string(status), func(t *testing.T) {
+			st, store, _, _, _ := newTestSystemTools(t)
+			ctx := context.Background()
+
+			jobResult, err := st.Execute(ctx, "create_job", json.RawMessage(`{
+				"title": "Job", "description": "desc"
+			}`))
+			assertNoError(t, err)
+			var jobRes map[string]string
+			if err := json.Unmarshal([]byte(jobResult), &jobRes); err != nil {
+				t.Fatalf("parsing job result: %v", err)
+			}
+			jobID := jobRes["job_id"]
+
+			if err := store.UpdateJobStatus(ctx, jobID, status); err != nil {
+				t.Fatalf("updating job status: %v", err)
+			}
+
+			_, err = st.Execute(ctx, "create_task", json.RawMessage(`{
+				"job_id": "`+jobID+`", "title": "Follow-up"
+			}`))
+			if err == nil {
+				t.Fatalf("create_task on a %s job accepted, want error", status)
+			}
+			if !strings.Contains(err.Error(), "workspace_of_job") {
+				t.Errorf("error = %q, want it to mention workspace_of_job as the follow-up path", err.Error())
+			}
+			if !strings.Contains(err.Error(), string(status)) {
+				t.Errorf("error = %q, want it to mention the job status %q", err.Error(), status)
+			}
+
+			tasks, err := store.ListTasksForJob(ctx, jobID)
+			assertNoError(t, err)
+			if len(tasks) != 0 {
+				t.Errorf("ListTasksForJob returned %d tasks, want 0 (no task should have been created)", len(tasks))
+			}
+		})
+	}
+}
+
+// create_task on a job that is still running (active) must continue to
+// succeed — the terminal-status guard must not be overbroad.
+func TestCreateTask_ActiveJobStillAccepted(t *testing.T) {
+	st, store, _, _, _ := newTestSystemTools(t)
+	ctx := context.Background()
+
+	jobResult, err := st.Execute(ctx, "create_job", json.RawMessage(`{
+		"title": "Job", "description": "desc"
+	}`))
+	assertNoError(t, err)
+	var jobRes map[string]string
+	if err := json.Unmarshal([]byte(jobResult), &jobRes); err != nil {
+		t.Fatalf("parsing job result: %v", err)
+	}
+	jobID := jobRes["job_id"]
+
+	if err := store.UpdateJobStatus(ctx, jobID, db.JobStatusActive); err != nil {
+		t.Fatalf("updating job status: %v", err)
+	}
+
+	result, err := st.Execute(ctx, "create_task", json.RawMessage(`{
+		"job_id": "`+jobID+`", "title": "Follow-up work"
+	}`))
+	assertNoError(t, err)
+
+	var res map[string]string
+	if err := json.Unmarshal([]byte(result), &res); err != nil {
+		t.Fatalf("parsing create_task result: %v", err)
+	}
+	task, err := store.GetTask(ctx, res["task_id"])
+	assertNoError(t, err)
+	assertEqual(t, "Follow-up work", task.Title)
+}
+
+// assign_task must refuse to dispatch a pending task whose job has already
+// reached a terminal status — e.g. a leftover pending task in a cancelled
+// job. Same follow-up guidance as create_task: create_job + workspace_of_job.
+func TestAssignTask_RejectsTerminalJob(t *testing.T) {
+	st, store, _, _, _ := newTestSystemTools(t)
+	ctx := context.Background()
+
+	jobResult, err := st.Execute(ctx, "create_job", json.RawMessage(`{
+		"title": "Job", "description": "desc"
+	}`))
+	assertNoError(t, err)
+	var jobRes map[string]string
+	if err := json.Unmarshal([]byte(jobResult), &jobRes); err != nil {
+		t.Fatalf("parsing job result: %v", err)
+	}
+	jobID := jobRes["job_id"]
+
+	// Task created while the job is live, then the job is cancelled with the
+	// task still pending.
+	taskID := seedTask(t, store, jobID, "Leftover work", "")
+	if err := store.UpdateJobStatus(ctx, jobID, db.JobStatusCancelled); err != nil {
+		t.Fatalf("updating job status: %v", err)
+	}
+
+	_, err = st.Execute(ctx, "assign_task", json.RawMessage(`{
+		"task_id": "`+taskID+`",
+		"graph_id": "bug-fix"
+	}`))
+	if err == nil {
+		t.Fatal("assign_task in a cancelled job accepted, want error")
+	}
+	if !strings.Contains(err.Error(), "workspace_of_job") {
+		t.Errorf("error = %q, want it to mention workspace_of_job as the follow-up path", err.Error())
+	}
+
+	task, err := store.GetTask(ctx, taskID)
+	assertNoError(t, err)
+	assertEqual(t, string(db.TaskStatusPending), string(task.Status))
+}
+
 func TestAssignTask_PromotesJobToActive(t *testing.T) {
 	st, store, _, _, _ := newTestSystemTools(t)
 	ctx := context.Background()

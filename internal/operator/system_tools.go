@@ -366,6 +366,19 @@ func (st *SystemTools) createJob(ctx context.Context, args json.RawMessage) (str
 	return string(result), nil
 }
 
+// isTerminalJobStatus reports whether a job has finished running and will
+// never resume on its own. Terminal jobs must not gain new tasks — the
+// follow-up path is create_job with workspace_of_job, which starts a new job
+// against the same workspace.
+func isTerminalJobStatus(status db.JobStatus) bool {
+	switch status {
+	case db.JobStatusCompleted, db.JobStatusFailed, db.JobStatusCancelled:
+		return true
+	default:
+		return false
+	}
+}
+
 // createTask adds a pending task to an existing job. With a graph_id it
 // dispatches immediately through the same path as assign_task (respecting
 // serial execution); without one it broadcasts task-created with an empty
@@ -391,6 +404,9 @@ func (st *SystemTools) createTask(ctx context.Context, args json.RawMessage) (st
 	job, err := st.store.GetJob(ctx, params.JobID)
 	if err != nil {
 		return "", fmt.Errorf("getting job: %w", err)
+	}
+	if isTerminalJobStatus(job.Status) {
+		return "", fmt.Errorf("job %s is %s; tasks cannot be added to a finished job. To continue this work, create a follow-up job with create_job and workspace_of_job: %q so it shares the same workspace", job.ID, job.Status, job.ID)
 	}
 	if params.GraphID != "" && st.graphCatalog != nil {
 		known := false
@@ -482,6 +498,9 @@ func (st *SystemTools) assignTask(ctx context.Context, args json.RawMessage) (st
 	job, err := st.store.GetJob(ctx, task.JobID)
 	if err != nil {
 		return "", fmt.Errorf("getting job for workspace: %w", err)
+	}
+	if isTerminalJobStatus(job.Status) {
+		return "", fmt.Errorf("job %s is %s; tasks cannot be dispatched in a finished job. To continue this work, create a follow-up job with create_job and workspace_of_job: %q so it shares the same workspace", job.ID, job.Status, job.ID)
 	}
 
 	// 2a. Validate the job's workspace directory is under $HOME. This guards
