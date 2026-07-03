@@ -86,6 +86,10 @@ func TestEventPayloadRoundTrip(t *testing.T) {
 			Command: "go test ./...", ExitCode: 1, DurationMs: 1234, OutputBytes: 512,
 			Truncated: true, TimedOut: false,
 		},
+		service.EventTypeSessionWorkerSpawn: service.SessionWorkerSpawnPayload{
+			Role: "coder", Task: "implement the thing", JobID: "j-1", Depth: 2,
+			Failed: true, Error: "role not found",
+		},
 		service.EventTypeSessionDone: service.SessionDonePayload{
 			WorkerName: "w", JobID: "j-1", TaskID: "t-1", Status: "completed", FinalText: "bye",
 		},

@@ -80,6 +80,15 @@ type EventSink interface {
 	// CoreTools' ShellExecNotifier (see buildToolExecutor in executor.go).
 	// Like BroadcastSessionFileChange, it's a pure display side-channel.
 	BroadcastSessionShellExec(sessionID string, se runtime.ShellExec)
+	// BroadcastSessionWorkerSpawn carries a spawn_worker attempt's role,
+	// task, depth, and outcome from a graph node's tool execution, wired via
+	// CoreTools' WorkerSpawnNotifier (see buildToolExecutor in executor.go).
+	// Like BroadcastSessionShellExec, it's a pure display side-channel. In
+	// practice buildToolExecutor never attaches a spawner to graph-node
+	// CoreTools, so spawn_worker isn't advertised there and this fires only
+	// on the defensive "spawn_worker is not available" path — wired anyway
+	// for parity with the other two side-channels and in case that changes.
+	BroadcastSessionWorkerSpawn(sessionID string, ws runtime.WorkerSpawn)
 }
 
 type nodeContextKey struct{}

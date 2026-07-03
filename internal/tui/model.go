@@ -604,6 +604,20 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case SessionWorkerSpawnMsg:
+		slot, ok := m.runtimeSessions[msg.SessionID]
+		if !ok {
+			return m, nil
+		}
+		slot.attachWorkerSpawn(msg.Role, msg.Task, msg.JobID, msg.Depth, msg.Failed, msg.Error)
+		m.attachWorkerStreamWorkerSpawn(slot, msg)
+		m.refreshNodesAutoTail(msg.SessionID)
+		m.updateViewportContent()
+		if !m.scroll.userScrolled {
+			m.chatViewport.GotoBottom()
+		}
+		return m, nil
+
 	case SessionDoneMsg:
 		return m.handleSessionDone(msg)
 

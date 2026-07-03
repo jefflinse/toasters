@@ -1213,6 +1213,39 @@ func TestParseSSEPayload_SessionShellExec(t *testing.T) {
 	}
 }
 
+func TestParseSSEPayload_SessionWorkerSpawn(t *testing.T) {
+	t.Parallel()
+
+	raw := json.RawMessage(`{"role":"coder","task":"implement the thing","job_id":"job-1","depth":2,"failed":true,"error":"role not found"}`)
+	payload, err := ParseSSEPayload("session.worker_spawn", raw)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	p, ok := payload.(service.SessionWorkerSpawnPayload)
+	if !ok {
+		t.Fatalf("payload type = %T, want SessionWorkerSpawnPayload", payload)
+	}
+	if p.Role != "coder" {
+		t.Errorf("Role = %q, want %q", p.Role, "coder")
+	}
+	if p.Task != "implement the thing" {
+		t.Errorf("Task = %q, want %q", p.Task, "implement the thing")
+	}
+	if p.JobID != "job-1" {
+		t.Errorf("JobID = %q, want %q", p.JobID, "job-1")
+	}
+	if p.Depth != 2 {
+		t.Errorf("Depth = %d, want 2", p.Depth)
+	}
+	if !p.Failed {
+		t.Errorf("Failed = false, want true")
+	}
+	if p.Error != "role not found" {
+		t.Errorf("Error = %q, want %q", p.Error, "role not found")
+	}
+}
+
 func TestParseSSEPayload_SessionDone(t *testing.T) {
 	t.Parallel()
 

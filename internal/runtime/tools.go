@@ -59,8 +59,9 @@ type CoreTools struct {
 	providerName string
 	model        string
 
-	fileChangeNotifier FileChangeNotifier // display side-channel for write_file/edit_file; may be nil
-	shellExecNotifier  ShellExecNotifier  // display side-channel for shell; may be nil
+	fileChangeNotifier  FileChangeNotifier  // display side-channel for write_file/edit_file; may be nil
+	shellExecNotifier   ShellExecNotifier   // display side-channel for shell; may be nil
+	workerSpawnNotifier WorkerSpawnNotifier // display side-channel for spawn_worker; may be nil
 }
 
 // GraphCatalog is a read-only view over the loaded graph Definitions,
@@ -183,6 +184,21 @@ func WithShellExecNotifier(n ShellExecNotifier) CoreToolsOption {
 // built and so can't close over themselves via WithShellExecNotifier.
 func (ct *CoreTools) SetShellExecNotifier(n ShellExecNotifier) {
 	ct.shellExecNotifier = n
+}
+
+// WithWorkerSpawnNotifier sets the display side-channel invoked after a
+// spawn_worker call finishes — success, or any failure reason including the
+// pre-attempt validation checks (see WorkerSpawn). See SetWorkerSpawnNotifier
+// for the post-construction equivalent.
+func WithWorkerSpawnNotifier(n WorkerSpawnNotifier) CoreToolsOption {
+	return func(ct *CoreTools) { ct.workerSpawnNotifier = n }
+}
+
+// SetWorkerSpawnNotifier sets the worker-spawn notifier after construction.
+// Needed by callers (runtime.Session) that don't exist yet when CoreTools is
+// built and so can't close over themselves via WithWorkerSpawnNotifier.
+func (ct *CoreTools) SetWorkerSpawnNotifier(n WorkerSpawnNotifier) {
+	ct.workerSpawnNotifier = n
 }
 
 // NewCoreTools creates a CoreTools with the given work directory and options.
@@ -1393,7 +1409,70 @@ func (ct *CoreTools) webFetch(ctx context.Context, args json.RawMessage) (string
 	return string(body), nil
 }
 
-func (ct *CoreTools) spawnWorker(ctx context.Context, args json.RawMessage) (string, error) {
+const (
+	// maxWorkerSpawnTaskBytes caps the Task field of a WorkerSpawn
+	// notification. SpawnOpts.Task is already documented as a short
+	// (≤60 char) label, but the model doesn't reliably respect that, and
+	// this is a display value, not the task actually handed to the child.
+	maxWorkerSpawnTaskBytes = 200
+
+	// maxWorkerSpawnErrorBytes caps the Error field of a WorkerSpawn
+	// notification — a display value shown on the spawn card, not the
+	// error returned to the model.
+	maxWorkerSpawnErrorBytes = 300
+)
+
+// displaySpawnTask caps a spawn_worker task label for inclusion in a
+// WorkerSpawn display notification, marking the cut so a chopped label
+// doesn't read as the whole thing.
+func displaySpawnTask(task string) string {
+	if len(task) <= maxWorkerSpawnTaskBytes {
+		return task
+	}
+	return truncateBytesRuneSafe(task, maxWorkerSpawnTaskBytes) + "… (truncated)"
+}
+
+// displaySpawnError caps an error message for inclusion in a WorkerSpawn
+// display notification.
+func displaySpawnError(err error) string {
+	msg := err.Error()
+	if len(msg) <= maxWorkerSpawnErrorBytes {
+		return msg
+	}
+	return truncateBytesRuneSafe(msg, maxWorkerSpawnErrorBytes) + "… (truncated)"
+}
+
+func (ct *CoreTools) spawnWorker(ctx context.Context, args json.RawMessage) (_ string, err error) {
+	var params struct {
+		Role    string `json:"role"`
+		Message string `json:"message"`
+		Task    string `json:"task"`
+	}
+	depth := ct.depth + 1
+
+	// notify fires the display side-channel, when a listener is attached, on
+	// every exit path of this function — unlike shell, which skips its
+	// pre-execution validation errors (they never ran a command and have
+	// nothing to report), a rejected spawn_worker call is itself meaningful
+	// information for the TUI's spawn card: "tried to spawn X, but the role
+	// didn't exist" is worth surfacing just as much as a successful spawn.
+	defer func() {
+		if ct.workerSpawnNotifier == nil {
+			return
+		}
+		ws := WorkerSpawn{
+			Role:   params.Role,
+			Task:   displaySpawnTask(params.Task),
+			JobID:  ct.jobID,
+			Depth:  depth,
+			Failed: err != nil,
+		}
+		if err != nil {
+			ws.Error = displaySpawnError(err)
+		}
+		ct.workerSpawnNotifier(ctx, ws)
+	}()
+
 	if ct.spawner == nil {
 		return "", fmt.Errorf("spawn_worker is not available")
 	}
@@ -1404,11 +1483,6 @@ func (ct *CoreTools) spawnWorker(ctx context.Context, args json.RawMessage) (str
 		return "", fmt.Errorf("max spawn depth (%d) exceeded", ct.maxDepth)
 	}
 
-	var params struct {
-		Role    string `json:"role"`
-		Message string `json:"message"`
-		Task    string `json:"task"`
-	}
 	if err := json.Unmarshal(args, &params); err != nil {
 		return "", fmt.Errorf("parsing arguments: %w", err)
 	}
@@ -1431,7 +1505,7 @@ func (ct *CoreTools) spawnWorker(ctx context.Context, args json.RawMessage) (str
 		InitialMessage: params.Message,
 		WorkDir:        ct.workDir,
 		MaxDepth:       ct.maxDepth,
-		Depth:          ct.depth + 1,
+		Depth:          depth,
 		ProviderName:   ct.providerName,
 		Model:          ct.model,
 		WorkerID:       params.Role,

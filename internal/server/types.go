@@ -869,6 +869,15 @@ type wireSessionShellExecPayload struct {
 	TimedOut    bool   `json:"timed_out,omitempty"`
 }
 
+type wireSessionWorkerSpawnPayload struct {
+	Role   string `json:"role"`
+	Task   string `json:"task,omitempty"`
+	JobID  string `json:"job_id,omitempty"`
+	Depth  int    `json:"depth,omitempty"`
+	Failed bool   `json:"failed,omitempty"`
+	Error  string `json:"error,omitempty"`
+}
+
 type wireSessionDonePayload struct {
 	WorkerName string `json:"worker_name"`
 	JobID      string `json:"job_id,omitempty"`
@@ -1057,6 +1066,11 @@ func EventPayloadToWire(ev service.Event) any {
 		return wireSessionShellExecPayload{
 			Command: p.Command, ExitCode: p.ExitCode, DurationMs: p.DurationMs,
 			OutputBytes: p.OutputBytes, Truncated: p.Truncated, TimedOut: p.TimedOut,
+		}
+	case service.SessionWorkerSpawnPayload:
+		return wireSessionWorkerSpawnPayload{
+			Role: p.Role, Task: p.Task, JobID: p.JobID,
+			Depth: p.Depth, Failed: p.Failed, Error: p.Error,
 		}
 	case service.SessionDonePayload:
 		return wireSessionDonePayload{

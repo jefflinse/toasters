@@ -158,14 +158,17 @@ func renderToolBlock(it *outputItem, width int) string {
 	}
 
 	var status string
-	if it.hasShellExec {
+	switch {
+	case it.hasShellExec:
 		// CoreTools.shell folds a nonzero exit into the result text with a
 		// nil error (the LLM needs to see the output either way), so
 		// it.toolError is always false for a failed command — the generic
 		// ok/error line below would misreport it as "✓ ok". Only the
 		// shell_exec side-channel knows the real outcome.
 		status = renderShellExecStatusLine(it)
-	} else {
+	case it.hasWorkerSpawn:
+		status = renderWorkerSpawnStatusLine(it)
+	default:
 		dur := it.endedAt.Sub(it.startedAt).Round(time.Millisecond)
 		statusMark := "✓"
 		statusColor := ColorConnected
@@ -185,6 +188,13 @@ func renderToolBlock(it *outputItem, width int) string {
 		// A diff supersedes the raw result preview below — "wrote N bytes" is
 		// redundant once the actual change is shown.
 		out += renderFileDiffSection(it, width)
+	case it.hasWorkerSpawn && it.spawnTask != "":
+		// Second line: the task label the child was spawned for, dimmed —
+		// same "supersedes the raw result preview" reasoning as the diff
+		// case above, plus the model-visible result here is either the
+		// child's own final text or a failure message, neither of which is
+		// a useful preview of what this spawn_worker call was for.
+		out += "\n  " + DimStyle.Render(truncateMiddle(it.spawnTask, max(width-2, 4)))
 	case it.toolResult != "":
 		preview := strings.SplitN(it.toolResult, "\n", 2)[0]
 		preview = truncateMiddle(preview, width-4)
@@ -272,6 +282,38 @@ func formatBytes(n int) string {
 	default:
 		return fmt.Sprintf("%.1f MB", float64(n)/(1024*1024))
 	}
+}
+
+// renderWorkerSpawnStatusLine builds a spawn_worker tool item's status line
+// from its WorkerSpawn side-channel metadata. Like renderShellExecStatusLine,
+// this replaces the generic ok/error line rather than appending a section:
+// spawn_worker's model-visible result is the child's own final text
+// (success) or an error string (failure), neither of which is the compact
+// "what got spawned, where" summary the card needs.
+func renderWorkerSpawnStatusLine(it *outputItem) string {
+	if it.spawnFailed {
+		msg := it.spawnError
+		if msg == "" {
+			msg = "unknown error"
+		}
+		return lipgloss.NewStyle().Foreground(ColorError).Render("✗ spawn failed") +
+			DimStyle.Render(" · "+msg)
+	}
+	head := lipgloss.NewStyle().Foreground(ColorConnected).Render("⚡ spawned " + it.spawnRole)
+	if id := shortID(it.spawnJobID); id != "" {
+		head += DimStyle.Render(" · " + id)
+	}
+	return head
+}
+
+// shortID shortens a UUID-style identifier to its first 8 characters for
+// compact inline display (e.g. the spawn card's job id), matching the
+// truncation convention used elsewhere in the TUI for job/session ids.
+func shortID(id string) string {
+	if len(id) <= 8 {
+		return id
+	}
+	return id[:8]
 }
 
 // diffHunkHeaderRe matches a unified-diff hunk header, e.g. "@@ -5,3 +5,4 @@".
