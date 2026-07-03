@@ -17,7 +17,7 @@ import (
 const scrollBottom = 1 << 30
 
 // cockpitTabNames are the tab labels, indexed by cockpitTab.
-var cockpitTabNames = [cockpitTabCount]string{"Output", "Prompt", "Stats"}
+var cockpitTabNames = [cockpitTabCount]string{"Output", "Prompt", "Initial Msg", "Stats"}
 
 // renderDetailPane renders the detail pane for the selected node into a bordered
 // box of the given outer dimensions. focused controls the border accent (cyan
@@ -160,6 +160,8 @@ func (m *Model) detailBodyLines(slot *runtimeSlot, innerW int) []string {
 	switch m.nodes.tab {
 	case cockpitTabPrompt:
 		return m.detailPromptLines(slot, innerW)
+	case cockpitTabInitialMsg:
+		return m.detailInitialMsgLines(slot, innerW)
 	case cockpitTabStats:
 		return m.detailStatsLines(slot, innerW)
 	default:
@@ -191,28 +193,29 @@ func (m *Model) detailOutputLines(slot *runtimeSlot, innerW int) []string {
 	return strings.Split(out, "\n")
 }
 
-// detailPromptLines renders the session's system prompt and initial message as
-// markdown, each under a styled section header.
-func (m *Model) detailPromptLines(slot *runtimeSlot, innerW int) []string {
-	if slot.systemPrompt == "" && slot.initialMessage == "" {
+// detailPromptLines renders the session's system prompt as markdown under a
+// styled section header. The initial message has its own tab.
+func (m *Model) detailPromptLines(slot *runtimeSlot, _ int) []string {
+	if slot.systemPrompt == "" {
 		return []string{DimStyle.Italic(true).Render("(no prompt captured)")}
 	}
-	var lines []string
-	section := func(title, content string) {
-		if content == "" {
-			return
-		}
-		if len(lines) > 0 {
-			lines = append(lines, "")
-		}
-		lines = append(lines, HeaderStyle.Render(title))
-		lines = append(lines, "")
-		rendered := renderMarkdownWith(m.outputMdRender, content)
-		lines = append(lines, strings.Split(rendered, "\n")...)
+	return promptSection(m, "System Prompt", slot.systemPrompt)
+}
+
+// detailInitialMsgLines renders the session's initial message (the task
+// description handed to the worker) as markdown.
+func (m *Model) detailInitialMsgLines(slot *runtimeSlot, _ int) []string {
+	if slot.initialMessage == "" {
+		return []string{DimStyle.Italic(true).Render("(no initial message captured)")}
 	}
-	section("System Prompt", slot.systemPrompt)
-	section("Initial Message", slot.initialMessage)
-	return lines
+	return promptSection(m, "Initial Message", slot.initialMessage)
+}
+
+// promptSection renders a styled section header followed by markdown content.
+func promptSection(m *Model, title, content string) []string {
+	lines := []string{HeaderStyle.Render(title), ""}
+	rendered := renderMarkdownWith(m.outputMdRender, content)
+	return append(lines, strings.Split(rendered, "\n")...)
 }
 
 // detailStatsLines renders a labeled stats block: identity, status/timing,

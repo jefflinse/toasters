@@ -269,11 +269,11 @@ var (
 				Background(lipgloss.Color("#333333")).
 				Bold(true)
 
-	// JobsScreenBgStyle tints the entire Jobs screen a subtle navy so it
-	// reads as visually distinct from the main screen. Kept low-saturation
-	// so syntax/status colors remain legible over it.
-	JobsScreenBgStyle = lipgloss.NewStyle().
-				Background(lipgloss.Color("#0d1b2a"))
+	// JobsScreenBgStyle wraps the entire Jobs screen. It carries no background
+	// (the screen renders on the terminal default), but the Jobs view still
+	// derives all its panel tints from GetBackground() here — set a color on
+	// this style and the whole screen tints uniformly.
+	JobsScreenBgStyle = lipgloss.NewStyle()
 
 	// ModalReadOnlyStyle dims read-only entries in a modal.
 	ModalReadOnlyStyle = lipgloss.NewStyle().

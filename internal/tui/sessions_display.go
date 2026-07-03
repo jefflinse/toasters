@@ -167,6 +167,21 @@ func (m *Model) sortedRuntimeSessions() []*runtimeSlot {
 	return slots
 }
 
+// isFanoutRootSlot reports whether rs is a fan-out root pseudo-session: a
+// graph node whose LLM work happens in its "#i" branch (and ".judge") child
+// sessions. The root itself only splits and reduces, so it never streams
+// output or progress — showing it reads as a stuck worker. Identified by the
+// presence of at least one branch session sharing its id as a "#" prefix.
+func (m *Model) isFanoutRootSlot(rs *runtimeSlot) bool {
+	prefix := rs.sessionID + "#"
+	for id := range m.runtimeSessions {
+		if strings.HasPrefix(id, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
 // filteredNodeSessions returns the sorted runtime sessions narrowed by the
 // nodes screen's filter query (case-insensitive substring over job id,
 // role/worker name, team, and status). With an empty query it is exactly
@@ -210,12 +225,13 @@ func (m *Model) activePlanningCount() int {
 func (m *Model) displayRuntimeSessions() []*runtimeSlot {
 	all := m.sortedRuntimeSessions()
 
-	// Hide internal decomposition sessions unless --debug, so the Workers pane
-	// shows real work rather than the planning scaffolding.
+	// Hide internal decomposition sessions and fan-out roots unless --debug,
+	// so the Workers pane and fleet show real work rather than planning or
+	// splitting scaffolding.
 	if !m.debug {
 		filtered := all[:0:0]
 		for _, rs := range all {
-			if rs.system {
+			if rs.system || m.isFanoutRootSlot(rs) {
 				continue
 			}
 			filtered = append(filtered, rs)

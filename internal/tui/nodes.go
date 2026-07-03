@@ -302,6 +302,8 @@ func (m *Model) updateNodesDetail(msg tea.KeyPressMsg, nodes []*runtimeSlot) (te
 	case "2":
 		m.nodes.tab = cockpitTabPrompt
 	case "3":
+		m.nodes.tab = cockpitTabInitialMsg
+	case "4":
 		m.nodes.tab = cockpitTabStats
 	case "up", "k":
 		if m.nodes.tabScroll[tab] > 0 {
