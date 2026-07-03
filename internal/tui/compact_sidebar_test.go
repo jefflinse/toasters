@@ -30,8 +30,8 @@ func TestSpliceTopBorderLabel(t *testing.T) {
 	if lipgloss.Width(outLines[0]) != w {
 		t.Errorf("top row width = %d, want %d (%q)", lipgloss.Width(outLines[0]), w, top)
 	}
-	if !strings.HasPrefix(top, "┌─ ⬡ gemma ") || !strings.HasSuffix(top, "┐") {
-		t.Errorf("top row = %q, want embedded label between corners", top)
+	if !strings.HasPrefix(top, "┌─") || !strings.HasSuffix(top, " ⬡ gemma ─┐") {
+		t.Errorf("top row = %q, want right-aligned label before the corner", top)
 	}
 	// Body rows must be untouched.
 	for i := 1; i < len(inLines); i++ {

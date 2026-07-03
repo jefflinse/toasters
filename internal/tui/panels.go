@@ -706,9 +706,10 @@ func (m Model) renderOperatorBorderLabel(maxWidth int) string {
 }
 
 // spliceTopBorderLabel replaces the top border row of a rendered bordered box
-// with a rule that embeds a label just after the top-left corner:
+// with a rule that embeds a label right-aligned, just before the top-right
+// corner:
 //
-//	┌─ <label> ─────────────┐
+//	┌───────────── <label> ─┐
 //
 // box must be the fully rendered box with its top border intact; outerWidth is
 // its total cell width; ruleColor styles the drawn border runs. The label is
@@ -720,13 +721,13 @@ func spliceTopBorderLabel(box string, outerWidth int, label string, ruleColor co
 		return box
 	}
 	rule := lipgloss.NewStyle().Foreground(ruleColor)
-	// Fixed chrome around the label: "┌─ " (3) + " " (1) + "┐" (1) = 5 cells.
+	// Fixed chrome around the label: "┌" (1) + " " (1) + " " (1) + "─┐" (2) = 5 cells.
 	const chrome = 5
 	fill := outerWidth - chrome - lipgloss.Width(label)
 	if fill < 0 {
 		return box
 	}
-	lines[0] = rule.Render("┌─ ") + label + " " + rule.Render(strings.Repeat("─", fill)) + rule.Render("┐")
+	lines[0] = rule.Render("┌"+strings.Repeat("─", fill)) + " " + label + " " + rule.Render("─┐")
 	return strings.Join(lines, "\n")
 }
 
