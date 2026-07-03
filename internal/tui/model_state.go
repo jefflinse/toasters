@@ -92,6 +92,7 @@ type cockpitTab int
 const (
 	cockpitTabOutput cockpitTab = iota
 	cockpitTabPrompt
+	cockpitTabInitialMsg
 	cockpitTabStats
 	cockpitTabCount // sentinel: number of tabs
 )
