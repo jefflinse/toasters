@@ -81,6 +81,17 @@ func RoleNode(cfg TemplateConfig, role *prompt.Role, nodeID string, slots map[st
 		tunedProv := newTunedProvider(cfg.Provider, thinkingEnabled, temperature)
 		baseOnEvent := onEventSink(ctx)
 
+		// contextWindow is resolved once per node call (provider/model don't
+		// change across request_context rounds); lastInputTokens is updated
+		// per round-trip below and read at session close, capturing the
+		// node's context occupancy at completion the same way runtime
+		// sessions track it via lastInputTokens.
+		var contextWindow int
+		if cfg.ContextWindows != nil {
+			contextWindow = cfg.ContextWindows.Window(state.ProviderName, cfg.Model)
+		}
+		var lastInputTokens int64
+
 		messages := []provider.Message{{Role: "user", Content: buildInitialMessage(state)}}
 		// On a resumed run the interrupted node re-runs from scratch; warn the
 		// model that partial work from the prior attempt may be on disk so it
@@ -117,6 +128,9 @@ func RoleNode(cfg TemplateConfig, role *prompt.Role, nodeID string, slots map[st
 				if ev.Kind == agent.EventKindReasoning {
 					reasoningBuf.WriteString(ev.Text)
 				}
+				if ev.Kind == agent.EventKindUsage && ev.Usage != nil {
+					lastInputTokens = int64(ev.Usage.InputTokens)
+				}
 				if baseOnEvent != nil {
 					baseOnEvent(ev)
 				}
@@ -132,7 +146,7 @@ func RoleNode(cfg TemplateConfig, role *prompt.Role, nodeID string, slots map[st
 				MaxTurns:     role.MaxTurns,
 				OnEvent:      onEvent,
 			})
-			closeGraphSession(ctx, cfg.Store, sess, res, runErr, reasoningBuf.String())
+			closeGraphSession(ctx, cfg.Store, sess, res, runErr, reasoningBuf.String(), lastInputTokens, contextWindow)
 
 			if runErr != nil {
 				if tail := lastAssistantText(res.History); tail != "" {

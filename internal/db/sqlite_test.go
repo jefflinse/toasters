@@ -2104,3 +2104,238 @@ func TestMarkSessionMessagesSuperseded(t *testing.T) {
 		t.Errorf("other session's rows affected: %+v", other)
 	}
 }
+
+// --- Metrics: node_executions ---
+
+func TestInsertNodeExecution_RoundTrip(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t)
+	ctx := context.Background()
+
+	exec := &NodeExecution{
+		ID:        "exec-1",
+		JobID:     "job-1",
+		TaskID:    "task-1",
+		GraphID:   "bug-fix",
+		Node:      "implement",
+		Status:    "completed",
+		ElapsedMS: 1234,
+	}
+	if err := store.InsertNodeExecution(ctx, exec); err != nil {
+		t.Fatalf("InsertNodeExecution: %v", err)
+	}
+
+	var gotNode, gotStatus, gotGraphID string
+	var gotElapsed int64
+	if err := store.db.QueryRow(
+		"SELECT node, status, graph_id, elapsed_ms FROM node_executions WHERE id = ?", "exec-1",
+	).Scan(&gotNode, &gotStatus, &gotGraphID, &gotElapsed); err != nil {
+		t.Fatalf("querying node_executions: %v", err)
+	}
+	if gotNode != "implement" || gotStatus != "completed" || gotGraphID != "bug-fix" || gotElapsed != 1234 {
+		t.Errorf("row = (%q, %q, %q, %d), want (implement, completed, bug-fix, 1234)",
+			gotNode, gotStatus, gotGraphID, gotElapsed)
+	}
+}
+
+// insertExecs is a test helper that inserts a batch of node_executions rows
+// for aggregation tests.
+func insertExecs(t *testing.T, store *SQLiteStore, node string, statuses []string, elapsedMS []int64) {
+	t.Helper()
+	ctx := context.Background()
+	for i, status := range statuses {
+		id := fmt.Sprintf("%s-exec-%d", node, i)
+		if err := store.InsertNodeExecution(ctx, &NodeExecution{
+			ID: id, JobID: "job-1", TaskID: "task-1", Node: node,
+			Status: status, ElapsedMS: elapsedMS[i],
+		}); err != nil {
+			t.Fatalf("InsertNodeExecution(%s): %v", id, err)
+		}
+	}
+}
+
+// A "failed" status counts as a failure; a routing outcome (e.g.
+// "tests_passed") is a successful run that just isn't "completed".
+func TestNodeExecutionStats_Aggregation(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t)
+
+	insertExecs(t, store, "implement",
+		[]string{"completed", "failed", "completed"},
+		[]int64{100, 300, 200})
+	insertExecs(t, store, "test",
+		[]string{"tests_passed", "tests_failed"},
+		[]int64{50, 150})
+
+	stats, err := store.NodeExecutionStats(context.Background())
+	if err != nil {
+		t.Fatalf("NodeExecutionStats: %v", err)
+	}
+	if len(stats) != 2 {
+		t.Fatalf("got %d node stats, want 2: %+v", len(stats), stats)
+	}
+
+	// Sorted by node name ascending: "implement" before "test".
+	impl := stats[0]
+	if impl.Node != "implement" {
+		t.Fatalf("stats[0].Node = %q, want implement", impl.Node)
+	}
+	if impl.Runs != 3 {
+		t.Errorf("implement.Runs = %d, want 3", impl.Runs)
+	}
+	if impl.Failures != 1 {
+		t.Errorf("implement.Failures = %d, want 1 (only status=failed counts)", impl.Failures)
+	}
+	if impl.AvgElapsedMS != 200 {
+		t.Errorf("implement.AvgElapsedMS = %v, want 200", impl.AvgElapsedMS)
+	}
+	if impl.MinElapsedMS != 100 || impl.MaxElapsedMS != 300 {
+		t.Errorf("implement min/max = %d/%d, want 100/300", impl.MinElapsedMS, impl.MaxElapsedMS)
+	}
+
+	test := stats[1]
+	if test.Node != "test" {
+		t.Fatalf("stats[1].Node = %q, want test", test.Node)
+	}
+	if test.Runs != 2 {
+		t.Errorf("test.Runs = %d, want 2", test.Runs)
+	}
+	// "tests_failed" is a routing outcome, not the literal status "failed" —
+	// it must NOT count as a failure.
+	if test.Failures != 0 {
+		t.Errorf("test.Failures = %d, want 0 (routing outcomes aren't failures)", test.Failures)
+	}
+}
+
+// --- Metrics: worker_sessions aggregation ---
+
+// sessionSeed describes one worker_sessions row for SessionStats tests.
+type sessionSeed struct {
+	id                  string
+	workerID            string
+	status              SessionStatus
+	tokensIn, tokensOut int64
+	contextTokens       int64
+	contextWindow       int
+	durationSeconds     float64 // 0 means "still active" (no ended_at)
+}
+
+func seedSession(t *testing.T, store *SQLiteStore, s sessionSeed) {
+	t.Helper()
+	ctx := context.Background()
+	started := time.Now().UTC().Add(-time.Hour)
+	sess := &WorkerSession{
+		ID:            s.id,
+		WorkerID:      s.workerID,
+		JobID:         "job-1",
+		Status:        SessionStatusActive,
+		Model:         "test-model",
+		Provider:      "test-provider",
+		StartedAt:     started,
+		ContextTokens: 0,
+		ContextWindow: 0,
+	}
+	if err := store.CreateSession(ctx, sess); err != nil {
+		t.Fatalf("CreateSession(%s): %v", s.id, err)
+	}
+
+	update := SessionUpdate{
+		Status:        &s.status,
+		TokensIn:      &s.tokensIn,
+		TokensOut:     &s.tokensOut,
+		ContextTokens: &s.contextTokens,
+		ContextWindow: &s.contextWindow,
+	}
+	if s.durationSeconds > 0 {
+		ended := started.Add(time.Duration(s.durationSeconds * float64(time.Second)))
+		update.EndedAt = &ended
+	}
+	if err := store.UpdateSession(ctx, s.id, update); err != nil {
+		t.Fatalf("UpdateSession(%s): %v", s.id, err)
+	}
+}
+
+// Sessions with tokens_in == 0 AND tokens_out == 0 are usage-unavailable
+// (the signature of a provider that omitted usage) and must not drag the
+// token/context averages toward zero.
+func TestSessionStats_UsageUnavailableExcluded(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t)
+
+	seedSession(t, store, sessionSeed{
+		id: "s1", workerID: "coder", status: SessionStatusCompleted,
+		tokensIn: 1000, tokensOut: 200, contextTokens: 500, contextWindow: 1000,
+		durationSeconds: 10,
+	})
+	seedSession(t, store, sessionSeed{
+		id: "s2", workerID: "coder", status: SessionStatusFailed,
+		tokensIn: 0, tokensOut: 0, // usage unavailable — local server omitted it
+		durationSeconds: 20,
+	})
+	seedSession(t, store, sessionSeed{
+		id: "s3", workerID: "coder", status: SessionStatusCompleted,
+		tokensIn: 2000, tokensOut: 400, contextTokens: 800, contextWindow: 1000,
+		durationSeconds: 30,
+	})
+
+	stats, err := store.SessionStats(context.Background())
+	if err != nil {
+		t.Fatalf("SessionStats: %v", err)
+	}
+	if len(stats) != 1 {
+		t.Fatalf("got %d session stats, want 1: %+v", len(stats), stats)
+	}
+	st := stats[0]
+
+	if st.WorkerID != "coder" {
+		t.Fatalf("WorkerID = %q, want coder", st.WorkerID)
+	}
+	if st.Sessions != 3 {
+		t.Errorf("Sessions = %d, want 3", st.Sessions)
+	}
+	if st.Failures != 1 {
+		t.Errorf("Failures = %d, want 1", st.Failures)
+	}
+	if st.UsageUnavailable != 1 {
+		t.Errorf("UsageUnavailable = %d, want 1", st.UsageUnavailable)
+	}
+	// avg(1000, 2000) = 1500 — s2's tokens_in=0 must be excluded, not
+	// averaged in as a real zero (which would give 1000).
+	if st.AvgTokensIn != 1500 {
+		t.Errorf("AvgTokensIn = %v, want 1500", st.AvgTokensIn)
+	}
+	if st.AvgTokensOut != 300 {
+		t.Errorf("AvgTokensOut = %v, want 300", st.AvgTokensOut)
+	}
+	// avg(500/1000, 800/1000) = 0.65 — s2 has no context columns set, so
+	// it must be excluded rather than averaged in as 0% occupancy.
+	if diff := st.AvgContextPercent - 0.65; diff < -0.001 || diff > 0.001 {
+		t.Errorf("AvgContextPercent = %v, want ~0.65", st.AvgContextPercent)
+	}
+	// avg(10, 20, 30) = 20 seconds.
+	if diff := st.AvgDurationSeconds - 20; diff < -0.01 || diff > 0.01 {
+		t.Errorf("AvgDurationSeconds = %v, want ~20", st.AvgDurationSeconds)
+	}
+}
+
+// Distinct worker ids aggregate into distinct rows.
+func TestSessionStats_GroupsByWorkerID(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t)
+
+	seedSession(t, store, sessionSeed{id: "s1", workerID: "graph:implement", status: SessionStatusCompleted, tokensIn: 100, tokensOut: 50, durationSeconds: 5})
+	seedSession(t, store, sessionSeed{id: "s2", workerID: "reviewer", status: SessionStatusCompleted, tokensIn: 200, tokensOut: 80, durationSeconds: 5})
+
+	stats, err := store.SessionStats(context.Background())
+	if err != nil {
+		t.Fatalf("SessionStats: %v", err)
+	}
+	if len(stats) != 2 {
+		t.Fatalf("got %d session stats, want 2: %+v", len(stats), stats)
+	}
+	// Ordered by worker_id ascending.
+	if stats[0].WorkerID != "graph:implement" || stats[1].WorkerID != "reviewer" {
+		t.Errorf("worker ids = [%q, %q], want [graph:implement, reviewer]",
+			stats[0].WorkerID, stats[1].WorkerID)
+	}
+}

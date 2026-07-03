@@ -558,6 +558,74 @@ type wireProgressState struct {
 	FeedEntries    []wireFeedEntry                 `json:"feed_entries"`
 }
 
+// wireNodeMetric is the JSON wire representation of a service.NodeMetric.
+type wireNodeMetric struct {
+	Node         string  `json:"node"`
+	Runs         int     `json:"runs"`
+	Failures     int     `json:"failures"`
+	FailureRate  float64 `json:"failure_rate"`
+	AvgElapsedMS float64 `json:"avg_elapsed_ms"`
+	MinElapsedMS int64   `json:"min_elapsed_ms"`
+	MaxElapsedMS int64   `json:"max_elapsed_ms"`
+}
+
+func nodeMetricToWire(m service.NodeMetric) wireNodeMetric {
+	return wireNodeMetric{
+		Node:         m.Node,
+		Runs:         m.Runs,
+		Failures:     m.Failures,
+		FailureRate:  m.FailureRate,
+		AvgElapsedMS: m.AvgElapsedMS,
+		MinElapsedMS: m.MinElapsedMS,
+		MaxElapsedMS: m.MaxElapsedMS,
+	}
+}
+
+// wireSessionMetric is the JSON wire representation of a service.SessionMetric.
+type wireSessionMetric struct {
+	WorkerID           string  `json:"worker_id"`
+	Sessions           int     `json:"sessions"`
+	Failures           int     `json:"failures"`
+	FailureRate        float64 `json:"failure_rate"`
+	AvgDurationSeconds float64 `json:"avg_duration_seconds"`
+	AvgTokensIn        float64 `json:"avg_tokens_in"`
+	AvgTokensOut       float64 `json:"avg_tokens_out"`
+	UsageUnavailable   int     `json:"usage_unavailable"`
+	AvgContextPercent  float64 `json:"avg_context_percent"`
+}
+
+func sessionMetricToWire(m service.SessionMetric) wireSessionMetric {
+	return wireSessionMetric{
+		WorkerID:           m.WorkerID,
+		Sessions:           m.Sessions,
+		Failures:           m.Failures,
+		FailureRate:        m.FailureRate,
+		AvgDurationSeconds: m.AvgDurationSeconds,
+		AvgTokensIn:        m.AvgTokensIn,
+		AvgTokensOut:       m.AvgTokensOut,
+		UsageUnavailable:   m.UsageUnavailable,
+		AvgContextPercent:  m.AvgContextPercent,
+	}
+}
+
+// wireMetricsReport is the JSON wire representation of a service.MetricsReport.
+type wireMetricsReport struct {
+	Nodes    []wireNodeMetric    `json:"nodes"`
+	Sessions []wireSessionMetric `json:"sessions"`
+}
+
+func metricsReportToWire(r service.MetricsReport) wireMetricsReport {
+	nodes := make([]wireNodeMetric, 0, len(r.Nodes))
+	for _, m := range r.Nodes {
+		nodes = append(nodes, nodeMetricToWire(m))
+	}
+	sessions := make([]wireSessionMetric, 0, len(r.Sessions))
+	for _, m := range r.Sessions {
+		sessions = append(sessions, sessionMetricToWire(m))
+	}
+	return wireMetricsReport{Nodes: nodes, Sessions: sessions}
+}
+
 // wireGraphNode is the JSON wire representation of a service.GraphNodeSnapshot.
 type wireGraphNode struct {
 	SessionID string    `json:"session_id"`

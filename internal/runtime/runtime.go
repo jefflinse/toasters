@@ -259,11 +259,18 @@ func (r *Runtime) SpawnWorker(ctx context.Context, opts SpawnOpts) (*Session, er
 			status := db.SessionStatus(snap.Status)
 			tokensIn := snap.TokensIn
 			tokensOut := snap.TokensOut
+			contextTokens := snap.CurrentContextTokens
+			var contextWindow int
+			if r.ctxWindows != nil {
+				contextWindow = r.ctxWindows.Window(snap.Provider, snap.Model)
+			}
 			update := db.SessionUpdate{
-				Status:    &status,
-				TokensIn:  &tokensIn,
-				TokensOut: &tokensOut,
-				EndedAt:   &now,
+				Status:        &status,
+				TokensIn:      &tokensIn,
+				TokensOut:     &tokensOut,
+				EndedAt:       &now,
+				ContextTokens: &contextTokens,
+				ContextWindow: &contextWindow,
 			}
 			if updateErr := r.store.UpdateSession(context.Background(), id, update); updateErr != nil {
 				slog.Warn("failed to update session", "session", id, "error", updateErr)

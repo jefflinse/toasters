@@ -697,3 +697,15 @@ func (s *remoteSystemService) GetLogs(ctx context.Context) (string, error) {
 	}
 	return w.Content, nil
 }
+
+func (s *remoteSystemService) Metrics(ctx context.Context) (service.MetricsReport, error) {
+	resp, err := s.c.http.get(ctx, "/api/v1/metrics")
+	if err != nil {
+		return service.MetricsReport{}, fmt.Errorf("get metrics: %w", err)
+	}
+	w, err := decodeResponse[wireMetricsReport](resp)
+	if err != nil {
+		return service.MetricsReport{}, fmt.Errorf("get metrics: %w", err)
+	}
+	return wireMetricsReportToService(w), nil
+}

@@ -180,6 +180,13 @@ type WorkerSession struct {
 	CostUSD      *float64
 	SystemPrompt string // full system prompt sent to LLM
 	ToolsJSON    string // JSON array of tool names available to the session
+	// ContextTokens is the prompt size of the session's final model
+	// round-trip (its context occupancy at completion). 0 means
+	// unavailable, not "empty" — see SessionStat's tokens==0 handling.
+	ContextTokens int64
+	// ContextWindow is the resolved context window for the session's
+	// provider/model at completion time. 0 means unresolved.
+	ContextWindow int
 }
 
 // SessionMessage records a single message in a session's conversation transcript.
@@ -258,4 +265,64 @@ type SessionUpdate struct {
 	TokensOut *int64
 	EndedAt   *time.Time
 	CostUSD   *float64
+	// ContextTokens/ContextWindow, when set, record the session's final
+	// context occupancy — see WorkerSession's doc comment on the same
+	// fields. Populated once, at completion, alongside TokensIn/TokensOut.
+	ContextTokens *int64
+	ContextWindow *int
+}
+
+// NodeExecution records one logical execution of a graph node — a single
+// row per outer middleware call. Rhizome retries of the same node inside
+// that call are not separate rows (see the node_executions migration).
+// Foundation for future auto-tuning: aggregated by NodeExecutionStats.
+type NodeExecution struct {
+	ID        string
+	JobID     string
+	TaskID    string
+	GraphID   string // may be empty when not cheaply available at the call site
+	Node      string
+	Status    string // "completed", "failed", or a routing outcome (state.Status)
+	ElapsedMS int64
+	CreatedAt time.Time
+}
+
+// NodeExecutionStat aggregates node_executions rows by node name. Failure
+// counts only status == "failed" — routing outcomes (e.g. "tests_passed",
+// "needs_revision") are successful executions, just not the default one.
+type NodeExecutionStat struct {
+	Node         string
+	Runs         int
+	Failures     int
+	AvgElapsedMS float64
+	MinElapsedMS int64
+	MaxElapsedMS int64
+}
+
+// SessionStat aggregates worker_sessions rows by worker id — the spawned
+// worker's role name, or "graph:<node>" for graph-node sessions (see
+// graphSession.WorkerID in internal/graphexec/sessions.go). Token and
+// context-window averages exclude sessions with unavailable usage rather
+// than treating a missing value as a real zero: many local
+// OpenAI-compatible inference servers omit usage entirely, which would
+// otherwise silently drag the averages toward zero.
+type SessionStat struct {
+	WorkerID string
+	Sessions int
+	Failures int
+	// AvgDurationSeconds averages over sessions that have completed
+	// (EndedAt set); in-flight sessions are excluded rather than
+	// contributing a partial duration.
+	AvgDurationSeconds float64
+	// AvgTokensIn/AvgTokensOut exclude rows where that specific counter is
+	// 0 (see UsageUnavailable for the both-zero case these overlap with).
+	AvgTokensIn  float64
+	AvgTokensOut float64
+	// UsageUnavailable counts sessions where tokens_in == 0 AND
+	// tokens_out == 0 — the signature of a provider that didn't report
+	// usage, per the caveat in local_broadcast_operator.go.
+	UsageUnavailable int
+	// AvgContextPercent is context_tokens/context_window (0..1), averaged
+	// only over sessions where both columns are > 0.
+	AvgContextPercent float64
 }

@@ -55,6 +55,7 @@ type Executor struct {
 	defaultModel  string
 	nodeTimeout   time.Duration
 	retryAttempts int
+	ctxWindows    runtime.ContextWindowSource
 
 	// checkpointStore, when non-nil, enables node-granular checkpoint/resume:
 	// graphs compile WithCheckpointing, each run carries a thread id (the task
@@ -141,6 +142,12 @@ type ExecutorConfig struct {
 	// re-running from the entry node. Production wires this to the SQLite
 	// store; leave nil to disable (tests, non-SQLite backends).
 	CheckpointStore CheckpointStore
+
+	// ContextWindows resolves each node session's effective context window
+	// for the worker_sessions.context_window column. Optional — nil leaves
+	// that column at 0 ("unresolved"); production wires this to the same
+	// resolver the runtime and operator use.
+	ContextWindows runtime.ContextWindowSource
 }
 
 // NewExecutor creates an Executor with the given configuration.
@@ -168,6 +175,7 @@ func NewExecutor(cfg ExecutorConfig) *Executor {
 		workerThinkingEnabled: cfg.WorkerThinkingEnabled,
 		workerTemperature:     cfg.WorkerTemperature,
 		checkpointStore:       cfg.CheckpointStore,
+		ctxWindows:            cfg.ContextWindows,
 	}
 }
 
@@ -401,7 +409,7 @@ func (e *Executor) Execute(ctx context.Context, graph *rhizome.CompiledGraph[*Ta
 		rhizome.WithMiddleware[*TaskState](
 			NodeContextMiddleware(e.eventSink),
 			EventMiddleware(e.eventSink),
-			PersistenceMiddleware(e.store),
+			PersistenceMiddleware(e.store, graphID),
 			rhizome.Retry[*TaskState](rhizome.WithMaxAttempts(e.retryAttempts)),
 			rhizome.Recover[*TaskState](),
 			rhizome.Timeout[*TaskState](e.nodeTimeout),
@@ -654,6 +662,7 @@ func (e *Executor) prepareTask(req TaskRequest) (*rhizome.CompiledGraph[*TaskSta
 		WorkerThinkingEnabled: thinking,
 		WorkerTemperature:     temperature,
 		CheckpointStore:       e.checkpointStore,
+		ContextWindows:        e.ctxWindows,
 	}
 
 	if e.graphs == nil {

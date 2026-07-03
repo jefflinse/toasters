@@ -496,6 +496,101 @@ func (s *SQLiteStore) GetRecentProgress(ctx context.Context, jobID string, limit
 	return reports, rows.Err()
 }
 
+// --- Metrics ---
+
+// InsertNodeExecution records one logical graph-node execution. Callers
+// (graphexec's PersistenceMiddleware) mint the id and measure elapsed
+// across any internal rhizome retries, so this is a single insert with no
+// read-modify-write.
+func (s *SQLiteStore) InsertNodeExecution(ctx context.Context, exec *NodeExecution) error {
+	if exec.CreatedAt.IsZero() {
+		exec.CreatedAt = time.Now().UTC()
+	}
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO node_executions (id, job_id, task_id, graph_id, node, status, elapsed_ms, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		exec.ID, exec.JobID, exec.TaskID, exec.GraphID, exec.Node, exec.Status, exec.ElapsedMS,
+		exec.CreatedAt.Format(time.RFC3339),
+	)
+	if err != nil {
+		return fmt.Errorf("inserting node execution: %w", err)
+	}
+	return nil
+}
+
+// NodeExecutionStats aggregates node_executions by node name. A "failure"
+// is exactly status == "failed"; routing outcomes (e.g. "tests_passed")
+// count as successful runs.
+func (s *SQLiteStore) NodeExecutionStats(ctx context.Context) ([]*NodeExecutionStat, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT node,
+		        COUNT(*),
+		        SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END),
+		        AVG(elapsed_ms),
+		        MIN(elapsed_ms),
+		        MAX(elapsed_ms)
+		 FROM node_executions
+		 GROUP BY node
+		 ORDER BY node ASC`)
+	if err != nil {
+		return nil, fmt.Errorf("aggregating node execution stats: %w", err)
+	}
+	defer rows.Close() //nolint:errcheck
+
+	var stats []*NodeExecutionStat
+	for rows.Next() {
+		st := &NodeExecutionStat{}
+		if err := rows.Scan(&st.Node, &st.Runs, &st.Failures,
+			&st.AvgElapsedMS, &st.MinElapsedMS, &st.MaxElapsedMS); err != nil {
+			return nil, fmt.Errorf("scanning node execution stat: %w", err)
+		}
+		stats = append(stats, st)
+	}
+	return stats, rows.Err()
+}
+
+// SessionStats aggregates worker_sessions by worker id. Sessions where
+// tokens_in and tokens_out are both 0 are counted as UsageUnavailable and
+// excluded from the token/context averages instead of pulling them toward
+// zero — see the SessionStat doc comment for why.
+func (s *SQLiteStore) SessionStats(ctx context.Context) ([]*SessionStat, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT
+		    worker_id,
+		    COUNT(*),
+		    SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END),
+		    AVG(CASE WHEN ended_at IS NOT NULL
+		             THEN (julianday(ended_at) - julianday(started_at)) * 86400.0 END),
+		    AVG(CASE WHEN tokens_in > 0 THEN tokens_in END),
+		    AVG(CASE WHEN tokens_out > 0 THEN tokens_out END),
+		    SUM(CASE WHEN tokens_in = 0 AND tokens_out = 0 THEN 1 ELSE 0 END),
+		    AVG(CASE WHEN context_tokens > 0 AND context_window > 0
+		             THEN CAST(context_tokens AS REAL) / context_window END)
+		 FROM worker_sessions
+		 GROUP BY worker_id
+		 ORDER BY worker_id ASC`)
+	if err != nil {
+		return nil, fmt.Errorf("aggregating session stats: %w", err)
+	}
+	defer rows.Close() //nolint:errcheck
+
+	var stats []*SessionStat
+	for rows.Next() {
+		st := &SessionStat{}
+		var avgDuration, avgTokensIn, avgTokensOut, avgContextPct sql.NullFloat64
+		if err := rows.Scan(&st.WorkerID, &st.Sessions, &st.Failures,
+			&avgDuration, &avgTokensIn, &avgTokensOut, &st.UsageUnavailable, &avgContextPct); err != nil {
+			return nil, fmt.Errorf("scanning session stat: %w", err)
+		}
+		st.AvgDurationSeconds = avgDuration.Float64
+		st.AvgTokensIn = avgTokensIn.Float64
+		st.AvgTokensOut = avgTokensOut.Float64
+		st.AvgContextPercent = avgContextPct.Float64
+		stats = append(stats, st)
+	}
+	return stats, rows.Err()
+}
+
 // --- Skills ---
 
 func (s *SQLiteStore) UpsertSkill(ctx context.Context, skill *Skill) error {
@@ -865,13 +960,14 @@ func (s *SQLiteStore) CreateSession(ctx context.Context, session *WorkerSession)
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO worker_sessions (id, worker_id, job_id, task_id, status, model, provider,
 		                              tokens_in, tokens_out, started_at, ended_at, cost_usd,
-		                              system_prompt, tools_json)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		                              system_prompt, tools_json, context_tokens, context_window)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		session.ID, session.WorkerID, session.JobID, session.TaskID,
 		string(session.Status), session.Model, session.Provider,
 		session.TokensIn, session.TokensOut,
 		session.StartedAt.Format(time.RFC3339), endedAt, session.CostUSD,
 		session.SystemPrompt, session.ToolsJSON,
+		session.ContextTokens, session.ContextWindow,
 	)
 	if err != nil {
 		return fmt.Errorf("inserting session: %w", err)
@@ -902,6 +998,14 @@ func (s *SQLiteStore) UpdateSession(ctx context.Context, id string, update Sessi
 	if update.CostUSD != nil {
 		sets = append(sets, "cost_usd = ?")
 		args = append(args, *update.CostUSD)
+	}
+	if update.ContextTokens != nil {
+		sets = append(sets, "context_tokens = ?")
+		args = append(args, *update.ContextTokens)
+	}
+	if update.ContextWindow != nil {
+		sets = append(sets, "context_window = ?")
+		args = append(args, *update.ContextWindow)
 	}
 
 	if len(sets) == 0 {
@@ -956,7 +1060,8 @@ func (s *SQLiteStore) ReconcileInterrupted(ctx context.Context) (int, int, error
 func (s *SQLiteStore) ListSessionsForJob(ctx context.Context, jobID string) ([]*WorkerSession, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, worker_id, job_id, task_id, status, model, provider,
-		        tokens_in, tokens_out, started_at, ended_at, cost_usd
+		        tokens_in, tokens_out, started_at, ended_at, cost_usd,
+		        context_tokens, context_window
 		 FROM worker_sessions
 		 WHERE job_id = ?
 		 ORDER BY started_at ASC`, jobID)
@@ -982,7 +1087,8 @@ func (s *SQLiteStore) ListSessionsForJob(ctx context.Context, jobID string) ([]*
 func (s *SQLiteStore) ListSessionsForTask(ctx context.Context, taskID string) ([]*WorkerSession, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, worker_id, job_id, task_id, status, model, provider,
-		        tokens_in, tokens_out, started_at, ended_at, cost_usd
+		        tokens_in, tokens_out, started_at, ended_at, cost_usd,
+		        context_tokens, context_window
 		 FROM worker_sessions
 		 WHERE task_id = ?
 		 ORDER BY started_at DESC`, taskID)
@@ -1005,7 +1111,8 @@ func (s *SQLiteStore) ListSessionsForTask(ctx context.Context, taskID string) ([
 func (s *SQLiteStore) GetActiveSessions(ctx context.Context) ([]*WorkerSession, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, worker_id, job_id, task_id, status, model, provider,
-		        tokens_in, tokens_out, started_at, ended_at, cost_usd
+		        tokens_in, tokens_out, started_at, ended_at, cost_usd,
+		        context_tokens, context_window
 		 FROM worker_sessions
 		 WHERE status = 'active'
 		 ORDER BY started_at DESC`)
@@ -1215,7 +1322,8 @@ func scanSession(s scanner) (*WorkerSession, error) {
 	if err := s.Scan(&sess.ID, &sess.WorkerID, &sess.JobID, &sess.TaskID,
 		&status, &sess.Model, &sess.Provider,
 		&sess.TokensIn, &sess.TokensOut,
-		&startedAt, &endedAt, &costUSD); err != nil {
+		&startedAt, &endedAt, &costUSD,
+		&sess.ContextTokens, &sess.ContextWindow); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrNotFound
 		}

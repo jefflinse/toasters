@@ -429,3 +429,59 @@ func (s *LocalService) UpdateSettings(_ context.Context, next Settings) error {
 
 	return nil
 }
+
+// Metrics returns aggregate per-node and per-worker-session execution
+// statistics, computed from node_executions and worker_sessions. Returns a
+// zero-value report (not an error) when no store is configured — tests and
+// standalone TUI previews shouldn't have to stand up a database just to
+// call this.
+func (s *LocalService) Metrics(ctx context.Context) (MetricsReport, error) {
+	if s.cfg.Store == nil {
+		return MetricsReport{}, nil
+	}
+
+	nodeStats, err := s.cfg.Store.NodeExecutionStats(ctx)
+	if err != nil {
+		return MetricsReport{}, fmt.Errorf("aggregating node execution stats: %w", err)
+	}
+	sessionStats, err := s.cfg.Store.SessionStats(ctx)
+	if err != nil {
+		return MetricsReport{}, fmt.Errorf("aggregating session stats: %w", err)
+	}
+
+	report := MetricsReport{
+		Nodes:    make([]NodeMetric, 0, len(nodeStats)),
+		Sessions: make([]SessionMetric, 0, len(sessionStats)),
+	}
+	for _, st := range nodeStats {
+		m := NodeMetric{
+			Node:         st.Node,
+			Runs:         st.Runs,
+			Failures:     st.Failures,
+			AvgElapsedMS: st.AvgElapsedMS,
+			MinElapsedMS: st.MinElapsedMS,
+			MaxElapsedMS: st.MaxElapsedMS,
+		}
+		if st.Runs > 0 {
+			m.FailureRate = float64(st.Failures) / float64(st.Runs)
+		}
+		report.Nodes = append(report.Nodes, m)
+	}
+	for _, st := range sessionStats {
+		m := SessionMetric{
+			WorkerID:           st.WorkerID,
+			Sessions:           st.Sessions,
+			Failures:           st.Failures,
+			AvgDurationSeconds: st.AvgDurationSeconds,
+			AvgTokensIn:        st.AvgTokensIn,
+			AvgTokensOut:       st.AvgTokensOut,
+			UsageUnavailable:   st.UsageUnavailable,
+			AvgContextPercent:  st.AvgContextPercent,
+		}
+		if st.Sessions > 0 {
+			m.FailureRate = float64(st.Failures) / float64(st.Sessions)
+		}
+		report.Sessions = append(report.Sessions, m)
+	}
+	return report, nil
+}

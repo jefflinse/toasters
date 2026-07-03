@@ -84,6 +84,15 @@ func (m *Model) View() tea.View {
 		return v
 	}
 
+	// Metrics modal takes over the full terminal as a centered overlay.
+	if m.metricsModal.show {
+		metricsView := m.renderMetricsModal()
+		v := tea.NewView(metricsView)
+		v.AltScreen = true
+		v.MouseMode = tea.MouseModeCellMotion
+		return v
+	}
+
 	// Presets modal takes over the full terminal as a centered overlay.
 	if m.presetsModal.show {
 		presetsView := m.renderPresetsModal()

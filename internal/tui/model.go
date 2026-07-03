@@ -88,6 +88,9 @@ type Model struct {
 	// MCP modal state.
 	mcpModal mcpModalState
 
+	// Metrics modal state (/metrics).
+	metricsModal metricsModalState
+
 	// Catalog modal state (models.dev browser).
 	catalogModal catalogModalState
 
@@ -395,6 +398,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.settingsModal.settings = msg.Settings
 			m.settingsModal.dirty = msg.Settings
 			m.applySettings(msg.Settings)
+		}
+
+	case MetricsLoadedMsg:
+		m.metricsModal.loading = false
+		m.metricsModal.err = msg.Err
+		if msg.Err == nil {
+			m.metricsModal.report = msg.Report
 		}
 
 	case SettingsSavedMsg:

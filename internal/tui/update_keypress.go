@@ -49,6 +49,11 @@ func (m *Model) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.updateSettingsModal(msg)
 	}
 
+	// Metrics modal key handling — intercept all keys when modal is open.
+	if m.metricsModal.show {
+		return m.updateMetricsModal(msg)
+	}
+
 	// Presets modal key handling — intercept all keys when modal is open.
 	if m.presetsModal.show {
 		return m.updatePresetsModal(msg)
@@ -542,6 +547,11 @@ func (m *Model) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				m.cmdPopup.show = false
 				m.settingsModal = settingsModalState{show: true, loading: true}
 				return m, m.fetchSettings()
+			case "/metrics":
+				m.input.Reset()
+				m.cmdPopup.show = false
+				m.metricsModal = metricsModalState{show: true, loading: true}
+				return m, m.fetchMetrics()
 			case "/presets":
 				m.input.Reset()
 				m.cmdPopup.show = false

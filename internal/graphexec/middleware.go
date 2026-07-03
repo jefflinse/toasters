@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/gofrs/uuid/v5"
 	"github.com/jefflinse/rhizome"
 	"github.com/jefflinse/toasters/internal/db"
 	"github.com/jefflinse/toasters/internal/runtime"
@@ -159,10 +160,16 @@ func EventMiddleware(sink EventSink) rhizome.Middleware[*TaskState] {
 
 // PersistenceMiddleware writes progress reports to the database at node
 // boundaries. After each node completes, it persists a summary so the
-// TUI can show historical progress even after reconnection.
-func PersistenceMiddleware(store db.Store) rhizome.Middleware[*TaskState] {
+// TUI can show historical progress even after reconnection. It also
+// records one node_executions row per logical execution — this sits
+// outside rhizome.Retry in the middleware chain (see Execute's chain
+// comment), so internal retries of the same node collapse into the row
+// this single call produces rather than one row per attempt.
+func PersistenceMiddleware(store db.Store, graphID string) rhizome.Middleware[*TaskState] {
 	return func(ctx context.Context, node string, state *TaskState, next rhizome.NodeFunc[*TaskState]) (*TaskState, error) {
+		start := time.Now()
 		result, err := next(ctx, state)
+		elapsed := time.Since(start)
 
 		if store != nil && result != nil {
 			report := &db.ProgressReport{
@@ -175,6 +182,25 @@ func PersistenceMiddleware(store db.Store) rhizome.Middleware[*TaskState] {
 			if persistErr := store.ReportProgress(ctx, report); persistErr != nil {
 				slog.Warn("failed to persist graph progress",
 					"node", node, "job_id", result.JobID, "task_id", result.TaskID, "error", persistErr)
+			}
+
+			id, uuidErr := uuid.NewV4()
+			if uuidErr != nil {
+				slog.Warn("failed to mint node execution id", "node", node, "error", uuidErr)
+			} else {
+				exec := &db.NodeExecution{
+					ID:        id.String(),
+					JobID:     result.JobID,
+					TaskID:    result.TaskID,
+					GraphID:   graphID,
+					Node:      node,
+					Status:    progressStatus(result, err),
+					ElapsedMS: elapsed.Milliseconds(),
+				}
+				if persistErr := store.InsertNodeExecution(ctx, exec); persistErr != nil {
+					slog.Warn("failed to persist node execution",
+						"node", node, "job_id", result.JobID, "task_id", result.TaskID, "error", persistErr)
+				}
 			}
 		}
 

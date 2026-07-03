@@ -732,6 +732,51 @@ type ProgressState struct {
 }
 
 // ---------------------------------------------------------------------------
+// Metrics
+// ---------------------------------------------------------------------------
+
+// NodeMetric aggregates node_executions by graph node name. Foundation for
+// future auto-tuning: surfaced read-only today via GET /api/metrics and the
+// /metrics TUI modal. Failures count only status == "failed" — a routing
+// outcome (e.g. "tests_passed") is a successful run.
+type NodeMetric struct {
+	Node         string
+	Runs         int
+	Failures     int
+	FailureRate  float64 // Failures / Runs; 0 when Runs == 0
+	AvgElapsedMS float64
+	MinElapsedMS int64
+	MaxElapsedMS int64
+}
+
+// SessionMetric aggregates worker_sessions by worker id — the spawned
+// worker's role name, or "graph:<node>" for graph-node sessions. Token and
+// context averages exclude sessions with unavailable usage (see
+// UsageUnavailable) rather than treating a missing value as a real zero:
+// many local OpenAI-compatible inference servers omit usage entirely.
+type SessionMetric struct {
+	WorkerID           string
+	Sessions           int
+	Failures           int
+	FailureRate        float64 // Failures / Sessions; 0 when Sessions == 0
+	AvgDurationSeconds float64
+	AvgTokensIn        float64
+	AvgTokensOut       float64
+	UsageUnavailable   int
+	// AvgContextPercent is context_tokens/context_window (0..1), averaged
+	// only over sessions where both are known.
+	AvgContextPercent float64
+}
+
+// MetricsReport is the aggregate statistics payload returned by
+// Metrics(): per-node execution timing/failure rates and per-worker
+// session stats (duration, token usage, context occupancy).
+type MetricsReport struct {
+	Nodes    []NodeMetric
+	Sessions []SessionMetric
+}
+
+// ---------------------------------------------------------------------------
 // Operator status
 // ---------------------------------------------------------------------------
 

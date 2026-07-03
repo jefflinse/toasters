@@ -108,6 +108,15 @@ func (m *mockStore) ReportProgress(_ context.Context, _ *db.ProgressReport) erro
 func (m *mockStore) GetRecentProgress(_ context.Context, _ string, _ int) ([]*db.ProgressReport, error) {
 	return nil, fmt.Errorf("not implemented")
 }
+func (m *mockStore) InsertNodeExecution(_ context.Context, _ *db.NodeExecution) error {
+	return fmt.Errorf("not implemented")
+}
+func (m *mockStore) NodeExecutionStats(_ context.Context) ([]*db.NodeExecutionStat, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+func (m *mockStore) SessionStats(_ context.Context) ([]*db.SessionStat, error) {
+	return nil, fmt.Errorf("not implemented")
+}
 func (m *mockStore) UpsertSkill(_ context.Context, _ *db.Skill) error {
 	return fmt.Errorf("not implemented")
 }

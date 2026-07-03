@@ -272,6 +272,11 @@ type SystemService interface {
 	// them to the live service (e.g. refreshing the prompt engine so new
 	// worker runs use the updated values). Invalid enum values are rejected.
 	UpdateSettings(ctx context.Context, s Settings) error
+
+	// Metrics returns aggregate per-node and per-worker-session execution
+	// statistics — the foundation for future auto-tuning. Read-only;
+	// returns a zero-value report (not an error) when no store is wired.
+	Metrics(ctx context.Context) (MetricsReport, error)
 }
 
 // Sentinel errors (ErrNotFound, ErrConflict, ErrUnavailable, ErrInvalid,
