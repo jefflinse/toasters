@@ -352,6 +352,11 @@ func (e *Executor) buildToolExecutor(workspaceDir, workspaceBase string) runtime
 			nc.Sink.BroadcastSessionShellExec(nc.SessionID, se)
 		}
 	})
+	coreTools.SetWorkerSpawnNotifier(func(ctx context.Context, ws runtime.WorkerSpawn) {
+		if nc := NodeContextFromContext(ctx); nc != nil && nc.Sink != nil {
+			nc.Sink.BroadcastSessionWorkerSpawn(nc.SessionID, ws)
+		}
+	})
 	if e.mcpManager != nil && len(e.mcpManager.Tools()) > 0 {
 		truncating := mcp.NewTruncatingCaller(e.mcpManager, mcp.DefaultMaxResultLen)
 		return runtime.NewCompositeTools(coreTools, truncating, mcp.ToRuntimeToolDefs(e.mcpManager.Tools()))

@@ -56,6 +56,18 @@ type outputItem struct {
 	shellOutputBytes int
 	shellTruncated   bool
 	shellTimedOut    bool
+
+	// Worker-spawn metadata attached to a spawn_worker tool item, delivered
+	// by a session.worker_spawn event (display-only; never LLM context).
+	// hasWorkerSpawn distinguishes "no event yet" from a legitimate
+	// zero-value spawnDepth.
+	hasWorkerSpawn bool
+	spawnRole      string
+	spawnTask      string
+	spawnJobID     string
+	spawnDepth     int
+	spawnFailed    bool
+	spawnError     string
 }
 
 // appendText adds streamed text to the slot. Streamed tokens coalesce
@@ -282,6 +294,60 @@ func (rs *runtimeSlot) attachShellExec(exitCode int, durationMs int64, outputByt
 	it := outputItem{
 		kind:      outputItemTool,
 		toolName:  "shell",
+		startedAt: now,
+		endedAt:   now,
+	}
+	set(&it)
+	rs.items = append(rs.items, it)
+}
+
+// attachWorkerSpawn pairs a session.worker_spawn event with the spawn_worker
+// tool item that produced it. Like shell, spawn_worker calls carry no
+// argument that disambiguates concurrent in-flight calls, so matching is
+// name-only: the oldest still-pending "spawn_worker" item that hasn't
+// already been attached — oldest-first for the same reason as
+// attachShellExec (mycelium fires every tool_call event for a turn before
+// executing any of them sequentially, so notifications arrive in
+// execution/insertion order).
+func (rs *runtimeSlot) attachWorkerSpawn(role, task, jobID string, depth int, failed bool, errMsg string) {
+	set := func(it *outputItem) {
+		it.hasWorkerSpawn = true
+		it.spawnRole = role
+		it.spawnTask = task
+		it.spawnJobID = jobID
+		it.spawnDepth = depth
+		it.spawnFailed = failed
+		it.spawnError = errMsg
+	}
+
+	var completed *outputItem
+	for i := 0; i < len(rs.items); i++ {
+		it := &rs.items[i]
+		if it.kind != outputItemTool || it.toolName != "spawn_worker" || it.hasWorkerSpawn {
+			continue
+		}
+		if it.endedAt.IsZero() {
+			rs.contentVersion++
+			set(it)
+			return
+		}
+		if completed == nil {
+			completed = it
+		}
+	}
+	if completed != nil {
+		rs.contentVersion++
+		set(completed)
+		return
+	}
+
+	// No matching tool item at all — synthesize a completed one so the
+	// status still surfaces instead of being silently dropped.
+	rs.contentVersion++
+	now := time.Now()
+	it := outputItem{
+		kind:      outputItemTool,
+		toolName:  "spawn_worker",
 		startedAt: now,
 		endedAt:   now,
 	}

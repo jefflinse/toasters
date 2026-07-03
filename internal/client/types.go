@@ -494,6 +494,15 @@ type wireSessionShellExecPayload struct {
 	TimedOut    bool   `json:"timed_out,omitempty"`
 }
 
+type wireSessionWorkerSpawnPayload struct {
+	Role   string `json:"role"`
+	Task   string `json:"task,omitempty"`
+	JobID  string `json:"job_id,omitempty"`
+	Depth  int    `json:"depth,omitempty"`
+	Failed bool   `json:"failed,omitempty"`
+	Error  string `json:"error,omitempty"`
+}
+
 type wireSessionDonePayload struct {
 	WorkerName string `json:"worker_name"`
 	JobID      string `json:"job_id,omitempty"`
@@ -1183,6 +1192,20 @@ func ParseSSEPayload(eventType string, raw json.RawMessage) (any, error) {
 			OutputBytes: w.OutputBytes,
 			Truncated:   w.Truncated,
 			TimedOut:    w.TimedOut,
+		}, nil
+
+	case service.EventTypeSessionWorkerSpawn:
+		var w wireSessionWorkerSpawnPayload
+		if err := json.Unmarshal(raw, &w); err != nil {
+			return nil, fmt.Errorf("decoding session.worker_spawn payload: %w", err)
+		}
+		return service.SessionWorkerSpawnPayload{
+			Role:   w.Role,
+			Task:   w.Task,
+			JobID:  w.JobID,
+			Depth:  w.Depth,
+			Failed: w.Failed,
+			Error:  w.Error,
 		}, nil
 
 	case service.EventTypeSessionDone:

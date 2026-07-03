@@ -172,6 +172,25 @@ func (s *LocalService) BroadcastSessionShellExec(sessionID string, se runtime.Sh
 	})
 }
 
+// BroadcastSessionWorkerSpawn emits a session.worker_spawn event for a graph
+// node's spawn_worker attempt. The TUI pairs it with the matching in-flight
+// spawn_worker tool item by tool name (spawn_worker calls have no
+// disambiguating argument, same as shell).
+func (s *LocalService) BroadcastSessionWorkerSpawn(sessionID string, ws runtime.WorkerSpawn) {
+	s.broadcast(Event{
+		Type:      EventTypeSessionWorkerSpawn,
+		SessionID: sessionID,
+		Payload: SessionWorkerSpawnPayload{
+			Role:   ws.Role,
+			Task:   ws.Task,
+			JobID:  ws.JobID,
+			Depth:  ws.Depth,
+			Failed: ws.Failed,
+			Error:  ws.Error,
+		},
+	})
+}
+
 // BroadcastSessionStarted bridges a runtime session into the unified service
 // event stream. It emits session.started immediately, then spawns a goroutine
 // that subscribes to the session's events and re-emits them as session.text /
@@ -323,6 +342,12 @@ func (s *LocalService) BroadcastSessionStarted(sess *runtime.Session) {
 					}
 					flushText()
 					s.BroadcastSessionShellExec(sessionID, *ev.ShellExec)
+				case runtime.SessionEventWorkerSpawn:
+					if ev.WorkerSpawn == nil {
+						continue
+					}
+					flushText()
+					s.BroadcastSessionWorkerSpawn(sessionID, *ev.WorkerSpawn)
 				case runtime.SessionEventCompaction:
 					if ev.Compaction == nil {
 						continue

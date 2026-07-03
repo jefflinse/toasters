@@ -64,29 +64,31 @@ type SessionSnapshot struct {
 
 // SessionEvent is emitted by a session for observers.
 type SessionEvent struct {
-	SessionID  string
-	Type       SessionEventType
-	Text       string
-	ToolCall   *ToolCallEvent
-	ToolResult *ToolResultEvent
-	FileChange *FileChange
-	ShellExec  *ShellExec
-	Compaction *CompactionEvent
-	Error      error
+	SessionID   string
+	Type        SessionEventType
+	Text        string
+	ToolCall    *ToolCallEvent
+	ToolResult  *ToolResultEvent
+	FileChange  *FileChange
+	ShellExec   *ShellExec
+	WorkerSpawn *WorkerSpawn
+	Compaction  *CompactionEvent
+	Error       error
 }
 
 // SessionEventType identifies the kind of session event.
 type SessionEventType string
 
 const (
-	SessionEventText       SessionEventType = "text"
-	SessionEventToolCall   SessionEventType = "tool_call"
-	SessionEventToolResult SessionEventType = "tool_result"
-	SessionEventFileChange SessionEventType = "file_change"
-	SessionEventShellExec  SessionEventType = "shell_exec"
-	SessionEventCompaction SessionEventType = "compaction"
-	SessionEventDone       SessionEventType = "done"
-	SessionEventError      SessionEventType = "error"
+	SessionEventText        SessionEventType = "text"
+	SessionEventToolCall    SessionEventType = "tool_call"
+	SessionEventToolResult  SessionEventType = "tool_result"
+	SessionEventFileChange  SessionEventType = "file_change"
+	SessionEventShellExec   SessionEventType = "shell_exec"
+	SessionEventWorkerSpawn SessionEventType = "worker_spawn"
+	SessionEventCompaction  SessionEventType = "compaction"
+	SessionEventDone        SessionEventType = "done"
+	SessionEventError       SessionEventType = "error"
 )
 
 // CompactionEvent describes a history compaction performed by a session.
@@ -160,3 +162,31 @@ type ShellExec struct {
 // ShellExecNotifier receives ShellExec notifications from CoreTools as a
 // display side-channel. See FileChangeNotifier for the ctx contract.
 type ShellExecNotifier func(ctx context.Context, se ShellExec)
+
+// WorkerSpawn describes an attempt by the built-in spawn_worker tool to
+// start a child worker session. It exists for display, mirroring ShellExec:
+// the model already gets the child's own final text (or a failure message)
+// back as the spawn_worker tool result, so this side-channel carries only
+// the structured metadata — which role, for what task, at what depth, and
+// whether the spawn itself succeeded — needed to render a compact spawn
+// card on the parent's spawn_worker tool block.
+//
+// Unlike ShellExec, notifications fire for every spawnWorker exit path,
+// including the pre-attempt validation failures (no spawner attached, depth
+// limit exceeded, unknown role): a rejected spawn_worker call is itself
+// meaningful information for the card, whereas shell's validation errors
+// (e.g. "shell tool is disabled") never ran a command and have nothing to
+// report.
+type WorkerSpawn struct {
+	Role  string // requested role/worker name
+	Task  string // task label/description, capped for display (maxWorkerSpawnTaskBytes)
+	JobID string // job the parent (and child) belong to
+	Depth int    // spawn depth the child would run at (parent depth + 1)
+
+	Failed bool
+	Error  string // capped failure message (maxWorkerSpawnErrorBytes); empty on success
+}
+
+// WorkerSpawnNotifier receives WorkerSpawn notifications from CoreTools as a
+// display side-channel. See FileChangeNotifier for the ctx contract.
+type WorkerSpawnNotifier func(ctx context.Context, ws WorkerSpawn)

@@ -486,6 +486,18 @@ type WorkerStreamItem struct {
 	ShellOutputBytes int
 	ShellTruncated   bool
 	ShellTimedOut    bool
+
+	// Worker-spawn metadata attached to a spawn_worker tool item, delivered
+	// by a session.worker_spawn event (display-only; never LLM context).
+	// HasWorkerSpawn distinguishes "no event yet" from a legitimate
+	// zero-value Depth.
+	HasWorkerSpawn bool
+	SpawnRole      string
+	SpawnTask      string
+	SpawnJobID     string
+	SpawnDepth     int
+	SpawnFailed    bool
+	SpawnError     string
 }
 
 // WorkerStreamSnapshot is the payload for a ChatEntryKindWorkerStream

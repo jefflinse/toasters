@@ -260,6 +260,21 @@ func translateEvent(ev service.Event) tea.Msg {
 			TimedOut:    p.TimedOut,
 		}
 
+	case service.EventTypeSessionWorkerSpawn:
+		p, ok := ev.Payload.(service.SessionWorkerSpawnPayload)
+		if !ok {
+			return nil
+		}
+		return SessionWorkerSpawnMsg{
+			SessionID: ev.SessionID,
+			Role:      p.Role,
+			Task:      p.Task,
+			JobID:     p.JobID,
+			Depth:     p.Depth,
+			Failed:    p.Failed,
+			Error:     p.Error,
+		}
+
 	case service.EventTypeSessionDone:
 		p, ok := ev.Payload.(service.SessionDonePayload)
 		if !ok {

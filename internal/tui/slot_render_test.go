@@ -322,3 +322,102 @@ func TestRenderToolBlock_ShellExecSuccess(t *testing.T) {
 		t.Errorf("expected the exit-code status line, got %q", out)
 	}
 }
+
+func TestShortID(t *testing.T) {
+	cases := []struct {
+		in   string
+		want string
+	}{
+		{"", ""},
+		{"short", "short"},
+		{"12345678", "12345678"},
+		{"123456789abcdef", "12345678"},
+	}
+	for _, c := range cases {
+		if got := shortID(c.in); got != c.want {
+			t.Errorf("shortID(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+// TestRenderWorkerSpawnStatusLine_Success verifies a successful spawn
+// renders the role and short job id.
+func TestRenderWorkerSpawnStatusLine_Success(t *testing.T) {
+	it := &outputItem{spawnRole: "coder", spawnJobID: "job-1234567890"}
+	out := xansi.Strip(renderWorkerSpawnStatusLine(it))
+	if !strings.Contains(out, "⚡ spawned coder") {
+		t.Errorf("expected the spawned-role marker, got %q", out)
+	}
+	if !strings.Contains(out, "job-1234") {
+		t.Errorf("expected the short job id, got %q", out)
+	}
+}
+
+// TestRenderWorkerSpawnStatusLine_Failure verifies a failed spawn renders
+// the error instead of a role/job summary.
+func TestRenderWorkerSpawnStatusLine_Failure(t *testing.T) {
+	it := &outputItem{spawnFailed: true, spawnError: "role \"ghost\" not found"}
+	out := xansi.Strip(renderWorkerSpawnStatusLine(it))
+	if !strings.Contains(out, "✗ spawn failed") {
+		t.Errorf("expected the failure marker, got %q", out)
+	}
+	if !strings.Contains(out, "role \"ghost\" not found") {
+		t.Errorf("expected the error message, got %q", out)
+	}
+}
+
+// TestRenderToolBlock_WorkerSpawnSuccess verifies a successful spawn_worker
+// tool block renders the spawn card in place of the generic "✓ ok" line,
+// plus a dimmed task line when a task label is present.
+func TestRenderToolBlock_WorkerSpawnSuccess(t *testing.T) {
+	now := time.Now()
+	it := &outputItem{
+		kind:           outputItemTool,
+		toolName:       "spawn_worker",
+		toolResult:     "child's final text",
+		startedAt:      now.Add(-500 * time.Millisecond),
+		endedAt:        now,
+		hasWorkerSpawn: true,
+		spawnRole:      "coder",
+		spawnTask:      "implement the thing",
+		spawnJobID:     "job-1234567890",
+	}
+	out := xansi.Strip(renderToolBlock(it, 80))
+
+	if !strings.Contains(out, "⚡ spawned coder") {
+		t.Errorf("expected the spawn card, got %q", out)
+	}
+	if !strings.Contains(out, "implement the thing") {
+		t.Errorf("expected the dimmed task line, got %q", out)
+	}
+	if strings.Contains(out, "✓ ok") {
+		t.Errorf("generic status line should be replaced, not appended: %q", out)
+	}
+}
+
+// TestRenderToolBlock_WorkerSpawnFailure_NoContradictoryOkMark is the
+// spawn_worker analogue of TestRenderToolBlock_ShellExecFailure_NoContradictoryOkMark:
+// spawnWorker returns a nil result and a non-nil error on failure, so
+// it.toolError is true here (unlike shell) — but the assertion that matters
+// is still that the card, not the generic line, is what's shown.
+func TestRenderToolBlock_WorkerSpawnFailure_NoContradictoryOkMark(t *testing.T) {
+	now := time.Now()
+	it := &outputItem{
+		kind:           outputItemTool,
+		toolName:       "spawn_worker",
+		toolError:      true,
+		startedAt:      now.Add(-500 * time.Millisecond),
+		endedAt:        now,
+		hasWorkerSpawn: true,
+		spawnFailed:    true,
+		spawnError:     "role \"ghost\" not found",
+	}
+	out := xansi.Strip(renderToolBlock(it, 80))
+
+	if !strings.Contains(out, "✗ spawn failed") {
+		t.Errorf("expected the spawn-failed marker, got %q", out)
+	}
+	if strings.Contains(out, "✓ ok") || strings.Contains(out, "✗ error") {
+		t.Errorf("generic status line should be replaced, not appended: %q", out)
+	}
+}

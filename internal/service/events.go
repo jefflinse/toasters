@@ -126,6 +126,14 @@ const (
 	// Payload: SessionShellExecPayload. Carries SessionID.
 	EventTypeSessionShellExec EventType = "session.shell_exec"
 
+	// EventTypeSessionWorkerSpawn is sent when a worker's spawn_worker tool
+	// finishes attempting to start a child worker — successfully or not. It
+	// carries role, task, depth, and outcome as a display side-channel: the
+	// model already gets the child's own final text (or a failure message)
+	// back as the tool result.
+	// Payload: SessionWorkerSpawnPayload. Carries SessionID.
+	EventTypeSessionWorkerSpawn EventType = "session.worker_spawn"
+
 	// EventTypeSessionDone is sent when a worker session completes.
 	// Payload: SessionDonePayload. Carries SessionID.
 	EventTypeSessionDone EventType = "session.done"
@@ -549,6 +557,19 @@ type SessionShellExecPayload struct {
 	OutputBytes int    // combined stdout+stderr size, before any truncation
 	Truncated   bool   // model-visible result exceeded the standard tool-result cap
 	TimedOut    bool   // command was killed after exceeding its timeout
+}
+
+// SessionWorkerSpawnPayload is the payload for EventTypeSessionWorkerSpawn
+// events. The TUI pairs it with the session's matching in-flight
+// spawn_worker tool item by tool name — like shell, spawn_worker calls carry
+// no argument that disambiguates concurrent in-flight calls.
+type SessionWorkerSpawnPayload struct {
+	Role   string // requested role/worker name
+	Task   string // task label/description, capped for display
+	JobID  string // job the parent (and child) belong to
+	Depth  int    // spawn depth the child would run at
+	Failed bool
+	Error  string // capped failure message; empty on success
 }
 
 // SessionDonePayload is the payload for EventTypeSessionDone events.

@@ -463,6 +463,71 @@ func TestAttachWorkerStreamShellExec_SynthesizesOnTotalMiss(t *testing.T) {
 	}
 }
 
+// TestAttachWorkerStreamWorkerSpawn_MergesIntoPendingCall mirrors
+// TestAttachWorkerStreamShellExec_MergesIntoPendingCall: the notifier fires
+// from within CoreTools.Execute (SpawnAndWait blocks until the child
+// finishes), before the tool_result, so attaching it must not mark the item
+// done — the later result still needs to merge into the same item.
+func TestAttachWorkerStreamWorkerSpawn_MergesIntoPendingCall(t *testing.T) {
+	m := newMinimalModel(t)
+	s := &runtimeSlot{sessionID: "s", workerName: "graph:implement", jobID: "j"}
+
+	m.appendWorkerStreamToolCall(s, "call1", "spawn_worker", json.RawMessage(`{"role":"coder"}`))
+	m.attachWorkerStreamWorkerSpawn(s, SessionWorkerSpawnMsg{
+		SessionID: "s", Role: "coder", Task: "implement the thing", JobID: "j-1", Depth: 1,
+	})
+
+	card := m.findWorkerStream("s")
+	if card == nil || len(card.Items) != 1 {
+		t.Fatalf("expected 1 item, card=%+v", card)
+	}
+	it := card.Items[0]
+	if !it.HasWorkerSpawn {
+		t.Fatal("worker spawn not attached")
+	}
+	if !it.EndedAt.IsZero() {
+		t.Error("attaching worker spawn must not complete the item — tool_result still needs to merge into it")
+	}
+
+	m.appendWorkerStreamToolResult(s, "call1", "spawn_worker", "child done", false)
+	if len(card.Items) != 1 {
+		t.Fatalf("expected the result to merge into the same item, got %d items", len(card.Items))
+	}
+	if !card.Items[0].HasWorkerSpawn {
+		t.Error("worker spawn lost after the result merged in")
+	}
+	if card.Items[0].SpawnRole != "coder" {
+		t.Errorf("SpawnRole = %q, want %q", card.Items[0].SpawnRole, "coder")
+	}
+}
+
+// TestAttachWorkerStreamWorkerSpawn_SynthesizesOnTotalMiss mirrors
+// TestAttachWorkerStreamShellExec_SynthesizesOnTotalMiss: with no matching
+// tool item, a completed item is synthesized so the status still surfaces.
+func TestAttachWorkerStreamWorkerSpawn_SynthesizesOnTotalMiss(t *testing.T) {
+	m := newMinimalModel(t)
+	s := &runtimeSlot{sessionID: "s", workerName: "graph:implement", jobID: "j"}
+
+	m.attachWorkerStreamWorkerSpawn(s, SessionWorkerSpawnMsg{
+		SessionID: "s", Role: "coder", Failed: true, Error: "role not found",
+	})
+
+	card := m.findWorkerStream("s")
+	if card == nil || len(card.Items) != 1 {
+		t.Fatalf("expected a synthesized item, got %+v", card)
+	}
+	it := card.Items[0]
+	if it.Kind != service.WorkerStreamItemTool || it.ToolName != "spawn_worker" {
+		t.Errorf("synthesized item wrong: %+v", it)
+	}
+	if !it.HasWorkerSpawn || !it.SpawnFailed || it.SpawnError != "role not found" {
+		t.Errorf("worker spawn fields not set on synthesized item: %+v", it)
+	}
+	if it.EndedAt.IsZero() {
+		t.Error("synthesized item should be marked complete")
+	}
+}
+
 // TestSessionFileChangeMsg_AccumulatesDiffStatAndPatchesActivity verifies
 // that Model.Update accumulates diffAdded/diffRemoved on the runtime slot
 // across successive session.file_change events for a session (grid.go's
@@ -603,6 +668,67 @@ func TestWorkerStreamItemAsOutputItem_CarriesShellExecFields(t *testing.T) {
 	if got.shellTruncated != src.ShellTruncated || got.shellTimedOut != src.ShellTimedOut {
 		t.Errorf("shellTruncated/shellTimedOut = %v/%v, want %v/%v",
 			got.shellTruncated, got.shellTimedOut, src.ShellTruncated, src.ShellTimedOut)
+	}
+}
+
+// TestWorkerStreamItemAsOutputItem_CarriesWorkerSpawnFields mirrors
+// TestWorkerStreamItemAsOutputItem_CarriesShellExecFields for the
+// worker_spawn fields.
+func TestWorkerStreamItemAsOutputItem_CarriesWorkerSpawnFields(t *testing.T) {
+	src := &service.WorkerStreamItem{
+		Kind:           service.WorkerStreamItemTool,
+		ToolName:       "spawn_worker",
+		HasWorkerSpawn: true,
+		SpawnRole:      "coder",
+		SpawnTask:      "implement the thing",
+		SpawnJobID:     "job-1",
+		SpawnDepth:     2,
+		SpawnFailed:    true,
+		SpawnError:     "role not found",
+	}
+	got := workerStreamItemAsOutputItem(src)
+	if got.hasWorkerSpawn != src.HasWorkerSpawn {
+		t.Errorf("hasWorkerSpawn = %v, want %v", got.hasWorkerSpawn, src.HasWorkerSpawn)
+	}
+	if got.spawnRole != src.SpawnRole || got.spawnTask != src.SpawnTask {
+		t.Errorf("spawnRole/spawnTask = %q/%q, want %q/%q", got.spawnRole, got.spawnTask, src.SpawnRole, src.SpawnTask)
+	}
+	if got.spawnJobID != src.SpawnJobID || got.spawnDepth != src.SpawnDepth {
+		t.Errorf("spawnJobID/spawnDepth = %q/%d, want %q/%d", got.spawnJobID, got.spawnDepth, src.SpawnJobID, src.SpawnDepth)
+	}
+	if got.spawnFailed != src.SpawnFailed || got.spawnError != src.SpawnError {
+		t.Errorf("spawnFailed/spawnError = %v/%q, want %v/%q", got.spawnFailed, got.spawnError, src.SpawnFailed, src.SpawnError)
+	}
+}
+
+// TestSessionWorkerSpawnMsg_AttachesToSlotAndWorkerStream verifies
+// Model.Update wires a SessionWorkerSpawnMsg into both the runtime slot
+// (jobs pane) and the worker-stream (chat card) copies, mirroring the shell
+// and file-change message handlers.
+func TestSessionWorkerSpawnMsg_AttachesToSlotAndWorkerStream(t *testing.T) {
+	m := newMinimalModel(t)
+	slot := &runtimeSlot{sessionID: "s", workerName: "graph:implement", jobID: "j"}
+	m.runtimeSessions["s"] = slot
+
+	args, _ := json.Marshal(map[string]string{"role": "coder"})
+	res, _ := m.Update(SessionToolCallMsg{SessionID: "s", ToolID: "call1", ToolName: "spawn_worker", ToolInput: string(args)})
+	got := res.(*Model)
+
+	res, _ = got.Update(SessionWorkerSpawnMsg{
+		SessionID: "s", Role: "coder", Task: "implement the thing", JobID: "j-1", Depth: 1,
+	})
+	got = res.(*Model)
+
+	if len(slot.items) != 1 || !slot.items[0].hasWorkerSpawn {
+		t.Fatalf("expected the runtime slot's tool item to carry the spawn metadata, got %+v", slot.items)
+	}
+	if slot.items[0].spawnRole != "coder" {
+		t.Errorf("spawnRole = %q, want %q", slot.items[0].spawnRole, "coder")
+	}
+
+	card := got.findWorkerStream("s")
+	if card == nil || len(card.Items) != 1 || !card.Items[0].HasWorkerSpawn {
+		t.Fatalf("expected the worker-stream card's item to carry the spawn metadata, card=%+v", card)
 	}
 }
 

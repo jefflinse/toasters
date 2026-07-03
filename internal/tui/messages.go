@@ -245,6 +245,21 @@ type SessionShellExecMsg struct {
 	TimedOut    bool
 }
 
+// SessionWorkerSpawnMsg is sent when a worker's spawn_worker tool finishes
+// attempting to start a child worker. Produced by the event consumer in
+// response to a session.worker_spawn event; role/task/depth/outcome are a
+// display side-channel attached to the matching tool-call block, not fed
+// back into LLM context.
+type SessionWorkerSpawnMsg struct {
+	SessionID string
+	Role      string
+	Task      string
+	JobID     string
+	Depth     int
+	Failed    bool
+	Error     string
+}
+
 // SessionDoneMsg is sent when a worker session terminates.
 // Produced by the event consumer in response to a session.done event.
 type SessionDoneMsg struct {

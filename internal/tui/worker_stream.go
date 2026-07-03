@@ -493,6 +493,59 @@ func (m *Model) attachWorkerStreamShellExec(slot *runtimeSlot, msg SessionShellE
 	snap.Items = append(snap.Items, it)
 }
 
+// attachWorkerStreamWorkerSpawn pairs a session.worker_spawn event with the
+// chat card's matching spawn_worker tool item, mirroring attachWorkerSpawn
+// in slot_output.go for the worker-stream (chat card) copy of the same
+// lifecycle. Like shell, spawn_worker calls carry no path-like argument to
+// disambiguate concurrent in-flight calls, so matching is name-only.
+func (m *Model) attachWorkerStreamWorkerSpawn(slot *runtimeSlot, msg SessionWorkerSpawnMsg) {
+	if slot == nil || m.slotHidden(slot) {
+		return
+	}
+	snap := m.ensureWorkerStream(slot)
+	snap.LastActivity = time.Now()
+
+	set := func(it *service.WorkerStreamItem) {
+		it.HasWorkerSpawn = true
+		it.SpawnRole = msg.Role
+		it.SpawnTask = msg.Task
+		it.SpawnJobID = msg.JobID
+		it.SpawnDepth = msg.Depth
+		it.SpawnFailed = msg.Failed
+		it.SpawnError = msg.Error
+	}
+
+	var completed *service.WorkerStreamItem
+	for i := 0; i < len(snap.Items); i++ {
+		it := &snap.Items[i]
+		if it.Kind != service.WorkerStreamItemTool || it.ToolName != "spawn_worker" || it.HasWorkerSpawn {
+			continue
+		}
+		if it.EndedAt.IsZero() {
+			set(it)
+			return
+		}
+		if completed == nil {
+			completed = it
+		}
+	}
+	if completed != nil {
+		set(completed)
+		return
+	}
+
+	// No matching tool item — synthesize a completed one.
+	now := time.Now()
+	it := service.WorkerStreamItem{
+		Kind:      service.WorkerStreamItemTool,
+		ToolName:  "spawn_worker",
+		StartedAt: now,
+		EndedAt:   now,
+	}
+	set(&it)
+	snap.Items = append(snap.Items, it)
+}
+
 // markWorkerStreamDone flips the Done flag on whichever open worker
 // stream block matches the just-finished session. Called from the
 // SessionDoneMsg handler. The block stays at the top of the stack but
@@ -716,5 +769,13 @@ func workerStreamItemAsOutputItem(it *service.WorkerStreamItem) *outputItem {
 		shellOutputBytes: it.ShellOutputBytes,
 		shellTruncated:   it.ShellTruncated,
 		shellTimedOut:    it.ShellTimedOut,
+
+		hasWorkerSpawn: it.HasWorkerSpawn,
+		spawnRole:      it.SpawnRole,
+		spawnTask:      it.SpawnTask,
+		spawnJobID:     it.SpawnJobID,
+		spawnDepth:     it.SpawnDepth,
+		spawnFailed:    it.SpawnFailed,
+		spawnError:     it.SpawnError,
 	}
 }

@@ -212,3 +212,82 @@ func TestAttachShellExec_SynthesizesOnTotalMiss(t *testing.T) {
 		t.Error("synthesized item should be marked complete (no pending call exists to merge with later)")
 	}
 }
+
+// TestAttachWorkerSpawn_PendingItemStaysPending mirrors
+// TestAttachShellExec_PendingItemStaysPending: SpawnAndWait blocks until the
+// child finishes and the notifier fires from within CoreTools.Execute, so
+// attaching it must not complete the item — the later tool_result still
+// needs to merge into the same item.
+func TestAttachWorkerSpawn_PendingItemStaysPending(t *testing.T) {
+	rs := &runtimeSlot{}
+	args, _ := json.Marshal(map[string]string{"role": "coder"})
+	rs.startTool("call1", "spawn_worker", args)
+
+	rs.attachWorkerSpawn("coder", "implement the thing", "job-1", 1, false, "")
+
+	if len(rs.items) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(rs.items))
+	}
+	it := rs.items[0]
+	if !it.hasWorkerSpawn {
+		t.Fatal("worker spawn not attached")
+	}
+	if !it.endedAt.IsZero() {
+		t.Error("attachWorkerSpawn must not complete the item — it should stay pending until the tool_result arrives")
+	}
+	if _, ok := rs.toolItemIdx["call1"]; !ok {
+		t.Error("toolItemIdx entry removed — completeTool would synthesize a duplicate")
+	}
+
+	rs.completeTool("call1", "spawn_worker", "child done", false)
+	if len(rs.items) != 1 {
+		t.Fatalf("expected the result to merge into the same item, got %d items", len(rs.items))
+	}
+	if !rs.items[0].hasWorkerSpawn {
+		t.Error("worker spawn lost after completeTool merged the result")
+	}
+	if rs.items[0].spawnRole != "coder" {
+		t.Errorf("spawnRole = %q, want %q", rs.items[0].spawnRole, "coder")
+	}
+}
+
+// TestAttachWorkerSpawn_OldestPendingFirst verifies name-only matching walks
+// oldest-first, mirroring TestAttachShellExec_OldestPendingFirst.
+func TestAttachWorkerSpawn_OldestPendingFirst(t *testing.T) {
+	rs := &runtimeSlot{}
+	rs.startTool("call1", "spawn_worker", nil)
+	rs.startTool("call2", "spawn_worker", nil)
+
+	rs.attachWorkerSpawn("investigator", "", "job-1", 1, false, "")
+	rs.attachWorkerSpawn("coder", "", "job-1", 1, false, "")
+
+	if rs.items[0].spawnRole != "investigator" {
+		t.Errorf("items[0].spawnRole = %q, want %q (first notification -> oldest pending item)", rs.items[0].spawnRole, "investigator")
+	}
+	if rs.items[1].spawnRole != "coder" {
+		t.Errorf("items[1].spawnRole = %q, want %q (second notification -> second item)", rs.items[1].spawnRole, "coder")
+	}
+}
+
+// TestAttachWorkerSpawn_SynthesizesOnTotalMiss mirrors
+// TestAttachShellExec_SynthesizesOnTotalMiss: with no matching tool item, a
+// completed item is synthesized so the status still surfaces.
+func TestAttachWorkerSpawn_SynthesizesOnTotalMiss(t *testing.T) {
+	rs := &runtimeSlot{}
+
+	rs.attachWorkerSpawn("coder", "", "job-1", 1, true, "role not found")
+
+	if len(rs.items) != 1 {
+		t.Fatalf("expected a synthesized item, got %d", len(rs.items))
+	}
+	it := rs.items[0]
+	if it.kind != outputItemTool || it.toolName != "spawn_worker" {
+		t.Errorf("synthesized item wrong: %+v", it)
+	}
+	if !it.hasWorkerSpawn || !it.spawnFailed || it.spawnError != "role not found" {
+		t.Errorf("worker spawn fields not set on synthesized item: %+v", it)
+	}
+	if it.endedAt.IsZero() {
+		t.Error("synthesized item should be marked complete (no pending call exists to merge with later)")
+	}
+}
