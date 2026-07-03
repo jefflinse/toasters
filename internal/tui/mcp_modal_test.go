@@ -834,9 +834,9 @@ func TestAllCommandsCount(t *testing.T) {
 	t.Parallel()
 	// Verify the total command count (including /mcp, /models, /providers,
 	// /operator, /skills, /workers, /jobs, /blockers, /fleet, /graphmap,
-	// /settings, /presets, ...).
-	if len(allCommands) != 17 {
-		t.Errorf("expected 17 commands in allCommands, got %d", len(allCommands))
+	// /settings, /presets, /metrics, ...).
+	if len(allCommands) != 18 {
+		t.Errorf("expected 18 commands in allCommands, got %d", len(allCommands))
 	}
 	// Verify /mcp is present.
 	found := false

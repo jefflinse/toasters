@@ -89,7 +89,9 @@ type mockDefinitionService struct{}
 type mockJobService struct{}
 type mockSessionService struct{}
 type mockEventService struct{ ch chan service.Event }
-type mockSystemService struct{}
+type mockSystemService struct {
+	metrics service.MetricsReport
+}
 
 func (m *mockDefinitionService) ListSkills(_ context.Context) ([]service.Skill, error) {
 	return nil, nil
@@ -174,6 +176,9 @@ func (m *mockSystemService) GetSettings(_ context.Context) (service.Settings, er
 func (m *mockSystemService) UpdateSettings(_ context.Context, _ service.Settings) error {
 	return nil
 }
+func (m *mockSystemService) Metrics(_ context.Context) (service.MetricsReport, error) {
+	return m.metrics, nil
+}
 
 // ---------------------------------------------------------------------------
 // Handler tests
@@ -211,6 +216,45 @@ func TestOperatorBlockers_ReturnsQueue(t *testing.T) {
 	}
 	if len(got.Questions) != 1 || got.Questions[0].Question != "Which?" {
 		t.Errorf("questions = %v, want one 'Which?'", got.Questions)
+	}
+}
+
+func TestGetMetrics_RoundTrip(t *testing.T) {
+	t.Parallel()
+
+	mockSvc := newMockService()
+	mockSvc.system.metrics = service.MetricsReport{
+		Nodes: []service.NodeMetric{
+			{Node: "implement", Runs: 4, Failures: 1, FailureRate: 0.25, AvgElapsedMS: 1500, MinElapsedMS: 800, MaxElapsedMS: 3000},
+		},
+		Sessions: []service.SessionMetric{
+			{WorkerID: "coder", Sessions: 3, Failures: 0, AvgTokensIn: 1200, AvgTokensOut: 300, UsageUnavailable: 1, AvgContextPercent: 0.42},
+		},
+	}
+	srv := New(mockSvc)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/metrics", nil)
+	rec := httptest.NewRecorder()
+	srv.getMetrics(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	var resp wireMetricsReport
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(resp.Nodes) != 1 || resp.Nodes[0].Node != "implement" || resp.Nodes[0].Runs != 4 {
+		t.Fatalf("nodes = %+v, want one implement/4-runs row", resp.Nodes)
+	}
+	if resp.Nodes[0].Failures != 1 || resp.Nodes[0].FailureRate != 0.25 {
+		t.Errorf("failures/rate = %d/%v, want 1/0.25", resp.Nodes[0].Failures, resp.Nodes[0].FailureRate)
+	}
+	if len(resp.Sessions) != 1 || resp.Sessions[0].WorkerID != "coder" {
+		t.Fatalf("sessions = %+v, want one coder row", resp.Sessions)
+	}
+	if resp.Sessions[0].UsageUnavailable != 1 {
+		t.Errorf("usage_unavailable = %d, want 1", resp.Sessions[0].UsageUnavailable)
 	}
 }
 

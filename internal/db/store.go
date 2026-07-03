@@ -46,6 +46,13 @@ type Store interface {
 	ReportProgress(ctx context.Context, report *ProgressReport) error
 	GetRecentProgress(ctx context.Context, jobID string, limit int) ([]*ProgressReport, error)
 
+	// Metrics — per-node execution and per-session aggregate statistics.
+	// Foundation for future auto-tuning; feeds the service layer's
+	// Metrics() report.
+	InsertNodeExecution(ctx context.Context, exec *NodeExecution) error
+	NodeExecutionStats(ctx context.Context) ([]*NodeExecutionStat, error)
+	SessionStats(ctx context.Context) ([]*SessionStat, error)
+
 	// Skills
 	UpsertSkill(ctx context.Context, skill *Skill) error
 	GetSkill(ctx context.Context, id string) (*Skill, error)

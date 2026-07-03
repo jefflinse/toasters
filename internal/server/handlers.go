@@ -684,3 +684,13 @@ func (s *Server) getLogs(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, logsResponse{Content: content})
 }
+
+// getMetrics handles GET /api/v1/metrics.
+func (s *Server) getMetrics(w http.ResponseWriter, r *http.Request) {
+	report, err := s.svc.System().Metrics(r.Context())
+	if err != nil {
+		handleServiceError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, metricsReportToWire(report))
+}

@@ -215,6 +215,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/progress", s.getProgress)
 	mux.HandleFunc("GET /api/v1/settings", s.getSettings)
 	mux.HandleFunc("PUT /api/v1/settings", s.updateSettings)
+	mux.HandleFunc("GET /api/v1/metrics", s.getMetrics)
 
 	// SSE
 	mux.HandleFunc("GET /api/v1/events", s.events)

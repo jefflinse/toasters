@@ -352,3 +352,6 @@ func (m *mockSystemService) GetSettings(_ context.Context) (service.Settings, er
 func (m *mockSystemService) UpdateSettings(_ context.Context, _ service.Settings) error {
 	return nil
 }
+func (m *mockSystemService) Metrics(_ context.Context) (service.MetricsReport, error) {
+	return service.MetricsReport{}, nil
+}

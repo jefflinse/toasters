@@ -27,6 +27,7 @@ var allCommands = []SlashCommand{
 	{Name: "/graphmap", Description: "View the live graph map for the active task"},
 	{Name: "/presets", Description: "Pick a preset prompt to send as a job"},
 	{Name: "/settings", Description: "View and edit runtime settings"},
+	{Name: "/metrics", Description: "View node execution and session statistics"},
 }
 
 // filterCommands returns commands whose Name has the given prefix.

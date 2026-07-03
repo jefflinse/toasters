@@ -69,4 +69,10 @@ type TemplateConfig struct {
 	// different temperatures across branches. nil leaves normal resolution.
 	TemperatureOverride *float64
 	ThinkingOverride    *bool
+
+	// ContextWindows resolves the effective context window for a node
+	// session's provider/model, for the worker_sessions.context_window
+	// column recorded at session close. Optional — nil leaves that column
+	// at 0 ("unresolved").
+	ContextWindows runtime.ContextWindowSource
 }

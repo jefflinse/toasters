@@ -409,3 +409,6 @@ func (m *shutdownTestSystem) GetSettings(_ context.Context) (service.Settings, e
 func (m *shutdownTestSystem) UpdateSettings(_ context.Context, _ service.Settings) error {
 	return nil
 }
+func (m *shutdownTestSystem) Metrics(_ context.Context) (service.MetricsReport, error) {
+	return service.MetricsReport{}, nil
+}

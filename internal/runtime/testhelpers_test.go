@@ -107,11 +107,16 @@ func (s *noopStore) ReportProgress(_ context.Context, _ *db.ProgressReport) erro
 func (s *noopStore) GetRecentProgress(_ context.Context, _ string, _ int) ([]*db.ProgressReport, error) {
 	return nil, nil
 }
-func (s *noopStore) UpsertSkill(_ context.Context, _ *db.Skill) error         { return nil }
-func (s *noopStore) GetSkill(_ context.Context, _ string) (*db.Skill, error)  { return nil, nil }
-func (s *noopStore) ListSkills(_ context.Context) ([]*db.Skill, error)        { return nil, nil }
-func (s *noopStore) DeleteAllSkills(_ context.Context) error                  { return nil }
-func (s *noopStore) CreateFeedEntry(_ context.Context, _ *db.FeedEntry) error { return nil }
+func (s *noopStore) InsertNodeExecution(_ context.Context, _ *db.NodeExecution) error { return nil }
+func (s *noopStore) NodeExecutionStats(_ context.Context) ([]*db.NodeExecutionStat, error) {
+	return nil, nil
+}
+func (s *noopStore) SessionStats(_ context.Context) ([]*db.SessionStat, error) { return nil, nil }
+func (s *noopStore) UpsertSkill(_ context.Context, _ *db.Skill) error          { return nil }
+func (s *noopStore) GetSkill(_ context.Context, _ string) (*db.Skill, error)   { return nil, nil }
+func (s *noopStore) ListSkills(_ context.Context) ([]*db.Skill, error)         { return nil, nil }
+func (s *noopStore) DeleteAllSkills(_ context.Context) error                   { return nil }
+func (s *noopStore) CreateFeedEntry(_ context.Context, _ *db.FeedEntry) error  { return nil }
 func (s *noopStore) ListRecentFeedEntries(_ context.Context, _ int) ([]*db.FeedEntry, error) {
 	return nil, nil
 }

@@ -225,6 +225,71 @@ type wireGraphNode struct {
 	StartedAt time.Time `json:"started_at"`
 }
 
+type wireNodeMetric struct {
+	Node         string  `json:"node"`
+	Runs         int     `json:"runs"`
+	Failures     int     `json:"failures"`
+	FailureRate  float64 `json:"failure_rate"`
+	AvgElapsedMS float64 `json:"avg_elapsed_ms"`
+	MinElapsedMS int64   `json:"min_elapsed_ms"`
+	MaxElapsedMS int64   `json:"max_elapsed_ms"`
+}
+
+func wireNodeMetricToService(w wireNodeMetric) service.NodeMetric {
+	return service.NodeMetric{
+		Node:         w.Node,
+		Runs:         w.Runs,
+		Failures:     w.Failures,
+		FailureRate:  w.FailureRate,
+		AvgElapsedMS: w.AvgElapsedMS,
+		MinElapsedMS: w.MinElapsedMS,
+		MaxElapsedMS: w.MaxElapsedMS,
+	}
+}
+
+type wireSessionMetric struct {
+	WorkerID           string  `json:"worker_id"`
+	Sessions           int     `json:"sessions"`
+	Failures           int     `json:"failures"`
+	FailureRate        float64 `json:"failure_rate"`
+	AvgDurationSeconds float64 `json:"avg_duration_seconds"`
+	AvgTokensIn        float64 `json:"avg_tokens_in"`
+	AvgTokensOut       float64 `json:"avg_tokens_out"`
+	UsageUnavailable   int     `json:"usage_unavailable"`
+	AvgContextPercent  float64 `json:"avg_context_percent"`
+}
+
+func wireSessionMetricToService(w wireSessionMetric) service.SessionMetric {
+	return service.SessionMetric{
+		WorkerID:           w.WorkerID,
+		Sessions:           w.Sessions,
+		Failures:           w.Failures,
+		FailureRate:        w.FailureRate,
+		AvgDurationSeconds: w.AvgDurationSeconds,
+		AvgTokensIn:        w.AvgTokensIn,
+		AvgTokensOut:       w.AvgTokensOut,
+		UsageUnavailable:   w.UsageUnavailable,
+		AvgContextPercent:  w.AvgContextPercent,
+	}
+}
+
+type wireMetricsReport struct {
+	Nodes    []wireNodeMetric    `json:"nodes"`
+	Sessions []wireSessionMetric `json:"sessions"`
+}
+
+func wireMetricsReportToService(w wireMetricsReport) service.MetricsReport {
+	nodes := make([]service.NodeMetric, 0, len(w.Nodes))
+	for _, m := range w.Nodes {
+		nodes = append(nodes, wireNodeMetricToService(m))
+	}
+	sessions := make([]service.SessionMetric, 0, len(w.Sessions))
+	for _, m := range w.Sessions {
+		sessions = append(sessions, wireSessionMetricToService(m))
+	}
+	return service.MetricsReport{Nodes: nodes, Sessions: sessions}
+}
+
 type wireWorkerSession struct {
 	ID        string     `json:"id"`
 	WorkerID  string     `json:"worker_id"`

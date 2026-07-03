@@ -62,6 +62,7 @@ type mockService struct {
 	listMCPServersFn   func(ctx context.Context) ([]service.MCPServerStatus, error)
 	getProgressStateFn func(ctx context.Context) (service.ProgressState, error)
 	getLogsFn          func(ctx context.Context) (string, error)
+	metricsFn          func(ctx context.Context) (service.MetricsReport, error)
 }
 
 func (m *mockService) Operator() service.OperatorService      { return &mockOperator{m} }
@@ -278,6 +279,12 @@ func (sys *mockSystem) GetLogs(ctx context.Context) (string, error) {
 		return sys.s.getLogsFn(ctx)
 	}
 	return "", nil
+}
+func (sys *mockSystem) Metrics(ctx context.Context) (service.MetricsReport, error) {
+	if sys.s.metricsFn != nil {
+		return sys.s.metricsFn(ctx)
+	}
+	return service.MetricsReport{}, nil
 }
 func (sys *mockSystem) ListCatalogProviders(_ context.Context) ([]service.CatalogProvider, error) {
 	return nil, nil

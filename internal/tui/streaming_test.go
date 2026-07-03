@@ -10,8 +10,9 @@ import (
 
 // mockSystemService implements service.SystemService for testing fetchModels.
 type mockSystemService struct {
-	models []service.ModelInfo
-	err    error
+	models  []service.ModelInfo
+	err     error
+	metrics service.MetricsReport
 }
 
 func (m *mockSystemService) Health(_ context.Context) (service.HealthStatus, error) {
@@ -52,6 +53,9 @@ func (m *mockSystemService) GetSettings(_ context.Context) (service.Settings, er
 }
 func (m *mockSystemService) UpdateSettings(_ context.Context, _ service.Settings) error {
 	return nil
+}
+func (m *mockSystemService) Metrics(_ context.Context) (service.MetricsReport, error) {
+	return m.metrics, nil
 }
 
 // mockDefinitionService implements service.DefinitionService with no-op methods.

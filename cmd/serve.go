@@ -337,6 +337,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 		DefaultModel:          defaultModel,
 		WorkerThinkingEnabled: cfg.WorkerThinkingEnabled,
 		WorkerTemperature:     cfg.WorkerTemperature,
+		ContextWindows:        ctxWindows,
 	}
 	// Enable node-granular checkpoint/resume when SQLite is the backend. Set
 	// only when non-nil so the interface field stays a true nil (a typed-nil

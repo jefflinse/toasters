@@ -19,7 +19,7 @@ import (
 // new-uuid-per-execution; the `worker_id` column carries "graph:<nodeID>"
 // so retries of the same node yield separate rows, findable by task_id.
 type graphSession struct {
-	id       string
+	id        string
 	startedAt time.Time
 }
 
@@ -77,7 +77,12 @@ func openGraphSession(ctx context.Context, store db.Store, state *TaskState, nod
 // Non-empty reasoning is persisted as the first session_messages row
 // with role="reasoning" so post-hoc debuggers see the pre-answer
 // thinking before the assistant/tool turns.
-func closeGraphSession(ctx context.Context, store db.Store, sess *graphSession, res agent.Result[json.RawMessage], runErr error, reasoning string) {
+//
+// contextTokens is the prompt size of the session's final model
+// round-trip (captured by RoleNode from the agent's usage events) and
+// contextWindow is the resolved context window for the session's
+// provider/model; both land at 0 ("unavailable") when not tracked.
+func closeGraphSession(ctx context.Context, store db.Store, sess *graphSession, res agent.Result[json.RawMessage], runErr error, reasoning string, contextTokens int64, contextWindow int) {
 	if store == nil || sess == nil || sess.id == "" {
 		return
 	}
@@ -121,10 +126,12 @@ func closeGraphSession(ctx context.Context, store db.Store, sess *graphSession, 
 	tokensIn := int64(res.Usage.InputTokens)
 	tokensOut := int64(res.Usage.OutputTokens)
 	if err := store.UpdateSession(ctx, sess.id, db.SessionUpdate{
-		Status:    &status,
-		TokensIn:  &tokensIn,
-		TokensOut: &tokensOut,
-		EndedAt:   &endedAt,
+		Status:        &status,
+		TokensIn:      &tokensIn,
+		TokensOut:     &tokensOut,
+		EndedAt:       &endedAt,
+		ContextTokens: &contextTokens,
+		ContextWindow: &contextWindow,
 	}); err != nil {
 		slog.Warn("graph session: failed to finalize worker_sessions row",
 			"session_id", sess.id, "error", err)
