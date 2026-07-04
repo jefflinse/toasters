@@ -68,6 +68,16 @@ type outputItem struct {
 	spawnDepth     int
 	spawnFailed    bool
 	spawnError     string
+
+	// KB-note metadata attached to a job_note_write/job_notes_search tool
+	// item, delivered by a session.kb event (display-only; never LLM
+	// context). hasKBNote distinguishes "no event yet" from a legitimate
+	// zero-value preview.
+	hasKBNote bool
+	kbScope   string
+	kbOp      string
+	kbSource  string
+	kbPreview string
 }
 
 // appendText adds streamed text to the slot. Streamed tokens coalesce
@@ -348,6 +358,64 @@ func (rs *runtimeSlot) attachWorkerSpawn(role, task, jobID string, depth int, fa
 	it := outputItem{
 		kind:      outputItemTool,
 		toolName:  "spawn_worker",
+		startedAt: now,
+		endedAt:   now,
+	}
+	set(&it)
+	rs.items = append(rs.items, it)
+}
+
+// attachKBNote pairs a session.kb event with the job_note_write/
+// job_notes_search tool item that produced it. Like shell and spawn_worker,
+// these calls carry no argument that disambiguates concurrent in-flight
+// calls, so matching is name-only: the oldest still-pending item for the
+// op's tool name that hasn't already been attached — oldest-first for the
+// same reason as attachShellExec. Unlike shell/spawn_worker, the underlying
+// tool result is already accurate (job_note_write/job_notes_search never
+// misreport success/failure the way a nonzero shell exit does), so this is
+// purely additive display metadata, not a correction.
+func (rs *runtimeSlot) attachKBNote(scope, op, source, preview string) {
+	toolName := "job_note_write"
+	if op == "search" {
+		toolName = "job_notes_search"
+	}
+
+	set := func(it *outputItem) {
+		it.hasKBNote = true
+		it.kbScope = scope
+		it.kbOp = op
+		it.kbSource = source
+		it.kbPreview = preview
+	}
+
+	var completed *outputItem
+	for i := 0; i < len(rs.items); i++ {
+		it := &rs.items[i]
+		if it.kind != outputItemTool || it.toolName != toolName || it.hasKBNote {
+			continue
+		}
+		if it.endedAt.IsZero() {
+			rs.contentVersion++
+			set(it)
+			return
+		}
+		if completed == nil {
+			completed = it
+		}
+	}
+	if completed != nil {
+		rs.contentVersion++
+		set(completed)
+		return
+	}
+
+	// No matching tool item at all — synthesize a completed one so the
+	// status still surfaces instead of being silently dropped.
+	rs.contentVersion++
+	now := time.Now()
+	it := outputItem{
+		kind:      outputItemTool,
+		toolName:  toolName,
 		startedAt: now,
 		endedAt:   now,
 	}

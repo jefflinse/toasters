@@ -568,6 +568,13 @@ type wireSessionWorkerSpawnPayload struct {
 	Error  string `json:"error,omitempty"`
 }
 
+type wireSessionKBPayload struct {
+	Scope   string `json:"scope"`
+	Op      string `json:"op"`
+	Source  string `json:"source,omitempty"`
+	Preview string `json:"preview,omitempty"`
+}
+
 type wireSessionDonePayload struct {
 	WorkerName string `json:"worker_name"`
 	JobID      string `json:"job_id,omitempty"`
@@ -1271,6 +1278,18 @@ func ParseSSEPayload(eventType string, raw json.RawMessage) (any, error) {
 			Depth:  w.Depth,
 			Failed: w.Failed,
 			Error:  w.Error,
+		}, nil
+
+	case service.EventTypeSessionKB:
+		var w wireSessionKBPayload
+		if err := json.Unmarshal(raw, &w); err != nil {
+			return nil, fmt.Errorf("decoding session.kb payload: %w", err)
+		}
+		return service.SessionKBPayload{
+			Scope:   w.Scope,
+			Op:      w.Op,
+			Source:  w.Source,
+			Preview: w.Preview,
 		}, nil
 
 	case service.EventTypeSessionDone:

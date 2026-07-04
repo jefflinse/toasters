@@ -209,6 +209,9 @@ func (r *Runtime) SpawnWorker(ctx context.Context, opts SpawnOpts) (*Session, er
 		core.SetWorkerSpawnNotifier(func(_ context.Context, ws WorkerSpawn) {
 			sess.emit(SessionEvent{SessionID: sess.id, Type: SessionEventWorkerSpawn, WorkerSpawn: &ws})
 		})
+		core.SetKBNoteNotifier(func(_ context.Context, kb KBNote) {
+			sess.emit(SessionEvent{SessionID: sess.id, Type: SessionEventKBNote, KBNote: &kb})
+		})
 	}
 
 	// Register in sessions map. The wg.Add happens under the same lock as

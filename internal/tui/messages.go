@@ -260,6 +260,18 @@ type SessionWorkerSpawnMsg struct {
 	Error     string
 }
 
+// SessionKBMsg is sent when a worker's job_note_write/job_notes_search tool
+// finishes. Produced by the event consumer in response to a session.kb
+// event; scope/op/source/preview are a display side-channel attached to the
+// matching tool-call block, not fed back into LLM context.
+type SessionKBMsg struct {
+	SessionID string
+	Scope     string
+	Op        string
+	Source    string
+	Preview   string
+}
+
 // SessionDoneMsg is sent when a worker session terminates.
 // Produced by the event consumer in response to a session.done event.
 type SessionDoneMsg struct {

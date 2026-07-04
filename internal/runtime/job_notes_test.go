@@ -400,3 +400,172 @@ func extractNoteID(t *testing.T, writeResult string) string {
 	}
 	return rest[:j]
 }
+
+// captureKBNotifier records KBNote notifications for assertion, mirroring
+// captureShellNotifier in tools_shellexec_test.go. Safe for concurrent use
+// even though these tests are single-goroutine.
+type captureKBNotifier struct {
+	mu    sync.Mutex
+	calls []KBNote
+}
+
+func (c *captureKBNotifier) notify(_ context.Context, kb KBNote) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.calls = append(c.calls, kb)
+}
+
+func (c *captureKBNotifier) count() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.calls)
+}
+
+func (c *captureKBNotifier) last() KBNote {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.calls[len(c.calls)-1]
+}
+
+// TestJobNoteWrite_NotifierFiresOnSuccess mirrors
+// TestShell_NotifierFiresOnSuccess in tools_shellexec_test.go for the
+// job_note_write side of the KB display side-channel.
+func TestJobNoteWrite_NotifierFiresOnSuccess(t *testing.T) {
+	cn := &captureKBNotifier{}
+	dir := t.TempDir()
+	ct := NewCoreTools(dir, WithKBNotes(true), WithKBNoteNotifier(cn.notify))
+
+	result, err := ct.Execute(context.Background(), "job_note_write", mustJSON(t, map[string]any{
+		"title":   "Found the bug",
+		"content": "The off-by-one is in the loop bound.",
+	}))
+	assertNoError(t, err)
+	assertContains(t, result, "Found the bug")
+
+	if cn.count() != 1 {
+		t.Fatalf("notifier called %d times, want 1", cn.count())
+	}
+	kb := cn.last()
+	if kb.Scope != "job" {
+		t.Errorf("Scope = %q, want %q", kb.Scope, "job")
+	}
+	if kb.Op != "write" {
+		t.Errorf("Op = %q, want %q", kb.Op, "write")
+	}
+	if !strings.Contains(kb.Preview, "Found the bug") {
+		t.Errorf("Preview = %q, does not contain the note title", kb.Preview)
+	}
+}
+
+// TestJobNoteWrite_NotifierNotCalledWhenUnset mirrors
+// TestShell_NotifierNotCalledWhenUnset: must not panic with no notifier
+// attached.
+func TestJobNoteWrite_NotifierNotCalledWhenUnset(t *testing.T) {
+	dir := t.TempDir()
+	ct := NewCoreTools(dir, WithKBNotes(true))
+
+	_, err := ct.Execute(context.Background(), "job_note_write", mustJSON(t, map[string]any{
+		"title":   "no notifier",
+		"content": "content",
+	}))
+	assertNoError(t, err)
+}
+
+// TestSetKBNoteNotifier_PostConstruction mirrors
+// TestSetShellExecNotifier_PostConstruction for the post-construction setter.
+func TestSetKBNoteNotifier_PostConstruction(t *testing.T) {
+	dir := t.TempDir()
+	ct := NewCoreTools(dir, WithKBNotes(true))
+
+	cn := &captureKBNotifier{}
+	ct.SetKBNoteNotifier(cn.notify)
+
+	_, err := ct.Execute(context.Background(), "job_note_write", mustJSON(t, map[string]any{
+		"title":   "post-construction",
+		"content": "content",
+	}))
+	assertNoError(t, err)
+
+	if cn.count() != 1 {
+		t.Fatalf("notifier set post-construction called %d times, want 1", cn.count())
+	}
+}
+
+// TestJobNotesSearch_NotifierFiresWithHitCount checks that job_notes_search
+// fires the notifier with Op "search" and a preview reporting query + raw
+// hit count (before topK truncation).
+func TestJobNotesSearch_NotifierFiresWithHitCount(t *testing.T) {
+	dir := t.TempDir()
+	ct := NewCoreTools(dir, WithKBNotes(true))
+	mustWriteNote(t, ct, "Found the bug", "The off-by-one is in the loop bound.")
+	mustWriteNote(t, ct, "Another finding", "The off-by-one strikes again.")
+
+	cn := &captureKBNotifier{}
+	ct.SetKBNoteNotifier(cn.notify)
+
+	_, err := ct.Execute(context.Background(), "job_notes_search", mustJSON(t, map[string]any{
+		"query": "off-by-one",
+	}))
+	assertNoError(t, err)
+
+	if cn.count() != 1 {
+		t.Fatalf("notifier called %d times, want 1", cn.count())
+	}
+	kb := cn.last()
+	if kb.Op != "search" {
+		t.Errorf("Op = %q, want %q", kb.Op, "search")
+	}
+	if kb.Scope != "job" {
+		t.Errorf("Scope = %q, want %q", kb.Scope, "job")
+	}
+	if !strings.Contains(kb.Preview, "off-by-one") || !strings.Contains(kb.Preview, "2 hits") {
+		t.Errorf("Preview = %q, want it to contain the query and hit count", kb.Preview)
+	}
+}
+
+// TestJobNotesSearch_NotifierUsesListForEmptyQuery checks the "list" preview
+// wording for an empty query (list-most-recent behavior).
+func TestJobNotesSearch_NotifierUsesListForEmptyQuery(t *testing.T) {
+	dir := t.TempDir()
+	ct := NewCoreTools(dir, WithKBNotes(true))
+	mustWriteNote(t, ct, "Found the bug", "content")
+
+	cn := &captureKBNotifier{}
+	ct.SetKBNoteNotifier(cn.notify)
+
+	_, err := ct.Execute(context.Background(), "job_notes_search", mustJSON(t, map[string]any{}))
+	assertNoError(t, err)
+
+	if cn.count() != 1 {
+		t.Fatalf("notifier called %d times, want 1", cn.count())
+	}
+	kb := cn.last()
+	if !strings.HasPrefix(kb.Preview, "list →") {
+		t.Errorf("Preview = %q, want it to start with %q", kb.Preview, "list →")
+	}
+}
+
+// TestJobNotesSearch_NotifierFiresOnZeroHits checks that the notifier still
+// fires (with a 0 hit count) when nothing matches — search activity is
+// meaningful even when it comes up empty.
+func TestJobNotesSearch_NotifierFiresOnZeroHits(t *testing.T) {
+	dir := t.TempDir()
+	ct := NewCoreTools(dir, WithKBNotes(true))
+	mustWriteNote(t, ct, "Found the bug", "content")
+
+	cn := &captureKBNotifier{}
+	ct.SetKBNoteNotifier(cn.notify)
+
+	_, err := ct.Execute(context.Background(), "job_notes_search", mustJSON(t, map[string]any{
+		"query": "nonexistent-term-xyz",
+	}))
+	assertNoError(t, err)
+
+	if cn.count() != 1 {
+		t.Fatalf("notifier called %d times, want 1", cn.count())
+	}
+	kb := cn.last()
+	if !strings.Contains(kb.Preview, "0 hits") {
+		t.Errorf("Preview = %q, want it to contain %q", kb.Preview, "0 hits")
+	}
+}

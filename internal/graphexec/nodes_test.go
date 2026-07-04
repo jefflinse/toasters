@@ -414,6 +414,9 @@ func (m *mockEventSink) BroadcastSessionShellExec(sessionID string, se runtime.S
 func (m *mockEventSink) BroadcastSessionWorkerSpawn(sessionID string, ws runtime.WorkerSpawn) {
 	m.record(fmt.Sprintf("session_worker_spawn:%s:%s:%v", sessionID, ws.Role, ws.Failed))
 }
+func (m *mockEventSink) BroadcastSessionKBNote(sessionID string, kb runtime.KBNote) {
+	m.record(fmt.Sprintf("session_kb_note:%s:%s:%s", sessionID, kb.Op, kb.Preview))
+}
 
 func TestExecutor_Execute(t *testing.T) {
 	cfg, _ := templateConfig(t, [][]provider.StreamEvent{

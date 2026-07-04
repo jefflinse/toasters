@@ -66,6 +66,7 @@ type CoreTools struct {
 	fileChangeNotifier  FileChangeNotifier  // display side-channel for write_file/edit_file; may be nil
 	shellExecNotifier   ShellExecNotifier   // display side-channel for shell; may be nil
 	workerSpawnNotifier WorkerSpawnNotifier // display side-channel for spawn_worker; may be nil
+	kbNoteNotifier      KBNoteNotifier      // display side-channel for job_note_write/job_notes_search; may be nil
 }
 
 // GraphCatalog is a read-only view over the loaded graph Definitions,
@@ -212,6 +213,20 @@ func WithWorkerSpawnNotifier(n WorkerSpawnNotifier) CoreToolsOption {
 // built and so can't close over themselves via WithWorkerSpawnNotifier.
 func (ct *CoreTools) SetWorkerSpawnNotifier(n WorkerSpawnNotifier) {
 	ct.workerSpawnNotifier = n
+}
+
+// WithKBNoteNotifier sets the display side-channel invoked after a
+// successful job_note_write or job_notes_search call. See SetKBNoteNotifier
+// for the post-construction equivalent.
+func WithKBNoteNotifier(n KBNoteNotifier) CoreToolsOption {
+	return func(ct *CoreTools) { ct.kbNoteNotifier = n }
+}
+
+// SetKBNoteNotifier sets the KB-note notifier after construction. Needed by
+// callers (runtime.Session) that don't exist yet when CoreTools is built and
+// so can't close over themselves via WithKBNoteNotifier.
+func (ct *CoreTools) SetKBNoteNotifier(n KBNoteNotifier) {
+	ct.kbNoteNotifier = n
 }
 
 // NewCoreTools creates a CoreTools with the given work directory and options.
@@ -1293,7 +1308,7 @@ func noteFilename(source, title string) (string, error) {
 
 // jobNoteWrite implements the job_note_write tool: mints a new immutable
 // note file under .toasters/notes/ and returns its id.
-func (ct *CoreTools) jobNoteWrite(_ context.Context, args json.RawMessage) (string, error) {
+func (ct *CoreTools) jobNoteWrite(ctx context.Context, args json.RawMessage) (string, error) {
 	var params struct {
 		Title   string `json:"title"`
 		Content string `json:"content"`
@@ -1339,6 +1354,16 @@ func (ct *CoreTools) jobNoteWrite(_ context.Context, args json.RawMessage) (stri
 	if title == "" {
 		title = deriveNoteTitle(stored)
 	}
+
+	if ct.kbNoteNotifier != nil {
+		ct.kbNoteNotifier(ctx, KBNote{
+			Scope:   "job",
+			Op:      "write",
+			Source:  ct.noteSource(),
+			Preview: fmt.Sprintf("%s (%s)", title, id),
+		})
+	}
+
 	return fmt.Sprintf("saved note %q (id: %s)", title, id), nil
 }
 
@@ -1391,7 +1416,7 @@ type noteHit struct {
 // formatted result at maxNoteSearchResultBytes, independent of (but well
 // under) the generic 8KB maxToolResultBytes cap enforced on all tool
 // results.
-func (ct *CoreTools) jobNotesSearch(_ context.Context, args json.RawMessage) (string, error) {
+func (ct *CoreTools) jobNotesSearch(ctx context.Context, args json.RawMessage) (string, error) {
 	var params struct {
 		Query string `json:"query"`
 		TopK  int    `json:"top_k"`
@@ -1403,6 +1428,27 @@ func (ct *CoreTools) jobNotesSearch(_ context.Context, args json.RawMessage) (st
 	if topK <= 0 {
 		topK = defaultNotesTopK
 	}
+	query := strings.ToLower(strings.TrimSpace(params.Query))
+
+	// notify fires the display side-channel, when a listener is attached, for
+	// every completed search below — including zero-hit results, which are
+	// still meaningful search activity. hitCount must be the raw match count,
+	// computed BEFORE any topK truncation or result formatting.
+	notify := func(hitCount int) {
+		if ct.kbNoteNotifier == nil {
+			return
+		}
+		preview := fmt.Sprintf("list → %d hits", hitCount)
+		if query != "" {
+			preview = fmt.Sprintf("%q → %d hits", params.Query, hitCount)
+		}
+		ct.kbNoteNotifier(ctx, KBNote{
+			Scope:   "job",
+			Op:      "search",
+			Source:  ct.noteSource(),
+			Preview: preview,
+		})
+	}
 
 	notesDir, err := ct.resolvePath(notesDirRelPath)
 	if err != nil {
@@ -1412,12 +1458,12 @@ func (ct *CoreTools) jobNotesSearch(_ context.Context, args json.RawMessage) (st
 	entries, err := os.ReadDir(notesDir)
 	if err != nil {
 		if os.IsNotExist(err) {
+			notify(0)
 			return "no notes yet", nil
 		}
 		return "", fmt.Errorf("reading notes directory: %w", err)
 	}
 
-	query := strings.ToLower(strings.TrimSpace(params.Query))
 	var hits []noteHit
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
@@ -1449,7 +1495,12 @@ func (ct *CoreTools) jobNotesSearch(_ context.Context, args json.RawMessage) (st
 		})
 	}
 
-	if len(hits) == 0 {
+	// total is the raw match count, captured before topK slicing, for the KB
+	// notifier — the tool response below may show fewer entries than actually
+	// matched.
+	total := len(hits)
+	if total == 0 {
+		notify(0)
 		if query == "" {
 			return "no notes yet", nil
 		}
@@ -1469,6 +1520,7 @@ func (ct *CoreTools) jobNotesSearch(_ context.Context, args json.RawMessage) (st
 		}
 		b.WriteString(entry)
 	}
+	notify(total)
 	return strings.TrimRight(b.String(), "\n"), nil
 }
 

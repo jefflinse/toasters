@@ -946,6 +946,13 @@ type wireSessionWorkerSpawnPayload struct {
 	Error  string `json:"error,omitempty"`
 }
 
+type wireSessionKBPayload struct {
+	Scope   string `json:"scope"`
+	Op      string `json:"op"`
+	Source  string `json:"source,omitempty"`
+	Preview string `json:"preview,omitempty"`
+}
+
 type wireSessionDonePayload struct {
 	WorkerName string `json:"worker_name"`
 	JobID      string `json:"job_id,omitempty"`
@@ -1139,6 +1146,10 @@ func EventPayloadToWire(ev service.Event) any {
 		return wireSessionWorkerSpawnPayload{
 			Role: p.Role, Task: p.Task, JobID: p.JobID,
 			Depth: p.Depth, Failed: p.Failed, Error: p.Error,
+		}
+	case service.SessionKBPayload:
+		return wireSessionKBPayload{
+			Scope: p.Scope, Op: p.Op, Source: p.Source, Preview: p.Preview,
 		}
 	case service.SessionDonePayload:
 		return wireSessionDonePayload{

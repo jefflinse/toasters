@@ -168,6 +168,8 @@ func renderToolBlock(it *outputItem, width int) string {
 		status = renderShellExecStatusLine(it)
 	case it.hasWorkerSpawn:
 		status = renderWorkerSpawnStatusLine(it)
+	case it.hasKBNote:
+		status = renderKBNoteStatusLine(it)
 	default:
 		dur := it.endedAt.Sub(it.startedAt).Round(time.Millisecond)
 		statusMark := "✓"
@@ -304,6 +306,22 @@ func renderWorkerSpawnStatusLine(it *outputItem) string {
 		head += DimStyle.Render(" · " + id)
 	}
 	return head
+}
+
+// renderKBNoteStatusLine builds a job_note_write/job_notes_search tool
+// item's status line from its KBNote side-channel metadata, mirroring
+// renderShellExecStatusLine. Unlike shell, CoreTools' job-note tools already
+// return an accurate result/error via the generic toolError/toolResult
+// path — the notifier only ever fires on success (see jobNoteWrite/
+// jobNotesSearch) — so this isn't correcting a misreported outcome, just
+// giving a more compact, icon-led summary than the raw tool result preview
+// below it.
+func renderKBNoteStatusLine(it *outputItem) string {
+	icon := "📝"
+	if it.kbOp == "search" {
+		icon = "🔎"
+	}
+	return lipgloss.NewStyle().Foreground(ColorConnected).Render(icon + " " + it.kbPreview)
 }
 
 // shortID shortens a UUID-style identifier to its first 8 characters for

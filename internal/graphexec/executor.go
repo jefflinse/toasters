@@ -375,6 +375,11 @@ func (e *Executor) buildToolExecutor(workspaceDir, workspaceBase string) runtime
 			nc.Sink.BroadcastSessionWorkerSpawn(nc.SessionID, ws)
 		}
 	})
+	coreTools.SetKBNoteNotifier(func(ctx context.Context, kb runtime.KBNote) {
+		if nc := NodeContextFromContext(ctx); nc != nil && nc.Sink != nil {
+			nc.Sink.BroadcastSessionKBNote(nc.SessionID, kb)
+		}
+	})
 	if e.mcpManager != nil && len(e.mcpManager.Tools()) > 0 {
 		truncating := mcp.NewTruncatingCaller(e.mcpManager, mcp.DefaultMaxResultLen)
 		return runtime.NewCompositeTools(coreTools, truncating, mcp.ToRuntimeToolDefs(e.mcpManager.Tools()))

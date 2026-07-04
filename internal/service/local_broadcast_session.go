@@ -191,6 +191,22 @@ func (s *LocalService) BroadcastSessionWorkerSpawn(sessionID string, ws runtime.
 	})
 }
 
+// BroadcastSessionKBNote emits a session.kb event for a graph node's
+// job_note_write/job_notes_search call. The TUI's fleet activity feed and
+// Knowledge screen surface it as memory activity happening in real time.
+func (s *LocalService) BroadcastSessionKBNote(sessionID string, kb runtime.KBNote) {
+	s.broadcast(Event{
+		Type:      EventTypeSessionKB,
+		SessionID: sessionID,
+		Payload: SessionKBPayload{
+			Scope:   kb.Scope,
+			Op:      kb.Op,
+			Source:  kb.Source,
+			Preview: kb.Preview,
+		},
+	})
+}
+
 // BroadcastSessionStarted bridges a runtime session into the unified service
 // event stream. It emits session.started immediately, then spawns a goroutine
 // that subscribes to the session's events and re-emits them as session.text /
@@ -348,6 +364,12 @@ func (s *LocalService) BroadcastSessionStarted(sess *runtime.Session) {
 					}
 					flushText()
 					s.BroadcastSessionWorkerSpawn(sessionID, *ev.WorkerSpawn)
+				case runtime.SessionEventKBNote:
+					if ev.KBNote == nil {
+						continue
+					}
+					flushText()
+					s.BroadcastSessionKBNote(sessionID, *ev.KBNote)
 				case runtime.SessionEventCompaction:
 					if ev.Compaction == nil {
 						continue

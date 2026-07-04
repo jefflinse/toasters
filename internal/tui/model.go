@@ -628,6 +628,40 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case SessionKBMsg:
+		slot, ok := m.runtimeSessions[msg.SessionID]
+		if !ok {
+			return m, nil
+		}
+		slot.attachKBNote(msg.Scope, msg.Op, msg.Source, msg.Preview)
+		// Patch the matching activity label with a preview-rich label,
+		// mirroring the shell/file-change activity patches above. Unlike
+		// those, the default activityLabel for job_note_write/
+		// job_notes_search is just the raw tool name (no case in grid.go's
+		// activityLabel), so this replaces the label outright rather than
+		// appending a suffix.
+		toolName := "job_note_write"
+		label := "📝 note: " + msg.Preview
+		if msg.Op == "search" {
+			toolName = "job_notes_search"
+			label = "🔎 notes: " + msg.Preview
+		}
+		for i := range slot.activities {
+			a := &slot.activities[i]
+			if a.toolName != toolName || a.statted {
+				continue
+			}
+			a.label = label
+			a.statted = true
+			break
+		}
+		m.refreshNodesAutoTail(msg.SessionID)
+		m.updateViewportContent()
+		if !m.scroll.userScrolled {
+			m.chatViewport.GotoBottom()
+		}
+		return m, nil
+
 	case SessionDoneMsg:
 		return m.handleSessionDone(msg)
 
