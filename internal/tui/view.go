@@ -3,6 +3,7 @@ package tui
 
 import (
 	"fmt"
+	"image/color"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -217,6 +218,16 @@ func (m *Model) View() tea.View {
 		// returns early from View, so the input area here is always the normal
 		// textarea.
 		inputArea := inputStyle.Width(mainWidth).Render(m.input.View())
+		// Operator stats ride the top border of the input box — they no longer
+		// appear in the Fleet pane. Rule color mirrors the focused/unfocused
+		// border tint chosen above (color 30 focused, ColorBorder dimmed).
+		var ruleColor color.Color = lipgloss.Color("30")
+		if m.focused != focusChat {
+			ruleColor = ColorBorder
+		}
+		if label := m.renderOperatorBorderLabel(mainWidth - 5); label != "" {
+			inputArea = spliceTopBorderLabel(inputArea, mainWidth, label, ruleColor)
+		}
 		if n := len(m.chat.queuedMessages); n > 0 {
 			label := fmt.Sprintf("  %d queued · sends when operator finishes", n)
 			if n == 1 {

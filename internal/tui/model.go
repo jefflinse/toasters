@@ -151,6 +151,11 @@ type Model struct {
 	// fleetDensity is the settings-driven fleet-panel row density ("full" or
 	// "compact"), refreshed whenever /settings is loaded or saved.
 	fleetDensity string
+	// compactSidebar collapses every sidebar list (Jobs, Fleet, Blockers) to a
+	// single line per item for a dense overview. A transient view toggle (alt+c),
+	// not settings-persisted — it's a "collapse for a glance" mode, like the
+	// sidebar-visibility toggle. When on, it overrides fleetDensity.
+	compactSidebar bool
 	// sidebarSide is the settings-driven side of the chat window the sidebar
 	// renders on ("left" or "right"), refreshed whenever /settings is loaded
 	// or saved.
