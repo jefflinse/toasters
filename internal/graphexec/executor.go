@@ -56,6 +56,7 @@ type Executor struct {
 	nodeTimeout   time.Duration
 	retryAttempts int
 	ctxWindows    runtime.ContextWindowSource
+	kbEnabled     bool // mirrors config.KBConfig.Enabled; gates job-note tools on graph-dispatched nodes
 
 	// checkpointStore, when non-nil, enables node-granular checkpoint/resume:
 	// graphs compile WithCheckpointing, each run carries a thread id (the task
@@ -148,6 +149,13 @@ type ExecutorConfig struct {
 	// that column at 0 ("unresolved"); production wires this to the same
 	// resolver the runtime and operator use.
 	ContextWindows runtime.ContextWindowSource
+
+	// KBEnabled mirrors config.KBConfig.Enabled — the kb.enabled kill switch
+	// (see docs/kb-design.md). When true, graph-dispatched nodes' CoreTools
+	// advertise job_note_write/job_notes_search/job_note_read. Defaults to
+	// false (disabled) when left unset, matching the zero-value behavior of
+	// every other ExecutorConfig bool.
+	KBEnabled bool
 }
 
 // NewExecutor creates an Executor with the given configuration.
@@ -176,6 +184,7 @@ func NewExecutor(cfg ExecutorConfig) *Executor {
 		workerTemperature:     cfg.WorkerTemperature,
 		checkpointStore:       cfg.CheckpointStore,
 		ctxWindows:            cfg.ContextWindows,
+		kbEnabled:             cfg.KBEnabled,
 	}
 }
 
@@ -342,6 +351,7 @@ func (e *Executor) buildToolExecutor(workspaceDir, workspaceBase string) runtime
 	coreOpts := []runtime.CoreToolsOption{
 		runtime.WithShell(true),
 		runtime.WithStore(e.store),
+		runtime.WithKBNotes(e.kbEnabled),
 	}
 	if workspaceBase != "" && workspaceBase != workspaceDir {
 		coreOpts = append(coreOpts, runtime.WithPathAlias(workspaceBase))

@@ -222,6 +222,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 	rt.SetPromptEngine(promptEngine)
 	rt.SetCompactionThreshold(config.ValidCompactionThreshold(
 		cfg.WorkerCompactionThreshold, config.DefaultWorkerCompactionThreshold))
+	rt.SetKBEnabled(cfg.KB.Enabled)
 	defer rt.Shutdown()
 
 	// Initialize MCP manager and connect to configured servers.
@@ -338,6 +339,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 		WorkerThinkingEnabled: cfg.WorkerThinkingEnabled,
 		WorkerTemperature:     cfg.WorkerTemperature,
 		ContextWindows:        ctxWindows,
+		KBEnabled:             cfg.KB.Enabled,
 	}
 	// Enable node-granular checkpoint/resume when SQLite is the backend. Set
 	// only when non-nil so the interface field stays a true nil (a typed-nil
