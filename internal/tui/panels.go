@@ -150,7 +150,11 @@ func (m Model) buildJobsLines(contentWidth int) []string {
 			if snap == nil {
 				continue
 			}
-			lines = append(lines, renderJobUpdateBlock(snap, contentWidth, i == m.selectedJob, m.spinnerFrame, true))
+			if m.compactSidebar {
+				lines = append(lines, m.renderJobLine(snap, contentWidth, i == m.selectedJob))
+			} else {
+				lines = append(lines, renderJobUpdateBlock(snap, contentWidth, i == m.selectedJob, m.spinnerFrame, true))
+			}
 		}
 	}
 	if m.focused == focusJobs && len(displayedJobs) > 0 {
@@ -183,6 +187,16 @@ func (m Model) buildBlockersLines(contentWidth int) []string {
 				marker = "▶ "
 			}
 			attr := "⛔ " + m.blockerLabel(b) + " · " + compactAge(b.CreatedAt)
+			if m.compactSidebar {
+				// One line: attribution only; the question folds away.
+				line := marker + truncateStr(attr, contentWidth-3)
+				if selected {
+					lines = append(lines, BlockerSelectedStyle.Render(line))
+				} else {
+					lines = append(lines, DimStyle.Render(line))
+				}
+				continue
+			}
 			question := blockerFirstQuestion(b)
 			if extra := len(b.Questions) - 1; extra > 0 {
 				question += fmt.Sprintf(" (+%d more)", extra)
@@ -255,24 +269,44 @@ func (m Model) buildFleetLines(contentWidth, maxH int) []string {
 	}
 
 	var memLines []string
-	shown := 0
-	for _, mem := range fleet {
-		block := strings.Split(strings.TrimRight(m.renderFleetMember(mem, contentWidth), "\n"), "\n")
-		extra := len(block)
-		if shown > 0 {
-			extra++ // blank separator row
+	switch {
+	case len(fleet) == 0:
+		// Operator moved to the input border, so with no workers this pane has
+		// nothing live to show — say so rather than leaving a blank gap.
+		memLines = append(memLines, DimStyle.Italic(true).Render("  no workers active"))
+	case m.compactSidebar:
+		// One row per worker; no blank separators (density is the point).
+		shown := 0
+		for _, mem := range fleet {
+			if shown >= memBudget {
+				break
+			}
+			memLines = append(memLines, m.renderFleetMemberLine(mem, contentWidth))
+			shown++
 		}
-		if shown > 0 && len(memLines)+extra > memBudget {
-			break
+		if hidden := len(fleet) - shown; hidden > 0 {
+			memLines = append(memLines, DimStyle.Render(fmt.Sprintf("  +%d more…", hidden)))
 		}
-		if shown > 0 {
-			memLines = append(memLines, "")
+	default:
+		shown := 0
+		for _, mem := range fleet {
+			block := strings.Split(strings.TrimRight(m.renderFleetMember(mem, contentWidth), "\n"), "\n")
+			extra := len(block)
+			if shown > 0 {
+				extra++ // blank separator row
+			}
+			if shown > 0 && len(memLines)+extra > memBudget {
+				break
+			}
+			if shown > 0 {
+				memLines = append(memLines, "")
+			}
+			memLines = append(memLines, block...)
+			shown++
 		}
-		memLines = append(memLines, block...)
-		shown++
-	}
-	if hidden := len(fleet) - shown; hidden > 0 {
-		memLines = append(memLines, DimStyle.Render(fmt.Sprintf("  +%d more…", hidden)))
+		if hidden := len(fleet) - shown; hidden > 0 {
+			memLines = append(memLines, DimStyle.Render(fmt.Sprintf("  +%d more…", hidden)))
+		}
 	}
 
 	lines = append(lines, memLines...)
@@ -303,14 +337,11 @@ type fleetMember struct {
 	activity    string // most-recent activity (worker tool call, or operator compaction trace)
 }
 
-// buildFleet assembles the ordered list of LLMs to display: the operator first
-// (always pinned), then the currently-active workers. Finished workers are
-// intentionally excluded — the fleet is a live view; completed sessions live in
-// the grid drill-in and job history.
-func (m Model) buildFleet() []fleetMember {
-	members := make([]fleetMember, 0, 1+len(m.runtimeSessions))
-
-	// Operator, pinned first.
+// operatorMember builds the operator's fleet-member view from the live session
+// stats. The operator no longer renders in the Fleet pane — it rides the input
+// box's top border (see renderOperatorBorderLabel) — but the same struct still
+// drives that strip, so the construction lives here next to buildFleet.
+func (m Model) operatorMember() fleetMember {
 	op := fleetMember{
 		label:       "operator",
 		icon:        "⬡",
@@ -332,7 +363,16 @@ func (m Model) buildFleet() []fleetMember {
 		op.tps = float64(m.stats.CompletionTokensLive) / m.stats.LastResponseTime.Seconds()
 		op.hasTPS = true
 	}
-	members = append(members, op)
+	return op
+}
+
+// buildFleet assembles the currently-active workers, in dispatch order. The
+// operator is intentionally excluded — it lives on the input-box border now, so
+// the Fleet pane is a pure worker view. Finished workers are also excluded — the
+// fleet is a live view; completed sessions live in the grid drill-in and job
+// history.
+func (m Model) buildFleet() []fleetMember {
+	members := make([]fleetMember, 0, len(m.runtimeSessions))
 
 	// Active workers only.
 	for _, rs := range m.displayRuntimeSessions() {
@@ -527,6 +567,168 @@ func (m Model) renderFleetMemberCompact(mem fleetMember, contentWidth int) strin
 		b.WriteString("\n")
 	}
 	return b.String()
+}
+
+// renderFleetMemberLine renders a worker as a single sidebar row for compact
+// mode: "<icon><spin> <label> ........ <ctx%> · <t/s>". Occupancy and throughput
+// fold onto the one line (context first, so it survives a tight width); the
+// model name and activity are dropped — both stay visible in the grid drill-in.
+func (m Model) renderFleetMemberLine(mem fleetMember, contentWidth int) string {
+	prefix := mem.icon + m.memStatusIcon(mem)
+
+	var right []string
+	if mem.ctxMax > 0 && mem.ctxUsed > 0 {
+		pct := float64(mem.ctxUsed) / float64(mem.ctxMax)
+		if pct > 1 {
+			pct = 1
+		}
+		right = append(right, fmt.Sprintf("%.0f%%", pct*100))
+	}
+	if mem.hasTPS {
+		right = append(right, fmt.Sprintf("%.0f t/s", mem.tps))
+	}
+	rightStr := strings.Join(right, " · ")
+
+	labelMax := contentWidth - lipgloss.Width(prefix) - lipgloss.Width(rightStr) - 1
+	if labelMax < 1 {
+		labelMax = 1
+	}
+	left := prefix + truncateStr(mem.label, labelMax)
+	gap := contentWidth - lipgloss.Width(left) - lipgloss.Width(rightStr)
+	if gap < 1 {
+		gap = 1
+	}
+	return SidebarValueStyle.Render(left) + strings.Repeat(" ", gap) + DimStyle.Render(rightStr)
+}
+
+// renderJobLine renders a job as a single sidebar row for compact mode:
+// "<marker><glyph> <title> ........ <status>". Selection shows a ▶ marker and
+// the accent style, matching the compact blocker rows. The glyph animates for
+// active/pending jobs just like the full block.
+func (m Model) renderJobLine(snap *service.JobSnapshot, contentWidth int, selected bool) string {
+	glyph, statusWord, statusStyle, _ := jobStatusDecoration(snap)
+	if snap.Status == service.JobStatusActive || snap.Status == service.JobStatusPending {
+		glyph = string(spinnerChars[m.spinnerFrame%len(spinnerChars)])
+	}
+	marker := "  "
+	if selected {
+		marker = "▶ "
+	}
+	statusRendered := statusStyle.Render(statusWord)
+	prefix := marker + glyph + " "
+	titleMax := contentWidth - lipgloss.Width(prefix) - lipgloss.Width(statusRendered) - 1
+	if titleMax < 1 {
+		titleMax = 1
+	}
+	title := truncateStr(snap.Title, titleMax)
+	gap := contentWidth - lipgloss.Width(prefix) - lipgloss.Width(title) - lipgloss.Width(statusRendered)
+	if gap < 1 {
+		gap = 1
+	}
+	titleStyle := JobBlockTitleStyle
+	if selected {
+		titleStyle = BlockerSelectedStyle
+	}
+	return titleStyle.Render(prefix+title) + strings.Repeat(" ", gap) + statusRendered
+}
+
+// renderOperatorBorderLabel builds the operator-stats strip embedded in the
+// input box's top border. Segments render in display order but fit greedily
+// left-to-right, so a tight input box drops the least-essential stats (cost,
+// tokens, rate) first while the model name and context-window occupancy — the
+// two worth watching while you type — survive. Returns "" when there's no room
+// or nothing to show. The result's lipgloss.Width is <= maxWidth.
+func (m Model) renderOperatorBorderLabel(maxWidth int) string {
+	if maxWidth < 3 {
+		return ""
+	}
+	op := m.operatorMember()
+
+	type seg struct {
+		plain string
+		style lipgloss.Style
+	}
+	var segs []seg
+
+	model := op.model
+	if model == "" {
+		model = "operator"
+	}
+	segs = append(segs, seg{op.icon + " " + model, SidebarValueStyle})
+
+	if op.ctxMax > 0 && op.ctxUsed > 0 {
+		pct := float64(op.ctxUsed) / float64(op.ctxMax)
+		if pct > 1 {
+			pct = 1
+		}
+		segs = append(segs, seg{
+			fmt.Sprintf("%.0f%%", pct*100),
+			lipgloss.NewStyle().Foreground(contextBarFillColor(pct, op.threshold, false)),
+		})
+	}
+	if op.hasTPS {
+		segs = append(segs, seg{fmt.Sprintf("%.0f t/s", op.tps), DimStyle})
+	}
+	if op.tokensOut > 0 {
+		segs = append(segs, seg{formatTokenCount(op.tokensOut) + "↓", DimStyle})
+	}
+	if op.costUSD > 0 {
+		segs = append(segs, seg{fmt.Sprintf("~$%.2f", op.costUSD), DimStyle})
+	}
+	if op.compactions > 0 {
+		segs = append(segs, seg{fmt.Sprintf("↺%d", op.compactions), DimStyle})
+	}
+
+	const sep = " · "
+	sepW := lipgloss.Width(sep)
+	var parts []string
+	width := 0
+	for i, s := range segs {
+		add := lipgloss.Width(s.plain)
+		if i > 0 {
+			add += sepW
+		}
+		if width+add > maxWidth {
+			break
+		}
+		if i > 0 {
+			parts = append(parts, DimStyle.Render(sep))
+		}
+		parts = append(parts, s.style.Render(s.plain))
+		width += add
+	}
+	if len(parts) == 0 {
+		// Even the first segment overflows: hard-truncate it so the border still
+		// reads as the operator's rather than falling back to a bare rule.
+		return SidebarValueStyle.Render(truncateStr(op.icon+" "+model, maxWidth))
+	}
+	return strings.Join(parts, "")
+}
+
+// spliceTopBorderLabel replaces the top border row of a rendered bordered box
+// with a rule that embeds a label right-aligned, just before the top-right
+// corner:
+//
+//	┌───────────── <label> ─┐
+//
+// box must be the fully rendered box with its top border intact; outerWidth is
+// its total cell width; ruleColor styles the drawn border runs. The label is
+// expected to already fit the width budget (outerWidth-5); if it doesn't the
+// original box is returned unchanged rather than overflowing the line.
+func spliceTopBorderLabel(box string, outerWidth int, label string, ruleColor color.Color) string {
+	lines := strings.Split(box, "\n")
+	if len(lines) == 0 {
+		return box
+	}
+	rule := lipgloss.NewStyle().Foreground(ruleColor)
+	// Fixed chrome around the label: "┌" (1) + " " (1) + " " (1) + "─┐" (2) = 5 cells.
+	const chrome = 5
+	fill := outerWidth - chrome - lipgloss.Width(label)
+	if fill < 0 {
+		return box
+	}
+	lines[0] = rule.Render("┌"+strings.Repeat("─", fill)) + " " + label + " " + rule.Render("─┐")
+	return strings.Join(lines, "\n")
 }
 
 // renderMiniContextBar renders a single-line context-window occupancy bar with a

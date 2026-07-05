@@ -54,12 +54,10 @@ func TestOperatorDoneMsg_CompletionTokensAccumulated(t *testing.T) {
 	}
 }
 
-// TestBuildFleet_OperatorContextOccupancy pins what actually feeds the
-// operator row's context bar: the provider-reported PromptTokens, verbatim.
-// (An earlier test here asserted a PromptTokens+live-tokens formula that
-// never existed in panels.go — it recomputed its own expectation inline and
-// pinned nothing.)
-func TestBuildFleet_OperatorContextOccupancy(t *testing.T) {
+// TestOperatorMemberContextOccupancy pins what actually feeds the operator's
+// context bar (now on the input-box border): the provider-reported
+// PromptTokens, verbatim.
+func TestOperatorMemberContextOccupancy(t *testing.T) {
 	t.Parallel()
 
 	m := Model{runtimeSessions: map[string]*runtimeSlot{}}
@@ -67,13 +65,10 @@ func TestBuildFleet_OperatorContextOccupancy(t *testing.T) {
 	m.stats.PromptTokens = 1234
 	m.stats.ContextLength = 8192
 
-	fleet := m.buildFleet()
-	if len(fleet) == 0 {
-		t.Fatal("fleet empty")
-	}
-	if fleet[0].ctxUsed != 1234 || fleet[0].ctxMax != 8192 {
+	op := m.operatorMember()
+	if op.ctxUsed != 1234 || op.ctxMax != 8192 {
 		t.Errorf("operator ctx = %d/%d, want 1234/8192 (PromptTokens/ContextLength verbatim)",
-			fleet[0].ctxUsed, fleet[0].ctxMax)
+			op.ctxUsed, op.ctxMax)
 	}
 }
 
@@ -246,9 +241,10 @@ func TestHandleOperatorCompaction(t *testing.T) {
 	}
 }
 
-// TestBuildFleet_OperatorCompactionTrace verifies the fleet operator row
-// carries the compaction activity line and count.
-func TestBuildFleet_OperatorCompactionTrace(t *testing.T) {
+// TestOperatorMemberCompactionTrace verifies the operator member carries the
+// compaction activity line and count, and that the border strip shows the ↺
+// badge.
+func TestOperatorMemberCompactionTrace(t *testing.T) {
 	t.Parallel()
 
 	m := Model{runtimeSessions: map[string]*runtimeSlot{}}
@@ -256,25 +252,21 @@ func TestBuildFleet_OperatorCompactionTrace(t *testing.T) {
 	m.opCompactionCount = 2
 	m.opLastCompaction = "compacted 52% → ~18%"
 
-	fleet := m.buildFleet()
-	if len(fleet) == 0 || fleet[0].label != "operator" {
-		t.Fatalf("fleet = %+v, want operator first", fleet)
+	op := m.operatorMember()
+	if op.label != "operator" {
+		t.Fatalf("operatorMember = %+v, want operator", op)
 	}
-	if fleet[0].compactions != 2 {
-		t.Errorf("compactions = %d, want 2", fleet[0].compactions)
+	if op.compactions != 2 {
+		t.Errorf("compactions = %d, want 2", op.compactions)
 	}
-	if fleet[0].activity != "compacted 52% → ~18%" {
-		t.Errorf("activity = %q, want the compaction trace", fleet[0].activity)
+	if op.activity != "compacted 52% → ~18%" {
+		t.Errorf("activity = %q, want the compaction trace", op.activity)
 	}
 
-	// The rendered row shows the ↺ badge.
-	full := m.renderFleetMemberFull(fleet[0], 40)
-	if !strings.Contains(full, "↺2") {
-		t.Errorf("full render missing ↺2:\n%s", full)
-	}
-	compact := m.renderFleetMemberCompact(fleet[0], 40)
-	if !strings.Contains(compact, "↺2") {
-		t.Errorf("compact render missing ↺2:\n%s", compact)
+	// The border strip shows the ↺ badge (given room).
+	label := stripANSI(m.renderOperatorBorderLabel(80))
+	if !strings.Contains(label, "↺2") {
+		t.Errorf("border label missing ↺2:\n%s", label)
 	}
 }
 
@@ -306,11 +298,11 @@ func TestHandleSessionCompaction(t *testing.T) {
 	}
 
 	fleet := got.buildFleet()
-	if len(fleet) < 2 {
-		t.Fatalf("fleet = %d members, want operator + worker", len(fleet))
+	if len(fleet) < 1 {
+		t.Fatalf("fleet = %d members, want the worker", len(fleet))
 	}
-	if fleet[1].compactions != 1 {
-		t.Errorf("worker fleet compactions = %d, want 1", fleet[1].compactions)
+	if fleet[0].compactions != 1 {
+		t.Errorf("worker fleet compactions = %d, want 1", fleet[0].compactions)
 	}
 
 	// An unknown session must not panic.

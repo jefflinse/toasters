@@ -366,6 +366,13 @@ func (m *Model) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.resizeComponents()
 		return m, tea.Batch(cmds...)
 
+	case "alt+c":
+		// Toggle compact sidebar: collapse Jobs/Fleet/Blockers to one line per
+		// item for a dense overview. Transient (not settings-persisted); the
+		// pane heights recompute on the next render from the shorter lists.
+		m.compactSidebar = !m.compactSidebar
+		return m, nil
+
 	case "alt+[":
 		// Decrease sidebar width.
 		if m.shouldShowSidebar() {

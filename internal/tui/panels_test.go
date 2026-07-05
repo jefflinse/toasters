@@ -168,23 +168,27 @@ func TestBuildFleet(t *testing.T) {
 	m.opCompactionThreshold = 40
 	m.workerCompactionThreshold = 80
 
+	// The operator no longer rides in the fleet — it's sourced separately for
+	// the input-box border. buildFleet is now workers-only.
+	op := m.operatorMember()
+	if op.label != "operator" || op.icon != "⬡" {
+		t.Errorf("operatorMember = %+v, want operator glyph", op)
+	}
+	if op.ctxUsed != 5000 || op.ctxMax != 200000 {
+		t.Errorf("operator ctx = %d/%d, want 5000/200000", op.ctxUsed, op.ctxMax)
+	}
+	if op.threshold != 0.4 {
+		t.Errorf("operator threshold = %v, want 0.4 (operator setting, as a fraction)", op.threshold)
+	}
+
 	fleet := m.buildFleet()
-	if len(fleet) != 2 {
-		t.Fatalf("buildFleet len = %d, want 2 (operator + 1 worker)", len(fleet))
+	if len(fleet) != 1 {
+		t.Fatalf("buildFleet len = %d, want 1 (workers only, operator excluded)", len(fleet))
 	}
-	if fleet[0].label != "operator" || fleet[0].icon != "⬡" {
-		t.Errorf("first member = %+v, want operator pinned first", fleet[0])
+	if fleet[0].threshold != 0.8 {
+		t.Errorf("worker threshold = %v, want 0.8 (worker setting, as a fraction)", fleet[0].threshold)
 	}
-	if fleet[0].ctxUsed != 5000 || fleet[0].ctxMax != 200000 {
-		t.Errorf("operator ctx = %d/%d, want 5000/200000", fleet[0].ctxUsed, fleet[0].ctxMax)
-	}
-	if fleet[0].threshold != 0.4 {
-		t.Errorf("operator threshold = %v, want 0.4 (operator setting, as a fraction)", fleet[0].threshold)
-	}
-	if fleet[1].threshold != 0.8 {
-		t.Errorf("worker threshold = %v, want 0.8 (worker setting, as a fraction)", fleet[1].threshold)
-	}
-	w := fleet[1]
+	w := fleet[0]
 	if w.label != "abcdef12:plan" {
 		t.Errorf("worker label = %q, want %q", w.label, "abcdef12:plan")
 	}
