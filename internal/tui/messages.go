@@ -272,6 +272,25 @@ type SessionKBMsg struct {
 	Preview   string
 }
 
+// JobNotesLoadedMsg delivers the Knowledge screen's note list for one job,
+// produced by fetchJobNotesCmd. JobID lets stale responses (from a job
+// switch that happened while the request was in flight) be discarded.
+type JobNotesLoadedMsg struct {
+	JobID string
+	Notes []service.NoteMeta
+	Err   error
+}
+
+// JobNoteContentMsg delivers one note's full content for the Knowledge
+// screen, produced by fetchJobNoteCmd. ID lets a stale response (from a
+// selection change that happened while the request was in flight) be
+// discarded.
+type JobNoteContentMsg struct {
+	ID      string
+	Content string
+	Err     error
+}
+
 // SessionDoneMsg is sent when a worker session terminates.
 // Produced by the event consumer in response to a session.done event.
 type SessionDoneMsg struct {

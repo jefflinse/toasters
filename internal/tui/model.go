@@ -57,9 +57,10 @@ type Model struct {
 	jobsPaneMdRenderWidth int
 
 	// Sub-models grouping related state.
-	stream streamingState
-	nodes  nodesState
-	prompt promptModeState
+	stream    streamingState
+	nodes     nodesState
+	knowledge knowledgeState
+	prompt    promptModeState
 
 	// Blockers panel: pending ask_user requests queued for the user to answer
 	// on their own schedule. blockersSel is the cursor in the panel;
@@ -412,6 +413,64 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.metricsModal.report = msg.Report
 		}
 
+	case JobNotesLoadedMsg:
+		// Discard a stale response from a job switch that happened while
+		// the request was in flight (the Knowledge screen's jobID is set
+		// once, when it opens, and doesn't change while it's showing).
+		if msg.JobID != m.knowledge.jobID {
+			return m, nil
+		}
+		m.knowledge.loading = false
+		m.knowledge.err = msg.Err
+		if msg.Err != nil {
+			return m, nil
+		}
+		// Preserve the selection across a refresh by note id, not by index:
+		// notes are newest-first, so a note written while the screen is open
+		// (live-refresh) prepends and would shift a raw index onto a different
+		// note. Find where the previously-selected note landed.
+		prevID := ""
+		if m.knowledge.selected >= 0 && m.knowledge.selected < len(m.knowledge.notes) {
+			prevID = m.knowledge.notes[m.knowledge.selected].ID
+		}
+		m.knowledge.notes = msg.Notes
+		if len(m.knowledge.notes) == 0 {
+			m.knowledge.selected = 0
+			m.knowledge.content = ""
+			return m, nil
+		}
+		found := false
+		m.knowledge.selected = 0
+		if prevID != "" {
+			for i := range m.knowledge.notes {
+				if m.knowledge.notes[i].ID == prevID {
+					m.knowledge.selected = i
+					found = true
+					break
+				}
+			}
+		}
+		// Re-fetch content only when the selection actually moved to a
+		// different note (or we don't have content yet) — keeping the same
+		// note selected on a live-refresh must not flicker its content pane.
+		if found && m.knowledge.content != "" {
+			return m, nil
+		}
+		return m, m.selectKnowledgeNote(m.knowledge.selected)
+
+	case JobNoteContentMsg:
+		// Discard a stale response from a selection change that happened
+		// while the request was in flight.
+		sel := m.knowledge.selected
+		if sel < 0 || sel >= len(m.knowledge.notes) || m.knowledge.notes[sel].ID != msg.ID {
+			return m, nil
+		}
+		m.knowledge.loading = false
+		m.knowledge.err = msg.Err
+		if msg.Err == nil {
+			m.knowledge.content = msg.Content
+		}
+
 	case SettingsSavedMsg:
 		m.settingsModal.saving = false
 		if msg.Err != nil {
@@ -664,6 +723,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.updateViewportContent()
 		if !m.scroll.userScrolled {
 			m.chatViewport.GotoBottom()
+		}
+		// Live-refresh: if the Knowledge screen is open on this same job and
+		// a note was just written, re-fetch the list so the new note shows
+		// up without the user having to press 'r'.
+		if m.knowledge.show && msg.Op == "write" && m.knowledge.jobID != "" && slot.jobID == m.knowledge.jobID {
+			return m, m.fetchJobNotesCmd(m.knowledge.jobID)
 		}
 		return m, nil
 

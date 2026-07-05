@@ -63,6 +63,10 @@ type mockService struct {
 	getProgressStateFn func(ctx context.Context) (service.ProgressState, error)
 	getLogsFn          func(ctx context.Context) (string, error)
 	metricsFn          func(ctx context.Context) (service.MetricsReport, error)
+
+	// Knowledge
+	listJobNotesFn func(ctx context.Context, jobID string) ([]service.NoteMeta, error)
+	readJobNoteFn  func(ctx context.Context, jobID, id string) (string, error)
 }
 
 func (m *mockService) Operator() service.OperatorService      { return &mockOperator{m} }
@@ -71,6 +75,7 @@ func (m *mockService) Jobs() service.JobService               { return &mockJobs
 func (m *mockService) Sessions() service.SessionService       { return &mockSessions{m} }
 func (m *mockService) Events() service.EventService           { return &mockEvents{m} }
 func (m *mockService) System() service.SystemService          { return &mockSystem{m} }
+func (m *mockService) Knowledge() service.KnowledgeService    { return &mockKnowledge{m} }
 
 // --- Operator ---
 
@@ -202,6 +207,24 @@ func (j *mockJobs) RetryTask(ctx context.Context, taskID string) error {
 		return j.s.retryTaskFn(ctx, taskID)
 	}
 	return nil
+}
+
+// --- Knowledge ---
+
+type mockKnowledge struct{ s *mockService }
+
+func (k *mockKnowledge) ListJobNotes(ctx context.Context, jobID string) ([]service.NoteMeta, error) {
+	if k.s.listJobNotesFn != nil {
+		return k.s.listJobNotesFn(ctx, jobID)
+	}
+	return nil, nil
+}
+
+func (k *mockKnowledge) ReadJobNote(ctx context.Context, jobID, id string) (string, error) {
+	if k.s.readJobNoteFn != nil {
+		return k.s.readJobNoteFn(ctx, jobID, id)
+	}
+	return "", nil
 }
 
 // --- Sessions ---
@@ -622,6 +645,90 @@ func TestJobs_Get(t *testing.T) {
 	}
 	if jd.Progress[0].Message != "Working on it" {
 		t.Errorf("progress[0].Message = %q, want %q", jd.Progress[0].Message, "Working on it")
+	}
+}
+
+func TestKnowledge_ListJobNotes(t *testing.T) {
+	t.Parallel()
+
+	noteTime := testTime
+	mock := &mockService{
+		listJobNotesFn: func(_ context.Context, jobID string) ([]service.NoteMeta, error) {
+			if jobID != "job-42" {
+				return nil, fmt.Errorf("%w: job %s", service.ErrNotFound, jobID)
+			}
+			return []service.NoteMeta{
+				{ID: "20260302-120000.000-worker-hello-abc123", Title: "Hello", Source: "worker", ModTime: noteTime, Size: 42},
+			}, nil
+		},
+	}
+
+	rc := setupTestServer(t, mock)
+	ctx := context.Background()
+
+	notes, err := rc.Knowledge().ListJobNotes(ctx, "job-42")
+	if err != nil {
+		t.Fatalf("ListJobNotes: %v", err)
+	}
+	if len(notes) != 1 {
+		t.Fatalf("got %d notes, want 1", len(notes))
+	}
+	if notes[0].ID != "20260302-120000.000-worker-hello-abc123" {
+		t.Errorf("ID = %q, want %q", notes[0].ID, "20260302-120000.000-worker-hello-abc123")
+	}
+	if notes[0].Title != "Hello" {
+		t.Errorf("Title = %q, want %q", notes[0].Title, "Hello")
+	}
+	if notes[0].Source != "worker" {
+		t.Errorf("Source = %q, want %q", notes[0].Source, "worker")
+	}
+	if notes[0].Size != 42 {
+		t.Errorf("Size = %d, want 42", notes[0].Size)
+	}
+	if !notes[0].ModTime.Equal(noteTime) {
+		t.Errorf("ModTime = %v, want %v", notes[0].ModTime, noteTime)
+	}
+}
+
+func TestKnowledge_ReadJobNote(t *testing.T) {
+	t.Parallel()
+
+	mock := &mockService{
+		readJobNoteFn: func(_ context.Context, jobID, id string) (string, error) {
+			if jobID != "job-42" || id != "note-1" {
+				return "", fmt.Errorf("%w: note %s", service.ErrNotFound, id)
+			}
+			return "# Hello\n\nBody", nil
+		},
+	}
+
+	rc := setupTestServer(t, mock)
+	ctx := context.Background()
+
+	content, err := rc.Knowledge().ReadJobNote(ctx, "job-42", "note-1")
+	if err != nil {
+		t.Fatalf("ReadJobNote: %v", err)
+	}
+	if content != "# Hello\n\nBody" {
+		t.Errorf("content = %q, want %q", content, "# Hello\n\nBody")
+	}
+}
+
+func TestKnowledge_ReadJobNote_NotFound(t *testing.T) {
+	t.Parallel()
+
+	mock := &mockService{
+		readJobNoteFn: func(_ context.Context, _, id string) (string, error) {
+			return "", fmt.Errorf("%w: note %s", service.ErrNotFound, id)
+		},
+	}
+
+	rc := setupTestServer(t, mock)
+	ctx := context.Background()
+
+	_, err := rc.Knowledge().ReadJobNote(ctx, "job-42", "missing")
+	if !errors.Is(err, service.ErrNotFound) {
+		t.Errorf("err = %v, want wrapping service.ErrNotFound", err)
 	}
 }
 

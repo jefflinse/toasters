@@ -239,6 +239,31 @@ func jobDetailToWire(jd service.JobDetail) wireJobDetail {
 	}
 }
 
+// wireNoteMeta is the JSON wire representation of a service.NoteMeta, for
+// GET /api/v1/jobs/{id}/notes.
+type wireNoteMeta struct {
+	ID      string    `json:"id"`
+	Title   string    `json:"title"`
+	Source  string    `json:"source,omitempty"`
+	ModTime time.Time `json:"mod_time"`
+	Size    int64     `json:"size"`
+}
+
+func noteMetaToWire(n service.NoteMeta) wireNoteMeta {
+	return wireNoteMeta{
+		ID:      n.ID,
+		Title:   n.Title,
+		Source:  n.Source,
+		ModTime: n.ModTime,
+		Size:    n.Size,
+	}
+}
+
+// noteContentResponse is the body for GET /api/v1/jobs/{id}/notes/{noteID}.
+type noteContentResponse struct {
+	Content string `json:"content"`
+}
+
 // wireSkill is the JSON wire representation of a service.Skill.
 type wireSkill struct {
 	ID          string    `json:"id"`

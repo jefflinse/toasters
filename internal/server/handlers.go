@@ -434,6 +434,33 @@ func (s *Server) cancelJob(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// listJobNotes handles GET /api/v1/jobs/{id}/notes.
+func (s *Server) listJobNotes(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	notes, err := s.svc.Knowledge().ListJobNotes(r.Context(), id)
+	if err != nil {
+		handleServiceError(w, r, err)
+		return
+	}
+	wireNotes := make([]wireNoteMeta, 0, len(notes))
+	for _, n := range notes {
+		wireNotes = append(wireNotes, noteMetaToWire(n))
+	}
+	writeJSON(w, http.StatusOK, PaginatedResponse[wireNoteMeta]{Items: wireNotes, Total: len(wireNotes)})
+}
+
+// getJobNote handles GET /api/v1/jobs/{id}/notes/{noteID}.
+func (s *Server) getJobNote(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	noteID := r.PathValue("noteID")
+	content, err := s.svc.Knowledge().ReadJobNote(r.Context(), id, noteID)
+	if err != nil {
+		handleServiceError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, noteContentResponse{Content: content})
+}
+
 // retryTask handles POST /api/v1/tasks/{id}/retry.
 func (s *Server) retryTask(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")

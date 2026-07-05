@@ -74,6 +74,11 @@ func (m *Model) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.updateNodes(msg)
 	}
 
+	// When the Knowledge screen is visible, it intercepts all keys.
+	if m.knowledge.show {
+		return m.updateKnowledge(msg)
+	}
+
 	// When the log view is visible, handle navigation and dismiss it.
 	if m.logView.show {
 		return m.updateLogView(msg)
@@ -343,6 +348,10 @@ func (m *Model) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "ctrl+g":
 		m.toggleNodes()
 		return m, nil
+
+	case "ctrl+k":
+		cmd := m.toggleKnowledge()
+		return m, cmd
 
 	case `ctrl+\`:
 		if m.logView.show {

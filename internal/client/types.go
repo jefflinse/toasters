@@ -63,6 +63,19 @@ type wireJobDetail struct {
 	Progress []wireProgressReport `json:"progress"`
 }
 
+type wireNoteMeta struct {
+	ID      string    `json:"id"`
+	Title   string    `json:"title"`
+	Source  string    `json:"source,omitempty"`
+	ModTime time.Time `json:"mod_time"`
+	Size    int64     `json:"size"`
+}
+
+// noteContentResponse is the body for GET /api/v1/jobs/{id}/notes/{noteID}.
+type noteContentResponse struct {
+	Content string `json:"content"`
+}
+
 type wireSkill struct {
 	ID          string    `json:"id"`
 	Name        string    `json:"name"`
@@ -665,6 +678,16 @@ func wireJobToService(w wireJob) service.Job {
 		CreatedAt:   w.CreatedAt,
 		UpdatedAt:   w.UpdatedAt,
 		Metadata:    w.Metadata,
+	}
+}
+
+func wireNoteMetaToService(w wireNoteMeta) service.NoteMeta {
+	return service.NoteMeta{
+		ID:      w.ID,
+		Title:   w.Title,
+		Source:  w.Source,
+		ModTime: w.ModTime,
+		Size:    w.Size,
 	}
 }
 
