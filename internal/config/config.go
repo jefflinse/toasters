@@ -62,11 +62,22 @@ type Config struct {
 
 // KBConfig holds configuration for the Knowledge Base feature. Enabled is a
 // kill switch: when false, the job-note tools are not advertised to workers
-// and Execute rejects them. Only Enabled exists for now — Part A (job notes)
-// needs nothing else; Provider/Model/TopK for the vector-store epic (Part B)
-// land later. See docs/kb-design.md.
+// and Execute rejects them. Provider/Model/TopK gate the vector-store
+// features (Part B): when Provider or Model is unset, semantic search is
+// unavailable but job notes (Part A) keep working unaffected. See
+// docs/kb-design.md.
 type KBConfig struct {
 	Enabled bool `mapstructure:"enabled"`
+	// Provider is the ID of a dedicated embedding provider entry (its own
+	// scheduler, distinct from the operator/worker chat providers). Empty
+	// means the vector store has no embedding backend configured.
+	Provider string `mapstructure:"provider"`
+	// Model is the embedding model name, e.g. "nomic-embed-text". Empty
+	// means the vector store has no embedding model configured.
+	Model string `mapstructure:"model"`
+	// TopK is the number of nearest-neighbor results returned by a semantic
+	// search query.
+	TopK int `mapstructure:"top_k"`
 }
 
 // MCPServerConfig holds configuration for a single MCP server.
@@ -134,6 +145,7 @@ func Load() (*Config, error) {
 	viper.SetDefault("agents.defaults.provider", "")
 	viper.SetDefault("agents.defaults.model", "")
 	viper.SetDefault("kb.enabled", true)
+	viper.SetDefault("kb.top_k", 5)
 
 	if err := viper.ReadInConfig(); err != nil {
 		var notFound viper.ConfigFileNotFoundError

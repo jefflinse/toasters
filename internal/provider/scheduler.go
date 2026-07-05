@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"fmt"
 )
 
 // Scheduler wraps a Provider with a bounded FIFO queue for ChatStream calls.
@@ -87,4 +88,25 @@ func (s *Scheduler) ChatStream(ctx context.Context, req ChatRequest) (<-chan Str
 	return out, nil
 }
 
+// Embed proxies to the inner provider's Embed if it implements
+// EmbeddingProvider, acquiring a scheduler slot for the duration of the call.
+// Embed is a single blocking call (unlike ChatStream's long-lived stream), so
+// there's no drain dance: acquire, defer release, call, return.
+func (s *Scheduler) Embed(ctx context.Context, model string, inputs []string) ([][]float32, error) {
+	emb, ok := s.inner.(EmbeddingProvider)
+	if !ok {
+		return nil, fmt.Errorf("provider %q does not support embeddings", s.inner.Name())
+	}
+
+	select {
+	case s.sem <- struct{}{}:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	defer func() { <-s.sem }()
+
+	return emb.Embed(ctx, model, inputs)
+}
+
 var _ Provider = (*Scheduler)(nil)
+var _ EmbeddingProvider = (*Scheduler)(nil)
