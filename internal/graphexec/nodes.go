@@ -74,7 +74,7 @@ func RoleNode(cfg TemplateConfig, role *prompt.Role, nodeID string, slots map[st
 
 		exec := cfg.ToolExecutor
 		if cfg.ToolExecutorFor != nil {
-			exec = cfg.ToolExecutorFor(state.WorkspaceDir, state.WorkspaceBase)
+			exec = cfg.ToolExecutorFor(state.WorkspaceDir, state.WorkspaceBase, role.Name)
 		}
 		tools := toolsForRole(exec, role)
 		thinkingEnabled, temperature := effectiveWorkerDefaults(cfg, role)

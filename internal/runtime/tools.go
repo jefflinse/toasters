@@ -44,24 +44,25 @@ type WorkerSpawner interface {
 
 // CoreTools implements the standard worker tool set.
 type CoreTools struct {
-	workDir      string
-	aliasFrom    string // absolute prefix remapped onto workDir (fan-out isolation); empty = no alias
-	allowShell   bool
-	spawner      WorkerSpawner  // for spawn_worker; may be nil
-	depth        int            // current spawn depth
-	maxDepth     int            // max spawn depth
-	httpClient   *http.Client   // for web_fetch; nil uses webFetchClient
-	store        db.Store       // required; for progress tools
-	promptEngine *prompt.Engine // for spawn_worker; may be nil
-	graphCatalog GraphCatalog   // for query_graphs; may be nil
-	kbEnabled    bool           // gates job_note_write/job_notes_search/job_note_read
-	denylist     map[string]bool
-	sessionID    string
-	workerID     string
-	jobID        string
-	taskID       string
-	providerName string
-	model        string
+	workDir         string
+	aliasFrom       string // absolute prefix remapped onto workDir (fan-out isolation); empty = no alias
+	allowShell      bool
+	spawner         WorkerSpawner  // for spawn_worker; may be nil
+	depth           int            // current spawn depth
+	maxDepth        int            // max spawn depth
+	httpClient      *http.Client   // for web_fetch; nil uses webFetchClient
+	store           db.Store       // required; for progress tools
+	promptEngine    *prompt.Engine // for spawn_worker; may be nil
+	graphCatalog    GraphCatalog   // for query_graphs; may be nil
+	kbEnabled       bool           // gates job_note_write/job_notes_search/job_note_read
+	noteSourceLabel string         // stamps job-note filenames/events (the node's role on the graph path)
+	denylist        map[string]bool
+	sessionID       string
+	workerID        string
+	jobID           string
+	taskID          string
+	providerName    string
+	model           string
 
 	fileChangeNotifier  FileChangeNotifier  // display side-channel for write_file/edit_file; may be nil
 	shellExecNotifier   ShellExecNotifier   // display side-channel for shell; may be nil
@@ -170,6 +171,14 @@ func WithGraphCatalog(cat GraphCatalog) CoreToolsOption {
 // unrecognized name.
 func WithKBNotes(enabled bool) CoreToolsOption {
 	return func(ct *CoreTools) { ct.kbEnabled = enabled }
+}
+
+// WithNoteSource sets the label stamped onto job-note filenames and session.kb
+// events (see CoreTools.noteSource). On the graph-dispatch path this is the
+// node's role (e.g. "coder"); when unset, noteSource falls back to the worker
+// id, then "worker".
+func WithNoteSource(label string) CoreToolsOption {
+	return func(ct *CoreTools) { ct.noteSourceLabel = label }
 }
 
 // WithFileChangeNotifier sets the display side-channel invoked after a
@@ -1248,6 +1257,9 @@ const noteTimestampLayout = "20060102-150405.000"
 // WithSessionContext); the graph-dispatch path never sets session context at
 // all, so notes written from that path fall back to "worker".
 func (ct *CoreTools) noteSource() string {
+	if s := sanitizeNoteToken(ct.noteSourceLabel, 40); s != "" {
+		return s
+	}
 	if s := sanitizeNoteToken(ct.workerID, 40); s != "" {
 		return s
 	}

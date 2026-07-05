@@ -569,3 +569,27 @@ func TestJobNotesSearch_NotifierFiresOnZeroHits(t *testing.T) {
 		t.Errorf("Preview = %q, want it to contain %q", kb.Preview, "0 hits")
 	}
 }
+
+// TestJobNoteWrite_SourceStamp verifies WithNoteSource stamps the note's
+// source (the node's role on the graph path) into the filename, so notes are
+// attributable per-role instead of the generic "worker" fallback.
+func TestJobNoteWrite_SourceStamp(t *testing.T) {
+	dir := t.TempDir()
+	ct := NewCoreTools(dir, WithKBNotes(true), WithNoteSource("Coder"))
+
+	_, err := ct.Execute(context.Background(), "job_note_write", mustJSON(t, map[string]any{
+		"title":   "a finding",
+		"content": "some content",
+	}))
+	assertNoError(t, err)
+
+	entries, err := os.ReadDir(filepath.Join(dir, ".toasters", "notes"))
+	assertNoError(t, err)
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 note, got %d", len(entries))
+	}
+	// filename shape: <ts>-<source>-<slug>-<6hex>.md; source sanitized to "coder".
+	if !strings.Contains(entries[0].Name(), "-coder-") {
+		t.Errorf("filename %q missing sanitized source 'coder'", entries[0].Name())
+	}
+}

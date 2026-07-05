@@ -146,3 +146,23 @@ func TestToggleKnowledge_TogglesShow(t *testing.T) {
 		t.Error("closing toggle should return a nil cmd")
 	}
 }
+
+func TestStripNoteTitleHeading(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name, content, title, want string
+	}{
+		{"strips matching heading", "# SPA fallback\n\nbody text", "SPA fallback", "body text"},
+		{"no heading unchanged", "just body", "Some Title", "just body"},
+		{"non-matching heading kept", "# Other\n\nbody", "Title", "# Other\n\nbody"},
+		{"heading only", "# Title", "Title", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := stripNoteTitleHeading(tt.content, tt.title); got != tt.want {
+				t.Errorf("stripNoteTitleHeading(%q, %q) = %q, want %q", tt.content, tt.title, got, tt.want)
+			}
+		})
+	}
+}

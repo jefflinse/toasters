@@ -347,11 +347,12 @@ func (e *Executor) interruptHandler(ctx context.Context, req rhizome.InterruptRe
 // workspaceDir (fan-out branch isolation), absolute paths under it are
 // aliased into workspaceDir so canonical paths leaked into instructions
 // and artifacts keep working inside the branch.
-func (e *Executor) buildToolExecutor(workspaceDir, workspaceBase string) runtime.ToolExecutor {
+func (e *Executor) buildToolExecutor(workspaceDir, workspaceBase, source string) runtime.ToolExecutor {
 	coreOpts := []runtime.CoreToolsOption{
 		runtime.WithShell(true),
 		runtime.WithStore(e.store),
 		runtime.WithKBNotes(e.kbEnabled),
+		runtime.WithNoteSource(source),
 	}
 	if workspaceBase != "" && workspaceBase != workspaceDir {
 		coreOpts = append(coreOpts, runtime.WithPathAlias(workspaceBase))

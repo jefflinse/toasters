@@ -1042,8 +1042,8 @@ func TestExecutor_BuildToolExecutor_ScopedPerTask(t *testing.T) {
 
 	executor := NewExecutor(ExecutorConfig{})
 
-	execA := executor.buildToolExecutor(dirA, dirA)
-	execB := executor.buildToolExecutor(dirB, dirB)
+	execA := executor.buildToolExecutor(dirA, dirA, "test")
+	execB := executor.buildToolExecutor(dirB, dirB, "test")
 
 	readArgs := json.RawMessage(`{"path":"marker.txt"}`)
 	resultA, err := execA.Execute(context.Background(), "read_file", readArgs)
@@ -1267,7 +1267,7 @@ func TestBuildToolExecutor_AliasesCanonicalWorkspaceIntoBranch(t *testing.T) {
 	iso := t.TempDir()  // isolated branch copy
 
 	executor := NewExecutor(ExecutorConfig{})
-	exec := executor.buildToolExecutor(iso, base)
+	exec := executor.buildToolExecutor(iso, base, "test")
 
 	args, _ := json.Marshal(map[string]any{
 		"path":    filepath.Join(base, "backend", "main.go"),

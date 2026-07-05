@@ -425,7 +425,8 @@ func (m *Model) renderKnowledgeDetail(lay knowledgeLayout, focused bool) (string
 		bodyLines = []string{ErrorStyle.Render("Error: " + m.knowledge.err.Error())}
 		scroll = 0
 	default:
-		bodyLines = wrapLogLines(strings.Split(m.knowledge.content, "\n"), innerW)
+		body := stripNoteTitleHeading(m.knowledge.content, sel.Title)
+		bodyLines = wrapLogLines(strings.Split(body, "\n"), innerW)
 	}
 
 	maxScroll := len(bodyLines) - visibleH
@@ -454,4 +455,21 @@ func (m *Model) renderKnowledgeDetail(lay knowledgeLayout, focused bool) (string
 
 	content := titleLine + "\n\n" + strings.Join(truncated, "\n")
 	return box.Render(content), scroll
+}
+
+// stripNoteTitleHeading drops a leading "# <title>" H1 line (and the blank
+// line under it) from a note's content when it matches title. job_note_write
+// stores notes as "# <title>\n\n<body>", so the detail pane — which already
+// renders the title as its header — would otherwise show it twice.
+func stripNoteTitleHeading(content, title string) string {
+	parts := strings.SplitN(content, "\n", 2)
+	firstLine := strings.TrimSpace(parts[0])
+	if strings.HasPrefix(firstLine, "#") &&
+		strings.TrimSpace(strings.TrimLeft(firstLine, "#")) == strings.TrimSpace(title) {
+		if len(parts) == 2 {
+			return strings.TrimLeft(parts[1], "\n")
+		}
+		return ""
+	}
+	return content
 }
