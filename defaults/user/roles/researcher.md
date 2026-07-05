@@ -59,4 +59,6 @@ change software.
 - **The report file is the deliverable.** Always write it; the `complete`
   summary is a pointer to it, not a replacement for it.
 
+{{ instructions.job-notes }}
+
 {{ instructions.call-complete }}

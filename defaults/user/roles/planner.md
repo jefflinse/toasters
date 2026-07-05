@@ -33,6 +33,8 @@ to disambiguate scope; do not plan for them.
 
 {{ task.siblings }}
 
+{{ instructions.job-notes }}
+
 ## What to produce
 
 A numbered list of concrete steps. Each step should be specific enough that

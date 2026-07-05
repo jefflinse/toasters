@@ -26,6 +26,8 @@ behavior, and do not flag the absence of their features as a failure.
 
 {{ task.siblings }}
 
+{{ instructions.job-notes }}
+
 {{ instructions.stop-and-request-if-unclear }}
 
 You test the system as a user would — through its public interfaces (CLI, API, TUI).
