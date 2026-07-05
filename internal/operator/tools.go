@@ -25,10 +25,11 @@ type operatorTools struct {
 	store           db.Store
 	systemTools     *SystemTools
 	workDir         string
+	kb              KnowledgeBase                                                                                     // optional; nil disables kb_search/kb_write_user
 	promptUser      func(ctx context.Context, requestID string, questions []graphexec.PromptQuestion) (string, error) // set by Operator after construction
 }
 
-func newOperatorTools(rt *runtime.Runtime, promptEngine *prompt.Engine, defaultProvider, defaultModel string, store db.Store, systemTools *SystemTools, workDir string) *operatorTools {
+func newOperatorTools(rt *runtime.Runtime, promptEngine *prompt.Engine, defaultProvider, defaultModel string, store db.Store, systemTools *SystemTools, workDir string, kb KnowledgeBase) *operatorTools {
 	return &operatorTools{
 		rt:              rt,
 		promptEngine:    promptEngine,
@@ -37,6 +38,7 @@ func newOperatorTools(rt *runtime.Runtime, promptEngine *prompt.Engine, defaultP
 		store:           store,
 		systemTools:     systemTools,
 		workDir:         workDir,
+		kb:              kb,
 	}
 }
 
@@ -161,6 +163,12 @@ func (ot *operatorTools) Definitions() []runtime.ToolDef {
 		}
 	}
 
+	// Durable user-memory tools are only advertised when a KnowledgeBase is
+	// actually wired up (an embedding provider is configured).
+	if ot.kb != nil {
+		defs = append(defs, kbSearchDef, kbWriteUserDef)
+	}
+
 	return defs
 }
 
@@ -185,6 +193,10 @@ func (ot *operatorTools) Execute(ctx context.Context, name string, args json.Raw
 		return ot.systemTools.Execute(ctx, "retry_task", args)
 	case "ask_user":
 		return ot.askUser(ctx, args)
+	case "kb_search":
+		return ot.kbSearch(ctx, args)
+	case "kb_write_user":
+		return ot.kbWriteUser(ctx, args)
 	default:
 		return "", fmt.Errorf("%w: %s", runtime.ErrUnknownTool, name)
 	}

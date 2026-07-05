@@ -24,6 +24,7 @@ import (
 	"github.com/jefflinse/toasters/internal/contextwindow"
 	"github.com/jefflinse/toasters/internal/db"
 	"github.com/jefflinse/toasters/internal/graphexec"
+	"github.com/jefflinse/toasters/internal/kb"
 	"github.com/jefflinse/toasters/internal/loader"
 	"github.com/jefflinse/toasters/internal/mcp"
 	"github.com/jefflinse/toasters/internal/modelsdev"
@@ -138,6 +139,9 @@ func runServe(cmd *cobra.Command, args []string) error {
 	// checkpoints, when non-nil, backs node-granular graph checkpoint/resume.
 	// Only the SQLite store provides it; it stays nil for any other backend.
 	var checkpoints *db.CheckpointStore
+	// vectorStore, when non-nil, backs the operator's durable-memory KB tools
+	// (kb_search / kb_write_user). Only the SQLite store provides it.
+	var vectorStore *db.VectorStore
 	dbPath, err := config.DatabasePath(cfg, workspaceDir)
 	if err != nil {
 		slog.Warn("failed to resolve database path", "error", err)
@@ -148,6 +152,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 		} else {
 			store = sqliteStore
 			checkpoints = sqliteStore.CheckpointStore()
+			vectorStore = sqliteStore.VectorStore()
 			defer func() { _ = sqliteStore.Close() }()
 
 			// Reclaim rows orphaned by a previous run (crash or unclean stop):
@@ -390,6 +395,23 @@ func runServe(cmd *cobra.Command, args []string) error {
 		batcher := newTextBatcher(16*time.Millisecond, textFlush)
 		reasoningBatcher := newTextBatcher(16*time.Millisecond, reasoningFlush)
 
+		// Build the operator's durable-memory KB service when an embedding
+		// provider is configured. kbService stays nil (kb tools not
+		// advertised) if KB is disabled, unconfigured, the provider isn't
+		// found, or it doesn't support embeddings.
+		var kbService operator.KnowledgeBase
+		if cfg.KB.Enabled && cfg.KB.Provider != "" && cfg.KB.Model != "" && vectorStore != nil {
+			if p, ok := registry.Get(cfg.KB.Provider); ok {
+				if emb, ok := p.(provider.EmbeddingProvider); ok {
+					kbService = kb.New(vectorStore, emb, cfg.KB.Model, cfg.KB.DocPrefix, cfg.KB.QueryPrefix, cfg.KB.TopK)
+				} else {
+					slog.Warn("kb.provider does not support embeddings; operator memory disabled", "provider", cfg.KB.Provider)
+				}
+			} else {
+				slog.Warn("kb.provider not found in registry; operator memory disabled", "provider", cfg.KB.Provider)
+			}
+		}
+
 		var opErr error
 		op, opErr = operator.New(operator.Config{
 			Runtime:                rt,
@@ -406,6 +428,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 			PromptEngine:           promptEngine,
 			DefaultProvider:        defaultProvider,
 			DefaultModel:           defaultModel,
+			KB:                     kbService,
 			LifetimeCtx:            svc.Ctx(),
 			ProviderID:             cfg.Operator.Provider,
 			ContextWindows:         ctxWindows,

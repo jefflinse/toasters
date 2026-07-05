@@ -78,6 +78,19 @@ type KBConfig struct {
 	// TopK is the number of nearest-neighbor results returned by a semantic
 	// search query.
 	TopK int `mapstructure:"top_k"`
+	// DocPrefix is prepended to content before embedding it for storage
+	// (Remember/Insert). e.g. "search_document: " for nomic-embed models,
+	// which are trained on task-prefixed asymmetric retrieval pairs. Empty
+	// means no prefix is applied — the right default for models that were
+	// not trained with task prefixes.
+	DocPrefix string `mapstructure:"doc_prefix"`
+	// QueryPrefix is prepended to a query before embedding it for search
+	// (Recall/Search). e.g. "search_query: " for nomic-embed models. Empty
+	// means no prefix is applied. DocPrefix and QueryPrefix MUST match
+	// whatever the stored vectors were embedded with — changing either after
+	// facts have been written makes existing vectors incomparable to new
+	// queries (and vice versa).
+	QueryPrefix string `mapstructure:"query_prefix"`
 }
 
 // MCPServerConfig holds configuration for a single MCP server.
