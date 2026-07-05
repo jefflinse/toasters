@@ -51,6 +51,12 @@ func Execute() error {
 }
 
 func runTUI(cmd *cobra.Command, _ []string) error {
+	// Past flag parsing now: any error returned below is a runtime failure
+	// (server unreachable, a Bubble Tea "read /dev/tty" tty error, etc.), not
+	// command misuse — so don't let cobra dump the full usage block on top of
+	// it. Genuine bad-flag errors happen before RunE and still show usage.
+	cmd.SilenceUsage = true
+
 	config.BindFlags(cmd)
 
 	configDir, err := config.Dir()

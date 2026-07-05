@@ -82,6 +82,10 @@ func isLoopbackAddr(addr string) bool {
 }
 
 func runServe(cmd *cobra.Command, args []string) error {
+	// Past flag parsing: errors below are runtime failures (bind failure,
+	// bootstrap error, etc.), not misuse — don't dump usage on top of them.
+	cmd.SilenceUsage = true
+
 	config.BindFlags(cmd)
 
 	if !isLoopbackAddr(serveAddr) {
