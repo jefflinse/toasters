@@ -42,6 +42,8 @@ belong to them.
 
 {{ task.siblings }}
 
+{{ instructions.job-notes }}
+
 {{ instructions.stop-and-request-if-unclear }}
 
 {{ instructions.call-complete }}

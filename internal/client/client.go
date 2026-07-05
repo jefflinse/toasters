@@ -38,6 +38,7 @@ type RemoteClient struct {
 	sessions    *remoteSessionService
 	events      *remoteEventService
 	system      *remoteSystemService
+	knowledge   *remoteKnowledgeService
 }
 
 // Option configures a RemoteClient.
@@ -102,6 +103,7 @@ func New(baseURL string, opts ...Option) (*RemoteClient, error) {
 	rc.sessions = &remoteSessionService{c: rc}
 	rc.events = &remoteEventService{c: rc}
 	rc.system = &remoteSystemService{c: rc}
+	rc.knowledge = &remoteKnowledgeService{c: rc}
 
 	return rc, nil
 }
@@ -135,6 +137,10 @@ func (c *RemoteClient) Events() service.EventService { return c.events }
 // System returns the sub-interface for health checks, model listing, and
 // MCP server status.
 func (c *RemoteClient) System() service.SystemService { return c.system }
+
+// Knowledge returns the sub-interface for browsing a job's notes (the
+// Knowledge screen's read path).
+func (c *RemoteClient) Knowledge() service.KnowledgeService { return c.knowledge }
 
 // ---------------------------------------------------------------------------
 // OperatorService
@@ -708,4 +714,38 @@ func (s *remoteSystemService) Metrics(ctx context.Context) (service.MetricsRepor
 		return service.MetricsReport{}, fmt.Errorf("get metrics: %w", err)
 	}
 	return wireMetricsReportToService(w), nil
+}
+
+// ---------------------------------------------------------------------------
+// KnowledgeService
+// ---------------------------------------------------------------------------
+
+type remoteKnowledgeService struct{ c *RemoteClient }
+
+func (s *remoteKnowledgeService) ListJobNotes(ctx context.Context, jobID string) ([]service.NoteMeta, error) {
+	resp, err := s.c.http.get(ctx, fmt.Sprintf("/api/v1/jobs/%s/notes", url.PathEscape(jobID)))
+	if err != nil {
+		return nil, fmt.Errorf("list job notes: %w", err)
+	}
+	pr, err := decodeResponse[paginatedResponse[wireNoteMeta]](resp)
+	if err != nil {
+		return nil, fmt.Errorf("list job notes: %w", err)
+	}
+	notes := make([]service.NoteMeta, 0, len(pr.Items))
+	for _, w := range pr.Items {
+		notes = append(notes, wireNoteMetaToService(w))
+	}
+	return notes, nil
+}
+
+func (s *remoteKnowledgeService) ReadJobNote(ctx context.Context, jobID, id string) (string, error) {
+	resp, err := s.c.http.get(ctx, fmt.Sprintf("/api/v1/jobs/%s/notes/%s", url.PathEscape(jobID), url.PathEscape(id)))
+	if err != nil {
+		return "", fmt.Errorf("read job note: %w", err)
+	}
+	w, err := decodeResponse[noteContentResponse](resp)
+	if err != nil {
+		return "", fmt.Errorf("read job note: %w", err)
+	}
+	return w.Content, nil
 }

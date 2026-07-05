@@ -260,6 +260,37 @@ type SessionWorkerSpawnMsg struct {
 	Error     string
 }
 
+// SessionKBMsg is sent when a worker's job_note_write/job_notes_search tool
+// finishes. Produced by the event consumer in response to a session.kb
+// event; scope/op/source/preview are a display side-channel attached to the
+// matching tool-call block, not fed back into LLM context.
+type SessionKBMsg struct {
+	SessionID string
+	Scope     string
+	Op        string
+	Source    string
+	Preview   string
+}
+
+// JobNotesLoadedMsg delivers the Knowledge screen's note list for one job,
+// produced by fetchJobNotesCmd. JobID lets stale responses (from a job
+// switch that happened while the request was in flight) be discarded.
+type JobNotesLoadedMsg struct {
+	JobID string
+	Notes []service.NoteMeta
+	Err   error
+}
+
+// JobNoteContentMsg delivers one note's full content for the Knowledge
+// screen, produced by fetchJobNoteCmd. ID lets a stale response (from a
+// selection change that happened while the request was in flight) be
+// discarded.
+type JobNoteContentMsg struct {
+	ID      string
+	Content string
+	Err     error
+}
+
 // SessionDoneMsg is sent when a worker session terminates.
 // Produced by the event consumer in response to a session.done event.
 type SessionDoneMsg struct {

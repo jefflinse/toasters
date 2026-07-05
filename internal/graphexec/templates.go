@@ -32,7 +32,7 @@ type TemplateConfig struct {
 	// under it are aliased into workspaceDir so leaked canonical paths in
 	// instructions and artifacts keep working inside the branch. Production
 	// wires this to Executor.buildToolExecutor.
-	ToolExecutorFor func(workspaceDir, workspaceBase string) runtime.ToolExecutor
+	ToolExecutorFor func(workspaceDir, workspaceBase, source string) runtime.ToolExecutor
 
 	// Model is the default model for all nodes.
 	Model string

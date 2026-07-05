@@ -137,6 +137,14 @@ func (m *Model) View() tea.View {
 		return v
 	}
 
+	// Knowledge screen takes over the full terminal.
+	if m.knowledge.show {
+		v := tea.NewView(m.renderKnowledge())
+		v.AltScreen = true
+		v.MouseMode = tea.MouseModeCellMotion
+		return v
+	}
+
 	showSidebar := m.shouldShowSidebar()
 
 	sidebarWidth := m.effectiveSidebarWidth()

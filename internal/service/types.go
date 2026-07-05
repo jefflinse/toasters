@@ -829,3 +829,19 @@ type HealthStatus struct {
 	Version string        // application version
 	Uptime  time.Duration // time since the service started
 }
+
+// ---------------------------------------------------------------------------
+// Knowledge (job notes) types
+// ---------------------------------------------------------------------------
+
+// NoteMeta describes one job note file (see docs/kb-design.md's "Write
+// model: immutable entries") without its content, for the Knowledge screen's
+// note list. Fetched via Knowledge().ListJobNotes; the full body comes from
+// Knowledge().ReadJobNote.
+type NoteMeta struct {
+	ID      string    // filename without the ".md" extension
+	Title   string    // derived from the note's first non-empty line
+	Source  string    // stamped source segment of the filename, if parseable ("" otherwise)
+	ModTime time.Time // note file's modification time
+	Size    int64     // note file's size in bytes
+}

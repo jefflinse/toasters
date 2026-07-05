@@ -216,7 +216,20 @@ func (m *mockService) Jobs() service.JobService               { return m.jobs }
 func (m *mockService) Sessions() service.SessionService       { return m.sessions }
 func (m *mockService) Events() service.EventService           { return m.events }
 func (m *mockService) System() service.SystemService          { return m.system }
+func (m *mockService) Knowledge() service.KnowledgeService    { return &mockKnowledgeService{} }
 func (m *mockService) Shutdown(ctx context.Context) error     { return nil }
+
+// mockKnowledgeService implements service.KnowledgeService; the integration
+// suite doesn't exercise the Knowledge screen's read path.
+type mockKnowledgeService struct{}
+
+func (m *mockKnowledgeService) ListJobNotes(_ context.Context, _ string) ([]service.NoteMeta, error) {
+	return nil, nil
+}
+
+func (m *mockKnowledgeService) ReadJobNote(_ context.Context, _, _ string) (string, error) {
+	return "", nil
+}
 
 // mockOperatorService implements service.OperatorService
 type mockOperatorService struct{}

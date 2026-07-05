@@ -414,6 +414,9 @@ func (m *mockEventSink) BroadcastSessionShellExec(sessionID string, se runtime.S
 func (m *mockEventSink) BroadcastSessionWorkerSpawn(sessionID string, ws runtime.WorkerSpawn) {
 	m.record(fmt.Sprintf("session_worker_spawn:%s:%s:%v", sessionID, ws.Role, ws.Failed))
 }
+func (m *mockEventSink) BroadcastSessionKBNote(sessionID string, kb runtime.KBNote) {
+	m.record(fmt.Sprintf("session_kb_note:%s:%s:%s", sessionID, kb.Op, kb.Preview))
+}
 
 func TestExecutor_Execute(t *testing.T) {
 	cfg, _ := templateConfig(t, [][]provider.StreamEvent{
@@ -1039,8 +1042,8 @@ func TestExecutor_BuildToolExecutor_ScopedPerTask(t *testing.T) {
 
 	executor := NewExecutor(ExecutorConfig{})
 
-	execA := executor.buildToolExecutor(dirA, dirA)
-	execB := executor.buildToolExecutor(dirB, dirB)
+	execA := executor.buildToolExecutor(dirA, dirA, "test")
+	execB := executor.buildToolExecutor(dirB, dirB, "test")
 
 	readArgs := json.RawMessage(`{"path":"marker.txt"}`)
 	resultA, err := execA.Execute(context.Background(), "read_file", readArgs)
@@ -1264,7 +1267,7 @@ func TestBuildToolExecutor_AliasesCanonicalWorkspaceIntoBranch(t *testing.T) {
 	iso := t.TempDir()  // isolated branch copy
 
 	executor := NewExecutor(ExecutorConfig{})
-	exec := executor.buildToolExecutor(iso, base)
+	exec := executor.buildToolExecutor(iso, base, "test")
 
 	args, _ := json.Marshal(map[string]any{
 		"path":    filepath.Join(base, "backend", "main.go"),

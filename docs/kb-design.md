@@ -1,38 +1,67 @@
-# Knowledge Base (shared vector memory) — design
+# Knowledge Base — design
 
-Status: **proposal** (2026-07-03). Two governance decisions are still open — see
-[Open decisions](#open-decisions). Defaults below reflect the recommended choices.
+Status: **proposal**, revised 2026-07-03 after design feedback. This revision
+introduces the three-scope model and the **storage split** (files for job scope,
+vectors for system/user) that supersedes the earlier vector-for-everything design.
+The near-term execution plan (job notes first) lives in the plan file
+`~/.claude/plans/linear-plotting-feigenbaum.md`; this doc is the authoritative
+design it points back to.
 
 ## Motivation
 
 Today a worker's only memory is its own conversation context; when a graph node
-finishes, what it learned evaporates. Nothing is shared across a fleet mid-job,
-and nothing survives a job. The knowledge base gives the orchestrator a durable,
-searchable memory that stateless workers reach through tool calls — a direct
-extension of the project's spine: **Go owns the state; the LLM is a stateless
-tool invoked with accumulated context.** A KB entry is state Go owns; retrieval
-is a pure function of a query embedding.
+finishes, what it learned evaporates. Nothing is shared across a fleet mid-job, and
+nothing survives a job. The Knowledge Base gives the orchestrator durable,
+inspectable memory that stateless workers reach through tool calls — a direct
+extension of the project's spine: **Go owns the state; the LLM is a stateless tool
+invoked with accumulated context.**
 
-Two scopes:
+## Scopes
 
-- **`job`** — shared working memory for one fleet. Workers on job J write findings
-  and read each other's, without threading everything through the operator.
-- **`global`** — institutional memory that survives jobs (conventions, resolved
-  gotchas, environment facts).
+Three scopes, each with a distinct owner, audience, and lifetime:
 
-A worker in job J searching sees **global + job-J entries only**. Other jobs are
-invisible — that isolation boundary is the containment guarantee.
+| Scope | Written by | Read by | Lifetime |
+|---|---|---|---|
+| **system** | Go (auto-populated) | operator | as long as the fact holds |
+| **user** | human (Knowledge screen) + operator (promotion) | operator **and workers** | durable, survives jobs |
+| **job** | workers (their own job) | workers (their own job) + operator | with the job workspace |
 
-## Non-goals (v1)
+- **system** — what toasters itself, independent of the user, remembers about the
+  running system so the operator can give a better experience: available
+  providers/models, defined roles, endpoints, hardware/context limits, environment
+  facts. **Go-populated and read-only to the LLMs** — the operator reads it to reason
+  about its own capabilities; nothing an LLM says writes here.
+- **user** — durable facts *the user* wants to persist beyond any job: instructions,
+  heuristics, preferences, conventions. Authored by the human (via the Knowledge
+  screen) or promoted by the operator from a job note. Read by the operator **and by
+  workers** (heuristics/instructions are often exactly what a worker needs).
+- **job** — shared working memory for one fleet. Workers on job J write findings and
+  read each other's, without threading everything through the operator. Isolated:
+  job J never sees job K's notes.
 
-- Approximate-nearest-neighbor indexes (HNSW/IVF). Brute-force cosine over the
-  full candidate set is sub-millisecond at the thousands-of-vectors scale we
-  operate at; ANN is a later optimization gated on real volume.
-- Cross-provider embedding portability. Entries are ranked only against the
-  current embedding model (see [Model changes](#embedding-model-changes)).
-- Semantic dedup. v1 dedups on exact content hash only.
-- A CGo / `sqlite-vec` dependency. The pure-Go `modernc.org/sqlite` build is a
-  hard constraint; vectors are ranked in Go, not SQL.
+## Storage model (the key decision)
+
+Scope drives storage — they are **not** one mechanism:
+
+- **system + user → a system-wide vector store** (semantic search). These are
+  low-churn, durable, and benefit from embedding recall. Being system-wide (not
+  per-job) is what makes a pluggable `VectorStore` backend worthwhile.
+- **job → Markdown files in the job workspace.** Not vectors. This is deliberate:
+  - **Portable** — copy a job workspace to another machine running a *different or
+    absent* embedding model and the notes still work. Vectors don't travel; files do.
+  - **Model-agnostic & non-brittle** — job memory isn't tied to an embedding model's
+    identity or dimensionality.
+  - **Inspectable & organizable** — plain `.md` you can `cat`, grep, and diff.
+  - **Concurrency-safe** — see the write model below; independent files sidestep the
+    single-writer SQLite contention that a hot per-worker write path would create.
+
+**Hybrid job retrieval (best of both).** Files are always the source of truth.
+*If* an embedding model is configured, job notes are *also* encoded into a local
+vector index for semantic recall, with structural (list/read/grep) search as the
+always-available fallback. The index is a **rebuildable cache** over the files — it
+doesn't need to travel (re-encode on the new machine, or fall back to structural).
+This is an additive upgrade to the same `job_notes_search` tool, not a rewrite, and
+lands **after** the file-based version proves out.
 
 ## Relationship to the typed graph
 
@@ -49,114 +78,103 @@ must produce its schema-valid output whether or not the KB returned anything (se
 [Failure behavior](#failure-behavior) — a KB outage degrades to "memory
 unavailable", and the node proceeds on its typed inputs). The KB does not wire
 nodes together, does not gate edges, and carries no authority. It is opt-in
-per-role, and its value is measured, not assumed (see the eval in Phase 2). If the
-eval shows it doesn't help, it costs nothing to leave a role's `kb_*` tools
-un-advertised. In short: typed handoff is the skeleton; the KB is optional
-scratch/reference memory hanging off it, not a second, untyped dataflow graph.
+per-role, and its value is measured, not assumed (see the eval). If the eval shows
+it doesn't help, it costs nothing to leave a role's `kb_*` tools un-advertised. In
+short: typed handoff is the skeleton; the KB is optional scratch/reference memory
+hanging off it, not a second, untyped dataflow graph.
 
-## Observability (events)
+**Kill switch.** The extension of "advisory, never the contract" is that the whole
+feature can be turned off. `kb.enabled` (config, default **on** for now during
+build/testing) simply stops advertising the KB tools and hides the Knowledge
+screen. toasters runs identically with the KB disabled.
 
-A worker reading or writing *shared cross-worker memory* is at least as
-display-worthy as a shell command, and the codebase already surfaces tool activity
-through display side-channels that flow into the service event stream / SSE
-(`FileChangeNotifier`, `ShellExecNotifier`, `WorkerSpawnNotifier` in
-`internal/runtime/tools.go`). KB activity follows the same pattern: a `KBNotifier`
-emits a structured `session.kb` event on write (scope, job, source, content
-preview) and optionally on search (query, hit count). This feeds the `/kb` browser,
-lets the operator see writes land (and is one way the operator/TUI learns which
-entries exist to promote — ties into B2), and honors the project's "emit through
-the service, not a side channel" convention rather than leaving KB activity as an
-undifferentiated raw tool-result line.
+## Observability
 
-## Architecture
+KB activity is surfaced through the service event stream, following the project's
+display side-channel convention (`FileChangeNotifier`, `ShellExecNotifier`,
+`WorkerSpawnNotifier` in `internal/runtime/tools.go`) — never a raw tool-result
+line. A `KBNotifier` emits a structured **`session.kb`** event on **both write and
+query** (scope, job, op, source, preview/hit-count). This lets the operator and the
+TUI see memory activity as it happens, and feeds the Knowledge screen.
 
-Everything hangs off integration points that already exist (anchors are current
-as of this writing):
+**Knowledge screen.** A full-screen TUI view (mirroring the `ctrl+g` nodes screen,
+bound to a free key such as `ctrl+k`) with two parts: a browsable/editable view of
+**user + system facts** (the vector store — and the place the human *authors* user
+facts and promotes job notes upward), and a read/inspect view of the current job's
+**notes** (the files). This screen is the human's write surface for user scope,
+which closes the governance loop. Because the TUI is a remote client, it reads notes
+through a **service read path** (server reads the files/store, returns DTOs), not by
+touching the filesystem directly.
 
-| Piece | Location | Mirrors |
-|---|---|---|
-| Embeddings capability | `internal/provider`: `EmbeddingProvider` iface + `*OpenAIProvider.Embed()` | `fetchOpenAIModels` (`openai.go:510`) |
-| Embedder (registry resolution) | `internal/kb` | provider lookup at `runtime.go:107` |
-| Store + schema | `internal/db/kb_store.go` + `migrations/018_kb.sql` | `graph_checkpoints` (`checkpoints.go:22`) |
-| Cosine ranking | `internal/kb` | — |
-| Worker tools | `kb_search`/`kb_write` in `CoreTools` | `report_task_progress` (`tools.go:247`) |
-| Operator tools | `kb_write_global`/`kb_promote` in `internal/operator` | operator tool set |
-| Config | `KB KBConfig` on `Config` | `OperatorConfig` (`config.go:92`) |
+---
 
-### Data model
+# Part A — Job notes (files) · built first
 
-`migrations/018_kb.sql`:
+The lowest-risk, most portable piece; no embeddings required. This is the first
+epic (see plan file for the PR-by-PR breakdown).
 
-```sql
-CREATE TABLE IF NOT EXISTS kb_entries (
-    id              TEXT PRIMARY KEY,
-    scope           TEXT NOT NULL,            -- 'job' | 'global'
-    job_id          TEXT,                     -- set iff scope='job'
-    content         TEXT NOT NULL,
-    content_hash    TEXT NOT NULL,            -- dedup key (sha256 of content)
-    embedding       BLOB NOT NULL,            -- little-endian float32[dim]
-    dim             INTEGER NOT NULL,
-    model           TEXT NOT NULL,            -- embedding model that produced it
-    source_session  TEXT,                     -- provenance (Go-stamped)
-    source_role     TEXT,
-    metadata_json   TEXT,                     -- optional model-supplied tags
-    created_at      TIMESTAMP NOT NULL,
-    ttl_expires_at  TIMESTAMP                 -- NULL = never expires (global)
-);
-CREATE INDEX IF NOT EXISTS idx_kb_scope_job ON kb_entries(scope, job_id);
--- COALESCE(job_id,'') because global rows have job_id=NULL, and SQLite treats
--- NULLs as distinct in a UNIQUE index — without this, global dedup silently
--- never fires (review S5).
-CREATE UNIQUE INDEX IF NOT EXISTS idx_kb_dedup
-    ON kb_entries(scope, COALESCE(job_id,''), content_hash);
-```
+### Location
 
-`scope`, `job_id`, `source_session`, `source_role`, `model`, `created_at`, and
-`ttl_expires_at` are **always set by Go**, never by the model. `metadata_json`
-is the only model-influenced column and is treated as untrusted display data.
+Notes live at a **constant relative path under `workDir`**: `.toasters/notes/`.
+`workDir` already *is* the per-job directory `<workspace_dir>/<job-uuid>/` (created
+at `internal/operator/system_tools.go:337`), shared by every worker on the job. The
+path is **not** derived from `ct.jobID` — that's empty in the graph-node path
+(`internal/graphexec/executor.go:341` never sets session context); the fixed subdir
+resolved through `resolvePath` lands in whatever per-job `workDir` is active. The
+dot-namespace keeps notes out of the worker's actual deliverables and leaves room
+for a co-located `.toasters/notes.db` vector index later.
 
-### Store (`internal/db/kb_store.go`)
+### Write model: immutable entries
 
-Mirrors the checkpoint pattern — a thin view over the shared single-writer
-`*sql.DB`, all SQL local to the file:
+Each write mints a **new** timestamped, role-stamped file, so concurrent fleet
+writers never clobber each other:
 
-```go
-type KBStore struct { db *sql.DB }
-func (s *SQLiteStore) KBStore() *KBStore { return &KBStore{db: s.db} }
+`<UTC-yyyymmdd-hhmmss.mmm>-<role-or-workerid>-<slug>-<6hex>.md`
 
-func (k *KBStore) Insert(ctx, entry KBEntry) error            // ON CONFLICT dedup no-op
-func (k *KBStore) Candidates(ctx, scope, jobID, model) ([]KBEntry, error) // filtered rows for ranking
-func (k *KBStore) PurgeExpired(ctx, now) (int, error)          // lazy TTL sweep
-func (k *KBStore) DeleteByJob(ctx, jobID) error                // for the purge-on-completion option
-```
+(sub-second + random suffix guarantees uniqueness). `slug` = sanitized title.
+Notes are immutable — to revise, write a new one; retrieval surfaces the latest.
 
-`Candidates` returns rows matching `(scope='global' OR job_id=?)`, `model=<current>`,
-and `(ttl_expires_at IS NULL OR ttl_expires_at > now)`. Ranking happens in Go.
+### Tools (`CoreTools`)
 
-### Ranking (`internal/kb`)
+Three dedicated tools (not raw file access — the tool abstraction is what gives us
+control, events, and the future semantic upgrade), mirroring existing file
+handlers and reusing the `resolvePath` (`internal/runtime/tools.go:518`) confinement
+choke point and `displayPath` (`:591`, no absolute-path leaks):
 
-```go
-func rank(query []float32, cands []KBEntry, k int) []Scored
-```
+- **`job_note_write(title, content)`** — mirror `writeFile` (`:785`); creates the
+  stamped file; fires `KBNotifier`; returns `note saved as <id>`.
+- **`job_notes_search(query, top_k?)`** — structural now (grep over `.toasters/notes/`,
+  mirroring `grepFiles` `:1019`); returns **top-k (default 5), snippet-truncated**
+  `{id, title, snippet, age}` to stay under the 8KB `maxToolResultBytes` cap
+  (`internal/runtime/session.go:281`). Empty query → most-recent (acts as list).
+  Later: vector-rank when an embedding model is configured — same tool.
+- **`job_note_read(id)`** — mirror `readFile` (`:725`); `resolvePath` rejects
+  traversal in `id`.
 
-Decode each `embedding` BLOB to `[]float32`, cosine-similarity against the query,
-partial-sort top-k. Embeddings are L2-normalized at write time so cosine is a dot
-product. Pure, table-testable, no I/O.
+Registered in the `Execute` switch (`:223`) and `Definitions()` (`:315`), gated on
+`kb.enabled`; included in the base tool set every worker role gets
+(`toolsForRole`, `internal/runtime/nodes.go:~454`), deniable per-role via the
+existing denylist.
 
-`rank` **must assert `len(query) == entry.dim`** and skip (or error on) mismatches
-(review S4): model-name filtering catches a renamed model but not same-name /
-different-dim (re-quant, two servers advertising `nomic-embed-text` at different
-dims). A length mismatch otherwise panics or silently produces garbage similarity.
+### Lifecycle
 
-Decoded **global** embeddings are cached in memory (invalidated on any global
-write) so every search across the fleet doesn't re-load and re-decode the full
-global BLOB set from the single-writer connection (review S2). Job candidate sets
-are small and loaded per search.
+Job notes are files in the job workspace, so their lifetime **follows the
+workspace** — they persist as long as the job dir exists and travel when it's
+copied. No separate purge machinery. (Fan-out caveat: branch workers run in isolated
+workspace copies, so a branch's notes are branch-local until the winning branch is
+promoted back — normal file semantics via `internal/workspace`.)
 
-### Embeddings (`internal/provider`)
+---
 
-The mycelium `Provider` interface is chat-only, so embeddings ride on a new
-optional interface implemented by the concrete OpenAI-compatible provider:
+# Part B — Vector store (system + user) · later epic
+
+Semantic memory for the two durable scopes. Depends on an embedding capability that
+doesn't exist yet.
+
+### Embeddings seam (`internal/provider`)
+
+The mycelium `Provider` interface is chat-only, so embeddings ride on a new optional
+interface implemented by the concrete OpenAI-compatible provider:
 
 ```go
 type EmbeddingProvider interface {
@@ -164,197 +182,151 @@ type EmbeddingProvider interface {
 }
 ```
 
-`*OpenAIProvider.Embed` POSTs to `embeddingsURL(endpoint)` (a new helper mirroring
-`modelsURL`, producing `/v1/embeddings`) with `Authorization: Bearer`, exactly like
-`fetchOpenAIModels`.
+`*OpenAIProvider.Embed` POSTs to `/v1/embeddings` (a helper mirroring `modelsURL`),
+like `fetchOpenAIModels` (`openai.go:510`).
 
-**Resolution through the scheduler-wrapped registry (corrected — see B1 in the
-review).** Every provider in the registry is wrapped in `*provider.Scheduler`
-(`cmd/serve.go:563`), and `registry.Get` returns the chat-only `Provider`
-interface. A type-assert straight to `EmbeddingProvider` therefore **always
-fails** — the concrete `*OpenAIProvider` is unreachable behind the scheduler. So:
+**Resolution through the scheduler-wrapped registry (review B1).** Every provider is
+wrapped in `*provider.Scheduler` (`cmd/serve.go:563`); `registry.Get` returns the
+chat-only `Provider`, so a direct `.(EmbeddingProvider)` assertion **always fails**.
+Fix: `*Scheduler` gains an `Embed()` that acquires a slot and proxies to
+`s.inner.(EmbeddingProvider)`, so `registry.Get(name).(EmbeddingProvider)` succeeds.
+The embed model is configured as **its own provider entry** (`KBConfig.Provider`) —
+own endpoint/model, own scheduler + semaphore — so embed calls contend only with
+other embeds, never with worker/operator generation on a single-slot local backend.
+Embeddings stay local (`nomic-embed-text` etc.), zero cloud dependency.
 
-- `*Scheduler` gains an `Embed()` method that **acquires a scheduling slot** and
-  proxies to `s.inner.(EmbeddingProvider)` (type-asserting the wrapped provider,
-  which the scheduler *can* reach). `*Scheduler` thus implements `EmbeddingProvider`,
-  and `registry.Get(name).(EmbeddingProvider)` succeeds.
-- To avoid head-of-line blocking against chat generation on a single-slot local
-  backend, **the embedding model is configured as its own provider entry** —
-  `KBConfig.Provider` names a dedicated provider (its own endpoint/model, its own
-  scheduler + semaphore). Embed calls then contend only with other embed calls,
-  never with worker/operator generation. This is the deliberate capacity choice:
-  respect the semaphore (don't fire unbounded POSTs at a single slot) but isolate
-  the embed workload onto its own scheduler so the cost is bounded and off the
-  generation path.
+**Configuration (how the embed model is selected).** Explicit config, **not
+auto-detected** — the OpenAI-compatible `/v1/models` endpoint carries no
+embedding-capability flag, so discovery is unreliable. `kb.provider` names a
+provider entry (same registry as operator/workers); `kb.model` names the embedding
+model. On startup, if both are set, a one-shot capability probe POSTs to
+`/v1/embeddings` and **logs a warning if it fails**, so misconfig surfaces at boot,
+not at first `kb_search`. Unset ⇒ vector features off, job notes still work
+structurally. (Optional convenience: if `provider` set but `model` empty, pick the
+first `/models` id matching an embed heuristic and log the choice.)
 
-Embeddings stay **local** — `nomic-embed-text` or similar via LM Studio/Ollama —
-with zero cloud dependency, consistent with the local-model campaign. If the
-configured provider doesn't implement `EmbeddingProvider`, or `KBConfig` is unset,
-the KB tools are simply not advertised (feature is opt-in). Runtime failures
-(provider down, model not loaded) are handled per [Failure behavior](#failure-behavior),
-not silently swallowed.
+### Store — behind an interface (backend-swappable)
+
+Because the vector store is **system-wide** (not per-job), it's worth an interface so
+the SQLite default can give way to a real vector DB later:
+
+```go
+type VectorStore interface {
+    Insert(ctx, entry VectorEntry) error
+    Search(ctx, scope, queryVec []float32, k int) ([]Scored, error)
+    // ...
+}
+```
+
+Default impl: pure-Go **brute-force cosine over float32 BLOBs** in the shared
+`toasters.db` (`internal/db`, mirroring the `graph_checkpoints` thin-view pattern) —
+**no CGo / sqlite-vec** (hard `modernc.org/sqlite` constraint). Sub-millisecond at
+the thousands-of-vectors scale of durable facts. Decoded embeddings are cached in
+memory (invalidated on write) so searches don't re-scan the BLOB set on the
+single-writer connection (review S2). `rank` asserts `len(query) == entry.dim` and
+skips mismatches (review S4). Entries are Go-stamped with scope/source/model/time;
+`model` is stored so a model swap filters cleanly.
 
 ### Config
 
 ```go
 type KBConfig struct {
+    Enabled  bool   `mapstructure:"enabled"`  // kill switch, default true
     Provider string `mapstructure:"provider"` // dedicated embed provider (own scheduler)
     Model    string `mapstructure:"model"`    // e.g. "nomic-embed-text"
     TopK     int    `mapstructure:"top_k"`    // default 5
 }
 ```
 
-Added to `Config` with `viper.SetDefault`s. When `Provider`/`Model` are unset the
-KB tools are simply not advertised — the feature is opt-in.
+`Enabled` gates the whole feature (job notes included). `Provider`/`Model` gate the
+vector features specifically — unset ⇒ system/user semantic search and the hybrid
+job index are simply not available; job notes still work structurally.
 
-## Tool surface
+### Tool & governance surface
 
-### Worker tools (`CoreTools`)
+- **Workers** — `kb_search(query)` reads **user** facts (+ their own job's notes via
+  the hybrid path). Workers **cannot** write user or system scope.
+- **Operator** — `kb_search(query, scope?)` reads any scope (returns ids);
+  `kb_write_user(content)` authors durable user facts; `kb_promote(id)` copies a
+  vetted job note up to user scope. (The `id` in search results is what makes
+  promotion reachable — review B2.)
+- **system** — Go-populated, read-only to all LLMs.
+- **Human** — authors/edits user facts via the Knowledge screen.
 
-- **`kb_search(query string, top_k? int)`** — available to all workers. Embeds the
-  query, ranks global + current-job candidates, returns top-k. Each result is
-  `{id, content(truncated ~1.5KB), score, source_role, age}`. With k=5 the payload
-  is ~7.5KB, under the 8KB `maxToolResultBytes` cap (`session.go:281`) by design —
-  no exemption needed, and bounded context is what local models want anyway. The
-  `id` is included so a promotion flow has something to reference (see B2).
-- **`kb_write(content string, tags? []string)`** — writes a **job-scoped** entry,
-  stamped with `ct.jobID`/`ct.sessionID`/role by Go. **Rejected when `ct.jobID == ""`**
-  (same guard pattern as job-bound progress at `tools.go:247`). Exact-content-hash
-  duplicates are a silent no-op. Can be denied per-role via the existing denylist.
+Governance: **operator-only writes to durable scope** (workers never write user or
+system). A rogue worker can pollute only its own job's notes. Two caveats carried
+from review: **user reads are shared across all jobs/workers** (so the *write* gate
+is the only barrier — promotion must be deliberate), and any model-supplied metadata
+is treated as untrusted display text, never as an authority signal.
 
-### Operator tools (`internal/operator`) — global governance
+### Value gate (eval)
 
-- **`kb_search(query, scope?)`** — operator-facing read that returns entry **ids**
-  across global + any job (the operator isn't confined to one job's scope). This is
-  the mechanism by which the operator *discovers* an id to promote — without it,
-  `kb_promote` has no reachable argument (see B2).
-- **`kb_write_global(content string)`** — operator-authored institutional memory.
-- **`kb_promote(entry_id string)`** — copies a vetted job entry (id from the search
-  above, or from the `/kb` TUI) into global scope.
+Before building governance surface, a **minimal eval** (fixed queries,
+known-relevant entries, precision@k) establishes that injecting top-k hits into a
+small-context local loop *helps* rather than crowding out task context. Retrieval
+quality is the go/no-go, not deferred as "tuning."
 
-This is the [default governance](#open-decisions): workers can never write global
-directly; a rogue or confused worker can pollute only its own job's scratch memory.
-Global memory is curated by the operator or a human via the `/kb` browser. Note the
-two containment caveats surfaced in review: **global reads are shared across all
-jobs** (a poisoned global entry reaches every worker — so the *write* gate is the
-only barrier, and promotion must be deliberate), and **`metadata_json` is
-model-supplied** (treated as untrusted display text, never as a scope/authority
-signal).
+---
 
-## Lifecycle & growth control
-
-**Revised default (review): job scope is pure scratch.** `DeleteByJob` fires on a
-job's terminal transition — **completed *or* cancelled** — using hook points that
-already exist. No `ttl_expires_at` column, no lazy-purge DELETE scan on the write
-path (which would add latency on the single-writer connection). This is simpler,
-bounds growth trivially, and cleanly handles cancellation (which the TTL variant
-left lingering for the full TTL window).
-
-TTL / persist-for-forensics becomes a **later** option, added only if real demand
-for post-job inspection appears — at which point it's an additive column, not a
-v1 commitment. Global entries never expire regardless.
-
-### Failure behavior
+## Failure behavior
 
 The embedding provider being unavailable (backend busy, model evicted from VRAM) is
-the *common* case on a local box, not an edge — so it's handled explicitly, not
-swallowed:
+the *common* case on a local box, not an edge:
 
-- **`kb_write` failure** must not silently lose a finding. The write is buffered and
-  retried (bounded), and a failure after retries surfaces to the operator via a KB
-  event (below) rather than vanishing.
-- **`kb_search` failure** returns an explicit "memory unavailable" result (not an
-  empty result that reads as "nothing known"), so a node's behavior when the KB is
-  down is legible rather than a silent non-deterministic divergence.
-- Neither failure aborts the worker; the graph's typed edges remain the correctness
-  contract (see [Relationship to the typed graph](#relationship-to-the-typed-graph)).
+- **Writes** must not silently lose data. Job-note writes are just files (no embed on
+  the write path in the file model), so they're durable regardless; vector-index
+  encoding is best-effort and retried, and the file remains the source of truth.
+- **Search** returns an explicit "memory unavailable" (not an empty result that reads
+  as "nothing known"), and the hybrid path falls back to structural grep so job
+  search keeps working even with no embedder.
+- Neither aborts the worker; typed edges remain the correctness contract.
 
-## Poisoning & confinement (the real risk)
+## Sequencing
 
-Retrieval quality is a tuning problem; **write integrity is a security problem**,
-so the design spends its complexity there:
-
-1. **Go owns provenance.** Scope, job, session, role, model, timestamps are all
-   Go-stamped. The model cannot claim a different scope or forge authorship.
-2. **Workers can't reach global** (default). Blast radius of a bad worker write =
-   its own job's TTL'd scratch memory.
-3. **Job isolation on read.** Job J never sees job K's entries, so cross-job
-   contamination is impossible even before governance.
-4. **Model filtering on read.** Entries from a different embedding model are
-   excluded from ranking, so a model swap can't surface garbage-similarity hits.
-
-## Phasing
-
-Each phase is independently shippable and testable; 0–1 have no user-visible
-surface (lowest risk), following the project's per-batch branch → test → PR flow.
-
-- **Phase 0 — Embeddings.** `EmbeddingProvider` + `*OpenAIProvider.Embed()` +
-  `*Scheduler.Embed()` proxy, `internal/kb` embedder resolving a dedicated embed
-  provider from the registry, `KBConfig`. Tests hit a fake `/v1/embeddings` server.
-- **Phase 1 — Store + ranking.** `018_kb.sql` (no TTL column), `KBStore`
-  (`Insert`/`Candidates`/`DeleteByJob`), cosine `rank` with the dim-guard and
-  global-embedding cache. Unit tests.
-- **Phase 2 — Worker tools + eval.** `kb_search` + job-scoped `kb_write` in
-  `CoreTools`, `KBNotifier` events, result formatting under the cap, denylist
-  gating, `DeleteByJob` on job-terminal. **Plus a minimal eval harness** (fixed
-  queries, known-relevant entries, precision@k) so retrieval value is *falsifiable*
-  before more surface is built — the core question is whether injecting top-k hits
-  into a small-context local loop helps or crowds out task context (review S6).
-- **Gate:** only proceed past here if the Phase-2 eval shows the core loop earns
-  its keep. Retrieval quality is not deferred as "tuning" — it's the go/no-go.
-- **Phase 3 — Global governance.** `kb_write_global` / operator `kb_search` /
-  `kb_promote` operator tools. Built only after Phase 2 proves job-scoped memory
-  helps at all.
-- **Phase 4 — TUI `/kb` browser** (optional): inspect, prune, promote from the UI.
+1. **Job notes (files)** — Part A. Three PRs: tools → `session.kb` events → Knowledge
+   screen (+ service read path). See the plan file.
+2. **Vector store (system/user)** — Part B. Embeddings seam → `VectorStore` +
+   SQLite impl → operator/worker tools + governance → eval gate.
+3. **Hybrid job index** — encode job notes into a local vector index when an embed
+   model is configured; structural grep remains the fallback.
 
 ## Open decisions
 
-Two forks branch the schema/governance; recorded here with the recommended default
-and awaiting confirmation:
+1. **Durable-scope writes** — **RESOLVED: operator-only + promotion.** Workers never
+   write user/system; the human authors user facts via the Knowledge screen; the
+   operator promotes job notes upward.
+2. **Job-notes lifecycle** — **RESOLVED: follows the workspace** (notes persist in the
+   job dir, travel when copied, no separate purge). Larger workspace-management
+   changes are planned separately; this interim behavior is sufficient.
 
-1. **Global writes** — *default: operator-only + promotion.* Alternatives:
-   role-gated worker writes (trust moves into role definitions), or open writes
-   (rejected — poisoning risk on a 24/7 fleet).
-2. **Job-KB lifecycle** — *default (revised by review): pure scratch — `DeleteByJob`
-   on terminal state (completed or cancelled).* Alternatives: persist + TTL (adds a
-   column + purge scan; keeps a forensic window), or persist forever (durable
-   artifact, unbounded growth). TTL was the original default but is deferred as
-   additive rather than baked into the v1 schema.
+## Architecture review trail (2026-07-03)
 
-## Architecture review (2026-07-03)
+An independent architecture-critic pass on the *earlier* (vector-for-everything)
+design produced the findings below. The **storage split in this revision** (files
+for job, vectors only for durable system/user) dissolved several of them for the
+job scope — noted inline:
 
-An independent architecture-critic pass verified the doc's anchors and stress-tested
-the design. Its findings are folded into the sections above; recorded here as a
-trail:
-
-- **B1 (blocker, fixed):** the embedder could never resolve a provider — the registry
-  returns the scheduler-wrapped chat-only interface, so the `EmbeddingProvider`
-  assertion always failed. Fixed by proxying `Embed()` through `*Scheduler` and
-  running the embed model as its own provider entry. See [Embeddings](#embeddings-internalprovider).
-- **B2 (blocker, fixed):** the operator had no way to obtain an `entry_id` to
-  `kb_promote`. Fixed by adding `id` to search results and an operator-facing
-  `kb_search`. See [Operator tools](#operator-tools-internaloperator--global-governance).
-- **S1 (should-fix, addressed):** untyped shared memory reintroduces coupling the
-  typed graph removed — now justified explicitly in
+- **B1 (blocker, fixed):** embedder couldn't resolve a provider through the
+  scheduler-wrapped registry. Fixed via `*Scheduler.Embed()` + dedicated embed
+  provider. *Still applies* to the vector store (Part B).
+- **B2 (blocker, fixed):** operator had no `id` to promote. Fixed via ids in search
+  results + operator `kb_search`. *Still applies* to promotion.
+- **S1 (addressed):** untyped-memory-vs-typed-graph tension — justified in
   [Relationship to the typed graph](#relationship-to-the-typed-graph).
-- **S2 (should-fix, addressed):** single-writer serialization + unbounded global
-  re-scan → global-embedding in-memory cache; the risk is head-of-line blocking, not
-  races.
-- **S3 (should-fix, addressed):** embedding-provider-down is the common local case →
-  [Failure behavior](#failure-behavior).
-- **S4/S5 (should-fix, fixed in schema):** dim-guard in `rank`; `COALESCE(job_id,'')`
-  in the dedup index.
-- **S6 (should-fix, addressed):** retrieval value is unfalsifiable without an eval →
-  eval added to Phase 2 as the go/no-go gate.
-- **S7 (should-fix, addressed):** KB activity was invisible → `KBNotifier` events in
-  [Observability](#observability-events).
-- **Cut:** TTL machinery deferred (lifecycle above); global-governance surface gated
-  behind the Phase-2 eval.
+- **S2 (addressed / narrowed):** single-writer scan → in-memory embedding cache.
+  *Now scopes to the vector store only*; job writes are files, off the DB entirely.
+- **S3 (addressed):** embedder-down is the common local case →
+  [Failure behavior](#failure-behavior); job search degrades to structural grep.
+- **S4/S5 (narrowed):** dim-guard + dedup-index concerns *apply only to the vector
+  store now*; the file-based job scope has neither embeddings nor a dedup index (the
+  immutable-entry write model makes clobbering impossible by construction).
+- **S6 (addressed):** eval as the go/no-go gate before governance surface.
+- **S7 (addressed):** KB activity invisible → `session.kb` events on write **and**
+  query + the Knowledge screen.
 
 ## Library-extraction note
 
-If `internal/graphexec` is ever pulled out as a standalone OSS library, the KB
-should sit behind a small repository interface (like the checkpoint store) so the
-executor stays LLM- and storage-agnostic. The embedder already resolves through the
-provider registry, so it's decoupled from any specific model.
-```
+If `internal/graphexec` is ever pulled out as a standalone OSS library, the vector
+store should sit behind its `VectorStore` interface (already the plan) and job notes
+behind a small notes-repository interface, so the executor stays LLM- and
+storage-agnostic.

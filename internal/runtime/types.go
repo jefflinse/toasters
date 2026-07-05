@@ -73,6 +73,7 @@ type SessionEvent struct {
 	ShellExec   *ShellExec
 	WorkerSpawn *WorkerSpawn
 	Compaction  *CompactionEvent
+	KBNote      *KBNote
 	Error       error
 }
 
@@ -87,6 +88,7 @@ const (
 	SessionEventShellExec   SessionEventType = "shell_exec"
 	SessionEventWorkerSpawn SessionEventType = "worker_spawn"
 	SessionEventCompaction  SessionEventType = "compaction"
+	SessionEventKBNote      SessionEventType = "kb_note"
 	SessionEventDone        SessionEventType = "done"
 	SessionEventError       SessionEventType = "error"
 )
@@ -190,3 +192,21 @@ type WorkerSpawn struct {
 // WorkerSpawnNotifier receives WorkerSpawn notifications from CoreTools as a
 // display side-channel. See FileChangeNotifier for the ctx contract.
 type WorkerSpawnNotifier func(ctx context.Context, ws WorkerSpawn)
+
+// KBNote describes a job-note tool call (job_note_write or job_notes_search)
+// made by a worker. It exists for display, mirroring ShellExec/WorkerSpawn:
+// the model already sees the tool's own result text (the saved note's id, or
+// the search hits), so this side-channel carries only the structured
+// metadata — scope, operation, source, and a short preview — that the TUI's
+// Knowledge screen and fleet activity feed need. See docs/kb-design.md's
+// "Observability" section.
+type KBNote struct {
+	Scope   string // "job" for job notes; reserved for user/system scopes later
+	Op      string // "write" or "search"
+	Source  string // the worker's note-source label (see CoreTools.noteSource)
+	Preview string // write: title + id; search: query (or "list") + hit count
+}
+
+// KBNoteNotifier receives KBNote notifications from CoreTools as a display
+// side-channel. See FileChangeNotifier for the ctx contract.
+type KBNoteNotifier func(ctx context.Context, kb KBNote)

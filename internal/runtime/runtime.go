@@ -46,6 +46,13 @@ type Runtime struct {
 	// pointer and read it live at turn boundaries, so a /settings change
 	// applies to in-flight sessions without respawning them.
 	compactionThreshold atomic.Int32
+
+	// kbEnabled mirrors config.KBConfig.Enabled (the kb.enabled kill switch,
+	// see docs/kb-design.md) for the CoreTools built per-spawn below. Atomic
+	// for the same reason as compactionThreshold: read live by SpawnWorker,
+	// set once at startup via SetKBEnabled but safe to change without
+	// restarting in-flight sessions.
+	kbEnabled atomic.Bool
 }
 
 // New creates a new Runtime. store may be nil for in-memory only operation.
@@ -96,6 +103,14 @@ func (r *Runtime) CompactionThreshold() int {
 	return int(r.compactionThreshold.Load())
 }
 
+// SetKBEnabled wires the kb.enabled kill switch (config.KBConfig.Enabled)
+// into the runtime so worker sessions spawned afterward get the job-note
+// tools. Call once at startup with the resolved config value; safe to call
+// concurrently with SpawnWorker.
+func (r *Runtime) SetKBEnabled(enabled bool) {
+	r.kbEnabled.Store(enabled)
+}
+
 // SpawnWorker creates and starts a new worker session.
 func (r *Runtime) SpawnWorker(ctx context.Context, opts SpawnOpts) (*Session, error) {
 	// Validate mutually exclusive options.
@@ -144,6 +159,7 @@ func (r *Runtime) SpawnWorker(ctx context.Context, opts SpawnOpts) (*Session, er
 			WithStore(r.store),
 			WithSessionContext(id, opts.WorkerID, opts.JobID, opts.TaskID),
 			WithProvider(opts.ProviderName, opts.Model),
+			WithKBNotes(r.kbEnabled.Load()),
 		}
 		if promptEng != nil {
 			coreOpts = append(coreOpts, WithPromptEngine(promptEng))
@@ -192,6 +208,9 @@ func (r *Runtime) SpawnWorker(ctx context.Context, opts SpawnOpts) (*Session, er
 		})
 		core.SetWorkerSpawnNotifier(func(_ context.Context, ws WorkerSpawn) {
 			sess.emit(SessionEvent{SessionID: sess.id, Type: SessionEventWorkerSpawn, WorkerSpawn: &ws})
+		})
+		core.SetKBNoteNotifier(func(_ context.Context, kb KBNote) {
+			sess.emit(SessionEvent{SessionID: sess.id, Type: SessionEventKBNote, KBNote: &kb})
 		})
 	}
 

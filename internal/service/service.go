@@ -40,6 +40,10 @@ type Service interface {
 	// System returns the sub-interface for health checks, model listing, and
 	// MCP server status.
 	System() SystemService
+
+	// Knowledge returns the sub-interface for browsing a job's notes (the
+	// Knowledge screen's read path). See docs/kb-design.md.
+	Knowledge() KnowledgeService
 }
 
 // ---------------------------------------------------------------------------
@@ -277,6 +281,29 @@ type SystemService interface {
 	// statistics — the foundation for future auto-tuning. Read-only;
 	// returns a zero-value report (not an error) when no store is wired.
 	Metrics(ctx context.Context) (MetricsReport, error)
+}
+
+// ---------------------------------------------------------------------------
+// KnowledgeService
+// ---------------------------------------------------------------------------
+
+// KnowledgeService provides read-only access to a job's notes (the files a
+// job's workers write via the job_note_write tool, under
+// .toasters/notes/ in the job workspace — see docs/kb-design.md). It backs
+// the Knowledge screen's service read path: the TUI is a remote client and
+// cannot read the workspace filesystem directly, so the server reads the
+// files and returns DTOs.
+type KnowledgeService interface {
+	// ListJobNotes returns metadata for every note in the given job's notes
+	// directory, newest first. Returns an error wrapping ErrNotFound if the
+	// job does not exist. An empty (or missing) notes directory returns an
+	// empty slice, not an error.
+	ListJobNotes(ctx context.Context, jobID string) ([]NoteMeta, error)
+
+	// ReadJobNote returns the full Markdown content of one note by id.
+	// Returns an error wrapping ErrNotFound if the job or the note does not
+	// exist, and ErrInvalid if id contains a path separator or traversal.
+	ReadJobNote(ctx context.Context, jobID, id string) (string, error)
 }
 
 // Sentinel errors (ErrNotFound, ErrConflict, ErrUnavailable, ErrInvalid,

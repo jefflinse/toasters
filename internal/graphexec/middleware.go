@@ -90,6 +90,12 @@ type EventSink interface {
 	// on the defensive "spawn_worker is not available" path — wired anyway
 	// for parity with the other two side-channels and in case that changes.
 	BroadcastSessionWorkerSpawn(sessionID string, ws runtime.WorkerSpawn)
+	// BroadcastSessionKBNote carries a job_note_write/job_notes_search call's
+	// scope, operation, source, and preview from a graph node's tool
+	// execution, wired via CoreTools' KBNoteNotifier (see buildToolExecutor
+	// in executor.go). Like BroadcastSessionShellExec, it's a pure display
+	// side-channel — never part of the tool result the LLM sees.
+	BroadcastSessionKBNote(sessionID string, kb runtime.KBNote)
 }
 
 type nodeContextKey struct{}

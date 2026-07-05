@@ -331,6 +331,9 @@ func TestLoad_MissingConfigFile_AppliesDefaults(t *testing.T) {
 	if cfg.Operator.Model != "qwen/qwen3.6-35b-a3b" {
 		t.Errorf("Operator.Model: got %q, want %q", cfg.Operator.Model, "qwen/qwen3.6-35b-a3b")
 	}
+	if !cfg.KB.Enabled {
+		t.Error("KB.Enabled: got false, want true (default kill switch is on)")
+	}
 }
 
 func TestLoad_WithConfigFile_OverridesDefaults(t *testing.T) {

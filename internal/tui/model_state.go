@@ -46,6 +46,40 @@ type nodesState struct {
 	filterQuery  string
 }
 
+// knowledgeState holds all state for the full-screen Knowledge screen: a
+// scrollable list of the current job's notes on the left and the selected
+// note's content on the right. Mirrors nodesState's master-detail shape.
+// See docs/kb-design.md's "Knowledge screen".
+type knowledgeState struct {
+	show bool
+
+	// jobID is the job whose notes are shown — resolved once, when the
+	// screen opens, from the Jobs pane's current selection. "" means no job
+	// was selected when the screen opened (empty state).
+	jobID string
+
+	// List (master) state.
+	notes      []service.NoteMeta
+	selected   int // index into notes; -1/out-of-range = none
+	listScroll int // item offset of the list viewport
+
+	// focusDetail moves keyboard focus between the list (false) and the
+	// content pane (true), mirroring nodesState.focusDetail.
+	focusDetail bool
+
+	// Detail (content) pane state, applied to the selected note.
+	content       string
+	contentScroll int
+
+	// loading/err reflect whichever fetch (list or selected note's content)
+	// is most recently in flight or failed. The two fetches don't normally
+	// overlap — the list loads once on open, then each selection change
+	// loads that note's content — so a single pair of fields is enough
+	// without a separate loading flag per pane.
+	loading bool
+	err     error
+}
+
 // promptModeState holds all state for the interactive prompt mode
 // (active when the operator calls ask_user).
 type promptModeState struct {

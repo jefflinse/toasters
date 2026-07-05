@@ -171,6 +171,9 @@ type localJobService struct{ svc *LocalService }
 // conflicting with JobService methods of the same name (List, Get, Cancel).
 type localSessionService struct{ svc *LocalService }
 
+// localKnowledgeService wraps LocalService to implement KnowledgeService.
+type localKnowledgeService struct{ svc *LocalService }
+
 // nameReplacer strips characters that could cause YAML injection when
 // interpolated into frontmatter templates.
 var nameReplacer = strings.NewReplacer(
@@ -306,3 +309,4 @@ func (s *LocalService) Jobs() JobService               { return &localJobService
 func (s *LocalService) Sessions() SessionService       { return &localSessionService{s} }
 func (s *LocalService) Events() EventService           { return s }
 func (s *LocalService) System() SystemService          { return s }
+func (s *LocalService) Knowledge() KnowledgeService    { return &localKnowledgeService{s} }

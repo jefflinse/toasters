@@ -56,6 +56,7 @@ type Executor struct {
 	nodeTimeout   time.Duration
 	retryAttempts int
 	ctxWindows    runtime.ContextWindowSource
+	kbEnabled     bool // mirrors config.KBConfig.Enabled; gates job-note tools on graph-dispatched nodes
 
 	// checkpointStore, when non-nil, enables node-granular checkpoint/resume:
 	// graphs compile WithCheckpointing, each run carries a thread id (the task
@@ -148,6 +149,13 @@ type ExecutorConfig struct {
 	// that column at 0 ("unresolved"); production wires this to the same
 	// resolver the runtime and operator use.
 	ContextWindows runtime.ContextWindowSource
+
+	// KBEnabled mirrors config.KBConfig.Enabled — the kb.enabled kill switch
+	// (see docs/kb-design.md). When true, graph-dispatched nodes' CoreTools
+	// advertise job_note_write/job_notes_search/job_note_read. Defaults to
+	// false (disabled) when left unset, matching the zero-value behavior of
+	// every other ExecutorConfig bool.
+	KBEnabled bool
 }
 
 // NewExecutor creates an Executor with the given configuration.
@@ -176,6 +184,7 @@ func NewExecutor(cfg ExecutorConfig) *Executor {
 		workerTemperature:     cfg.WorkerTemperature,
 		checkpointStore:       cfg.CheckpointStore,
 		ctxWindows:            cfg.ContextWindows,
+		kbEnabled:             cfg.KBEnabled,
 	}
 }
 
@@ -338,10 +347,12 @@ func (e *Executor) interruptHandler(ctx context.Context, req rhizome.InterruptRe
 // workspaceDir (fan-out branch isolation), absolute paths under it are
 // aliased into workspaceDir so canonical paths leaked into instructions
 // and artifacts keep working inside the branch.
-func (e *Executor) buildToolExecutor(workspaceDir, workspaceBase string) runtime.ToolExecutor {
+func (e *Executor) buildToolExecutor(workspaceDir, workspaceBase, source string) runtime.ToolExecutor {
 	coreOpts := []runtime.CoreToolsOption{
 		runtime.WithShell(true),
 		runtime.WithStore(e.store),
+		runtime.WithKBNotes(e.kbEnabled),
+		runtime.WithNoteSource(source),
 	}
 	if workspaceBase != "" && workspaceBase != workspaceDir {
 		coreOpts = append(coreOpts, runtime.WithPathAlias(workspaceBase))
@@ -363,6 +374,11 @@ func (e *Executor) buildToolExecutor(workspaceDir, workspaceBase string) runtime
 	coreTools.SetWorkerSpawnNotifier(func(ctx context.Context, ws runtime.WorkerSpawn) {
 		if nc := NodeContextFromContext(ctx); nc != nil && nc.Sink != nil {
 			nc.Sink.BroadcastSessionWorkerSpawn(nc.SessionID, ws)
+		}
+	})
+	coreTools.SetKBNoteNotifier(func(ctx context.Context, kb runtime.KBNote) {
+		if nc := NodeContextFromContext(ctx); nc != nil && nc.Sink != nil {
+			nc.Sink.BroadcastSessionKBNote(nc.SessionID, kb)
 		}
 	})
 	if e.mcpManager != nil && len(e.mcpManager.Tools()) > 0 {

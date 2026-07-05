@@ -134,6 +134,14 @@ const (
 	// Payload: SessionWorkerSpawnPayload. Carries SessionID.
 	EventTypeSessionWorkerSpawn EventType = "session.worker_spawn"
 
+	// EventTypeSessionKB is sent when a worker's job_note_write or
+	// job_notes_search tool finishes. It carries scope, operation, source,
+	// and a short preview as a display side-channel: the model already sees
+	// the tool's own result text (the saved note's id, or the search hits).
+	// See docs/kb-design.md's "Observability" section.
+	// Payload: SessionKBPayload. Carries SessionID.
+	EventTypeSessionKB EventType = "session.kb"
+
 	// EventTypeSessionDone is sent when a worker session completes.
 	// Payload: SessionDonePayload. Carries SessionID.
 	EventTypeSessionDone EventType = "session.done"
@@ -570,6 +578,19 @@ type SessionWorkerSpawnPayload struct {
 	Depth  int    // spawn depth the child would run at
 	Failed bool
 	Error  string // capped failure message; empty on success
+}
+
+// SessionKBPayload is the payload for EventTypeSessionKB events. The TUI's
+// fleet activity feed and Knowledge screen use it to show memory activity as
+// it happens; unlike SessionShellExecPayload/SessionWorkerSpawnPayload it
+// isn't paired with an in-flight tool item by name-only matching for a
+// misreported-outcome correction — job_note_write/job_notes_search already
+// return an accurate result/error, so this is purely additive metadata.
+type SessionKBPayload struct {
+	Scope   string // "job" for job notes; reserved for user/system scopes later
+	Op      string // "write" or "search"
+	Source  string // the worker's note-source label
+	Preview string // write: title + id; search: query (or "list") + hit count
 }
 
 // SessionDonePayload is the payload for EventTypeSessionDone events.

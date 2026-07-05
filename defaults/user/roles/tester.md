@@ -33,6 +33,8 @@ tests, and do not flag the absence of their tests as a failure.
 
 {{ task.siblings }}
 
+{{ instructions.job-notes }}
+
 ## What was implemented
 
 {{ implement.summary }}

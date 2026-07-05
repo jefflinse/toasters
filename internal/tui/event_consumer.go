@@ -275,6 +275,19 @@ func translateEvent(ev service.Event) tea.Msg {
 			Error:     p.Error,
 		}
 
+	case service.EventTypeSessionKB:
+		p, ok := ev.Payload.(service.SessionKBPayload)
+		if !ok {
+			return nil
+		}
+		return SessionKBMsg{
+			SessionID: ev.SessionID,
+			Scope:     p.Scope,
+			Op:        p.Op,
+			Source:    p.Source,
+			Preview:   p.Preview,
+		}
+
 	case service.EventTypeSessionDone:
 		p, ok := ev.Payload.(service.SessionDonePayload)
 		if !ok {

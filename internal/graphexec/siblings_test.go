@@ -50,9 +50,9 @@ func TestSiblingTitles_ExcludeUnknownTask(t *testing.T) {
 
 func TestFormatSiblingTitles(t *testing.T) {
 	cases := []struct {
-		name   string
-		in     []string
-		want   string
+		name string
+		in   []string
+		want string
 	}{
 		{"empty", nil, ""},
 		{"single", []string{"Build the API"}, "- Build the API"},

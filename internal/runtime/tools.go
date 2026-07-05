@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,6 +17,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -41,27 +44,30 @@ type WorkerSpawner interface {
 
 // CoreTools implements the standard worker tool set.
 type CoreTools struct {
-	workDir      string
-	aliasFrom    string // absolute prefix remapped onto workDir (fan-out isolation); empty = no alias
-	allowShell   bool
-	spawner      WorkerSpawner  // for spawn_worker; may be nil
-	depth        int            // current spawn depth
-	maxDepth     int            // max spawn depth
-	httpClient   *http.Client   // for web_fetch; nil uses webFetchClient
-	store        db.Store       // required; for progress tools
-	promptEngine *prompt.Engine // for spawn_worker; may be nil
-	graphCatalog GraphCatalog   // for query_graphs; may be nil
-	denylist     map[string]bool
-	sessionID    string
-	workerID     string
-	jobID        string
-	taskID       string
-	providerName string
-	model        string
+	workDir         string
+	aliasFrom       string // absolute prefix remapped onto workDir (fan-out isolation); empty = no alias
+	allowShell      bool
+	spawner         WorkerSpawner  // for spawn_worker; may be nil
+	depth           int            // current spawn depth
+	maxDepth        int            // max spawn depth
+	httpClient      *http.Client   // for web_fetch; nil uses webFetchClient
+	store           db.Store       // required; for progress tools
+	promptEngine    *prompt.Engine // for spawn_worker; may be nil
+	graphCatalog    GraphCatalog   // for query_graphs; may be nil
+	kbEnabled       bool           // gates job_note_write/job_notes_search/job_note_read
+	noteSourceLabel string         // stamps job-note filenames/events (the node's role on the graph path)
+	denylist        map[string]bool
+	sessionID       string
+	workerID        string
+	jobID           string
+	taskID          string
+	providerName    string
+	model           string
 
 	fileChangeNotifier  FileChangeNotifier  // display side-channel for write_file/edit_file; may be nil
 	shellExecNotifier   ShellExecNotifier   // display side-channel for shell; may be nil
 	workerSpawnNotifier WorkerSpawnNotifier // display side-channel for spawn_worker; may be nil
+	kbNoteNotifier      KBNoteNotifier      // display side-channel for job_note_write/job_notes_search; may be nil
 }
 
 // GraphCatalog is a read-only view over the loaded graph Definitions,
@@ -158,6 +164,23 @@ func WithGraphCatalog(cat GraphCatalog) CoreToolsOption {
 	return func(ct *CoreTools) { ct.graphCatalog = cat }
 }
 
+// WithKBNotes gates the three job-note tools (job_note_write,
+// job_notes_search, job_note_read) — the kill switch described in
+// docs/kb-design.md. When false, the tools are absent from Definitions()
+// and Execute rejects them with the same unknown-tool error as any other
+// unrecognized name.
+func WithKBNotes(enabled bool) CoreToolsOption {
+	return func(ct *CoreTools) { ct.kbEnabled = enabled }
+}
+
+// WithNoteSource sets the label stamped onto job-note filenames and session.kb
+// events (see CoreTools.noteSource). On the graph-dispatch path this is the
+// node's role (e.g. "coder"); when unset, noteSource falls back to the worker
+// id, then "worker".
+func WithNoteSource(label string) CoreToolsOption {
+	return func(ct *CoreTools) { ct.noteSourceLabel = label }
+}
+
 // WithFileChangeNotifier sets the display side-channel invoked after a
 // successful write_file/edit_file mutation. See SetFileChangeNotifier for
 // the post-construction equivalent.
@@ -201,6 +224,20 @@ func (ct *CoreTools) SetWorkerSpawnNotifier(n WorkerSpawnNotifier) {
 	ct.workerSpawnNotifier = n
 }
 
+// WithKBNoteNotifier sets the display side-channel invoked after a
+// successful job_note_write or job_notes_search call. See SetKBNoteNotifier
+// for the post-construction equivalent.
+func WithKBNoteNotifier(n KBNoteNotifier) CoreToolsOption {
+	return func(ct *CoreTools) { ct.kbNoteNotifier = n }
+}
+
+// SetKBNoteNotifier sets the KB-note notifier after construction. Needed by
+// callers (runtime.Session) that don't exist yet when CoreTools is built and
+// so can't close over themselves via WithKBNoteNotifier.
+func (ct *CoreTools) SetKBNoteNotifier(n KBNoteNotifier) {
+	ct.kbNoteNotifier = n
+}
+
 // NewCoreTools creates a CoreTools with the given work directory and options.
 func NewCoreTools(workDir string, opts ...CoreToolsOption) *CoreTools {
 	ct := &CoreTools{
@@ -239,6 +276,21 @@ func (ct *CoreTools) Execute(ctx context.Context, name string, args json.RawMess
 		return ct.spawnWorker(ctx, args)
 	case "query_graphs":
 		return ct.queryGraphs()
+	case "job_note_write":
+		if !ct.kbEnabled {
+			return "", fmt.Errorf("%w: %s", ErrUnknownTool, name)
+		}
+		return ct.jobNoteWrite(ctx, args)
+	case "job_notes_search":
+		if !ct.kbEnabled {
+			return "", fmt.Errorf("%w: %s", ErrUnknownTool, name)
+		}
+		return ct.jobNotesSearch(ctx, args)
+	case "job_note_read":
+		if !ct.kbEnabled {
+			return "", fmt.Errorf("%w: %s", ErrUnknownTool, name)
+		}
+		return ct.jobNoteRead(ctx, args)
 	case "report_task_progress":
 		var params progress.ReportTaskProgressParams
 		if err := json.Unmarshal(args, &params); err != nil {
@@ -430,6 +482,53 @@ func (ct *CoreTools) Definitions() []ToolDef {
 				"required": ["role", "message"]
 			}`),
 		})
+	}
+
+	// job_note_* tools — shared per-job scratch memory (see docs/kb-design.md).
+	// Gated on the kb.enabled kill switch; absent entirely when disabled so a
+	// worker can't discover or call them.
+	if ct.kbEnabled {
+		defs = append(defs,
+			ToolDef{
+				Name: "job_note_write",
+				Description: "Save a short, immutable note to this job's shared scratch memory so other " +
+					"workers on the SAME job can find it later (e.g. a finding, a decision, a gotcha you hit). " +
+					"Notes are advisory context, not a substitute for your actual deliverables. Returns the " +
+					"note's id.",
+				Parameters: json.RawMessage(`{
+					"type": "object",
+					"properties": {
+						"title":   {"type": "string", "description": "Short human-readable title for the note."},
+						"content": {"type": "string", "description": "The note's content (Markdown)."}
+					},
+					"required": ["title", "content"]
+				}`),
+			},
+			ToolDef{
+				Name: "job_notes_search",
+				Description: "Search this job's shared notes (written by any worker on this job via " +
+					"job_note_write) for a keyword or phrase. Leave query empty to list the most recent notes. " +
+					"Returns up to top_k matches with a snippet and age.",
+				Parameters: json.RawMessage(`{
+					"type": "object",
+					"properties": {
+						"query": {"type": "string", "description": "Keyword or phrase to search for. Empty lists the most recent notes."},
+						"top_k": {"type": "integer", "description": "Maximum number of results to return. Default: 5."}
+					}
+				}`),
+			},
+			ToolDef{
+				Name:        "job_note_read",
+				Description: "Read the full content of a job note by its id (as returned by job_note_write or job_notes_search).",
+				Parameters: json.RawMessage(`{
+					"type": "object",
+					"properties": {
+						"id": {"type": "string", "description": "The note id (returned by job_note_write / job_notes_search)."}
+					},
+					"required": ["id"]
+				}`),
+			},
+		)
 	}
 
 	// Progress tools — always included (store is required).
@@ -1113,6 +1212,382 @@ func (ct *CoreTools) grepFiles(_ context.Context, args json.RawMessage) (string,
 	}
 
 	return b.String(), nil
+}
+
+// --- Job notes (Part A of the Knowledge Base — see docs/kb-design.md) ---
+//
+// Notes are immutable Markdown files under a constant relative path,
+// ".toasters/notes/", resolved through resolvePath so they land in whatever
+// per-job workDir is active. This is deliberately NOT derived from ct.jobID:
+// jobID is empty on the graph-dispatch path (graphexec never sets session
+// context on the per-task CoreTools it builds), but resolvePath still lands
+// the fixed subdir inside the correct per-job directory because workDir
+// itself already IS that job's directory.
+
+const (
+	// notesDirRelPath is the constant, job-relative location of job notes.
+	// The dot-namespace keeps notes out of a worker's actual deliverables.
+	notesDirRelPath = ".toasters/notes/"
+
+	// maxNoteBytes caps a single note's content, mirroring the spirit of
+	// writeFile's maxWriteContentSize but much smaller — notes are scratch
+	// findings, not deliverables.
+	maxNoteBytes = 256 * 1024
+
+	// maxNoteSnippetBytes caps a single search-result snippet.
+	maxNoteSnippetBytes = 1536
+
+	// maxNoteSearchResultBytes caps the whole job_notes_search result,
+	// mirroring the 8KB maxToolResultBytes cap enforced generically at
+	// session.go:281 — kept local too so the tool never depends on that
+	// backstop truncating mid-entry.
+	maxNoteSearchResultBytes = 8 * 1024
+
+	// defaultNotesTopK is job_notes_search's default result count.
+	defaultNotesTopK = 5
+)
+
+// noteTimestampLayout is the sortable, filesystem-safe UTC timestamp prefix
+// used in note filenames: yyyymmdd-hhmmss.mmm.
+const noteTimestampLayout = "20060102-150405.000"
+
+// noteSource returns the label used to stamp job-note filenames — the
+// worker's session-bound workerID, or "worker" when none is set. CoreTools
+// does not currently carry a distinct "role" field (only workerID from
+// WithSessionContext); the graph-dispatch path never sets session context at
+// all, so notes written from that path fall back to "worker".
+func (ct *CoreTools) noteSource() string {
+	if s := sanitizeNoteToken(ct.noteSourceLabel, 40); s != "" {
+		return s
+	}
+	if s := sanitizeNoteToken(ct.workerID, 40); s != "" {
+		return s
+	}
+	return "worker"
+}
+
+// sanitizeNoteToken lowercases s and collapses runs of non-[a-z0-9]
+// characters to a single "-", trimming leading/trailing dashes and capping
+// the result to maxLen bytes. Used for both the source and slug filename
+// components so a title or worker id can never inject path separators or
+// otherwise malformed filenames.
+func sanitizeNoteToken(s string, maxLen int) string {
+	lower := strings.ToLower(s)
+	var b strings.Builder
+	prevDash := false
+	for _, r := range lower {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+			prevDash = false
+		} else if !prevDash {
+			b.WriteByte('-')
+			prevDash = true
+		}
+	}
+	out := strings.Trim(b.String(), "-")
+	if len(out) > maxLen {
+		out = strings.Trim(out[:maxLen], "-")
+	}
+	return out
+}
+
+// randomHex6 returns 6 random lowercase hex characters, used as a note
+// filename suffix so concurrent writers never collide even if two notes
+// share the same sub-second timestamp, source, and slug.
+func randomHex6() (string, error) {
+	var buf [3]byte
+	if _, err := rand.Read(buf[:]); err != nil {
+		return "", fmt.Errorf("generating random suffix: %w", err)
+	}
+	return hex.EncodeToString(buf[:]), nil
+}
+
+// noteFilename mints an immutable, collision-resistant filename for a new
+// note: <UTC timestamp>-<source>-<slug>-<6hex>.md. See docs/kb-design.md's
+// "Write model: immutable entries".
+func noteFilename(source, title string) (string, error) {
+	slug := sanitizeNoteToken(title, 40)
+	if slug == "" {
+		slug = "note"
+	}
+	suffix, err := randomHex6()
+	if err != nil {
+		return "", err
+	}
+	ts := time.Now().UTC().Format(noteTimestampLayout)
+	return fmt.Sprintf("%s-%s-%s-%s.md", ts, source, slug, suffix), nil
+}
+
+// jobNoteWrite implements the job_note_write tool: mints a new immutable
+// note file under .toasters/notes/ and returns its id.
+func (ct *CoreTools) jobNoteWrite(ctx context.Context, args json.RawMessage) (string, error) {
+	var params struct {
+		Title   string `json:"title"`
+		Content string `json:"content"`
+	}
+	if err := json.Unmarshal(args, &params); err != nil {
+		return "", fmt.Errorf("parsing arguments: %w", err)
+	}
+	if strings.TrimSpace(params.Content) == "" {
+		return "", fmt.Errorf("content is required")
+	}
+
+	// Stamp the title onto the note as a leading Markdown heading so
+	// job_notes_search — which derives a display title from a note's first
+	// non-empty line — surfaces the title the caller actually gave, not
+	// whatever the content happens to start with.
+	title := strings.TrimSpace(params.Title)
+	stored := params.Content
+	if title != "" {
+		stored = fmt.Sprintf("# %s\n\n%s", title, params.Content)
+	}
+	if len(stored) > maxNoteBytes {
+		return "", fmt.Errorf("note content too large: %d bytes (max %d)", len(stored), maxNoteBytes)
+	}
+
+	filename, err := noteFilename(ct.noteSource(), params.Title)
+	if err != nil {
+		return "", err
+	}
+
+	resolved, err := ct.resolvePath(notesDirRelPath + filename)
+	if err != nil {
+		return "", err
+	}
+
+	if err := os.MkdirAll(filepath.Dir(resolved), 0o755); err != nil {
+		return "", fmt.Errorf("creating notes directory: %w", err)
+	}
+	if err := os.WriteFile(resolved, []byte(stored), 0o644); err != nil {
+		return "", fmt.Errorf("writing note: %w", err)
+	}
+
+	id := strings.TrimSuffix(filename, ".md")
+	if title == "" {
+		title = deriveNoteTitle(stored)
+	}
+
+	if ct.kbNoteNotifier != nil {
+		ct.kbNoteNotifier(ctx, KBNote{
+			Scope:   "job",
+			Op:      "write",
+			Source:  ct.noteSource(),
+			Preview: fmt.Sprintf("%s (%s)", title, id),
+		})
+	}
+
+	return fmt.Sprintf("saved note %q (id: %s)", title, id), nil
+}
+
+// jobNoteRead implements the job_note_read tool: reads back a note's full
+// content by id. Traversal in id (e.g. "../../etc/passwd") is rejected by
+// resolvePath's workDir-prefix guard — this function relies on that rather
+// than re-validating id itself.
+func (ct *CoreTools) jobNoteRead(_ context.Context, args json.RawMessage) (string, error) {
+	var params struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(args, &params); err != nil {
+		return "", fmt.Errorf("parsing arguments: %w", err)
+	}
+	if params.ID == "" {
+		return "", fmt.Errorf("id is required")
+	}
+	// Tolerate a model that includes the ".md" extension in id.
+	id := strings.TrimSuffix(params.ID, ".md")
+
+	resolved, err := ct.resolvePath(notesDirRelPath + id + ".md")
+	if err != nil {
+		return "", err
+	}
+
+	content, err := os.ReadFile(resolved)
+	if err != nil {
+		return "", fmt.Errorf("reading note: %w", err)
+	}
+	if len(content) > maxNoteBytes {
+		return truncateBytesRuneSafe(string(content), maxNoteBytes) + "\n… (truncated)", nil
+	}
+	return string(content), nil
+}
+
+// noteHit is one candidate result assembled by jobNotesSearch before
+// snippet/size truncation and formatting.
+type noteHit struct {
+	id      string
+	title   string
+	snippet string
+	modTime time.Time
+}
+
+// jobNotesSearch implements the job_notes_search tool: a structural
+// (grep-style) search over .toasters/notes/, case-insensitive, sorted by
+// modtime descending. An empty query lists the most recent notes instead of
+// matching content — this is the "acts as list" behavior from the design
+// doc. Every snippet is capped at maxNoteSnippetBytes and the whole
+// formatted result at maxNoteSearchResultBytes, independent of (but well
+// under) the generic 8KB maxToolResultBytes cap enforced on all tool
+// results.
+func (ct *CoreTools) jobNotesSearch(ctx context.Context, args json.RawMessage) (string, error) {
+	var params struct {
+		Query string `json:"query"`
+		TopK  int    `json:"top_k"`
+	}
+	if err := json.Unmarshal(args, &params); err != nil {
+		return "", fmt.Errorf("parsing arguments: %w", err)
+	}
+	topK := params.TopK
+	if topK <= 0 {
+		topK = defaultNotesTopK
+	}
+	query := strings.ToLower(strings.TrimSpace(params.Query))
+
+	// notify fires the display side-channel, when a listener is attached, for
+	// every completed search below — including zero-hit results, which are
+	// still meaningful search activity. hitCount must be the raw match count,
+	// computed BEFORE any topK truncation or result formatting.
+	notify := func(hitCount int) {
+		if ct.kbNoteNotifier == nil {
+			return
+		}
+		preview := fmt.Sprintf("list → %d hits", hitCount)
+		if query != "" {
+			preview = fmt.Sprintf("%q → %d hits", params.Query, hitCount)
+		}
+		ct.kbNoteNotifier(ctx, KBNote{
+			Scope:   "job",
+			Op:      "search",
+			Source:  ct.noteSource(),
+			Preview: preview,
+		})
+	}
+
+	notesDir, err := ct.resolvePath(notesDirRelPath)
+	if err != nil {
+		return "", err
+	}
+
+	entries, err := os.ReadDir(notesDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			notify(0)
+			return "no notes yet", nil
+		}
+		return "", fmt.Errorf("reading notes directory: %w", err)
+	}
+
+	var hits []noteHit
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
+			continue
+		}
+		path := filepath.Join(notesDir, entry.Name())
+		content, err := os.ReadFile(path)
+		if err != nil {
+			continue // skip unreadable notes rather than fail the whole search
+		}
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+
+		matchIdx := -1
+		if query != "" {
+			matchIdx = strings.Index(strings.ToLower(string(content)), query)
+			if matchIdx < 0 {
+				continue
+			}
+		}
+
+		hits = append(hits, noteHit{
+			id:      strings.TrimSuffix(entry.Name(), ".md"),
+			title:   deriveNoteTitle(string(content)),
+			snippet: noteSnippet(string(content), matchIdx),
+			modTime: info.ModTime(),
+		})
+	}
+
+	// total is the raw match count, captured before topK slicing, for the KB
+	// notifier — the tool response below may show fewer entries than actually
+	// matched.
+	total := len(hits)
+	if total == 0 {
+		notify(0)
+		if query == "" {
+			return "no notes yet", nil
+		}
+		return fmt.Sprintf("no notes matched %q", params.Query), nil
+	}
+
+	sort.Slice(hits, func(i, j int) bool { return hits[i].modTime.After(hits[j].modTime) })
+	if len(hits) > topK {
+		hits = hits[:topK]
+	}
+
+	var b strings.Builder
+	for _, h := range hits {
+		entry := fmt.Sprintf("[%s] %s (%s)\n    %s\n", h.id, h.title, formatNoteAge(h.modTime), h.snippet)
+		if b.Len()+len(entry) > maxNoteSearchResultBytes {
+			break
+		}
+		b.WriteString(entry)
+	}
+	notify(total)
+	return strings.TrimRight(b.String(), "\n"), nil
+}
+
+// deriveNoteTitle returns the first non-empty line of a note's content, with
+// a leading Markdown heading marker stripped, as a human-readable title
+// fallback for search results.
+func deriveNoteTitle(content string) string {
+	for _, line := range strings.Split(content, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		line = strings.TrimLeft(line, "#")
+		return strings.TrimSpace(line)
+	}
+	return "(untitled note)"
+}
+
+// noteSnippet extracts a truncated excerpt of content for a search result: a
+// window around matchIdx when a query matched, otherwise the start of the
+// content. The result is capped at maxNoteSnippetBytes.
+func noteSnippet(content string, matchIdx int) string {
+	const contextRadius = 200
+	start := 0
+	if matchIdx > contextRadius {
+		start = matchIdx - contextRadius
+	}
+	// matchIdx is an offset into strings.ToLower(content), whose byte length
+	// can differ from content (e.g. 'İ' lowercases to two runes), so start may
+	// land past the end of content. Clamp back to the start rather than slice
+	// out of range.
+	if start > len(content) {
+		start = 0
+	}
+	snippet := strings.TrimSpace(content[start:])
+	snippet = strings.ReplaceAll(snippet, "\n", " ")
+	if len(snippet) > maxNoteSnippetBytes {
+		return truncateBytesRuneSafe(snippet, maxNoteSnippetBytes) + "…"
+	}
+	return snippet
+}
+
+// formatNoteAge renders a human-friendly relative age for a note's modtime.
+func formatNoteAge(t time.Time) string {
+	d := time.Since(t)
+	switch {
+	case d < time.Minute:
+		return "just now"
+	case d < time.Hour:
+		return fmt.Sprintf("%dm ago", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh ago", int(d.Hours()))
+	default:
+		return fmt.Sprintf("%dd ago", int(d.Hours()/24))
+	}
 }
 
 // shellEnvAllowlist is the set of environment variable names passed through to

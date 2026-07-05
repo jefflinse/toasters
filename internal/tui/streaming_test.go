@@ -94,10 +94,11 @@ func (m *mockService) Definitions() service.DefinitionService {
 	}
 	return &mockDefinitionService{}
 }
-func (m *mockService) Jobs() service.JobService         { return nil }
-func (m *mockService) Sessions() service.SessionService { return nil }
-func (m *mockService) Events() service.EventService     { return nil }
-func (m *mockService) System() service.SystemService    { return m.system }
+func (m *mockService) Jobs() service.JobService            { return nil }
+func (m *mockService) Sessions() service.SessionService    { return nil }
+func (m *mockService) Events() service.EventService        { return nil }
+func (m *mockService) System() service.SystemService       { return m.system }
+func (m *mockService) Knowledge() service.KnowledgeService { return nil }
 
 func TestFetchModels_ReturnsNonNilCmd(t *testing.T) {
 	t.Parallel()

@@ -35,6 +35,8 @@ do not investigate or report on them.
 
 {{ task.siblings }}
 
+{{ instructions.job-notes }}
+
 ## How to investigate
 
 Use `read_file`, `glob`, and `grep` to explore. You do not have write or

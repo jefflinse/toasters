@@ -63,6 +63,19 @@ type wireJobDetail struct {
 	Progress []wireProgressReport `json:"progress"`
 }
 
+type wireNoteMeta struct {
+	ID      string    `json:"id"`
+	Title   string    `json:"title"`
+	Source  string    `json:"source,omitempty"`
+	ModTime time.Time `json:"mod_time"`
+	Size    int64     `json:"size"`
+}
+
+// noteContentResponse is the body for GET /api/v1/jobs/{id}/notes/{noteID}.
+type noteContentResponse struct {
+	Content string `json:"content"`
+}
+
 type wireSkill struct {
 	ID          string    `json:"id"`
 	Name        string    `json:"name"`
@@ -568,6 +581,13 @@ type wireSessionWorkerSpawnPayload struct {
 	Error  string `json:"error,omitempty"`
 }
 
+type wireSessionKBPayload struct {
+	Scope   string `json:"scope"`
+	Op      string `json:"op"`
+	Source  string `json:"source,omitempty"`
+	Preview string `json:"preview,omitempty"`
+}
+
 type wireSessionDonePayload struct {
 	WorkerName string `json:"worker_name"`
 	JobID      string `json:"job_id,omitempty"`
@@ -658,6 +678,16 @@ func wireJobToService(w wireJob) service.Job {
 		CreatedAt:   w.CreatedAt,
 		UpdatedAt:   w.UpdatedAt,
 		Metadata:    w.Metadata,
+	}
+}
+
+func wireNoteMetaToService(w wireNoteMeta) service.NoteMeta {
+	return service.NoteMeta{
+		ID:      w.ID,
+		Title:   w.Title,
+		Source:  w.Source,
+		ModTime: w.ModTime,
+		Size:    w.Size,
 	}
 }
 
@@ -1271,6 +1301,18 @@ func ParseSSEPayload(eventType string, raw json.RawMessage) (any, error) {
 			Depth:  w.Depth,
 			Failed: w.Failed,
 			Error:  w.Error,
+		}, nil
+
+	case service.EventTypeSessionKB:
+		var w wireSessionKBPayload
+		if err := json.Unmarshal(raw, &w); err != nil {
+			return nil, fmt.Errorf("decoding session.kb payload: %w", err)
+		}
+		return service.SessionKBPayload{
+			Scope:   w.Scope,
+			Op:      w.Op,
+			Source:  w.Source,
+			Preview: w.Preview,
 		}, nil
 
 	case service.EventTypeSessionDone:

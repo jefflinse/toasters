@@ -264,6 +264,22 @@ func (m *shutdownTestMock) System() service.SystemService {
 	return &shutdownTestSystem{m}
 }
 
+func (m *shutdownTestMock) Knowledge() service.KnowledgeService {
+	return &shutdownTestKnowledge{}
+}
+
+// shutdownTestKnowledge implements service.KnowledgeService; shutdown tests
+// don't exercise the Knowledge screen's read path.
+type shutdownTestKnowledge struct{}
+
+func (k *shutdownTestKnowledge) ListJobNotes(_ context.Context, _ string) ([]service.NoteMeta, error) {
+	return nil, nil
+}
+
+func (k *shutdownTestKnowledge) ReadJobNote(_ context.Context, _, _ string) (string, error) {
+	return "", nil
+}
+
 // shutdownTestOperator implements service.OperatorService.
 type shutdownTestOperator struct{}
 

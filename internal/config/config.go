@@ -57,6 +57,16 @@ type Config struct {
 	Operator                  OperatorConfig `mapstructure:"operator"`
 	Workers                   WorkersConfig  `mapstructure:"agents"` // config key "agents" kept for backward compatibility
 	MCP                       MCPConfig      `mapstructure:"mcp"`
+	KB                        KBConfig       `mapstructure:"kb"`
+}
+
+// KBConfig holds configuration for the Knowledge Base feature. Enabled is a
+// kill switch: when false, the job-note tools are not advertised to workers
+// and Execute rejects them. Only Enabled exists for now — Part A (job notes)
+// needs nothing else; Provider/Model/TopK for the vector-store epic (Part B)
+// land later. See docs/kb-design.md.
+type KBConfig struct {
+	Enabled bool `mapstructure:"enabled"`
 }
 
 // MCPServerConfig holds configuration for a single MCP server.
@@ -123,6 +133,7 @@ func Load() (*Config, error) {
 	viper.SetDefault("worker_compaction_threshold", DefaultWorkerCompactionThreshold)
 	viper.SetDefault("agents.defaults.provider", "")
 	viper.SetDefault("agents.defaults.model", "")
+	viper.SetDefault("kb.enabled", true)
 
 	if err := viper.ReadInConfig(); err != nil {
 		var notFound viper.ConfigFileNotFoundError

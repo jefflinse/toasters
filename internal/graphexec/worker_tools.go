@@ -14,29 +14,44 @@ import (
 
 // Tool name constants for building allowlists.
 const (
-	ToolReadFile    = "read_file"
-	ToolWriteFile   = "write_file"
-	ToolEditFile    = "edit_file"
-	ToolGlob        = "glob"
-	ToolGrep        = "grep"
-	ToolShell       = "shell"
-	ToolWebFetch    = "web_fetch"
-	ToolQueryGraphs = "query_graphs"
+	ToolReadFile       = "read_file"
+	ToolWriteFile      = "write_file"
+	ToolEditFile       = "edit_file"
+	ToolGlob           = "glob"
+	ToolGrep           = "grep"
+	ToolShell          = "shell"
+	ToolWebFetch       = "web_fetch"
+	ToolQueryGraphs    = "query_graphs"
+	ToolJobNoteWrite   = "job_note_write"
+	ToolJobNotesSearch = "job_notes_search"
+	ToolJobNoteRead    = "job_note_read"
 )
+
+// jobNoteTools are the three job-note tools (see docs/kb-design.md) — shared
+// per-job scratch memory every worker role gets by default, regardless of
+// access level, since they let workers on the same job compare notes without
+// needing write/shell access to do it. Still deniable per-role via the
+// existing denylist mechanism, and absent entirely when kb.enabled is false
+// (CoreTools.kbEnabled gates them out of Definitions()/Execute — see
+// internal/runtime/tools.go).
+var jobNoteTools = []string{ToolJobNoteWrite, ToolJobNotesSearch, ToolJobNoteRead}
 
 // Common tool sets for node builders. Roles that need tools outside
 // their access base (e.g. fine-decomposer needing query_graphs under
 // readonly access) opt in via the role frontmatter's `tools:` list —
 // see toolsForRole in nodes.go.
 var (
-	// ReadOnlyTools allows only non-mutating, workspace-oriented tools.
-	ReadOnlyTools = []string{ToolReadFile, ToolGlob, ToolGrep}
+	// ReadOnlyTools allows only non-mutating, workspace-oriented tools
+	// (plus the base job-note tools every role gets).
+	ReadOnlyTools = append([]string{ToolReadFile, ToolGlob, ToolGrep}, jobNoteTools...)
 
-	// WriteTools allows mutation plus reading.
-	WriteTools = []string{ToolReadFile, ToolWriteFile, ToolEditFile, ToolGlob, ToolGrep, ToolShell}
+	// WriteTools allows mutation plus reading (plus the base job-note tools
+	// every role gets).
+	WriteTools = append([]string{ToolReadFile, ToolWriteFile, ToolEditFile, ToolGlob, ToolGrep, ToolShell}, jobNoteTools...)
 
-	// TestTools allows running tests.
-	TestTools = []string{ToolReadFile, ToolGlob, ToolGrep, ToolShell}
+	// TestTools allows running tests (plus the base job-note tools every
+	// role gets).
+	TestTools = append([]string{ToolReadFile, ToolGlob, ToolGrep, ToolShell}, jobNoteTools...)
 )
 
 // AdaptTools converts a runtime.ToolExecutor — the pre-mycelium interface

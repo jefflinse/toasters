@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jefflinse/toasters/internal/service"
 )
@@ -23,6 +24,7 @@ type mockService struct {
 	sessions   *mockSessionService
 	events     *mockEventService
 	system     *mockSystemService
+	knowledge  *mockKnowledgeService
 }
 
 func newMockService() *mockService {
@@ -33,6 +35,7 @@ func newMockService() *mockService {
 		sessions:   &mockSessionService{},
 		events:     &mockEventService{},
 		system:     &mockSystemService{},
+		knowledge:  &mockKnowledgeService{},
 	}
 }
 
@@ -40,10 +43,11 @@ func (m *mockService) Operator() service.OperatorService { return m.operator }
 func (m *mockService) Definitions() service.DefinitionService {
 	return m.definition
 }
-func (m *mockService) Jobs() service.JobService         { return m.jobs }
-func (m *mockService) Sessions() service.SessionService { return m.sessions }
-func (m *mockService) Events() service.EventService     { return m.events }
-func (m *mockService) System() service.SystemService    { return m.system }
+func (m *mockService) Jobs() service.JobService            { return m.jobs }
+func (m *mockService) Sessions() service.SessionService    { return m.sessions }
+func (m *mockService) Events() service.EventService        { return m.events }
+func (m *mockService) System() service.SystemService       { return m.system }
+func (m *mockService) Knowledge() service.KnowledgeService { return m.knowledge }
 
 type mockOperatorService struct {
 	respondToPromptErr   error
@@ -91,6 +95,19 @@ type mockSessionService struct{}
 type mockEventService struct{ ch chan service.Event }
 type mockSystemService struct {
 	metrics service.MetricsReport
+}
+type mockKnowledgeService struct {
+	notes      []service.NoteMeta
+	notesErr   error
+	content    string
+	contentErr error
+}
+
+func (m *mockKnowledgeService) ListJobNotes(_ context.Context, _ string) ([]service.NoteMeta, error) {
+	return m.notes, m.notesErr
+}
+func (m *mockKnowledgeService) ReadJobNote(_ context.Context, _, _ string) (string, error) {
+	return m.content, m.contentErr
 }
 
 func (m *mockDefinitionService) ListSkills(_ context.Context) ([]service.Skill, error) {
@@ -352,5 +369,99 @@ func TestRespondToPrompt_EmptyResponse(t *testing.T) {
 	}
 	if !strings.Contains(errResp.Error.Message, "response is required") {
 		t.Errorf("error message = %q, want to contain 'response is required'", errResp.Error.Message)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Knowledge (job notes) handlers
+// ---------------------------------------------------------------------------
+
+func TestListJobNotes_ReturnsNotes(t *testing.T) {
+	t.Parallel()
+
+	mockSvc := newMockService()
+	mockSvc.knowledge.notes = []service.NoteMeta{
+		{ID: "20260702-120000.000-worker-hello-abc123", Title: "Hello", Source: "worker", ModTime: time.Now(), Size: 42},
+	}
+	srv := New(mockSvc)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/jobs/job-1/notes", nil)
+	req.SetPathValue("id", "job-1")
+	rec := httptest.NewRecorder()
+	srv.listJobNotes(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d (body: %s)", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	var resp PaginatedResponse[wireNoteMeta]
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if resp.Total != 1 || len(resp.Items) != 1 {
+		t.Fatalf("Total/Items = %d/%d, want 1/1", resp.Total, len(resp.Items))
+	}
+	got := resp.Items[0]
+	if got.ID != "20260702-120000.000-worker-hello-abc123" || got.Title != "Hello" || got.Source != "worker" {
+		t.Errorf("item = %+v, want id/title/source hello-abc123 / Hello / worker", got)
+	}
+}
+
+func TestListJobNotes_JobNotFound(t *testing.T) {
+	t.Parallel()
+
+	mockSvc := newMockService()
+	mockSvc.knowledge.notesErr = fmt.Errorf("getting job job-missing: %w", service.ErrNotFound)
+	srv := New(mockSvc)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/jobs/job-missing/notes", nil)
+	req.SetPathValue("id", "job-missing")
+	rec := httptest.NewRecorder()
+	srv.listJobNotes(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+}
+
+func TestGetJobNote_ReturnsContent(t *testing.T) {
+	t.Parallel()
+
+	mockSvc := newMockService()
+	mockSvc.knowledge.content = "# Hello\n\nBody"
+	srv := New(mockSvc)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/jobs/job-1/notes/note-1", nil)
+	req.SetPathValue("id", "job-1")
+	req.SetPathValue("noteID", "note-1")
+	rec := httptest.NewRecorder()
+	srv.getJobNote(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d (body: %s)", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	var resp noteContentResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if resp.Content != "# Hello\n\nBody" {
+		t.Errorf("content = %q, want %q", resp.Content, "# Hello\n\nBody")
+	}
+}
+
+func TestGetJobNote_NotFound(t *testing.T) {
+	t.Parallel()
+
+	mockSvc := newMockService()
+	mockSvc.knowledge.contentErr = fmt.Errorf("note note-missing: %w", service.ErrNotFound)
+	srv := New(mockSvc)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/jobs/job-1/notes/note-missing", nil)
+	req.SetPathValue("id", "job-1")
+	req.SetPathValue("noteID", "note-missing")
+	rec := httptest.NewRecorder()
+	srv.getJobNote(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusNotFound)
 	}
 }

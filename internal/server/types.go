@@ -239,6 +239,31 @@ func jobDetailToWire(jd service.JobDetail) wireJobDetail {
 	}
 }
 
+// wireNoteMeta is the JSON wire representation of a service.NoteMeta, for
+// GET /api/v1/jobs/{id}/notes.
+type wireNoteMeta struct {
+	ID      string    `json:"id"`
+	Title   string    `json:"title"`
+	Source  string    `json:"source,omitempty"`
+	ModTime time.Time `json:"mod_time"`
+	Size    int64     `json:"size"`
+}
+
+func noteMetaToWire(n service.NoteMeta) wireNoteMeta {
+	return wireNoteMeta{
+		ID:      n.ID,
+		Title:   n.Title,
+		Source:  n.Source,
+		ModTime: n.ModTime,
+		Size:    n.Size,
+	}
+}
+
+// noteContentResponse is the body for GET /api/v1/jobs/{id}/notes/{noteID}.
+type noteContentResponse struct {
+	Content string `json:"content"`
+}
+
 // wireSkill is the JSON wire representation of a service.Skill.
 type wireSkill struct {
 	ID          string    `json:"id"`
@@ -946,6 +971,13 @@ type wireSessionWorkerSpawnPayload struct {
 	Error  string `json:"error,omitempty"`
 }
 
+type wireSessionKBPayload struct {
+	Scope   string `json:"scope"`
+	Op      string `json:"op"`
+	Source  string `json:"source,omitempty"`
+	Preview string `json:"preview,omitempty"`
+}
+
 type wireSessionDonePayload struct {
 	WorkerName string `json:"worker_name"`
 	JobID      string `json:"job_id,omitempty"`
@@ -1139,6 +1171,10 @@ func EventPayloadToWire(ev service.Event) any {
 		return wireSessionWorkerSpawnPayload{
 			Role: p.Role, Task: p.Task, JobID: p.JobID,
 			Depth: p.Depth, Failed: p.Failed, Error: p.Error,
+		}
+	case service.SessionKBPayload:
+		return wireSessionKBPayload{
+			Scope: p.Scope, Op: p.Op, Source: p.Source, Preview: p.Preview,
 		}
 	case service.SessionDonePayload:
 		return wireSessionDonePayload{
