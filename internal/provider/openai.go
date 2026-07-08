@@ -56,6 +56,19 @@ func modelsURL(endpoint string) string {
 	return endpoint + "/v1/models"
 }
 
+// embeddingsURL constructs the embeddings URL for an endpoint base, using the
+// same heuristics as chatCompletionsURL and modelsURL.
+func embeddingsURL(endpoint string) string {
+	endpoint = strings.TrimRight(endpoint, "/")
+	if strings.HasSuffix(endpoint, "/embeddings") {
+		return endpoint
+	}
+	if versionPathSuffix.MatchString(endpoint) {
+		return endpoint + "/embeddings"
+	}
+	return endpoint + "/v1/embeddings"
+}
+
 // samplingParams carries anti-repetition sampler settings. The fields use the
 // llama.cpp / LM Studio JSON names and are pointers so an unset value is simply
 // omitted from the request. They are applied only to local endpoints (see
@@ -546,6 +559,77 @@ func (p *OpenAIProvider) fetchOpenAIModels(ctx context.Context) ([]ModelInfo, er
 	return models, nil
 }
 
+// Embed sends inputs to the OpenAI-compatible embeddings endpoint and
+// returns one vector per input, in input order. This is the seam only —
+// nothing in production calls Embed yet (see EmbeddingProvider).
+//
+// The response's data[] entries are NOT guaranteed to arrive in input order;
+// each carries an index that Embed uses to place it correctly.
+func (p *OpenAIProvider) Embed(ctx context.Context, model string, inputs []string) ([][]float32, error) {
+	if model == "" {
+		model = p.defaultModel
+	}
+
+	reqBody := openAIEmbeddingsRequest{
+		Model:          model,
+		Input:          inputs,
+		EncodingFormat: "float",
+	}
+	jsonBody, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("marshaling request: %w", err)
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, embeddingsURL(p.endpoint), bytes.NewReader(jsonBody))
+	if err != nil {
+		return nil, fmt.Errorf("creating request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	if p.apiKey != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+p.apiKey)
+	}
+
+	resp, err := p.httpClient.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("sending request: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		var buf bytes.Buffer
+		_, _ = buf.ReadFrom(io.LimitReader(resp.Body, 1<<20))
+		return nil, &APIError{
+			Provider:   p.name,
+			StatusCode: resp.StatusCode,
+			Body:       strings.TrimSpace(buf.String()),
+		}
+	}
+
+	var result openAIEmbeddingsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("decoding response: %w", err)
+	}
+
+	if len(result.Data) < len(inputs) {
+		return nil, fmt.Errorf("embeddings response had %d entries, want %d", len(result.Data), len(inputs))
+	}
+
+	out := make([][]float32, len(inputs))
+	for _, d := range result.Data {
+		if d.Index < 0 || d.Index >= len(out) {
+			return nil, fmt.Errorf("embeddings response index %d out of range for %d inputs", d.Index, len(inputs))
+		}
+		out[d.Index] = d.Embedding
+	}
+	for i, v := range out {
+		if v == nil {
+			return nil, fmt.Errorf("embeddings response missing entry for input index %d", i)
+		}
+	}
+
+	return out, nil
+}
+
 // --- OpenAI API types ---
 
 type openAIRequest struct {
@@ -620,3 +704,23 @@ type openAIUsage struct {
 	CompletionTokens int `json:"completion_tokens"`
 	TotalTokens      int `json:"total_tokens"`
 }
+
+type openAIEmbeddingsRequest struct {
+	Model string   `json:"model"`
+	Input []string `json:"input"`
+	// EncodingFormat is sent explicitly as "float" — some OpenAI-compatible
+	// servers default to base64-encoded floats otherwise, which would
+	// silently corrupt the vectors decoded below.
+	EncodingFormat string `json:"encoding_format"`
+}
+
+type openAIEmbeddingsResponse struct {
+	Data []openAIEmbeddingData `json:"data"`
+}
+
+type openAIEmbeddingData struct {
+	Index     int       `json:"index"`
+	Embedding []float32 `json:"embedding"`
+}
+
+var _ EmbeddingProvider = (*OpenAIProvider)(nil)

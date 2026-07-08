@@ -221,6 +221,12 @@ func runServe(cmd *cobra.Command, args []string) error {
 	registry := provider.NewRegistry()
 	registerProviders(registry, ldr)
 
+	// One-shot, non-fatal check that the configured KB embedding provider is
+	// reachable. The embed seam isn't wired into any feature yet (that lands
+	// in a later change) — this only surfaces a misconfiguration early
+	// instead of silently discovering it whenever Part B first calls Embed.
+	probeEmbedProvider(context.Background(), registry, cfg)
+
 	// Create the runtime for worker session management.
 	rt := runtime.New(store, registry)
 	rt.SetPromptEngine(promptEngine)
@@ -572,4 +578,48 @@ func registerProviders(registry *provider.Registry, ldr *loader.Loader) {
 		registry.Register(pc.Key(), scheduler)
 		providerFingerprints[pc.Key()] = fp
 	}
+}
+
+// probeEmbedProvider does a one-shot, non-fatal check that the KB vector
+// store's configured embedding provider is reachable, so a misconfiguration
+// (wrong provider ID, model not found, endpoint down) shows up in the server
+// log at startup rather than the first time a later feature calls Embed.
+// Nothing calls Embed in production yet — this is purely a startup
+// diagnostic, and never blocks or fails startup.
+func probeEmbedProvider(ctx context.Context, registry *provider.Registry, cfg *config.Config) {
+	if !cfg.KB.Enabled || cfg.KB.Provider == "" || cfg.KB.Model == "" {
+		return
+	}
+
+	p, ok := registry.Get(cfg.KB.Provider)
+	if !ok {
+		slog.Warn("KB embeddings configured but provider not found",
+			"provider", cfg.KB.Provider, "model", cfg.KB.Model)
+		return
+	}
+
+	emb, ok := p.(provider.EmbeddingProvider)
+	if !ok {
+		slog.Warn("KB embeddings configured but provider does not support embeddings",
+			"provider", cfg.KB.Provider, "model", cfg.KB.Model)
+		return
+	}
+
+	probeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	vecs, err := emb.Embed(probeCtx, cfg.KB.Model, []string{"probe"})
+	if err != nil {
+		slog.Warn("KB embeddings configured but probe failed",
+			"provider", cfg.KB.Provider, "model", cfg.KB.Model, "error", err)
+		return
+	}
+	if len(vecs) == 0 {
+		slog.Warn("KB embeddings configured but probe returned no vectors",
+			"provider", cfg.KB.Provider, "model", cfg.KB.Model)
+		return
+	}
+
+	slog.Info("KB embed provider reachable",
+		"provider", cfg.KB.Provider, "model", cfg.KB.Model, "dimension", len(vecs[0]))
 }
