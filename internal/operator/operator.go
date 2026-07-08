@@ -22,6 +22,7 @@ import (
 	"github.com/jefflinse/toasters/internal/db"
 	"github.com/jefflinse/toasters/internal/graphexec"
 	"github.com/jefflinse/toasters/internal/hitl"
+	"github.com/jefflinse/toasters/internal/kb"
 	"github.com/jefflinse/toasters/internal/prompt"
 	"github.com/jefflinse/toasters/internal/provider"
 	"github.com/jefflinse/toasters/internal/runtime"
@@ -45,6 +46,15 @@ const (
 // event-loop goroutine at turn boundaries.
 type ContextWindowSource interface {
 	Window(providerName, modelID string) int
+}
+
+// KnowledgeBase is the operator's durable user-memory dependency (satisfied
+// by *kb.Service). Nil when no embedding provider is configured — the
+// kb_search/kb_write_user tools are simply not advertised in that case (see
+// operatorTools.Definitions).
+type KnowledgeBase interface {
+	Recall(ctx context.Context, scope, query string, k int) ([]kb.Hit, error)
+	Remember(ctx context.Context, scope, source, content string) (string, error)
 }
 
 // Operator manages the event loop and long-lived operator LLM session.
@@ -132,6 +142,10 @@ type Config struct {
 	PromptEngine           *prompt.Engine         // prompt engine for role-based prompt composition
 	DefaultProvider        string                 // default provider for system workers
 	DefaultModel           string                 // default model for system workers
+	// KB is the operator's durable user-memory dependency, backing the
+	// kb_search / kb_write_user tools. Optional: nil disables those tools
+	// (e.g. no embedding provider configured).
+	KB KnowledgeBase
 	// OnText / OnReasoning are called with streamed text and reasoning
 	// chunks from the operator LLM. turnID is the user turn the text belongs
 	// to (from UserMessagePayload.TurnID); empty for system-initiated turns.
@@ -200,7 +214,7 @@ func New(cfg Config) (*Operator, error) {
 		})
 	}
 
-	tools := newOperatorTools(cfg.Runtime, cfg.PromptEngine, cfg.DefaultProvider, cfg.DefaultModel, cfg.Store, systemTools, cfg.WorkDir)
+	tools := newOperatorTools(cfg.Runtime, cfg.PromptEngine, cfg.DefaultProvider, cfg.DefaultModel, cfg.Store, systemTools, cfg.WorkDir, cfg.KB)
 	provTools := operatorToolsToProviderTools(tools.Definitions())
 
 	op := &Operator{

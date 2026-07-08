@@ -169,7 +169,7 @@ func newTestOperatorTools(t *testing.T) *operatorTools {
 		EventCh: eventCh, WorkDir: t.TempDir(),
 	})
 
-	return newOperatorTools(nil, engine, "test-provider", "test-model", store, systemTools, t.TempDir())
+	return newOperatorTools(nil, engine, "test-provider", "test-model", store, systemTools, t.TempDir(), nil)
 }
 
 // --- Tests ---
@@ -726,7 +726,7 @@ func TestEventLoop_TaskCompleted_AssignsNextTask(t *testing.T) {
 		EventCh: eventCh, WorkDir: t.TempDir(),
 		GraphExecutor: gExec,
 	})
-	tools := newOperatorTools(rt, engine, "test-provider", "test-model", store, systemTools, t.TempDir())
+	tools := newOperatorTools(rt, engine, "test-provider", "test-model", store, systemTools, t.TempDir(), nil)
 	provTools := operatorToolsToProviderTools(tools.Definitions())
 
 	var events []Event
@@ -821,7 +821,7 @@ func TestRun_RecoversInterruptedJobOnStart(t *testing.T) {
 		EventCh: eventCh, WorkDir: t.TempDir(),
 		GraphExecutor: gExec,
 	})
-	tools := newOperatorTools(rt, engine, "test-provider", "test-model", store, systemTools, t.TempDir())
+	tools := newOperatorTools(rt, engine, "test-provider", "test-model", store, systemTools, t.TempDir(), nil)
 
 	op := &Operator{
 		rt: rt, prov: mp, model: "test-model", tools: tools, store: store,
@@ -904,7 +904,7 @@ func TestEventLoop_TaskCompleted_SkipsGraphlessTask(t *testing.T) {
 		EventCh: eventCh, WorkDir: t.TempDir(),
 		GraphExecutor: gExec,
 	})
-	tools := newOperatorTools(rt, engine, "test-provider", "test-model", store, systemTools, t.TempDir())
+	tools := newOperatorTools(rt, engine, "test-provider", "test-model", store, systemTools, t.TempDir(), nil)
 	provTools := operatorToolsToProviderTools(tools.Definitions())
 
 	op := &Operator{
@@ -974,7 +974,7 @@ func TestEventLoop_TaskFailedSurfacesBlockedDependents(t *testing.T) {
 		DefaultProvider: "test-provider", DefaultModel: "test-model",
 		EventCh: eventCh, WorkDir: t.TempDir(),
 	})
-	tools := newOperatorTools(rt, engine, "test-provider", "test-model", store, systemTools, t.TempDir())
+	tools := newOperatorTools(rt, engine, "test-provider", "test-model", store, systemTools, t.TempDir(), nil)
 	provTools := operatorToolsToProviderTools(tools.Definitions())
 
 	op := &Operator{
@@ -1041,7 +1041,7 @@ func TestEventLoop_AdvanceFailureConsultsLLM(t *testing.T) {
 		DefaultProvider: "test-provider", DefaultModel: "test-model",
 		EventCh: eventCh, WorkDir: t.TempDir(),
 	})
-	tools := newOperatorTools(rt, engine, "test-provider", "test-model", store, systemTools, t.TempDir())
+	tools := newOperatorTools(rt, engine, "test-provider", "test-model", store, systemTools, t.TempDir(), nil)
 	provTools := operatorToolsToProviderTools(tools.Definitions())
 
 	op := &Operator{
@@ -1815,7 +1815,7 @@ func TestSurfaceToUserCreatesFeedEntry(t *testing.T) {
 		EventCh:         eventCh,
 		WorkDir:         t.TempDir(),
 	})
-	tools := newOperatorTools(nil, nil, "test-provider", "test-model", store, systemTools, t.TempDir())
+	tools := newOperatorTools(nil, nil, "test-provider", "test-model", store, systemTools, t.TempDir(), nil)
 
 	result, err := tools.Execute(context.Background(), "surface_to_user",
 		json.RawMessage(`{"text": "Important update"}`))
@@ -1834,7 +1834,7 @@ func TestSurfaceToUserCreatesFeedEntry(t *testing.T) {
 
 func TestSurfaceToUserWithoutSystemTools(t *testing.T) {
 	// surface_to_user should return an error when no system tools are configured.
-	tools := newOperatorTools(nil, nil, "test-provider", "test-model", nil, nil, t.TempDir())
+	tools := newOperatorTools(nil, nil, "test-provider", "test-model", nil, nil, t.TempDir(), nil)
 
 	_, err := tools.Execute(context.Background(), "surface_to_user",
 		json.RawMessage(`{"text": "No store available"}`))
@@ -1903,7 +1903,7 @@ func TestQueryJobDelegatesToSystemTools(t *testing.T) {
 		EventCh:         eventCh,
 		WorkDir:         t.TempDir(),
 	})
-	tools := newOperatorTools(nil, nil, "test-provider", "test-model", store, systemTools, t.TempDir())
+	tools := newOperatorTools(nil, nil, "test-provider", "test-model", store, systemTools, t.TempDir(), nil)
 
 	result, err := tools.Execute(ctx, "query_job",
 		json.RawMessage(`{"job_id": "job-1"}`))
@@ -1927,7 +1927,7 @@ func TestQueryGraphsDelegatesToSystemTools(t *testing.T) {
 			{ID: "bug-fix", Name: "Alpha Graph"},
 		}},
 	})
-	tools := newOperatorTools(nil, nil, "test-provider", "test-model", store, systemTools, t.TempDir())
+	tools := newOperatorTools(nil, nil, "test-provider", "test-model", store, systemTools, t.TempDir(), nil)
 
 	result, err := tools.Execute(ctx, "query_graphs", json.RawMessage(`{}`))
 	assertNoError(t, err)
@@ -2362,7 +2362,7 @@ func TestHandleUserMessage_DedupesCreateJobWithinTurn(t *testing.T) {
 		DefaultProvider: "test-provider", DefaultModel: "test-model",
 		EventCh: eventCh, WorkDir: workDir,
 	})
-	tools := newOperatorTools(nil, engine, "test-provider", "test-model", store, systemTools, workDir)
+	tools := newOperatorTools(nil, engine, "test-provider", "test-model", store, systemTools, workDir, nil)
 	provTools := operatorToolsToProviderTools(tools.Definitions())
 
 	createArgs, err := json.Marshal(map[string]string{
